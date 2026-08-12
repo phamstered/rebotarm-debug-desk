@@ -1,0 +1,18 @@
+[package]
+name = "easy-debug"
+version = "0.1.0"
+description = "ROS 2 robot debugging workstation"
+authors = ["Easy Debug contributors"]
+edition = "2021"
+
+[lib]
+name = "easy_debug_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["io-util", "process", "time"] }

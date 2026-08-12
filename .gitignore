@@ -1,0 +1,9 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+bridge/build/
+bridge/install/
+bridge/log/
+.DS_Store
+*.log
