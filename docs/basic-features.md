@@ -24,10 +24,10 @@
 - 从 ROS graph 获取 Topic 名称和类型。
 - 点击 Topic 后创建只读订阅，并以 JSON 查看最新消息。
 - 显示累计消息数和平均接收频率。
-- Topics 列表默认每 5 秒自动刷新，也可通过标题栏刷新按钮立即刷新；刷新失败时保留现有列表并显示原因。
+- Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；刷新失败时保留现有列表并显示原因。
 - Topics、ROS Control、Motor Control、Topic Inspector 四个区域可独立展开/收起，状态保存在本机；同一侧的另一个面板会自动使用释放出的高度。
 - Topics/ROS Control 和 Motor Control/Topic Inspector 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。
-- Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 5 秒只读刷新。
+- Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 30 秒只读刷新。
 - ROS Control 标题栏提供手动刷新按钮，与展开/收起按钮并列；手动与自动刷新具有并发保护。
 - controller manager 服务不可用或查询超时时显示离线原因，不阻塞 Topic 浏览和其他功能。
 - 当前 Bridge 支持以下消息内容：
@@ -93,8 +93,8 @@
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |
-| Topic | 发现、选择订阅、消息路由、计数和频率、手动/5 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
-| ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 名称/类型/状态展示、手动/5 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
+| Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
+| ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 名称/类型/状态展示、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
 | URDF | package URI、相对纹理、Base64、JointState 映射 | `src/urdfLogic.test.ts` |
 | 电机输入 | 默认 TRACK/Kp/Kd、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |

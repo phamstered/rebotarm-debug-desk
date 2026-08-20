@@ -12,6 +12,7 @@ import { clamp, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic
 import type { LayoutSizes } from "./layoutLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "connected" | "failed";
+const LIST_REFRESH_INTERVAL_MS = 30_000;
 
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
@@ -314,14 +315,14 @@ export default function App() {
 
   useEffect(() => {
     if (stage !== "connected") return;
-    const timer = window.setInterval(() => void refreshTopics(), 5000);
+    const timer = window.setInterval(() => void refreshTopics(), LIST_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [refreshTopics, stage]);
 
   useEffect(() => {
     if (stage !== "connected") return;
     void refreshRosControllers();
-    const timer = window.setInterval(() => void refreshRosControllers(), 5000);
+    const timer = window.setInterval(() => void refreshRosControllers(), LIST_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [refreshRosControllers, stage]);
 

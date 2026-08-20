@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -83,7 +83,7 @@ describe("App workflow", () => {
     expect(doubles.invoke).toHaveBeenCalledWith("check_ros_controllers", expect.objectContaining({ profile: expect.any(Object) }));
   });
 
-  it("manually refreshes Topics and ROS Control while scheduling both every five seconds", async () => {
+  it("manually refreshes Topics and ROS Control and executes both 30-second pollers", async () => {
     const intervalSpy = vi.spyOn(window, "setInterval");
     try {
       const user = userEvent.setup();
@@ -104,7 +104,21 @@ describe("App workflow", () => {
       await waitFor(() => expect(
         doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers"),
       ).toHaveLength(controllerCalls + 1));
-      expect(intervalSpy.mock.calls.filter(([, delay]) => delay === 5000).length).toBeGreaterThanOrEqual(3);
+
+      const automaticRefreshes = intervalSpy.mock.calls
+        .filter(([, delay]) => delay === 30_000)
+        .map(([callback]) => callback as () => void);
+      expect(automaticRefreshes).toHaveLength(2);
+      const topicsBeforeAutoRefresh = doubles.listTopics.mock.calls.length;
+      const controllersBeforeAutoRefresh = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
+      await act(async () => {
+        automaticRefreshes.forEach((refresh) => refresh());
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(doubles.listTopics).toHaveBeenCalledTimes(topicsBeforeAutoRefresh + 1));
+      await waitFor(() => expect(
+        doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers"),
+      ).toHaveLength(controllersBeforeAutoRefresh + 1));
     } finally {
       intervalSpy.mockRestore();
     }
