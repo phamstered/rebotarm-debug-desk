@@ -39,6 +39,23 @@ struct AgentServiceStatus {
     description: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ControllerInfo {
+    name: String,
+    type_name: String,
+    state: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RosControlStatus {
+    manager: String,
+    available: bool,
+    controllers: Vec<ControllerInfo>,
+    message: String,
+}
+
 fn ssh_target(profile: &ConnectionProfile) -> String {
     if profile.username.trim().is_empty() {
         profile.host.clone()
@@ -75,6 +92,54 @@ fn parse_agent_status(output: &str) -> AgentServiceStatus {
         }
     }
     status
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if code.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
+fn parse_controllers(output: &str) -> Vec<ControllerInfo> {
+    strip_ansi(output)
+        .lines()
+        .filter_map(|line| {
+            let columns: Vec<_> = line.split_whitespace().collect();
+            if columns.len() < 3 || columns[0].starts_with('[') {
+                return None;
+            }
+            Some(ControllerInfo {
+                name: columns[0].into(),
+                type_name: columns[1..columns.len() - 1].join(" "),
+                state: columns[columns.len() - 1].to_ascii_lowercase(),
+            })
+        })
+        .collect()
+}
+
+fn ros_control_error(output: &str) -> String {
+    if output.contains("Could not contact service") || output.contains("waiting for service") {
+        "controller_manager 服务不可用或查询超时".into()
+    } else {
+        output
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| strip_ansi(line.trim()))
+            .unwrap_or_else(|| "ROS Control 查询失败".into())
+    }
 }
 
 fn probe_local_port(port: u16) -> Result<u16, String> {
@@ -160,6 +225,55 @@ async fn check_micro_ros_agent(profile: ConnectionProfile) -> Result<AgentServic
     }
 
     Ok(parse_agent_status(&String::from_utf8_lossy(&output.stdout)))
+}
+
+#[tauri::command]
+async fn check_ros_controllers(profile: ConnectionProfile) -> Result<RosControlStatus, String> {
+    const MANAGER: &str = "/controller_manager";
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    let remote = format!(
+        "bash -lc 'source /opt/ros/humble/setup.bash; \
+         if [ -f \"{}\" ]; then source \"{}\"; fi; \
+         ROS_DOMAIN_ID={} timeout 5 ros2 control list_controllers \
+         --spin-time 1 -c {} 2>&1'",
+        profile.ros_setup_script,
+        profile.ros_setup_script,
+        profile.ros_domain_id,
+        MANAGER
+    );
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法查询 ROS Control：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    if !output.status.success() {
+        return Ok(RosControlStatus {
+            manager: MANAGER.into(),
+            available: false,
+            controllers: Vec::new(),
+            message: ros_control_error(&combined),
+        });
+    }
+    let controllers = parse_controllers(&stdout);
+    let message = if controllers.is_empty() {
+        "当前未加载 Controller".into()
+    } else {
+        String::new()
+    };
+    Ok(RosControlStatus {
+        manager: MANAGER.into(),
+        available: true,
+        controllers,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -274,11 +388,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_ssh,
             check_micro_ros_agent,
+            check_ros_controllers,
             start_session,
             stop_session
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Easy Debug");
+        .expect("failed to run Robot Console");
 }
 
 #[cfg(test)]
@@ -326,6 +441,35 @@ mod tests {
     #[test]
     fn malformed_pid_falls_back_to_zero() {
         assert_eq!(parse_agent_status("MainPID=invalid").main_pid, 0);
+    }
+
+    #[test]
+    fn parses_ros_control_controller_rows_and_ansi_colors() {
+        let controllers = parse_controllers(
+            "joint_state_broadcaster joint_state_broadcaster/JointStateBroadcaster \u{1b}[32mactive\u{1b}[0m\n\
+             arm_controller joint_trajectory_controller/JointTrajectoryController inactive\n",
+        );
+        assert_eq!(controllers, vec![
+            ControllerInfo {
+                name: "joint_state_broadcaster".into(),
+                type_name: "joint_state_broadcaster/JointStateBroadcaster".into(),
+                state: "active".into(),
+            },
+            ControllerInfo {
+                name: "arm_controller".into(),
+                type_name: "joint_trajectory_controller/JointTrajectoryController".into(),
+                state: "inactive".into(),
+            },
+        ]);
+    }
+
+    #[test]
+    fn ignores_ros_cli_logs_and_summarizes_manager_timeout() {
+        assert!(parse_controllers("[INFO] waiting for service\n").is_empty());
+        assert_eq!(
+            ros_control_error("[WARN] Could not contact service /controller_manager/list_controllers"),
+            "controller_manager 服务不可用或查询超时"
+        );
     }
 
     #[test]

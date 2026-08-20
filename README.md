@@ -1,4 +1,4 @@
-# Easy Debug
+# Robot Console
 
 基于 Tauri、Rust、React 和 Three.js 的 ROS 2 Humble 调试与受控操作上位机。桌面端运行在 macOS，ROS Bridge 运行在 Jetson/Ubuntu 22.04；两端仅通过 SSH 隧道通信，Mac 不需要安装 ROS 2。
 
@@ -9,6 +9,7 @@
 - 首选本地端口被占用时自动选择空闲端口，应用退出时回收 SSH隧道子进程
 - 每 5 秒检查 `micro-ros-agent-stm32h723.service`，显示运行、停止或检查失败状态
 - ROS graph Topic 名称与类型发现
+- 每 5 秒监测 `/controller_manager` 已加载 Controller 的名称、类型和状态
 - 标准 Topic 只读订阅、JSON 查看、频率和消息计数
 - 从 `std_msgs/msg/String` Topic 获取 URDF
 - Three.js URDF 渲染和 `sensor_msgs/msg/JointState` 关节驱动
@@ -69,7 +70,7 @@ npm run tauri build
 调试版 `.app` 位于：
 
 ```text
-src-tauri/target/debug/bundle/macos/Easy Debug.app
+src-tauri/target/debug/bundle/macos/Robot Console.app
 ```
 
 ## Jetson Bridge

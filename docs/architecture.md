@@ -9,7 +9,7 @@ Rust SSH session manager
       │ local port forwarding
       ▼
 Jetson 127.0.0.1:8765
-Easy Debug ROS Bridge
+Robot Console ROS Bridge
       │ rclcpp / Fast DDS
       ▼
 ROS 2 Humble graph (including entities exposed by Micro XRCE-DDS Agent)
@@ -25,6 +25,7 @@ The desktop never joins DDS directly. SSH provides authentication, host-key veri
 4. Desktop starts `ssh -N -L` local forwarding.
 5. WebView opens a WebSocket to the local forwarded port.
 6. UI requests the graph and subscribes to URDF and JointState topics.
+7. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every five seconds and shows controller names, types and states below Topics.
 
 ## URDF assets
 
@@ -37,3 +38,4 @@ The URDF XML remains a ROS Topic payload. For each `package://` URI, the desktop
 - Message decoding uses an explicit standard-type registry.
 - Mesh transfer is base64 and held in memory; streaming is a later optimization.
 - Topic charts, TF and rosbag are not part of this first vertical slice.
+- ROS Control monitoring is read-only and currently targets `/controller_manager`.

@@ -1,4 +1,4 @@
-# Easy Debug 开发约束
+# Robot Console 开发约束
 
 ## 强制测试规则
 

@@ -30,6 +30,19 @@ export type AgentServiceStatus = {
   description: string;
 };
 
+export type ControllerInfo = {
+  name: string;
+  typeName: string;
+  state: string;
+};
+
+export type RosControlStatus = {
+  manager: string;
+  available: boolean;
+  controllers: ControllerInfo[];
+  message: string;
+};
+
 export type BridgeEnvelope = {
   op: string;
   request_id?: string;

@@ -1,11 +1,11 @@
 import type { ConnectionProfile } from "./types";
 import { defaultProfile } from "./types";
 
-export type CollapsiblePanel = "topics" | "motor" | "inspector";
+export type CollapsiblePanel = "topics" | "rosControl" | "motor" | "inspector";
 export type PanelState = Record<CollapsiblePanel, boolean>;
 export type TopicSample = { data: unknown; count: number; firstAt: number; lastAt: number; hz: number };
 
-export const defaultPanelState: PanelState = { topics: true, motor: true, inspector: true };
+export const defaultPanelState: PanelState = { topics: true, rosControl: true, motor: true, inspector: true };
 
 export function migrateProfile(saved: Partial<ConnectionProfile>): ConnectionProfile {
   const profile = { ...defaultProfile, ...saved } as ConnectionProfile;

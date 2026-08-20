@@ -2,7 +2,7 @@
 name = "easy-debug"
 version = "0.1.0"
 description = "ROS 2 robot debugging workstation"
-authors = ["Easy Debug contributors"]
+authors = ["Robot Console contributors"]
 edition = "2021"
 
 [lib]
