@@ -20,6 +20,24 @@ export type TopicInfo = {
   types: string[];
 };
 
+export type RosGraphNode = {
+  id: string;
+  label: string;
+  kind: "node" | "topic";
+  types: string[];
+};
+
+export type RosGraphEdge = {
+  source: string;
+  target: string;
+  relation: "publish" | "subscribe";
+};
+
+export type RosGraph = {
+  nodes: RosGraphNode[];
+  edges: RosGraphEdge[];
+};
+
 export type AgentServiceStatus = {
   loadState: string;
   activeState: string;
@@ -50,6 +68,8 @@ export type BridgeEnvelope = {
   type?: string;
   data?: unknown;
   topics?: TopicInfo[];
+  nodes?: RosGraphNode[];
+  edges?: RosGraphEdge[];
   message?: string;
   uri?: string;
   mime?: string;

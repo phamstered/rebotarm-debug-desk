@@ -13,6 +13,10 @@ Messages are UTF-8 JSON WebSocket text frames.
 ```
 
 ```json
+{"op":"graph","request_id":"uuid"}
+```
+
+```json
 {"op":"subscribe","request_id":"uuid","topic":"/joint_states","type":"sensor_msgs/msg/JointState"}
 ```
 
@@ -59,6 +63,24 @@ Topic data:
   "data":{"name":["joint1"],"position":[0.2],"velocity":[],"effort":[]}
 }
 ```
+
+ROS node/topic graph:
+
+```json
+{
+  "op":"graph",
+  "request_id":"uuid",
+  "nodes":[
+    {"id":"node:/joint_state_publisher","label":"/joint_state_publisher","kind":"node","types":[]},
+    {"id":"topic:/joint_states","label":"/joint_states","kind":"topic","types":["sensor_msgs/msg/JointState"]}
+  ],
+  "edges":[
+    {"source":"node:/joint_state_publisher","target":"topic:/joint_states","relation":"publish"}
+  ]
+}
+```
+
+`relation` 为 `publish` 时方向是 ROS Node → Topic，为 `subscribe` 时方向是 Topic → ROS Node。Topic 节点可继续通过 `subscribe` 请求获取实时数据。
 
 Resource:
 

@@ -30,6 +30,13 @@ int main() {
   assert((disable == std::vector<uint32_t>{43, 44, 45}));
   assert(sequence == 45);
 
+  assert(easy_debug_bridge::fully_qualified_node_name("/", "controller_manager") ==
+         "/controller_manager");
+  assert(easy_debug_bridge::fully_qualified_node_name("/robot", "driver") ==
+         "/robot/driver");
+  assert(easy_debug_bridge::fully_qualified_node_name("robot", "driver") ==
+         "/robot/driver");
+
   sequence = UINT32_MAX;
   const auto wrapped = easy_debug_bridge::allocate_sequences(sequence, 1);
   assert(wrapped.front() == 0);

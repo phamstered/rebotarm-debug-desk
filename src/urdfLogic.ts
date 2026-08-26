@@ -20,6 +20,20 @@ export function packageUris(xml: string): string[] {
   return [...new Set(xml.match(/package:\/\/[^"'\s<>)]+/g) ?? [])];
 }
 
+export async function loadPackageResourcesSequentially(
+  xml: string,
+  load: (uri: string) => Promise<void>,
+): Promise<void> {
+  for (const uri of packageUris(xml)) {
+    try {
+      await load(uri);
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      throw new Error(`URDF 资源加载失败：${uri}（${detail}）`);
+    }
+  }
+}
+
 export function applyJointState(
   names: string[] | undefined,
   positions: number[] | undefined,

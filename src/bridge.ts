@@ -1,4 +1,4 @@
-import type { BridgeEnvelope, ConnectionProfile, TopicInfo } from "./types";
+import type { BridgeEnvelope, ConnectionProfile, RosGraph, TopicInfo } from "./types";
 
 type Listener = (message: BridgeEnvelope) => void;
 
@@ -79,13 +79,13 @@ export class BridgeClient {
     this.socket.send(JSON.stringify(message));
   }
 
-  request(message: BridgeEnvelope): Promise<BridgeEnvelope> {
+  request(message: BridgeEnvelope, timeoutMs = 10000): Promise<BridgeEnvelope> {
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error(`${message.op} 请求超时`));
-      }, 10000);
+      }, timeoutMs);
       this.pending.set(requestId, {
         resolve: (response) => {
           window.clearTimeout(timer);
@@ -103,5 +103,10 @@ export class BridgeClient {
   async listTopics(): Promise<TopicInfo[]> {
     const response = await this.request({ op: "topics" });
     return response.topics ?? [];
+  }
+
+  async getGraph(): Promise<RosGraph> {
+    const response = await this.request({ op: "graph" });
+    return { nodes: response.nodes ?? [], edges: response.edges ?? [] };
   }
 }

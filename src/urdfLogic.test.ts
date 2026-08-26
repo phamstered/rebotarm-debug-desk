@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyJointState, decodeBase64, packageUris, resolvePackageRelative } from "./urdfLogic";
+import { applyJointState, decodeBase64, loadPackageResourcesSequentially, packageUris, resolvePackageRelative } from "./urdfLogic";
 
 describe("URDF resources", () => {
   it("extracts unique package resources", () => {
@@ -16,6 +16,31 @@ describe("URDF resources", () => {
 
   it("decodes resource bytes", () => {
     expect([...decodeBase64("AQID")]).toEqual([1, 2, 3]);
+  });
+
+  it("loads large package resources sequentially instead of starting all timeouts together", async () => {
+    let releaseFirst!: () => void;
+    const firstResource = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const calls: string[] = [];
+    const loading = loadPackageResourcesSequentially(
+      '<mesh filename="package://robot/a.stl"/><mesh filename="package://robot/b.stl"/>',
+      async (uri) => {
+        calls.push(uri);
+        if (uri.endsWith("a.stl")) await firstResource;
+      },
+    );
+    await Promise.resolve();
+    expect(calls).toEqual(["package://robot/a.stl"]);
+    releaseFirst();
+    await loading;
+    expect(calls).toEqual(["package://robot/a.stl", "package://robot/b.stl"]);
+  });
+
+  it("identifies the package URI when a resource fails", async () => {
+    await expect(loadPackageResourcesSequentially(
+      '<mesh filename="package://robot/missing.stl"/>',
+      async () => { throw new Error("resource 请求超时"); },
+    )).rejects.toThrow("package://robot/missing.stl（resource 请求超时）");
   });
 
   it("maps JointState names to positions and defaults missing values to zero", () => {

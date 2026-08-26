@@ -49,6 +49,27 @@ describe("BridgeClient", () => {
     await expect(listed).resolves.toEqual([{ name: "/a", types: ["std_msgs/msg/String"] }]);
   });
 
+  it("requests ROS node/topic graph topology", async () => {
+    const bridge = new BridgeClient();
+    const connected = bridge.connect(defaultProfile);
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    await connected;
+    const graph = bridge.getGraph();
+    const request = JSON.parse(socket.sent.at(-1)!);
+    expect(request.op).toBe("graph");
+    socket.message({
+      op: "graph",
+      request_id: request.request_id,
+      nodes: [{ id: "topic:/joint_states", label: "/joint_states", kind: "topic", types: ["sensor_msgs/msg/JointState"] }],
+      edges: [{ source: "node:/driver", target: "topic:/joint_states", relation: "publish" }],
+    });
+    await expect(graph).resolves.toEqual({
+      nodes: [{ id: "topic:/joint_states", label: "/joint_states", kind: "topic", types: ["sensor_msgs/msg/JointState"] }],
+      edges: [{ source: "node:/driver", target: "topic:/joint_states", relation: "publish" }],
+    });
+  });
+
   it("rejects bridge errors and emits topic/disconnect events", async () => {
     const bridge = new BridgeClient();
     const connected = bridge.connect(defaultProfile);
@@ -65,6 +86,24 @@ describe("BridgeClient", () => {
     socket.close();
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ op: "topic_message", topic: "/a" }));
     expect(listener).toHaveBeenCalledWith({ op: "disconnected" });
+  });
+
+  it("supports a longer timeout for large URDF resources", async () => {
+    const timeoutSpy = vi.spyOn(window, "setTimeout");
+    try {
+      const bridge = new BridgeClient();
+      const connected = bridge.connect(defaultProfile);
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      await connected;
+      const pending = bridge.request({ op: "resource", uri: "package://robot/large.stl" }, 30_000);
+      const request = JSON.parse(socket.sent.at(-1)!);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+      socket.message({ op: "resource", request_id: request.request_id, base64: "AQID" });
+      await expect(pending).resolves.toMatchObject({ base64: "AQID" });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("throws if sending while disconnected", () => {

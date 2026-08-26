@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { BridgeClient } from "./bridge";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { MotorControl } from "./MotorControl";
-import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, HardwareStatus, RosControlStatus, TopicInfo } from "./types";
+import { TopicInspector } from "./TopicInspector";
+import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosControlStatus, TopicInfo } from "./types";
 import { UrdfViewer } from "./UrdfViewer";
 import { loadPanelState, loadProfile, nextTopicSample } from "./appLogic";
 import type { CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
@@ -13,6 +14,7 @@ import type { LayoutSizes } from "./layoutLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "connected" | "failed";
 const LIST_REFRESH_INTERVAL_MS = 30_000;
+const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
 
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
@@ -133,7 +135,9 @@ export default function App() {
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
   const [topics, setTopics] = useState<TopicInfo[]>([]);
+  const [topicFilter, setTopicFilter] = useState("");
   const [selected, setSelected] = useState<string>("");
+  const [topicSubscribeError, setTopicSubscribeError] = useState("");
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
@@ -144,8 +148,12 @@ export default function App() {
   const [topicRefreshing, setTopicRefreshing] = useState(false);
   const [topicRefreshError, setTopicRefreshError] = useState("");
   const [rosControlRefreshing, setRosControlRefreshing] = useState(false);
+  const [controllerAction, setControllerAction] = useState<{ name: string; action: "activate" | "deactivate" } | null>(null);
+  const [controllerActionMessage, setControllerActionMessage] = useState("");
+  const [controllerActionError, setControllerActionError] = useState("");
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
+  const [centerTab, setCenterTab] = useState<"robot" | "graph">("robot");
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
   const topicSidebarRef = useRef<HTMLElement>(null);
@@ -154,6 +162,14 @@ export default function App() {
   const topicRefreshInFlightRef = useRef(false);
   const rosControlRefreshInFlightRef = useRef(false);
   const bridge = useMemo(() => new BridgeClient(), []);
+  const filteredTopics = useMemo(() => {
+    const query = topicFilter.trim().toLocaleLowerCase();
+    if (!query) return topics;
+    return topics.filter((topic) =>
+      topic.name.toLocaleLowerCase().includes(query)
+      || topic.types.some((type) => type.toLocaleLowerCase().includes(query)),
+    );
+  }, [topicFilter, topics]);
 
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
@@ -246,12 +262,17 @@ export default function App() {
     }
   }, [bridge]);
 
+  const fetchRosControllers = useCallback(
+    () => invoke<RosControlStatus>("check_ros_controllers", { profile }),
+    [profile],
+  );
+
   const refreshRosControllers = useCallback(async () => {
     if (rosControlRefreshInFlightRef.current) return;
     rosControlRefreshInFlightRef.current = true;
     setRosControlRefreshing(true);
     try {
-      setRosControl(await invoke<RosControlStatus>("check_ros_controllers", { profile }));
+      setRosControl(await fetchRosControllers());
     } catch (reason) {
       setRosControl({
         manager: "/controller_manager",
@@ -263,7 +284,34 @@ export default function App() {
       rosControlRefreshInFlightRef.current = false;
       setRosControlRefreshing(false);
     }
-  }, [profile]);
+  }, [fetchRosControllers]);
+
+  const switchController = async (controller: ControllerInfo, action: "activate" | "deactivate") => {
+    if (controllerAction) return;
+    setControllerAction({ name: controller.name, action });
+    setControllerActionMessage("");
+    setControllerActionError("");
+    try {
+      const message = await invoke<string>("switch_ros_controller", {
+        profile,
+        controllerName: controller.name,
+        action,
+      });
+      setControllerActionMessage(message || `${controller.name} ${action} 完成`);
+    } catch (reason) {
+      setControllerActionError(reason instanceof Error ? reason.message : String(reason));
+    }
+    try {
+      setRosControl(await fetchRosControllers());
+    } catch (reason) {
+      setControllerActionError((current) => {
+        const refreshError = `列表刷新失败：${reason instanceof Error ? reason.message : String(reason)}`;
+        return current ? `${current}；${refreshError}` : refreshError;
+      });
+    } finally {
+      setControllerAction(null);
+    }
+  };
 
   useEffect(() => {
     return bridge.onMessage((message: BridgeEnvelope) => {
@@ -368,13 +416,26 @@ export default function App() {
     await invoke("stop_session").catch(() => undefined);
     setEffectiveLocalPort(null);
     setRosControl(null);
+    setControllerAction(null);
+    setControllerActionMessage("");
+    setControllerActionError("");
     setTopicRefreshError("");
+    setTopicFilter("");
     setStage("idle");
   }
 
-  function selectTopic(topic: TopicInfo) {
+  async function selectTopic(topic: TopicInfo) {
     setSelected(topic.name);
-    bridge.send({ op: "subscribe", topic: topic.name, type: topic.types[0] });
+    setTopicSubscribeError("");
+    if (!topic.types[0]) {
+      setTopicSubscribeError("该 Topic 没有可用消息类型");
+      return;
+    }
+    try {
+      await bridge.request({ op: "subscribe", topic: topic.name, type: topic.types[0] });
+    } catch (reason) {
+      setTopicSubscribeError(reason instanceof Error ? reason.message : String(reason));
+    }
   }
 
   if (stage !== "connected") {
@@ -414,15 +475,26 @@ export default function App() {
         <section className={`sidebar-section topics-section ${panels.topics ? "expanded" : "collapsed"}`}>
           <PanelTitle
             title="Topics"
-            meta={String(topics.length)}
+            meta={topicFilter ? `${filteredTopics.length}/${topics.length}` : String(topics.length)}
             expanded={panels.topics}
             onRefresh={() => void refreshTopics()}
             refreshing={topicRefreshing}
             onToggle={() => togglePanel("topics")}
           />
+          <div className="section-content topic-filter">
+            <input
+              type="search"
+              aria-label="过滤 Topics"
+              placeholder="搜索 Topic 或消息类型"
+              value={topicFilter}
+              onChange={(event) => setTopicFilter(event.target.value)}
+            />
+            <span>{filteredTopics.length}/{topics.length}</span>
+          </div>
           <div className="section-content topic-list">
             {topicRefreshError && <div className="topic-list-error">刷新失败：{topicRefreshError}</div>}
-            {topics.map((topic) => <button key={topic.name} className={selected === topic.name ? "active" : ""} onClick={() => selectTopic(topic)}><strong>{topic.name}</strong><small>{topic.types.join(", ")}</small></button>)}
+            {filteredTopics.map((topic) => <button key={topic.name} className={selected === topic.name ? "active" : ""} onClick={() => void selectTopic(topic)}><strong>{topic.name}</strong><small>{topic.types.join(", ")}</small></button>)}
+            {topics.length > 0 && filteredTopics.length === 0 && <div className="topic-filter-empty">没有匹配的 Topic</div>}
           </div>
         </section>
         {panels.topics && panels.rosControl && (
@@ -452,11 +524,24 @@ export default function App() {
           <div className="section-content ros-control-content">
             <div className="controller-manager-name">{rosControl?.manager ?? "/controller_manager"}</div>
             <div className="controller-list">
+            {controllerActionError && <div className="controller-action-feedback error">{controllerActionError}</div>}
+            {controllerActionMessage && <div className="controller-action-feedback success">{controllerActionMessage}</div>}
             {rosControl?.controllers.map((controller) => (
               <div className="controller-item" key={controller.name}>
                 <div><span className={`controller-state ${controller.state}`} /> <strong>{controller.name}</strong></div>
                 <small title={controller.typeName}>{controller.typeName}</small>
                 <span className={`controller-state-label ${controller.state}`}>{controller.state}</span>
+                <button
+                  className={`controller-action-button ${controller.state === "active" ? "deactivate" : "activate"}`}
+                  type="button"
+                  disabled={Boolean(controllerAction) || rosControlRefreshing}
+                  aria-label={`${controller.state === "active" ? "停用" : "激活"} Controller ${controller.name}`}
+                  onClick={() => void switchController(controller, controller.state === "active" ? "deactivate" : "activate")}
+                >
+                  {controllerAction?.name === controller.name
+                    ? "Working…"
+                    : controller.state === "active" ? "Deactivate" : "Activate"}
+                </button>
               </div>
             ))}
             {(!rosControl || rosControl.controllers.length === 0) && (
@@ -468,7 +553,18 @@ export default function App() {
           </div>
         </section>
       </aside>
-      <section className="urdf-panel"><div className="panel-title">Robot View <span>{profile.urdfTopic}</span></div><UrdfViewer xml={urdf} jointState={jointState} bridge={bridge} /></section>
+      <section className="urdf-panel">
+        <div className="panel-title center-tabs">
+          <div className="center-tab-list" role="tablist" aria-label="中心视图">
+            <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
+            <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
+          </div>
+          <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
+        </div>
+        {centerTab === "robot"
+          ? <UrdfViewer xml={urdf} jointState={jointState} bridge={bridge} />
+          : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
+      </section>
       <section
         ref={dataPanelRef}
         className={`data-panel ${panels.inspector ? "" : "inspector-collapsed"} ${panels.motor ? "" : "motor-collapsed"}`}
@@ -506,7 +602,7 @@ export default function App() {
             expanded={panels.inspector}
             onToggle={() => togglePanel("inspector")}
           />
-          <pre className="section-content">{selected ? JSON.stringify(messages[selected]?.data ?? "等待数据…", null, 2) : "从左侧选择一个 Topic"}</pre>
+          <TopicInspector selected={selected} sample={messages[selected]} subscribeError={topicSubscribeError} />
         </section>
       </section>
       <ResizeHandle

@@ -76,6 +76,55 @@ fn valid_topic(topic: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '/')
 }
 
+fn valid_controller_name(name: &str) -> bool {
+    let valid_start = name
+        .chars()
+        .next()
+        .map(|character| character.is_ascii_alphabetic() || character == '_' || character == '/')
+        .unwrap_or(false);
+    !name.is_empty()
+        && name.len() <= 255
+        && valid_start
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '/')
+}
+
+fn controller_action_flag(action: &str) -> Option<&'static str> {
+    match action {
+        "activate" => Some("--activate"),
+        "deactivate" => Some("--deactivate"),
+        _ => None,
+    }
+}
+
+fn controller_switch_command(
+    profile: &ConnectionProfile,
+    controller_name: &str,
+    action: &str,
+) -> Result<String, String> {
+    const MANAGER: &str = "/controller_manager";
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    if !valid_controller_name(controller_name) {
+        return Err("Controller 名称格式无效".into());
+    }
+    let flag = controller_action_flag(action).ok_or("不支持的 Controller 操作")?;
+    Ok(format!(
+        "bash -lc 'source /opt/ros/humble/setup.bash; \
+         if [ -f \"{}\" ]; then source \"{}\"; fi; \
+         ROS_DOMAIN_ID={} timeout 10 ros2 control switch_controllers \
+         {} {} --strict --spin-time 1 -c {} 2>&1'",
+        profile.ros_setup_script,
+        profile.ros_setup_script,
+        profile.ros_domain_id,
+        flag,
+        controller_name,
+        MANAGER
+    ))
+}
+
 fn parse_agent_status(output: &str) -> AgentServiceStatus {
     let mut status = AgentServiceStatus::default();
     for line in output.lines() {
@@ -277,6 +326,35 @@ async fn check_ros_controllers(profile: ConnectionProfile) -> Result<RosControlS
 }
 
 #[tauri::command]
+async fn switch_ros_controller(
+    profile: ConnectionProfile,
+    controller_name: String,
+    action: String,
+) -> Result<String, String> {
+    let remote = controller_switch_command(&profile, &controller_name, &action)?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法执行 Controller 操作：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    if !output.status.success() {
+        return Err(format!("Controller 操作失败：{}", ros_control_error(&combined)));
+    }
+    Ok(stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| strip_ansi(line.trim()))
+        .unwrap_or_else(|| format!("Controller {controller_name} {action} 完成")))
+}
+
+#[tauri::command]
 async fn start_session(
     profile: ConnectionProfile,
     state: State<'_, SessionState>,
@@ -389,6 +467,7 @@ pub fn run() {
             check_ssh,
             check_micro_ros_agent,
             check_ros_controllers,
+            switch_ros_controller,
             start_session,
             stop_session
         ])
@@ -423,6 +502,32 @@ mod tests {
         assert!(valid_topic("/stm32/joint_commands"));
         assert!(!valid_topic("stm32/joint_commands"));
         assert!(!valid_topic("/stm32/joint-commands"));
+        assert!(valid_controller_name("/arm/trajectory_controller"));
+        assert!(valid_controller_name("joint_state_broadcaster"));
+        assert!(!valid_controller_name("arm-controller"));
+        assert!(!valid_controller_name("arm;reboot"));
+    }
+
+    #[test]
+    fn builds_safe_ros_controller_switch_commands() {
+        let activate = controller_switch_command(&profile(""), "arm_controller", "activate").unwrap();
+        assert!(activate.contains("switch_controllers --activate arm_controller --strict"));
+        assert!(activate.contains("--strict --spin-time 1"));
+        assert!(!activate.contains("--switch-timeout"));
+        assert!(activate.contains("ROS_DOMAIN_ID=0"));
+        assert!(activate.contains("-c /controller_manager"));
+        let deactivate = controller_switch_command(&profile(""), "/arm/controller", "deactivate").unwrap();
+        assert!(deactivate.contains("--deactivate /arm/controller"));
+        assert!(controller_switch_command(&profile(""), "arm;reboot", "activate").is_err());
+        assert!(controller_switch_command(&profile(""), "arm_controller", "restart").is_err());
+    }
+
+    #[test]
+    fn csp_allows_threejs_to_fetch_blob_meshes() {
+        let config = include_str!("../tauri.conf.json");
+        assert!(config.contains("script-src 'self' 'wasm-unsafe-eval'"));
+        assert!(config.contains("connect-src 'self' blob:"));
+        assert!(config.contains("img-src 'self' asset: http://asset.localhost blob:"));
     }
 
     #[test]

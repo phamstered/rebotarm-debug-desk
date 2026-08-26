@@ -36,4 +36,14 @@ inline std::vector<uint32_t> allocate_sequences(uint32_t &current, unsigned coun
   return values;
 }
 
+inline std::string fully_qualified_node_name(const std::string &node_namespace,
+                                             const std::string &node_name) {
+  std::string result = node_namespace.empty() ? "/" : node_namespace;
+  if (result.front() != '/') result.insert(result.begin(), '/');
+  if (result.back() != '/') result.push_back('/');
+  result += node_name;
+  while (result.size() > 1 && result.back() == '/') result.pop_back();
+  return result;
+}
+
 }  // namespace easy_debug_bridge

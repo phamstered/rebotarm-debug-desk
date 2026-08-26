@@ -18,7 +18,7 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader, { type URDFRobot } from "urdf-loader";
 import type { BridgeClient } from "./bridge";
-import { applyJointState, decodeBase64, packageUris, resolvePackageRelative } from "./urdfLogic";
+import { applyJointState, decodeBase64, loadPackageResourcesSequentially, resolvePackageRelative } from "./urdfLogic";
 
 type JointState = { name?: string[]; position?: number[] };
 
@@ -76,13 +76,13 @@ function Scene({ robot }: { robot: URDFRobot | null }) {
 }
 
 async function hydrateResources(xml: string, bridge: BridgeClient) {
-  const uris = packageUris(xml);
   const urls = new Map<string, string>();
   const formats = new Map<string, string>();
-  await Promise.all(
-    uris.map(async (uri) => {
-      const response = await bridge.request({ op: "resource", uri });
-      if (!response.base64) return;
+  const dispose = () => urls.forEach((url) => URL.revokeObjectURL(url));
+  try {
+    await loadPackageResourcesSequentially(xml, async (uri) => {
+      const response = await bridge.request({ op: "resource", uri }, 30_000);
+      if (!response.base64) throw new Error("Bridge 未返回资源内容");
       let bytes = decodeBase64(response.base64);
       let mime = response.mime ?? "application/octet-stream";
 
@@ -91,18 +91,18 @@ async function hydrateResources(xml: string, bridge: BridgeClient) {
       if (mime === "model/vnd.collada+xml") {
         let dae = new TextDecoder().decode(bytes);
         const references = [...new Set([...dae.matchAll(/<init_from[^>]*>([^<]+)<\/init_from>/g)].map((match) => match[1].trim()))];
-        await Promise.all(references.map(async (reference) => {
-          if (!reference || reference.startsWith("#") || /^(data:|https?:|blob:)/.test(reference)) return;
+        for (const reference of references) {
+          if (!reference || reference.startsWith("#") || /^(data:|https?:|blob:)/.test(reference)) continue;
           const dependencyUri = resolvePackageRelative(uri, reference);
-          const dependency = await bridge.request({ op: "resource", uri: dependencyUri });
-          if (!dependency.base64) return;
+          const dependency = await bridge.request({ op: "resource", uri: dependencyUri }, 30_000);
+          if (!dependency.base64) throw new Error(`Bridge 未返回依赖资源：${dependencyUri}`);
           const dependencyUrl = URL.createObjectURL(new Blob(
             [decodeBase64(dependency.base64)],
             { type: dependency.mime ?? "application/octet-stream" },
           ));
           urls.set(dependencyUri, dependencyUrl);
           dae = dae.split(reference).join(dependencyUrl);
-        }));
+        }
         bytes = new TextEncoder().encode(dae);
         mime = "model/vnd.collada+xml";
       }
@@ -110,13 +110,16 @@ async function hydrateResources(xml: string, bridge: BridgeClient) {
       const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
       urls.set(uri, url);
       formats.set(url, uri.split(".").pop()?.toLowerCase() ?? "");
-    }),
-  );
+    });
+  } catch (reason) {
+    dispose();
+    throw reason;
+  }
   let hydrated = xml;
   urls.forEach((url, uri) => {
     hydrated = hydrated.split(uri).join(url);
   });
-  return { hydrated, formats, dispose: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  return { hydrated, formats, dispose };
 }
 
 export function UrdfViewer({
@@ -143,11 +146,15 @@ export function UrdfViewer({
       .then(({ hydrated, formats, dispose }) => {
         release = dispose;
         const manager = new LoadingManager();
-        manager.onError = (url) => setError(`资源加载失败：${url}`);
+        manager.onError = (url) => setError((current) => current || `资源加载失败：${url}`);
         const loader = new URDFLoader(manager);
         loader.loadMeshCb = (path, meshManager, done) => {
           const complete = (object: Object3D) => done(object);
-          const failed = (reason: unknown) => done(null, reason instanceof Error ? reason : new Error(String(reason)));
+          const failed = (reason: unknown) => {
+            const meshError = reason instanceof Error ? reason : new Error(String(reason));
+            if (!disposed) setError(`网格解析失败：${path}（${meshError.message}）`);
+            done(null, meshError);
+          };
           const format = formats.get(path) ?? "";
           if (format === "stl") {
             new STLLoader(meshManager).load(path, (geometry) => complete(new Mesh(

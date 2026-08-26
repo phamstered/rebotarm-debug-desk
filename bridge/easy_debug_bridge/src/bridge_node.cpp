@@ -30,9 +30,11 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -239,6 +241,8 @@ class BridgeNode : public rclcpp::Node {
         session->send("{\"op\":\"hello\",\"bridge_version\":\"0.1.0\",\"ros_distro\":\"humble\"}");
       } else if (op == "topics") {
         send_topics(session, request_id);
+      } else if (op == "graph") {
+        send_graph(session, request_id);
       } else if (op == "subscribe") {
         subscribe(session, request.get<std::string>("topic", ""),
                   request.get<std::string>("type", ""), request_id);
@@ -281,6 +285,62 @@ class BridgeNode : public rclcpp::Node {
       if (!first_topic) out << ',';
       first_topic = false;
       out << "{\"name\":" << json_quote(name) << ",\"types\":" << string_array(types) << '}';
+    }
+    out << "]}";
+    session->send(out.str());
+  }
+
+  void send_graph(const std::shared_ptr<WebSocketSession> &session, const std::string &request_id) {
+    auto topics = get_topic_names_and_types();
+    const auto graph_interface = get_node_graph_interface();
+    std::set<std::string> nodes;
+    std::set<std::tuple<std::string, std::string, std::string>> edges;
+    for (const auto &[node_name, node_namespace] : graph_interface->get_node_names_and_namespaces()) {
+      const std::string full_name =
+          easy_debug_bridge::fully_qualified_node_name(node_namespace, node_name);
+      nodes.insert(full_name);
+      try {
+        for (const auto &[topic, types] :
+             graph_interface->get_publisher_names_and_types_by_node(node_name, node_namespace)) {
+          topics[topic] = types;
+          edges.emplace("node:" + full_name, "topic:" + topic, "publish");
+        }
+        for (const auto &[topic, types] :
+             graph_interface->get_subscriber_names_and_types_by_node(node_name, node_namespace)) {
+          topics[topic] = types;
+          edges.emplace("topic:" + topic, "node:" + full_name, "subscribe");
+        }
+      } catch (const std::exception &) {
+        // ROS graph can change between listing a node and querying its endpoints.
+      }
+    }
+
+    std::ostringstream out;
+    out << "{\"op\":\"graph\",\"request_id\":" << json_quote(request_id)
+        << ",\"nodes\":[";
+    bool first = true;
+    for (const auto &node : nodes) {
+      if (!first) out << ',';
+      first = false;
+      out << "{\"id\":" << json_quote("node:" + node)
+          << ",\"label\":" << json_quote(node)
+          << ",\"kind\":\"node\",\"types\":[]}";
+    }
+    for (const auto &[topic, types] : topics) {
+      if (!first) out << ',';
+      first = false;
+      out << "{\"id\":" << json_quote("topic:" + topic)
+          << ",\"label\":" << json_quote(topic)
+          << ",\"kind\":\"topic\",\"types\":" << string_array(types) << '}';
+    }
+    out << "],\"edges\":[";
+    first = true;
+    for (const auto &[source, target, relation] : edges) {
+      if (!first) out << ',';
+      first = false;
+      out << "{\"source\":" << json_quote(source)
+          << ",\"target\":" << json_quote(target)
+          << ",\"relation\":" << json_quote(relation) << '}';
     }
     out << "]}";
     session->send(out.str());

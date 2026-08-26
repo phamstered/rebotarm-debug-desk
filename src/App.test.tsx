@@ -9,6 +9,13 @@ const doubles = vi.hoisted(() => ({
     { name: "/robot_description", types: ["std_msgs/msg/String"] },
     { name: "/stm32/status", types: ["microros_stm32h723_bridge/msg/HardwareStatus"] },
   ]),
+  getGraph: vi.fn().mockResolvedValue({
+    nodes: [
+      { id: "node:/stm32_bridge", label: "/stm32_bridge", kind: "node", types: [] },
+      { id: "topic:/stm32/status", label: "/stm32/status", kind: "topic", types: ["microros_stm32h723_bridge/msg/HardwareStatus"] },
+    ],
+    edges: [{ source: "node:/stm32_bridge", target: "topic:/stm32/status", relation: "publish" }],
+  }),
   send: vi.fn(),
   request: vi.fn().mockResolvedValue({ op: "joint_command_ack", sequence: 1 }),
   close: vi.fn(),
@@ -20,6 +27,7 @@ vi.mock("./bridge", () => ({
   BridgeClient: class {
     connect = doubles.connect;
     listTopics = doubles.listTopics;
+    getGraph = doubles.getGraph;
     send = doubles.send;
     request = doubles.request;
     close = doubles.close;
@@ -36,7 +44,7 @@ describe("App workflow", () => {
     localStorage.clear();
     vi.clearAllMocks();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
-    doubles.invoke.mockImplementation((command: string) => {
+    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string }) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "check_micro_ros_agent") return Promise.resolve({
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
@@ -51,6 +59,9 @@ describe("App workflow", () => {
         ],
         message: "",
       });
+      if (command === "switch_ros_controller") return Promise.resolve(
+        `${args?.controllerName} ${args?.action} complete`,
+      );
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -70,6 +81,24 @@ describe("App workflow", () => {
     expect(doubles.send).toHaveBeenCalledWith({ op: "subscribe", topic: "/stm32/joint_states", type: "sensor_msgs/msg/JointState" });
   });
 
+  it("filters Topics by name or message type without changing subscriptions", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const filter = await screen.findByRole("searchbox", { name: "过滤 Topics" });
+    const sendsBeforeFilter = doubles.send.mock.calls.length;
+
+    await user.type(filter, "STATUS");
+    expect(screen.getByRole("button", { name: /\/stm32\/status/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /\/robot_description/ })).not.toBeInTheDocument();
+
+    await user.clear(filter);
+    await user.type(filter, "std_msgs");
+    expect(screen.getByRole("button", { name: /\/robot_description/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /\/stm32\/status/ })).not.toBeInTheDocument();
+    expect(doubles.send).toHaveBeenCalledTimes(sendsBeforeFilter);
+  });
+
   it("shows loaded ROS Control controllers and their current states below Topics", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -81,6 +110,35 @@ describe("App workflow", () => {
     expect(control).toHaveTextContent("arm_controller");
     expect(control).toHaveTextContent("inactive");
     expect(doubles.invoke).toHaveBeenCalledWith("check_ros_controllers", expect.objectContaining({ profile: expect.any(Object) }));
+  });
+
+  it("activates and deactivates controllers and refreshes the list after each operation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("joint_state_broadcaster");
+
+    const controllerQueries = () => doubles.invoke.mock.calls
+      .filter(([command]) => command === "check_ros_controllers").length;
+    const beforeDeactivate = controllerQueries();
+    await user.click(screen.getByRole("button", { name: "停用 Controller joint_state_broadcaster" }));
+    expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", {
+      profile: expect.any(Object),
+      controllerName: "joint_state_broadcaster",
+      action: "deactivate",
+    });
+    await waitFor(() => expect(controllerQueries()).toBe(beforeDeactivate + 1));
+    expect(screen.getByText("joint_state_broadcaster deactivate complete")).toBeVisible();
+
+    const beforeActivate = controllerQueries();
+    await user.click(screen.getByRole("button", { name: "激活 Controller arm_controller" }));
+    expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", {
+      profile: expect.any(Object),
+      controllerName: "arm_controller",
+      action: "activate",
+    });
+    await waitFor(() => expect(controllerQueries()).toBe(beforeActivate + 1));
+    expect(screen.getByText("arm_controller activate complete")).toBeVisible();
   });
 
   it("manually refreshes Topics and ROS Control and executes both 30-second pollers", async () => {
@@ -153,7 +211,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("micro-ROS Agent：运行中");
     await user.click(screen.getByRole("button", { name: /\/stm32\/status/ }));
-    expect(doubles.send).toHaveBeenCalledWith(expect.objectContaining({ op: "subscribe", topic: "/stm32/status" }));
+    expect(doubles.request).toHaveBeenCalledWith(expect.objectContaining({ op: "subscribe", topic: "/stm32/status" }));
 
     await user.click(screen.getByRole("button", { name: "收起Topics" }));
     expect(container.querySelector(".topics-section")).toHaveClass("collapsed");
@@ -208,5 +266,23 @@ describe("App workflow", () => {
     await screen.findByText("micro-ROS Agent：运行中");
     doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "<robot/>" });
     await waitFor(() => expect(screen.getByTestId("urdf")).toHaveTextContent("<robot/>"));
+  });
+
+  it("opens Topic Graph and subscribes a selected topic for jq inspection", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(screen.getByRole("tab", { name: "Topic Graph" }));
+
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
+    expect(doubles.getGraph).toHaveBeenCalledTimes(1);
+    await user.click(await screen.findByRole("button", { name: "Topic /stm32/status" }));
+    expect(doubles.request).toHaveBeenCalledWith({
+      op: "subscribe",
+      topic: "/stm32/status",
+      type: "microros_stm32h723_bridge/msg/HardwareStatus",
+    });
+    expect(screen.getByLabelText("jq 过滤 /stm32/status")).toHaveValue("");
+    expect(screen.getByText("未筛选 · 原始 JSON")).toBeVisible();
   });
 });

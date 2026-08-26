@@ -24,8 +24,10 @@ The desktop never joins DDS directly. SSH provides authentication, host-key veri
 3. Desktop starts the Bridge if its configured loopback port is not listening.
 4. Desktop starts `ssh -N -L` local forwarding.
 5. WebView opens a WebSocket to the local forwarded port.
-6. UI requests the graph and subscribes to URDF and JointState topics.
-7. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every five seconds and shows controller names, types and states below Topics.
+6. UI requests Topic discovery and the node/topic endpoint graph, then subscribes to URDF and JointState topics.
+7. Topic Graph applies Sugiyama-style barycentric sweeps before rendering publisher → topic → subscriber SVG edges. Selecting a Topic creates a read-only Bridge subscription and opens it in Topic Inspector.
+8. Topic Inspector shows raw JSON by default. A non-empty per-Topic jq expression lazy-loads jq 1.8.2 inline WASM and filters each decoded sample locally.
+9. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every 30 seconds and shows controller names, types and states below Topics.
 
 ## URDF assets
 
@@ -37,5 +39,6 @@ The URDF XML remains a ROS Topic payload. For each `package://` URI, the desktop
 - Bridge subscriptions are shared by all connected WebSocket clients.
 - Message decoding uses an explicit standard-type registry.
 - Mesh transfer is base64 and held in memory; streaming is a later optimization.
-- Topic charts, TF and rosbag are not part of this first vertical slice.
-- ROS Control monitoring is read-only and currently targets `/controller_manager`.
+- Time-series Topic charts, TF and rosbag are not part of this vertical slice.
+- Topic Graph can visualize every discovered type, while live jq inspection is limited to message types decoded by the Bridge registry.
+- ROS Control targets `/controller_manager` and supports controller Activate/Deactivate operations.
