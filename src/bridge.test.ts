@@ -106,6 +106,30 @@ describe("BridgeClient", () => {
     }
   });
 
+  it("rejects pending requests and ignores messages from a closed session", async () => {
+    const bridge = new BridgeClient();
+    const firstConnection = bridge.connect(defaultProfile);
+    const firstSocket = FakeWebSocket.instances[0];
+    firstSocket.open();
+    await firstConnection;
+    const listener = vi.fn();
+    bridge.onMessage(listener);
+    const pending = bridge.request({ op: "resource", uri: "package://robot/old.stl" });
+
+    bridge.close();
+    await expect(pending).rejects.toThrow("Bridge 连接已关闭");
+
+    const secondConnection = bridge.connect(defaultProfile);
+    const secondSocket = FakeWebSocket.instances[1];
+    secondSocket.open();
+    await secondConnection;
+    firstSocket.message({ op: "topic_message", topic: "/old", data: 1 });
+    secondSocket.message({ op: "topic_message", topic: "/new", data: 2 });
+
+    expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({ topic: "/old" }));
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ topic: "/new" }));
+  });
+
   it("throws if sending while disconnected", () => {
     expect(() => new BridgeClient().send({ op: "hello" })).toThrow("Bridge 尚未连接");
   });

@@ -81,6 +81,71 @@ describe("App workflow", () => {
     expect(doubles.send).toHaveBeenCalledWith({ op: "subscribe", topic: "/stm32/joint_states", type: "sensor_msgs/msg/JointState" });
   });
 
+  it("clears all previous connection data before reconnecting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("Robot Console");
+    await user.click(screen.getByRole("button", { name: /\/stm32\/status/ }));
+    act(() => {
+      doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "old-session-urdf" });
+      doubles.listener?.({ op: "topic_message", topic: "/stm32/status", data: { fault_code: 4 } });
+    });
+    expect(screen.getByTestId("urdf")).toHaveTextContent("old-session-urdf");
+    expect(screen.getByText(/fault_code/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "断开" }));
+    await screen.findByRole("button", { name: "连接 Jetson" });
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("Robot Console");
+
+    expect(screen.getByTestId("urdf")).toHaveTextContent("empty");
+    expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
+    expect(screen.queryByText(/fault_code/)).not.toBeInTheDocument();
+  });
+
+  it("does not let a delayed controller response from the old session repopulate state", async () => {
+    let resolveOldControllers!: (value: unknown) => void;
+    let controllerRequest = 0;
+    doubles.invoke.mockImplementation((command: string) => {
+      if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "check_micro_ros_agent") return Promise.resolve({
+        loadState: "loaded", activeState: "active", subState: "running", result: "success",
+        mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
+      });
+      if (command === "start_session") return Promise.resolve(19001);
+      if (command === "check_ros_controllers") {
+        controllerRequest += 1;
+        if (controllerRequest === 1) {
+          return new Promise((resolve) => { resolveOldControllers = resolve; });
+        }
+        return Promise.resolve({
+          manager: "/controller_manager", available: true,
+          controllers: [{ name: "new_controller", typeName: "test/New", state: "active" }], message: "",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("button", { name: "断开" });
+    await user.click(screen.getByRole("button", { name: "断开" }));
+    await user.click(await screen.findByRole("button", { name: "连接 Jetson" }));
+    expect(await screen.findByText("new_controller")).toBeVisible();
+
+    await act(async () => {
+      resolveOldControllers({
+        manager: "/controller_manager", available: true,
+        controllers: [{ name: "old_controller", typeName: "test/Old", state: "active" }], message: "",
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("new_controller")).toBeVisible();
+    expect(screen.queryByText("old_controller")).not.toBeInTheDocument();
+  });
+
   it("filters Topics by name or message type without changing subscriptions", async () => {
     const user = userEvent.setup();
     render(<App />);
