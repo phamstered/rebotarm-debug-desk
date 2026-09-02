@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TopicSample } from "./appLogic";
 import { loadJqExpressions } from "./topicInspectorLogic";
 
@@ -11,6 +11,8 @@ export function TopicInspector({ selected, sample, subscribeError = "" }: { sele
   const [output, setOutput] = useState(() => rawJson(sample));
   const [jqError, setJqError] = useState("");
   const expression = selected ? expressions[selected] ?? "" : "";
+  const latestSampleRef = useRef(sample);
+  latestSampleRef.current = sample;
 
   useEffect(() => {
     localStorage.setItem("robot-console-jq-filters", JSON.stringify(expressions));
@@ -30,25 +32,44 @@ export function TopicInspector({ selected, sample, subscribeError = "" }: { sele
     if (sample?.data === undefined) {
       setOutput("等待数据…");
       setJqError("");
-      return;
     }
+  }, [expression, sample?.data, selected]);
+
+  useEffect(() => {
+    const query = expression.trim();
+    if (!selected || !query) return;
     let current = true;
-    const timer = window.setTimeout(() => {
-      void import("./jqFilter").then(async ({ formatJqOutputs, runJqFilter }) => {
-        const values = await runJqFilter(sample.data, expression);
+    let interval: number | undefined;
+    let running = false;
+    let lastData: unknown = Symbol("unprocessed");
+    const update = async () => {
+      const data = latestSampleRef.current?.data;
+      if (data === undefined || running || data === lastData) return;
+      running = true;
+      lastData = data;
+      try {
+        const { formatJqOutputs, runJqFilter } = await import("./jqFilter");
+        const values = await runJqFilter(data, query);
         if (current) {
           setOutput(formatJqOutputs(values));
           setJqError("");
         }
-      }).catch((reason) => {
+      } catch (reason) {
         if (current) setJqError(reason instanceof Error ? reason.message : String(reason));
-      });
+      } finally {
+        running = false;
+      }
+    };
+    const timer = window.setTimeout(() => {
+      void update();
+      interval = window.setInterval(() => void update(), 100);
     }, 80);
     return () => {
       current = false;
       window.clearTimeout(timer);
+      if (interval !== undefined) window.clearInterval(interval);
     };
-  }, [expression, sample?.data, selected]);
+  }, [expression, selected]);
 
   return (
     <div className="section-content topic-inspector-content">

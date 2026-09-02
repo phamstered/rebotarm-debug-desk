@@ -58,6 +58,7 @@
 - 点击任意节点会高亮其一跳关联节点和连线、弱化其他拓扑；点击 Topic 节点还会创建只读订阅，并将该 Topic 送入右侧 Topic Inspector。
 - jq 编辑器和结果位于 Topic Inspector。每个 Topic 可配置独立表达式；使用浏览器内嵌的 jq 1.8.2 WASM，支持管道、字段选择、数组、`select` 等标准 jq 语法，不依赖 Jetson 安装 jq。
 - jq 表达式按 Topic 持久化在本机；默认留空且直接显示原始 JSON，仅在填写表达式后按需加载 jq WASM。语法错误、订阅失败与空输出分别显示，不会中断 Graph 刷新。
+- jq 使用固定频率处理最新一帧 Topic 数据；高频消息不会反复重置表达式防抖，因此 JointState 等持续数据流也能稳定刷新筛选结果。
 - Graph 可以展示 ROS graph 中的全部 Topic，但实时数据仍受 Bridge 消息类型注册表限制；不支持解码的消息类型会明确提示订阅失败。
 
 ## 5. URDF 与 Three.js
