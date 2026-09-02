@@ -11,6 +11,8 @@
 - 依次执行 SSH 检查、micro-ROS Agent 状态检查、Jetson Bridge 启动、SSH 本地端口转发和 WebSocket 连接。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。
 - 断开连接时关闭 WebSocket、SSH 隧道；电机命令流运行时先请求 DISABLE。
+- 断开和重新连接时清空上一会话的 Topic 列表与采样、选中项、URDF、JointState、硬件/Agent/Controller 状态、错误及操作反馈；保留连接配置、面板布局等用户偏好。
+- Bridge 关闭时拒绝上一会话尚未完成的请求，并忽略旧 WebSocket 延迟到达的数据帧，避免污染新会话。
 - Jetson Bridge 仅监听 `127.0.0.1`，通过 SSH 隧道访问。
 
 ## 2. micro-ROS Agent 状态
@@ -105,7 +107,7 @@
 |---|---|---|
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
 | 面板 | 默认/持久化状态、四个面板独立收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
-| 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅 | `src/App.test.tsx` |
+| 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |

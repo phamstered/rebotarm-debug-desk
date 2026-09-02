@@ -10,6 +10,11 @@ export class BridgeClient {
     { resolve(message: BridgeEnvelope): void; reject(error: Error): void }
   >();
 
+  private rejectPending(error: Error) {
+    this.pending.forEach(({ reject }) => reject(error));
+    this.pending.clear();
+  }
+
   private connectOnce(profile: ConnectionProfile): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(`ws://127.0.0.1:${profile.localPort}`);
@@ -30,6 +35,7 @@ export class BridgeClient {
         reject(new Error("无法连接 Jetson Bridge"));
       };
       socket.onmessage = (event) => {
+        if (this.socket !== socket) return;
         const message = JSON.parse(String(event.data)) as BridgeEnvelope;
         if (message.request_id && this.pending.has(message.request_id)) {
           const pending = this.pending.get(message.request_id)!;
@@ -40,7 +46,9 @@ export class BridgeClient {
         this.listeners.forEach((listener) => listener(message));
       };
       socket.onclose = () => {
-        if (this.socket === socket) this.socket = null;
+        if (this.socket !== socket) return;
+        this.socket = null;
+        this.rejectPending(new Error("Bridge 连接已断开"));
         if (opened) this.listeners.forEach((listener) => listener({ op: "disconnected" }));
       };
     });
@@ -61,8 +69,10 @@ export class BridgeClient {
   }
 
   close() {
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    this.rejectPending(new Error("Bridge 连接已关闭"));
+    socket?.close();
   }
 
   onMessage(listener: Listener) {

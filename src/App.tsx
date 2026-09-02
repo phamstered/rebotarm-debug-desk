@@ -159,6 +159,7 @@ export default function App() {
   const topicSidebarRef = useRef<HTMLElement>(null);
   const dataPanelRef = useRef<HTMLElement>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const connectionGenerationRef = useRef(0);
   const topicRefreshInFlightRef = useRef(false);
   const rosControlRefreshInFlightRef = useRef(false);
   const bridge = useMemo(() => new BridgeClient(), []);
@@ -249,16 +250,22 @@ export default function App() {
 
   const refreshTopics = useCallback(async () => {
     if (topicRefreshInFlightRef.current) return;
+    const generation = connectionGenerationRef.current;
     topicRefreshInFlightRef.current = true;
     setTopicRefreshing(true);
     try {
-      setTopics(await bridge.listTopics());
+      const discovered = await bridge.listTopics();
+      if (generation !== connectionGenerationRef.current) return;
+      setTopics(discovered);
       setTopicRefreshError("");
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setTopicRefreshError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      topicRefreshInFlightRef.current = false;
-      setTopicRefreshing(false);
+      if (generation === connectionGenerationRef.current) {
+        topicRefreshInFlightRef.current = false;
+        setTopicRefreshing(false);
+      }
     }
   }, [bridge]);
 
@@ -269,11 +276,15 @@ export default function App() {
 
   const refreshRosControllers = useCallback(async () => {
     if (rosControlRefreshInFlightRef.current) return;
+    const generation = connectionGenerationRef.current;
     rosControlRefreshInFlightRef.current = true;
     setRosControlRefreshing(true);
     try {
-      setRosControl(await fetchRosControllers());
+      const status = await fetchRosControllers();
+      if (generation !== connectionGenerationRef.current) return;
+      setRosControl(status);
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setRosControl({
         manager: "/controller_manager",
         available: false,
@@ -281,13 +292,16 @@ export default function App() {
         message: reason instanceof Error ? reason.message : String(reason),
       });
     } finally {
-      rosControlRefreshInFlightRef.current = false;
-      setRosControlRefreshing(false);
+      if (generation === connectionGenerationRef.current) {
+        rosControlRefreshInFlightRef.current = false;
+        setRosControlRefreshing(false);
+      }
     }
   }, [fetchRosControllers]);
 
   const switchController = async (controller: ControllerInfo, action: "activate" | "deactivate") => {
     if (controllerAction) return;
+    const generation = connectionGenerationRef.current;
     setControllerAction({ name: controller.name, action });
     setControllerActionMessage("");
     setControllerActionError("");
@@ -297,19 +311,25 @@ export default function App() {
         controllerName: controller.name,
         action,
       });
-      setControllerActionMessage(message || `${controller.name} ${action} 完成`);
+      if (generation === connectionGenerationRef.current) {
+        setControllerActionMessage(message || `${controller.name} ${action} 完成`);
+      }
     } catch (reason) {
-      setControllerActionError(reason instanceof Error ? reason.message : String(reason));
+      if (generation === connectionGenerationRef.current) {
+        setControllerActionError(reason instanceof Error ? reason.message : String(reason));
+      }
     }
     try {
-      setRosControl(await fetchRosControllers());
+      const status = await fetchRosControllers();
+      if (generation === connectionGenerationRef.current) setRosControl(status);
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setControllerActionError((current) => {
         const refreshError = `列表刷新失败：${reason instanceof Error ? reason.message : String(reason)}`;
         return current ? `${current}；${refreshError}` : refreshError;
       });
     } finally {
-      setControllerAction(null);
+      if (generation === connectionGenerationRef.current) setControllerAction(null);
     }
   };
 
@@ -374,7 +394,33 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refreshRosControllers, stage]);
 
+  function clearConnectionData() {
+    connectionGenerationRef.current += 1;
+    topicRefreshInFlightRef.current = false;
+    rosControlRefreshInFlightRef.current = false;
+    setTopics([]);
+    setTopicFilter("");
+    setSelected("");
+    setTopicSubscribeError("");
+    setMessages({});
+    setUrdf("");
+    setJointState(null);
+    setHardwareStatus(null);
+    setAgentStatus(null);
+    setAgentError("");
+    setRosControl(null);
+    setTopicRefreshing(false);
+    setTopicRefreshError("");
+    setRosControlRefreshing(false);
+    setControllerAction(null);
+    setControllerActionMessage("");
+    setControllerActionError("");
+    setControlStreaming(false);
+    setEffectiveLocalPort(null);
+  }
+
   async function connect() {
+    clearConnectionData();
     setError("");
     localStorage.setItem("easy-debug-profile", JSON.stringify(profile));
     try {
@@ -414,13 +460,7 @@ export default function App() {
     }
     bridge.close();
     await invoke("stop_session").catch(() => undefined);
-    setEffectiveLocalPort(null);
-    setRosControl(null);
-    setControllerAction(null);
-    setControllerActionMessage("");
-    setControllerActionError("");
-    setTopicRefreshError("");
-    setTopicFilter("");
+    clearConnectionData();
     setStage("idle");
   }
 
