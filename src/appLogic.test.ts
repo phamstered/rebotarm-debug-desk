@@ -19,6 +19,7 @@ describe("connection profile", () => {
     expect(profile.host).toBe("robot");
     expect(profile.rosSetupScript).toBe(defaultProfile.rosSetupScript);
     expect(profile.jointStateTopic).toBe("/stm32/joint_states");
+    expect(profile.robotJointStateTopic).toBe("/joint_states");
   });
 });
 

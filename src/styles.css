@@ -191,13 +191,32 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .motor-panel-content { min-height: 0; overflow: auto; }
 .data-panel pre { flex: 1; min-height: 0; margin: 0; padding: 14px; overflow: auto; color: #a9c5d8; background: #08131c; font: 12px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
 .topic-inspector-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.inspector-tab-list { flex: 0 0 34px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 4px; border-bottom: 1px solid var(--line); background: #08141d; }
+.inspector-tab-list button { color: #718b9d; border: 1px solid transparent; border-radius: 5px; background: transparent; font-size: 9px; font-weight: 700; }
+.inspector-tab-list button:hover { color: #bcd3df; background: #102431; }
+.inspector-tab-list button.active { color: #d9faf5; border-color: #285b57; background: #153936; }
+.inspector-tab-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .topic-inspector-filter { flex: 0 0 auto; display: grid; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); background: #0a1721; }
 .topic-inspector-filter textarea { min-height: 54px; resize: vertical; padding: 7px 8px; color: #d8edf6; border: 1px solid #294657; border-radius: 7px; background: #07131c; outline: none; font: 10px/1.45 "SFMono-Regular", monospace; }
 .topic-inspector-filter textarea:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(66, 214, 199, .09); }
 .topic-inspector-filter > span { color: #647f90; font: 9px/1 "SFMono-Regular", monospace; }
 .topic-inspector-filter > span.enabled { color: #75cfc4; }
 .topic-inspector-error { flex: 0 0 auto; padding: 7px 10px; color: #eba09a; border-bottom: 1px solid #542d2c; background: #251515; font-size: 10px; }
-.topic-inspector-content > pre { flex: 1 1 auto; }
+.topic-inspector-success, .topic-inspector-warning { margin: 0 10px 8px; padding: 7px 8px; border: 1px solid #295a50; border-radius: 6px; color: #8adccc; background: #0b211d; font-size: 9px; line-height: 1.4; }
+.topic-inspector-warning { color: #e6b680; border-color: #5d472d; background: #231c12; }
+.inspector-tab-content > pre { flex: 1 1 auto; }
+.inspector-action-row { flex: 0 0 36px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 0 11px; border-bottom: 1px solid var(--line); background: #0a1721; }
+.inspector-action-row span { min-width: 0; color: #708b9d; font: 9px/1 "SFMono-Regular", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-action-row button, .publish-once-button { padding: 5px 8px; color: #91d9d1; border: 1px solid #285b5a; border-radius: 6px; background: #0d2929; font-size: 9px; font-weight: 700; }
+.inspector-action-row button:disabled, .publish-once-button:disabled { cursor: not-allowed; opacity: .45; }
+.publish-tab-content { gap: 9px; padding: 10px; overflow: auto; background: #0a1721; }
+.publish-topic-meta { display: grid; gap: 4px; min-width: 0; }
+.publish-topic-meta strong { color: #d3e7f1; font-size: 11px; overflow-wrap: anywhere; }
+.publish-topic-meta span { color: #668294; font: 9px/1.4 "SFMono-Regular", monospace; overflow-wrap: anywhere; }
+.publish-tab-content textarea { min-height: 120px; resize: vertical; padding: 8px; color: #d8edf6; border: 1px solid #294657; border-radius: 7px; background: #07131c; outline: none; font: 10px/1.5 "SFMono-Regular", monospace; }
+.publish-tab-content textarea:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(66, 214, 199, .09); }
+.publish-tab-content .topic-inspector-error { margin: 0; border: 1px solid #542d2c; border-radius: 6px; }
+.publish-once-button { flex: 0 0 31px; }
 .motor-control { padding: 12px; overflow: auto; background: #0a1721; }
 .control-status-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }
 .control-status-row span { padding: 5px 7px; border: 1px solid #263d4e; border-radius: 5px; color: #8fa8b8; background: #09141d; font: 10px/1.2 "SFMono-Regular", monospace; }

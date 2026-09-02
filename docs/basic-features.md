@@ -1,6 +1,6 @@
 # Robot Console 基本功能与测试覆盖
 
-更新日期：2026-08-26
+更新日期：2026-08-30
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
@@ -36,19 +36,9 @@
 - Controller 名称和操作类型在 Tauri/Rust 后端校验，拒绝包含 shell 特殊字符的输入。
 - 兼容 Jetson 当前 Humble `ros2controlcli` 的超时参数类型缺陷：不显式传入 `--switch-timeout`，使用其内部浮点默认值，并由外层进程提供 10 秒超时保护。
 - controller manager 服务不可用或查询超时时显示离线原因，不阻塞 Topic 浏览和其他功能。
-- 当前 Bridge 支持以下消息内容：
-
-  - `std_msgs/msg/String`
-  - `std_msgs/msg/Bool`
-  - `std_msgs/msg/Float32`
-  - `std_msgs/msg/Float64`
-  - `std_msgs/msg/Int32`
-  - `std_msgs/msg/UInt32`
-  - `std_msgs/msg/Float32MultiArray`
-  - `std_msgs/msg/Float64MultiArray`
-  - `sensor_msgs/msg/JointState`
-  - `microros_stm32h723_bridge/msg/JointCommand`
-  - `microros_stm32h723_bridge/msg/HardwareStatus`
+- Bridge 使用 ROS 2 C++ introspection 运行时解码所有已安装的消息类型，无需逐一登记类型；支持标准/自定义消息、递归嵌套消息、定长/变长数组、字符串和二进制数组。
+- `std_msgs/msg/String`、JointState、JointTrajectory、JointCommand 和 HardwareStatus 等内建路径继续保留针对界面功能的专用编码；其余类型自动走通用解码路径，JSON 字段结构与 ROS 消息定义一致。
+- 消息包及其 C++ introspection typesupport 必须存在于 Jetson 启动 Bridge 时 source 的 ROS 环境；仅能从 DDS graph 发现但本机未安装定义的类型会返回明确订阅错误。
 
 ## 4. Topic Graph 与 Topic Inspector jq 过滤
 
@@ -59,13 +49,20 @@
 - jq 编辑器和结果位于 Topic Inspector。每个 Topic 可配置独立表达式；使用浏览器内嵌的 jq 1.8.2 WASM，支持管道、字段选择、数组、`select` 等标准 jq 语法，不依赖 Jetson 安装 jq。
 - jq 表达式按 Topic 持久化在本机；默认留空且直接显示原始 JSON，仅在填写表达式后按需加载 jq WASM。语法错误、订阅失败与空输出分别显示，不会中断 Graph 刷新。
 - jq 使用固定频率处理最新一帧 Topic 数据；高频消息不会反复重置表达式防抖，因此 JointState 等持续数据流也能稳定刷新筛选结果。
-- Graph 可以展示 ROS graph 中的全部 Topic，但实时数据仍受 Bridge 消息类型注册表限制；不支持解码的消息类型会明确提示订阅失败。
+- Topic Inspector 下方提供“数据 / Topic Info / 发送”三个 Tab；数据 Tab 保留实时 JSON 与 jq 功能。
+- Topic Info 通过 SSH 执行 Humble `ros2 topic info --no-daemon --spin-time 1 -v`，展示类型、Publisher/Subscription 数量、节点、GID 和 QoS，并支持手动刷新。
+- 发送 Tab 显示当前 Topic 与消息类型，要求 JSON 顶层为对象；前端与 Rust 后端双重校验格式、Topic、消息类型和 64 KiB 大小限制后，通过 `ros2 topic pub --once --wait-matching-subscriptions 0` 发布一帧。
+- 通用发送禁止目标为配置的电机命令 Topic；`/stm32/joint_commands` 仍必须使用 Motor Control 的安全确认与 Bridge 预检。
+- Graph 可以展示 ROS graph 中的全部 Topic；只要对应消息定义安装在 Jetson 环境，Topic Inspector 即可实时查看并使用 jq 过滤。
 
 ## 5. URDF 与 Three.js
 
 - 从配置的 `std_msgs/msg/String` Topic 获取 URDF XML。
+- Robot View 默认订阅标准 `/joint_states`，与电机控制安全反馈 `/stm32/joint_states` 独立配置；两者相同时只创建一次订阅。
 - 使用 Three.js、React Three Fiber 和 `urdf-loader` 渲染机器人。
 - 根据 `sensor_msgs/msg/JointState` 的 name/position 驱动 URDF 关节；缺少的位置值按 0 处理。
+- 保留最新 JointState；即使状态先于 URDF/网格加载完成到达，模型就绪后也会立即重放最新关节角度。
+- 保留机械臂原始颜色：URDF `<material><color rgba>` 会应用到 STL 以及嵌套的 DAE/OBJ Mesh；URDF 未声明颜色时保留网格文件自带材质与贴图。
 - 通过 Bridge 获取 `package://` 资源，支持 STL、DAE、OBJ、PNG、JPG/JPEG。
 - 解析 DAE 相对纹理路径，生成临时 Blob URL，并在资源释放时回收 URL。
 - Bridge 对 package 资源执行规范路径检查，禁止越过 package share 目录。
@@ -115,13 +112,16 @@
 | Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
 | Topic Graph | ROS 图请求、Sugiyama 重心排序和交叉消除、Publisher/Subscriber 方向、节点聚焦、Tab 与节点订阅、手动/30 秒刷新 | `src/bridge.test.ts`、`src/topicGraphLogic.test.ts`、`src/TopicGraph.test.tsx`、`src/App.test.tsx` |
 | Topic Inspector jq | 默认原始 JSON、jq 1.8.2 WASM 实际执行、管道/选择、单/多/空结果格式和表达式持久化 | `src/jqFilter.test.ts`、`src/topicInspectorLogic.test.ts`、`src/TopicInspector.test.tsx`、`src/App.test.tsx` |
+| Topic Info / 单帧发送 | 三 Tab、无 daemon 详细查询、手动刷新、JSON 双重校验、消息类型/大小校验、无订阅者发布、电机命令禁发 | `src/TopicInspector.test.tsx`、`src/topicInspectorLogic.test.ts`、`src-tauri/src/lib.rs`、Jetson 隔离 Topic 验证 |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
-| URDF | package URI、相对纹理、Base64、JointState 映射 | `src/urdfLogic.test.ts` |
+| URDF | package URI、相对纹理、Base64、Robot/Motor JointState 独立订阅、消息路由、模型延迟加载后的 JointState 同步 | `src/urdfLogic.test.ts`、`src/UrdfViewer.test.tsx`、`src/App.test.tsx` |
 | 电机输入 | 默认 TRACK/Kp/Kd、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
 | 电机交互 | 安全确认、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort 及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
+| 轨迹消息 | JointTrajectoryPoint 的 position/velocity/acceleration/effort/time_from_start JSON 编码及 Jetson 隔离 Topic 端到端订阅 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、Jetson `colcon test`/隔离验证 |
+| 通用消息 | ROS 2 introspection 动态解码；嵌套 Pose、动态 DiagnosticArray、Image uint8 数组端到端验证 | `bridge/easy_debug_bridge/test/test_generic_topics.py`、Jetson 隔离验证 |
 
 ## 10. 测试命令
 

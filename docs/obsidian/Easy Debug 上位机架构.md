@@ -5,7 +5,7 @@ aliases:
   - Robot Console Architecture
   - Easy Debug Architecture
 date: 2026-08-09
-updated: 2026-08-20
+updated: 2026-08-30
 status: active
 tags:
   - project/robot-console
@@ -20,7 +20,7 @@ related:
 
 # Robot Console 上位机架构
 
-Robot Console 是运行在 macOS Apple Silicon 上的 ROS 2 Humble 调试与受控操作上位机。Mac 不安装 ROS 2，也不直接加入 DDS 网络；Topic 数据和控制命令由 Jetson Bridge 转发，ROS Control 状态通过 Jetson 上的 `ros2 control` CLI 只读查询。
+Robot Console 是运行在 macOS Apple Silicon 上的 ROS 2 Humble 调试与受控操作上位机。Mac 不安装 ROS 2，也不直接加入 DDS 网络；实时 Topic 数据和控制命令由 Jetson Bridge 转发，Topic Info、通用单帧调试发布和 ROS Control 操作通过 Jetson ROS CLI 执行。
 
 > [!info] 当前部署
 > - Mac：Tauri v2 + Rust + React + TypeScript + Three.js
@@ -50,13 +50,14 @@ flowchart LR
         UI --> URDF
         UI --> CONTROL
         CONNECTION --> TAURI
+        TOPIC --> TAURI
         ROSCONTROL --> TAURI
         TAURI --> SSH
     end
 
     subgraph JETSON["Jetson · Ubuntu 22.04"]
         BRIDGE["easy_debug_bridge · rclcpp + Boost.Beast"]
-        GRAPH["ROS Graph / 标准与自定义消息编解码"]
+        GRAPH["ROS Graph / introspection 通用消息解码"]
         RESOURCE["ament package:// 资源解析"]
         GUARD["MIT 命令安全预检与序列号"]
         FASTDDS["ROS 2 Humble · Fast DDS"]
@@ -86,6 +87,7 @@ flowchart LR
     end
 
     SSH <-->|"加密隧道 · WebSocket JSON"| BRIDGE
+    SSH <-->|"topic info -v / topic pub --once"| FASTDDS
     SSH <-->|"每5秒只读查询"| CONTROLCLI
     URDF <-->|"URDF XML + Mesh资源"| BRIDGE
     TOPIC <-->|"只读 Topic 数据"| BRIDGE
@@ -128,9 +130,12 @@ sequenceDiagram
 | 方向 | Topic / 接口 | 类型 | 用途 |
 |---|---|---|---|
 | ROS → UI | `/robot_description` | `std_msgs/msg/String` | URDF XML |
-| ROS → UI | `/stm32/joint_states` | `sensor_msgs/msg/JointState` | 三维模型驱动与实时反馈 |
+| ROS → UI | `/joint_states` | `sensor_msgs/msg/JointState` | Robot View 三维模型驱动（独立配置） |
+| ROS → UI | `/stm32/joint_states` | `sensor_msgs/msg/JointState` | 电机控制反馈与 Bridge 安全检查 |
 | ROS → UI | `/stm32/status` | `microros_stm32h723_bridge/msg/HardwareStatus` | 模式、序列号、active mask、故障码 |
 | UI → ROS | `/stm32/joint_commands` | `microros_stm32h723_bridge/msg/JointCommand` | MIT 电机控制命令 |
+| UI → ROS | 选中 Topic | 已安装 ROS 消息类型 | JSON 校验后的单帧调试发布；禁止电机命令 Topic |
+| ROS → UI | `ros2 topic info -v` | CLI 文本 | Topic 类型、端点、GID 与 QoS |
 | UI ↔ Bridge | WebSocket JSON | Easy Debug Protocol v0.1 | Topic发现、订阅、资源及命令 |
 | ROS → UI | `/controller_manager/list_controllers` | ROS Control service / CLI | 已加载 Controller 的名称、类型和状态 |
 | Bridge → UI | `package://...` | STL / DAE / OBJ / Texture | URDF网格与材质资源 |
@@ -149,7 +154,8 @@ flowchart LR
     AMENT --> ASSET["STL / DAE / OBJ / Texture"]
     ASSET --> BLOB["Mac Blob URL缓存"]
     BLOB --> THREE["Three.js Scene"]
-    JOINTS["/stm32/joint_states"] --> THREE
+    VIEW_JOINTS["/joint_states · Robot View"] --> THREE
+    MOTOR_JOINTS["/stm32/joint_states · Motor Safety"] --> BRIDGE
 ```
 
 DAE中的相对纹理路径会先在 Jetson解析并传输，再替换为本地 Blob URL。Bridge 对资源路径执行 canonicalize，并拒绝越过 package目录的请求。
@@ -219,6 +225,7 @@ flowchart TD
 | URDF渲染 | `/Users/jialiang/Project/easy_debug/src/UrdfViewer.tsx` |
 | Tauri SSH后端 | `/Users/jialiang/Project/easy_debug/src-tauri/src/lib.rs` |
 | ROS Bridge | `/Users/jialiang/Project/easy_debug/bridge/easy_debug_bridge/src/bridge_node.cpp` |
+| 通用消息解码 | `/Users/jialiang/Project/easy_debug/bridge/easy_debug_bridge/src/generic_message.cpp` |
 | ROS消息定义 | `/Users/jialiang/Project/leader_follower/src/plugin/microros_stm32h723_bridge/msg` |
 | STM32控制状态机 | `/Users/jialiang/Project/rebotarm_executor/User/motor_bridge.c` |
 

@@ -64,6 +64,28 @@ Topic data:
 }
 ```
 
+除若干界面专用类型外，Bridge 通过 ROS 2 C++ introspection 自动解码消息。`data` 会递归保留消息定义中的字段、嵌套对象和数组；非有限浮点数编码为 JSON `null`，64 位整数编码为十进制字符串以避免 JavaScript 精度损失。消息类型无需预先登记，但其消息包和 introspection typesupport 必须安装在 Jetson ROS 环境中。单条消息解码失败时，事件数据为 `{"_decode_error":"原因"}`，不会中断订阅。
+
+Joint trajectory data:
+
+```json
+{
+  "op":"topic_message",
+  "topic":"/arm_controller/joint_trajectory",
+  "data":{
+    "header":{"stamp":{"sec":0,"nanosec":0},"frame_id":"base_link"},
+    "joint_names":["joint1","joint2"],
+    "points":[{
+      "positions":[0.2,-0.1],
+      "velocities":[0.5,0.5],
+      "accelerations":[],
+      "effort":[],
+      "time_from_start":{"sec":1,"nanosec":500000000}
+    }]
+  }
+}
+```
+
 ROS node/topic graph:
 
 ```json

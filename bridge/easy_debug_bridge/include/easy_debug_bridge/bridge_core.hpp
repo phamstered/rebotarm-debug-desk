@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -44,6 +46,31 @@ inline std::string fully_qualified_node_name(const std::string &node_namespace,
   result += node_name;
   while (result.size() > 1 && result.back() == '/') result.pop_back();
   return result;
+}
+
+inline std::string trajectory_point_json(
+    const std::vector<double> &positions,
+    const std::vector<double> &velocities,
+    const std::vector<double> &accelerations,
+    const std::vector<double> &effort,
+    int32_t seconds,
+    uint32_t nanoseconds) {
+  const auto array_json = [](const std::vector<double> &values) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t index = 0; index < values.size(); ++index) {
+      if (index) out << ',';
+      out << std::setprecision(15) << values[index];
+    }
+    out << ']';
+    return out.str();
+  };
+  return "{\"positions\":" + array_json(positions) +
+         ",\"velocities\":" + array_json(velocities) +
+         ",\"accelerations\":" + array_json(accelerations) +
+         ",\"effort\":" + array_json(effort) +
+         ",\"time_from_start\":{\"sec\":" + std::to_string(seconds) +
+         ",\"nanosec\":" + std::to_string(nanoseconds) + "}}";
 }
 
 }  // namespace easy_debug_bridge

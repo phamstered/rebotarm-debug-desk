@@ -17,6 +17,7 @@ struct ConnectionProfile {
     remote_port: u16,
     ros_domain_id: u16,
     ros_setup_script: String,
+    robot_joint_state_topic: String,
     joint_state_topic: String,
     command_topic: String,
     status_topic: String,
@@ -74,6 +75,73 @@ fn valid_topic(topic: &str) -> bool {
         && topic
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '/')
+}
+
+fn valid_ros_type(type_name: &str) -> bool {
+    let parts: Vec<_> = type_name.split('/').collect();
+    parts.len() == 3
+        && parts[1] == "msg"
+        && parts[0].chars().all(|character| character.is_ascii_alphanumeric() || character == '_')
+        && parts[2].chars().all(|character| character.is_ascii_alphanumeric() || character == '_')
+        && !parts[0].is_empty()
+        && !parts[2].is_empty()
+}
+
+fn hex_encode(value: &str) -> String {
+    value.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn validated_publish_payload(
+    profile: &ConnectionProfile,
+    topic: &str,
+    type_name: &str,
+    payload_json: &str,
+) -> Result<String, String> {
+    if !valid_topic(topic) || !valid_ros_type(type_name) {
+        return Err("Topic 名称或消息类型格式无效".into());
+    }
+    if topic == profile.command_topic {
+        return Err("禁止从 Topic Inspector 绕过 Motor Control 发布电机命令".into());
+    }
+    if payload_json.len() > 65_536 {
+        return Err("JSON 内容超过 64 KiB".into());
+    }
+    let value: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|error| format!("JSON 格式无效：{error}"))?;
+    if !value.is_object() {
+        return Err("ROS 消息 JSON 顶层必须是对象".into());
+    }
+    Ok(hex_encode(payload_json))
+}
+
+fn topic_info_command(profile: &ConnectionProfile, topic: &str) -> String {
+    format!(
+        "bash -lc 'source /opt/ros/humble/setup.bash; \
+         if [ -f \"{}\" ]; then source \"{}\"; fi; \
+         ROS_DOMAIN_ID={} timeout 8 ros2 topic info --no-daemon --spin-time 1 -v {} 2>&1'",
+        profile.ros_setup_script, profile.ros_setup_script, profile.ros_domain_id, topic,
+    )
+}
+
+fn topic_publish_command(
+    profile: &ConnectionProfile,
+    topic: &str,
+    type_name: &str,
+    payload_hex: &str,
+) -> String {
+    format!(
+        "bash -lc 'source /opt/ros/humble/setup.bash; \
+         if [ -f \"{}\" ]; then source \"{}\"; fi; \
+         ROS_DOMAIN_ID={} timeout 10 ros2 topic pub --once \
+         --wait-matching-subscriptions 0 {} {} \
+         \"$(printf %s {} | xxd -r -p)\" 2>&1'",
+        profile.ros_setup_script,
+        profile.ros_setup_script,
+        profile.ros_domain_id,
+        topic,
+        type_name,
+        payload_hex,
+    )
 }
 
 fn valid_controller_name(name: &str) -> bool {
@@ -355,6 +423,48 @@ async fn switch_ros_controller(
 }
 
 #[tauri::command]
+async fn get_topic_info(profile: ConnectionProfile, topic: String) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) || !valid_topic(&topic) {
+        return Err("ROS 环境脚本或 Topic 名称格式无效".into());
+    }
+    let remote = topic_info_command(&profile, &topic);
+    let output = ssh_base(&profile)
+        .arg("-o").arg("BatchMode=yes")
+        .arg(ssh_target(&profile)).arg(remote)
+        .output().await
+        .map_err(|error| format!("无法查询 Topic Info：{error}"))?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() {
+        return Err(if text.is_empty() { "Topic Info 查询失败或超时".into() } else { text });
+    }
+    Ok(text)
+}
+
+#[tauri::command]
+async fn publish_topic_once(
+    profile: ConnectionProfile,
+    topic: String,
+    type_name: String,
+    payload_json: String,
+) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    let payload_hex = validated_publish_payload(&profile, &topic, &type_name, &payload_json)?;
+    let remote = topic_publish_command(&profile, &topic, &type_name, &payload_hex);
+    let output = ssh_base(&profile)
+        .arg("-o").arg("BatchMode=yes")
+        .arg(ssh_target(&profile)).arg(remote)
+        .output().await
+        .map_err(|error| format!("无法发布 Topic 数据：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() {
+        return Err(if stdout.is_empty() { "单帧发布失败或超时".into() } else { stdout });
+    }
+    Ok(stdout.lines().last().unwrap_or("已发布一帧数据").to_string())
+}
+
+#[tauri::command]
 async fn start_session(
     profile: ConnectionProfile,
     state: State<'_, SessionState>,
@@ -364,7 +474,8 @@ async fn start_session(
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
-    if !valid_topic(&profile.joint_state_topic)
+    if !valid_topic(&profile.robot_joint_state_topic)
+        || !valid_topic(&profile.joint_state_topic)
         || !valid_topic(&profile.command_topic)
         || !valid_topic(&profile.status_topic)
     {
@@ -468,6 +579,8 @@ pub fn run() {
             check_micro_ros_agent,
             check_ros_controllers,
             switch_ros_controller,
+            get_topic_info,
+            publish_topic_once,
             start_session,
             stop_session
         ])
@@ -484,6 +597,7 @@ mod tests {
             host: "damiao".into(), ssh_port: 22, username: username.into(),
             identity_file: String::new(), local_port: 18765, remote_port: 8765,
             ros_domain_id: 0, ros_setup_script: "/opt/robot/install/setup.bash".into(),
+            robot_joint_state_topic: "/joint_states".into(),
             joint_state_topic: "/stm32/joint_states".into(),
             command_topic: "/stm32/joint_commands".into(), status_topic: "/stm32/status".into(),
         }
@@ -502,10 +616,34 @@ mod tests {
         assert!(valid_topic("/stm32/joint_commands"));
         assert!(!valid_topic("stm32/joint_commands"));
         assert!(!valid_topic("/stm32/joint-commands"));
+        assert!(valid_ros_type("sensor_msgs/msg/JointState"));
+        assert!(!valid_ros_type("sensor_msgs/JointState"));
         assert!(valid_controller_name("/arm/trajectory_controller"));
         assert!(valid_controller_name("joint_state_broadcaster"));
         assert!(!valid_controller_name("arm-controller"));
         assert!(!valid_controller_name("arm;reboot"));
+    }
+
+    #[test]
+    fn validates_and_encodes_single_frame_topic_payloads() {
+        let profile = profile("");
+        let payload = r#"{"data":"hello ' robot"}"#;
+        assert_eq!(
+            validated_publish_payload(&profile, "/debug", "std_msgs/msg/String", payload).unwrap(),
+            hex_encode(payload),
+        );
+        assert!(validated_publish_payload(&profile, "/debug", "std_msgs/msg/String", "{").is_err());
+        assert!(validated_publish_payload(&profile, "/debug", "std_msgs/msg/String", "[]").is_err());
+        assert!(validated_publish_payload(
+            &profile,
+            "/stm32/joint_commands",
+            "microros_stm32h723_bridge/msg/JointCommand",
+            "{}",
+        ).is_err());
+        assert!(topic_info_command(&profile, "/joint_states").contains("--no-daemon --spin-time 1 -v /joint_states"));
+        let publish = topic_publish_command(&profile, "/debug", "std_msgs/msg/String", "7b7d");
+        assert!(publish.contains("--once --wait-matching-subscriptions 0"));
+        assert!(publish.contains("std_msgs/msg/String"));
     }
 
     #[test]

@@ -34,7 +34,7 @@ vi.mock("./bridge", () => ({
     onMessage(listener: (message: unknown) => void) { doubles.listener = listener; return () => {}; }
   },
 }));
-vi.mock("./UrdfViewer", () => ({ UrdfViewer: ({ xml }: { xml: string }) => <div data-testid="urdf">{xml || "empty"}</div> }));
+vi.mock("./UrdfViewer", () => ({ UrdfViewer: ({ xml, jointState }: { xml: string; jointState?: unknown }) => <div data-testid="urdf">{xml || "empty"}|{JSON.stringify(jointState)}</div> }));
 vi.mock("./MotorControl", () => ({ MotorControl: () => <div data-testid="motor">motor</div> }));
 
 import App from "./App";
@@ -71,7 +71,8 @@ describe("App workflow", () => {
     localStorage.setItem("easy-debug-profile", JSON.stringify({ jointStateTopic: "/joint_states", host: "damiao" }));
     const user = userEvent.setup();
     render(<App />);
-    expect(screen.getByLabelText("JointState Topic")).toHaveValue("/stm32/joint_states");
+    expect(screen.getByLabelText("Robot View JointState")).toHaveValue("/joint_states");
+    expect(screen.getByLabelText("Motor JointState")).toHaveValue("/stm32/joint_states");
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     expect(await screen.findByText("micro-ROS Agent：运行中")).toBeVisible();
     expect(screen.getByText("localhost:19001")).toBeVisible();
@@ -79,6 +80,7 @@ describe("App workflow", () => {
     expect(screen.getByRole("button", { name: /\/robot_description/ })).toBeVisible();
     expect(doubles.connect).toHaveBeenCalledWith(expect.objectContaining({ localPort: 19001, jointStateTopic: "/stm32/joint_states" }));
     expect(doubles.send).toHaveBeenCalledWith({ op: "subscribe", topic: "/stm32/joint_states", type: "sensor_msgs/msg/JointState" });
+    expect(doubles.send).toHaveBeenCalledWith({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
   });
 
   it("clears all previous connection data before reconnecting", async () => {
@@ -89,6 +91,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: /\/stm32\/status/ }));
     act(() => {
       doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "old-session-urdf" });
+      doubles.listener?.({ op: "topic_message", topic: "/joint_states", data: { name: ["joint1"], position: [0.5] } });
       doubles.listener?.({ op: "topic_message", topic: "/stm32/status", data: { fault_code: 4 } });
     });
     expect(screen.getByTestId("urdf")).toHaveTextContent("old-session-urdf");
@@ -99,7 +102,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("Robot Console");
 
-    expect(screen.getByTestId("urdf")).toHaveTextContent("empty");
+    expect(screen.getByTestId("urdf")).toHaveTextContent("empty|null");
     expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
     expect(screen.queryByText(/fault_code/)).not.toBeInTheDocument();
   });
@@ -330,7 +333,9 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("micro-ROS Agent：运行中");
     doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "<robot/>" });
+    doubles.listener?.({ op: "topic_message", topic: "/joint_states", data: { name: ["joint1"], position: [0.42] } });
     await waitFor(() => expect(screen.getByTestId("urdf")).toHaveTextContent("<robot/>"));
+    await waitFor(() => expect(screen.getByTestId("urdf")).toHaveTextContent("0.42"));
   });
 
   it("opens Topic Graph and subscribes a selected topic for jq inspection", async () => {

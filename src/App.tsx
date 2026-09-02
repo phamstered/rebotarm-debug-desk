@@ -123,7 +123,8 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
       <label>ROS_DOMAIN_ID<input type="number" value={profile.rosDomainId} onChange={(e) => field("rosDomainId", Number(e.target.value))} /></label>
       <label>ROS 环境脚本<input value={profile.rosSetupScript} onChange={(e) => field("rosSetupScript", e.target.value)} placeholder="/path/to/install/setup.bash" /></label>
       <label>URDF Topic<input value={profile.urdfTopic} onChange={(e) => field("urdfTopic", e.target.value)} /></label>
-      <label>JointState Topic<input value={profile.jointStateTopic} onChange={(e) => field("jointStateTopic", e.target.value)} /></label>
+      <label>Robot View JointState<input value={profile.robotJointStateTopic} onChange={(e) => field("robotJointStateTopic", e.target.value)} /></label>
+      <label>Motor JointState<input value={profile.jointStateTopic} onChange={(e) => field("jointStateTopic", e.target.value)} /></label>
       <label>Command Topic<input value={profile.commandTopic} onChange={(e) => field("commandTopic", e.target.value)} /></label>
       <label>Status Topic<input value={profile.statusTopic} onChange={(e) => field("statusTopic", e.target.value)} /></label>
     </div>
@@ -137,10 +138,12 @@ export default function App() {
   const [topics, setTopics] = useState<TopicInfo[]>([]);
   const [topicFilter, setTopicFilter] = useState("");
   const [selected, setSelected] = useState<string>("");
+  const [selectedTopicType, setSelectedTopicType] = useState("");
   const [topicSubscribeError, setTopicSubscribeError] = useState("");
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
+  const [robotJointState, setRobotJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentServiceStatus | null>(null);
   const [agentError, setAgentError] = useState("");
@@ -348,13 +351,16 @@ export default function App() {
         if (message.topic === profile.jointStateTopic && message.data && typeof message.data === "object") {
           setJointState(message.data as { name?: string[]; position?: number[] });
         }
+        if (message.topic === profile.robotJointStateTopic && message.data && typeof message.data === "object") {
+          setRobotJointState(message.data as { name?: string[]; position?: number[] });
+        }
         if (message.topic === profile.statusTopic && message.data && typeof message.data === "object") {
           setHardwareStatus(message.data as HardwareStatus);
         }
       }
       if (message.op === "disconnected") setStage("failed");
     });
-  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic]);
+  }, [bridge, profile.jointStateTopic, profile.robotJointStateTopic, profile.statusTopic, profile.urdfTopic]);
 
   useEffect(() => {
     if (stage !== "connected") return;
@@ -401,10 +407,12 @@ export default function App() {
     setTopics([]);
     setTopicFilter("");
     setSelected("");
+    setSelectedTopicType("");
     setTopicSubscribeError("");
     setMessages({});
     setUrdf("");
     setJointState(null);
+    setRobotJointState(null);
     setHardwareStatus(null);
     setAgentStatus(null);
     setAgentError("");
@@ -443,6 +451,9 @@ export default function App() {
       setTopicRefreshError("");
       bridge.send({ op: "subscribe", topic: profile.urdfTopic, type: "std_msgs/msg/String" });
       bridge.send({ op: "subscribe", topic: profile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
+      if (profile.robotJointStateTopic !== profile.jointStateTopic) {
+        bridge.send({ op: "subscribe", topic: profile.robotJointStateTopic, type: "sensor_msgs/msg/JointState" });
+      }
       bridge.send({ op: "subscribe", topic: profile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
       setStage("connected");
     } catch (reason) {
@@ -466,6 +477,7 @@ export default function App() {
 
   async function selectTopic(topic: TopicInfo) {
     setSelected(topic.name);
+    setSelectedTopicType(topic.types[0] ?? "");
     setTopicSubscribeError("");
     if (!topic.types[0]) {
       setTopicSubscribeError("该 Topic 没有可用消息类型");
@@ -602,7 +614,7 @@ export default function App() {
           <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
         </div>
         {centerTab === "robot"
-          ? <UrdfViewer xml={urdf} jointState={jointState} bridge={bridge} />
+          ? <UrdfViewer xml={urdf} jointState={robotJointState} bridge={bridge} />
           : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
       </section>
       <section
@@ -642,7 +654,7 @@ export default function App() {
             expanded={panels.inspector}
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector selected={selected} sample={messages[selected]} subscribeError={topicSubscribeError} />
+          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} profile={profile} subscribeError={topicSubscribeError} />
         </section>
       </section>
       <ResizeHandle

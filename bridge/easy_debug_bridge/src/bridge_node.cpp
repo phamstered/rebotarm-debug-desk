@@ -17,7 +17,9 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int32.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include "easy_debug_bridge/bridge_core.hpp"
+#include "easy_debug_bridge/generic_message.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -399,6 +401,22 @@ class BridgeNode : public rclcpp::Node {
           return "{\"name\":" + string_array(m.name) + ",\"position\":" + number_array(m.position) +
                  ",\"velocity\":" + number_array(m.velocity) + ",\"effort\":" + number_array(m.effort) + "}";
         });
+      } else if (type == "trajectory_msgs/msg/JointTrajectory") {
+        create_typed_subscription<trajectory_msgs::msg::JointTrajectory>(topic, [](const auto &m) {
+          std::ostringstream points;
+          points << '[';
+          for (size_t index = 0; index < m.points.size(); ++index) {
+            if (index) points << ',';
+            const auto &point = m.points[index];
+            points << easy_debug_bridge::trajectory_point_json(
+                point.positions, point.velocities, point.accelerations, point.effort,
+                point.time_from_start.sec, point.time_from_start.nanosec);
+          }
+          points << ']';
+          return "{\"header\":" + header_json(m.header) +
+                 ",\"joint_names\":" + string_array(m.joint_names) +
+                 ",\"points\":" + points.str() + "}";
+        });
       } else if (type == "microros_stm32h723_bridge/msg/JointCommand") {
         create_typed_subscription<microros_stm32h723_bridge::msg::JointCommand>(topic, [](const auto &m) {
           return "{\"header\":" + header_json(m.header) +
@@ -422,8 +440,19 @@ class BridgeNode : public rclcpp::Node {
                  ",\"fault_code\":" + std::to_string(m.fault_code) + "}";
         });
       } else {
-        session->send(error_message(request_id, "第一版暂不支持消息内容类型：" + type));
-        return;
+        auto decoder = std::make_shared<easy_debug_bridge::GenericMessageDecoder>(type);
+        auto subscription = create_generic_subscription(
+            topic, type, compatible_qos(topic),
+            [this, topic, decoder](std::shared_ptr<rclcpp::SerializedMessage> message) {
+              try {
+                broadcast("{\"op\":\"topic_message\",\"topic\":" + json_quote(topic) +
+                          ",\"data\":" + decoder->decode(*message) + "}");
+              } catch (const std::exception &error) {
+                broadcast("{\"op\":\"topic_message\",\"topic\":" + json_quote(topic) +
+                          ",\"data\":{\"_decode_error\":" + json_quote(error.what()) + "}}");
+              }
+            });
+        subscriptions_[topic] = subscription;
       }
     }
     session->send("{\"op\":\"subscribed\",\"request_id\":" + json_quote(request_id) +

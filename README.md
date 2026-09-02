@@ -9,30 +9,18 @@
 - 首选本地端口被占用时自动选择空闲端口，应用退出时回收 SSH隧道子进程
 - 每 5 秒检查 `micro-ros-agent-stm32h723.service`，显示运行、停止或检查失败状态
 - ROS graph Topic 名称与类型发现
+- Topic Inspector 提供实时数据/jq、`ros2 topic info -v` 属性和 JSON 校验后的单帧发布三个 Tab
 - 每 5 秒监测 `/controller_manager` 已加载 Controller 的名称、类型和状态
-- 标准 Topic 只读订阅、JSON 查看、频率和消息计数
+- 所有已安装 ROS 2 消息类型的只读订阅、递归 JSON 查看、频率和消息计数
 - 从 `std_msgs/msg/String` Topic 获取 URDF
 - Three.js URDF 渲染和 `sensor_msgs/msg/JointState` 关节驱动
 - Jetson 侧解析并传输 `package://` STL、DAE、OBJ和纹理
 - 基于发布者端点选择兼容的 Reliability/Durability QoS
 - `/stm32/joint_commands` MIT 控制面板，支持 HOLD、TRACK、RETURN、DISABLE
+- 通用单帧发布禁止写入 `/stm32/joint_commands`，电机命令必须经过 Motor Control 安全确认
 - 20 Hz命令流、序列号同步、反馈/订阅者预检和 Effort 限幅
 
-第一版支持的消息内容类型：
-
-- `std_msgs/msg/String`
-- `std_msgs/msg/Bool`
-- `std_msgs/msg/Float32`
-- `std_msgs/msg/Float64`
-- `std_msgs/msg/Int32`
-- `std_msgs/msg/UInt32`
-- `std_msgs/msg/Float32MultiArray`
-- `std_msgs/msg/Float64MultiArray`
-- `sensor_msgs/msg/JointState`
-- `microros_stm32h723_bridge/msg/JointCommand`
-- `microros_stm32h723_bridge/msg/HardwareStatus`
-
-其他未注册类型仍会出现在 Topic 列表中，但内容查看会提示暂不支持。
+Bridge 对标准消息、自定义消息、嵌套消息、定长/变长数组和二进制数组使用 ROS 2 C++ introspection 运行时解码，无需为每一种消息维护注册表。消息包及其 C++ introspection typesupport 必须安装在 Jetson 当前 ROS 环境中；缺少消息定义时会显示明确的订阅错误。
 
 ## MIT 电机控制
 
@@ -105,7 +93,8 @@ ROS setup: /home/jialiang/Project/leader_follower/install/setup.bash
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description
-JointState topic: /stm32/joint_states
+Robot View JointState topic: /joint_states
+Motor feedback JointState topic: /stm32/joint_states
 ```
 
 如果机器人使用其他 overlay（例如 URDF package 位于另一个工作空间），请把“ROS 环境脚本”改成对应 overlay 的 `install/setup.bash`。

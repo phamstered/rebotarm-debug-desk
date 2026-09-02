@@ -1,5 +1,5 @@
 import { Canvas, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Box3,
   Color,
@@ -18,7 +18,13 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader, { type URDFRobot } from "urdf-loader";
 import type { BridgeClient } from "./bridge";
-import { applyJointState, decodeBase64, loadPackageResourcesSequentially, resolvePackageRelative } from "./urdfLogic";
+import {
+  applyJointState,
+  applyUrdfVisualColors,
+  decodeBase64,
+  loadPackageResourcesSequentially,
+  resolvePackageRelative,
+} from "./urdfLogic";
 
 type JointState = { name?: string[]; position?: number[] };
 
@@ -133,7 +139,6 @@ export function UrdfViewer({
 }) {
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [error, setError] = useState("");
-  const robotRef = useRef<URDFRobot | null>(null);
 
   useEffect(() => {
     if (!xml.trim()) {
@@ -170,12 +175,12 @@ export function UrdfViewer({
           }
         };
         const parsed = loader.parse(hydrated);
+        applyUrdfVisualColors(parsed);
         parsed.traverse((object) => {
           object.castShadow = true;
           object.receiveShadow = true;
         });
         if (!disposed) {
-          robotRef.current = parsed;
           setRobot(parsed);
           setError("");
         }
@@ -188,10 +193,11 @@ export function UrdfViewer({
   }, [bridge, xml]);
 
   useEffect(() => {
+    if (!robot) return;
     applyJointState(jointState?.name, jointState?.position, (name, value) => {
-      robotRef.current?.setJointValue(name, value);
+      robot.setJointValue(name, value);
     });
-  }, [jointState]);
+  }, [jointState, robot]);
 
   return (
     <div className="viewer">

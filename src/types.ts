@@ -10,6 +10,7 @@ export type ConnectionProfile = {
   rosDomainId: number;
   rosSetupScript: string;
   urdfTopic: string;
+  robotJointStateTopic: string;
   jointStateTopic: string;
   commandTopic: string;
   statusTopic: string;
@@ -105,6 +106,7 @@ export const defaultProfile: ConnectionProfile = {
   rosDomainId: 0,
   rosSetupScript: "/home/jialiang/Project/leader_follower/install/setup.bash",
   urdfTopic: "/robot_description",
+  robotJointStateTopic: "/joint_states",
   jointStateTopic: "/stm32/joint_states",
   commandTopic: "/stm32/joint_commands",
   statusTopic: "/stm32/status",

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { applyJointState, decodeBase64, loadPackageResourcesSequentially, packageUris, resolvePackageRelative } from "./urdfLogic";
+import { BoxGeometry, Group, Mesh, MeshStandardMaterial, Texture } from "three";
+import {
+  applyJointState,
+  applyUrdfVisualColors,
+  decodeBase64,
+  loadPackageResourcesSequentially,
+  packageUris,
+  resolvePackageRelative,
+} from "./urdfLogic";
 
 describe("URDF resources", () => {
   it("extracts unique package resources", () => {
@@ -47,5 +55,51 @@ describe("URDF resources", () => {
     const values: Array<[string, number]> = [];
     applyJointState(["joint1", "joint2"], [.2], (name, value) => values.push([name, value]));
     expect(values).toEqual([["joint1", .2], ["joint2", 0]]);
+  });
+
+  it("applies a named URDF material color to meshes nested inside a visual group", () => {
+    const document = new DOMParser().parseFromString(`
+      <robot name="arm">
+        <material name="arm_blue"><color rgba="0.1 0.4 0.8 0.65"/></material>
+        <link name="base">
+          <visual><geometry><mesh filename="model.dae"/></geometry><material name="arm_blue"/></visual>
+        </link>
+      </robot>
+    `, "text/xml");
+    const visual = new Group() as Group & { urdfNode: Element };
+    visual.urdfNode = document.querySelector("visual")!;
+    const texture = new Texture();
+    const original = new MeshStandardMaterial({ color: "#ffffff", map: texture });
+    const mesh = new Mesh(new BoxGeometry(), original);
+    visual.add(new Group().add(mesh));
+    const robot = new Group().add(visual);
+
+    applyUrdfVisualColors(robot);
+
+    const material = mesh.material as MeshStandardMaterial;
+    expect(material).not.toBe(original);
+    expect(material.color.r).toBeCloseTo(0.1);
+    expect(material.color.g).toBeCloseTo(0.4);
+    expect(material.color.b).toBeCloseTo(0.8);
+    expect(material.opacity).toBe(0.65);
+    expect(material.transparent).toBe(true);
+    expect(material.depthWrite).toBe(false);
+    expect(material.map).toBe(texture);
+  });
+
+  it("keeps mesh-file materials when the URDF visual does not declare a color", () => {
+    const document = new DOMParser().parseFromString(`
+      <robot name="arm"><link name="base"><visual><geometry><mesh filename="model.dae"/></geometry></visual></link></robot>
+    `, "text/xml");
+    const visual = new Group() as Group & { urdfNode: Element };
+    visual.urdfNode = document.querySelector("visual")!;
+    const original = new MeshStandardMaterial({ color: "#cc4422" });
+    const mesh = new Mesh(new BoxGeometry(), original);
+    visual.add(mesh);
+
+    applyUrdfVisualColors(new Group().add(visual));
+
+    expect(mesh.material).toBe(original);
+    expect(original.color.getHexString()).toBe("cc4422");
   });
 });
