@@ -65,6 +65,8 @@
 
 - 从配置的 `std_msgs/msg/String` Topic 获取 URDF XML。
 - 使用 Three.js、React Three Fiber 和 `urdf-loader` 渲染机器人。
+- 保留 URDF `<visual>` 的内联或全局命名 RGBA 材质颜色；异步 STL、DAE、OBJ 网格挂载后再应用颜色，并保留网格纹理等材质属性。
+- Robot View 使用平衡的环境光和方向光，避免中间色机械臂因过曝显示成白色。
 - 根据 `sensor_msgs/msg/JointState` 的 name/position 驱动 URDF 关节；缺少的位置值按 0 处理。
 - 通过 Bridge 获取 `package://` 资源，支持 STL、DAE、OBJ、PNG、JPG/JPEG。
 - 解析 DAE 相对纹理路径，生成临时 Blob URL，并在资源释放时回收 URL。
@@ -117,7 +119,7 @@
 | Topic Inspector jq | 默认原始 JSON、jq 1.8.2 WASM 实际执行、管道/选择、单/多/空结果格式和表达式持久化 | `src/jqFilter.test.ts`、`src/topicInspectorLogic.test.ts`、`src/TopicInspector.test.tsx`、`src/App.test.tsx` |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
-| URDF | package URI、相对纹理、Base64、JointState 映射 | `src/urdfLogic.test.ts` |
+| URDF | package URI、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色 | `src/urdfLogic.test.ts` |
 | 电机输入 | 默认 TRACK/Kp/Kd、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
 | 电机交互 | 安全确认、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |

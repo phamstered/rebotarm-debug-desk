@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { applyJointState, decodeBase64, loadPackageResourcesSequentially, packageUris, resolvePackageRelative } from "./urdfLogic";
+import { Group, Mesh, MeshStandardMaterial, Texture } from "three";
+import {
+  applyJointState,
+  applyUrdfVisualColors,
+  decodeBase64,
+  finalizeLoadedUrdfMesh,
+  loadPackageResourcesSequentially,
+  packageUris,
+  resolvePackageRelative,
+} from "./urdfLogic";
 
 describe("URDF resources", () => {
   it("extracts unique package resources", () => {
@@ -47,5 +56,66 @@ describe("URDF resources", () => {
     const values: Array<[string, number]> = [];
     applyJointState(["joint1", "joint2"], [.2], (name, value) => values.push([name, value]));
     expect(values).toEqual([["joint1", .2], ["joint2", 0]]);
+  });
+
+  it("applies a named URDF RGBA color after an async nested mesh is attached", () => {
+    const document = new DOMParser().parseFromString(`
+      <robot name="arm">
+        <material name="arm_blue"><color rgba="0.2 0.4 0.6 0.75"/></material>
+        <link name="base"><visual><geometry/><material name="arm_blue"/></visual></link>
+      </robot>
+    `, "application/xml");
+    const visual = new Group() as Group & { isURDFVisual: boolean; urdfNode: Element };
+    visual.isURDFVisual = true;
+    visual.urdfNode = document.querySelector("visual")!;
+
+    const texture = new Texture();
+    const originalMaterial = new MeshStandardMaterial({ color: 0xffffff, map: texture });
+    const mesh = new Mesh(undefined, originalMaterial);
+    const loadedObject = new Group();
+    loadedObject.add(mesh);
+
+    // The initial post-parse pass cannot see an asynchronously loaded mesh.
+    applyUrdfVisualColors(visual);
+    expect(mesh.material).toBe(originalMaterial);
+
+    // Mirrors URDFLoader's done(): attach first, then finalize the loaded object.
+    visual.add(loadedObject);
+    finalizeLoadedUrdfMesh(loadedObject);
+
+    const material = mesh.material as MeshStandardMaterial;
+    expect(material).not.toBe(originalMaterial);
+    expect(material.color.toArray()).toEqual([0.2, 0.4, 0.6]);
+    expect(material.opacity).toBe(0.75);
+    expect(material.transparent).toBe(true);
+    expect(material.depthWrite).toBe(false);
+    expect(material.map).toBe(texture);
+    expect(mesh.castShadow).toBe(true);
+    expect(mesh.receiveShadow).toBe(true);
+  });
+
+  it("applies inline colors and leaves uncolored visual materials unchanged", () => {
+    const document = new DOMParser().parseFromString(`
+      <robot name="arm">
+        <link name="colored"><visual><geometry/><material><color rgba="0.8 0.3 0.1 1"/></material></visual></link>
+        <link name="plain"><visual><geometry/><material name="plain"/></visual></link>
+      </robot>
+    `, "application/xml");
+    const visuals = [...document.querySelectorAll("visual")].map((node) => {
+      const visual = new Group() as Group & { isURDFVisual: boolean; urdfNode: Element };
+      visual.isURDFVisual = true;
+      visual.urdfNode = node;
+      visual.add(new Mesh(undefined, new MeshStandardMaterial({ color: 0xffffff })));
+      return visual;
+    });
+    const root = new Group();
+    root.add(...visuals);
+    const plainMaterial = (visuals[1].children[0] as Mesh).material;
+
+    applyUrdfVisualColors(root);
+
+    expect(((visuals[0].children[0] as Mesh).material as MeshStandardMaterial).color.toArray())
+      .toEqual([0.8, 0.3, 0.1]);
+    expect((visuals[1].children[0] as Mesh).material).toBe(plainMaterial);
   });
 });
