@@ -37,6 +37,15 @@ int main() {
   assert(easy_debug_bridge::fully_qualified_node_name("robot", "driver") ==
          "/robot/driver");
 
+  assert(easy_debug_bridge::base64_encode({}) == "");
+  assert(easy_debug_bridge::base64_encode({1, 2, 3}) == "AQID");
+  assert(easy_debug_bridge::base64_encode({255, 0, 128, 64}) == "/wCAQA==");
+  const auto image_frame = easy_debug_bridge::binary_image_frame("{\"width\":2}", {1, 2, 3});
+  assert(std::string(image_frame.begin(), image_frame.begin() + 4) == "RCI1");
+  assert(image_frame[4] == 0 && image_frame[5] == 0 && image_frame[6] == 0 && image_frame[7] == 11);
+  assert(std::string(image_frame.begin() + 8, image_frame.begin() + 19) == "{\"width\":2}");
+  assert((std::vector<uint8_t>(image_frame.begin() + 19, image_frame.end()) ==
+          std::vector<uint8_t>{1, 2, 3}));
   sequence = UINT32_MAX;
   const auto wrapped = easy_debug_bridge::allocate_sequences(sequence, 1);
   assert(wrapped.front() == 0);

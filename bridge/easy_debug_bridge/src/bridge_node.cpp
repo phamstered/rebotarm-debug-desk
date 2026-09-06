@@ -8,6 +8,7 @@
 #include <microros_stm32h723_bridge/msg/joint_command.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rmw/types.h>
+#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
@@ -121,21 +122,14 @@ static std::string string_array(const std::vector<std::string> &values) {
   return out.str();
 }
 
-static std::string base64_encode(const std::vector<unsigned char> &data) {
-  static constexpr char alphabet[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string result;
-  result.reserve(((data.size() + 2) / 3) * 4);
-  for (size_t i = 0; i < data.size(); i += 3) {
-    const uint32_t value = (static_cast<uint32_t>(data[i]) << 16) |
-                           (i + 1 < data.size() ? static_cast<uint32_t>(data[i + 1]) << 8 : 0) |
-                           (i + 2 < data.size() ? static_cast<uint32_t>(data[i + 2]) : 0);
-    result.push_back(alphabet[(value >> 18) & 0x3f]);
-    result.push_back(alphabet[(value >> 12) & 0x3f]);
-    result.push_back(i + 1 < data.size() ? alphabet[(value >> 6) & 0x3f] : '=');
-    result.push_back(i + 2 < data.size() ? alphabet[value & 0x3f] : '=');
-  }
-  return result;
+static std::string image_metadata_json(const sensor_msgs::msg::Image &image) {
+  return "{\"header\":" + header_json(image.header) +
+         ",\"height\":" + std::to_string(image.height) +
+         ",\"width\":" + std::to_string(image.width) +
+         ",\"encoding\":" + json_quote(image.encoding) +
+         ",\"is_bigendian\":" + std::to_string(image.is_bigendian) +
+         ",\"step\":" + std::to_string(image.step) +
+         ",\"data_length\":" + std::to_string(image.data.size()) + "}";
 }
 
 static std::string mime_for(const std::filesystem::path &path) {
@@ -164,6 +158,16 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
     if (!open_.load()) return false;
     beast::error_code error;
     socket_.text(true);
+    socket_.write(asio::buffer(payload), error);
+    if (error) open_.store(false);
+    return !error;
+  }
+
+  bool send_binary(const std::vector<uint8_t> &payload) {
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    if (!open_.load()) return false;
+    beast::error_code error;
+    socket_.binary(true);
     socket_.write(asio::buffer(payload), error);
     if (error) open_.store(false);
     return !error;
@@ -221,6 +225,16 @@ class BridgeNode : public rclcpp::Node {
         std::remove_if(sessions_.begin(), sessions_.end(), [&](auto &weak) {
           auto session = weak.lock();
           return !session || !session->send(payload);
+        }),
+        sessions_.end());
+  }
+
+  void broadcast_binary(const std::vector<uint8_t> &payload) {
+    std::lock_guard<std::mutex> lock(session_mutex_);
+    sessions_.erase(
+        std::remove_if(sessions_.begin(), sessions_.end(), [&](auto &weak) {
+          auto session = weak.lock();
+          return !session || !session->send_binary(payload);
         }),
         sessions_.end());
   }
@@ -399,6 +413,14 @@ class BridgeNode : public rclcpp::Node {
           return "{\"name\":" + string_array(m.name) + ",\"position\":" + number_array(m.position) +
                  ",\"velocity\":" + number_array(m.velocity) + ",\"effort\":" + number_array(m.effort) + "}";
         });
+      } else if (type == "sensor_msgs/msg/Image") {
+        auto subscription = create_subscription<sensor_msgs::msg::Image>(
+            topic, compatible_qos(topic), [this, topic](const sensor_msgs::msg::Image::SharedPtr message) {
+              const std::string metadata = "{\"op\":\"topic_message\",\"topic\":" +
+                  json_quote(topic) + ",\"data\":" + image_metadata_json(*message) + "}";
+              broadcast_binary(easy_debug_bridge::binary_image_frame(metadata, message->data));
+            });
+        subscriptions_[topic] = subscription;
       } else if (type == "microros_stm32h723_bridge/msg/JointCommand") {
         create_typed_subscription<microros_stm32h723_bridge::msg::JointCommand>(topic, [](const auto &m) {
           return "{\"header\":" + header_json(m.header) +
@@ -458,7 +480,7 @@ class BridgeNode : public rclcpp::Node {
       std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), {});
       session->send("{\"op\":\"resource\",\"request_id\":" + json_quote(request_id) +
                     ",\"uri\":" + json_quote(uri) + ",\"mime\":" + json_quote(mime_for(path)) +
-                    ",\"base64\":" + json_quote(base64_encode(bytes)) + "}");
+                    ",\"base64\":" + json_quote(easy_debug_bridge::base64_encode(bytes)) + "}");
     } catch (const std::exception &error) {
       session->send(error_message(request_id, std::string("资源读取失败：") + error.what()));
     }

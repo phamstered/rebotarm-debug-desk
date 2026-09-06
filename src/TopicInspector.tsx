@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { TopicSample } from "./appLogic";
+import { imageMetadataJson, isRosImageType } from "./imageTopicLogic";
+import { RosImagePreview } from "./RosImagePreview";
 import { loadJqExpressions } from "./topicInspectorLogic";
 
 function rawJson(sample: TopicSample | undefined): string {
   return JSON.stringify(sample?.data ?? "等待数据…", null, 2);
 }
 
-export function TopicInspector({ selected, sample, subscribeError = "" }: { selected: string; sample: TopicSample | undefined; subscribeError?: string }) {
+export function TopicInspector({ selected, topicType = "", sample, subscribeError = "" }: { selected: string; topicType?: string; sample: TopicSample | undefined; subscribeError?: string }) {
   const [expressions, setExpressions] = useState<Record<string, string>>(loadJqExpressions);
   const [output, setOutput] = useState(() => rawJson(sample));
   const [jqError, setJqError] = useState("");
   const expression = selected ? expressions[selected] ?? "" : "";
+  const imageTopic = isRosImageType(topicType);
   const latestSampleRef = useRef(sample);
   latestSampleRef.current = sample;
 
@@ -25,7 +28,7 @@ export function TopicInspector({ selected, sample, subscribeError = "" }: { sele
       return;
     }
     if (!expression.trim()) {
-      setOutput(rawJson(sample));
+      setOutput(imageTopic ? imageMetadataJson(sample?.data) : rawJson(sample));
       setJqError("");
       return;
     }
@@ -33,7 +36,7 @@ export function TopicInspector({ selected, sample, subscribeError = "" }: { sele
       setOutput("等待数据…");
       setJqError("");
     }
-  }, [expression, sample?.data, selected]);
+  }, [expression, imageTopic, sample?.data, selected]);
 
   useEffect(() => {
     const query = expression.trim();
@@ -82,14 +85,15 @@ export function TopicInspector({ selected, sample, subscribeError = "" }: { sele
               value={expression}
               spellCheck={false}
               onChange={(event) => setExpressions((current) => ({ ...current, [selected]: event.target.value }))}
-              placeholder="留空显示原始 JSON，例如 .position[0]"
+              placeholder="留空显示原始数据，例如 .position[0]"
             />
           </label>
-          <span className={expression.trim() ? "enabled" : ""}>{expression.trim() ? "jq 已启用" : "未筛选 · 原始 JSON"}</span>
+          <span className={expression.trim() ? "enabled" : ""}>{expression.trim() ? "jq 已启用" : imageTopic ? "未筛选 · 图像预览 + 元数据" : "未筛选 · 原始 JSON"}</span>
         </div>
       )}
       {subscribeError && <div className="topic-inspector-error">订阅失败：{subscribeError}</div>}
       {jqError && <div className="topic-inspector-error">jq 错误：{jqError}</div>}
+      {!expression.trim() && imageTopic && <RosImagePreview data={sample?.data} />}
       <pre>{jqError ? "" : output}</pre>
     </div>
   );

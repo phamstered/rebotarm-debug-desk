@@ -2,6 +2,23 @@ import type { BridgeEnvelope, ConnectionProfile, RosGraph, TopicInfo } from "./t
 
 type Listener = (message: BridgeEnvelope) => void;
 
+const IMAGE_MAGIC = [0x52, 0x43, 0x49, 0x31]; // RCI1
+
+export function decodeBridgeEnvelope(payload: string | ArrayBuffer): BridgeEnvelope {
+  if (typeof payload === "string") return JSON.parse(payload) as BridgeEnvelope;
+  const bytes = new Uint8Array(payload);
+  if (bytes.length < 8 || !IMAGE_MAGIC.every((value, index) => bytes[index] === value)) {
+    throw new Error("未知的 Bridge 二进制消息");
+  }
+  const metadataLength = new DataView(payload).getUint32(4, false);
+  const pixelOffset = 8 + metadataLength;
+  if (pixelOffset > bytes.length) throw new Error("Bridge 图像消息不完整");
+  const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(8, pixelOffset))) as BridgeEnvelope;
+  if (!metadata.data || typeof metadata.data !== "object") throw new Error("Bridge 图像元数据无效");
+  (metadata.data as Record<string, unknown>).data_bytes = bytes.subarray(pixelOffset);
+  return metadata;
+}
+
 export class BridgeClient {
   private socket: WebSocket | null = null;
   private listeners = new Set<Listener>();
@@ -18,6 +35,7 @@ export class BridgeClient {
   private connectOnce(profile: ConnectionProfile): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(`ws://127.0.0.1:${profile.localPort}`);
+      socket.binaryType = "arraybuffer";
       let opened = false;
       const timer = window.setTimeout(() => {
         socket.close();
@@ -36,7 +54,7 @@ export class BridgeClient {
       };
       socket.onmessage = (event) => {
         if (this.socket !== socket) return;
-        const message = JSON.parse(String(event.data)) as BridgeEnvelope;
+        const message = decodeBridgeEnvelope(event.data as string | ArrayBuffer);
         if (message.request_id && this.pending.has(message.request_id)) {
           const pending = this.pending.get(message.request_id)!;
           if (message.op === "error") pending.reject(new Error(message.message ?? "Bridge 请求失败"));
