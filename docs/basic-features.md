@@ -47,9 +47,11 @@
 - Graph 使用 Sugiyama 分层图的重心排序：Publisher 倾向左侧、Topic 居中、Subscriber 倾向右侧，通过多轮相邻层扫描减少连线交叉，并按相邻 Topic 平均位置对齐 ROS Node。
 - 点击任意节点会高亮其一跳关联节点和连线、弱化其他拓扑；点击 Topic 节点还会创建只读订阅，并将该 Topic 送入右侧 Topic Inspector。
 - jq 编辑器和结果位于 Topic Inspector。每个 Topic 可配置独立表达式；使用浏览器内嵌的 jq 1.8.2 WASM，支持管道、字段选择、数组、`select` 等标准 jq 语法，不依赖 Jetson 安装 jq。
-- jq 表达式按 Topic 持久化在本机；默认留空且直接显示原始 JSON，仅在填写表达式后按需加载 jq WASM。语法错误、订阅失败与空输出分别显示，不会中断 Graph 刷新。
+- jq 表达式按 Topic 持久化在本机；默认留空，普通消息直接显示原始 JSON，图像消息显示预览与紧凑元数据；仅在填写表达式后按需加载 jq WASM。语法错误、订阅失败与空输出分别显示，不会中断 Graph 刷新。
 - jq 使用固定频率处理最新一帧 Topic 数据；高频消息不会反复重置表达式防抖，因此 JointState 等持续数据流也能稳定刷新筛选结果。
 - Topic Inspector 下方提供“数据 / Topic Info / 发送”三个 Tab；数据 Tab 保留实时 JSON 与 jq 功能。
+- `sensor_msgs/msg/Image` Topic（包括 `/camera/color/image_raw`）在数据 Tab 使用 Canvas 实时预览，支持 rgb8、bgr8、rgba8、bgra8、mono8、mono16 及对应 OpenCV 8UC/16UC1 编码、行步长和大小端转换。
+- Image 数据由 Bridge 使用 WebSocket 二进制帧全速传输，帧头保留 JSON 元数据、像素保持原始字节，避免 Base64 膨胀和大 JSON 解析；Canvas 使用浏览器动画帧合并绘制，不丢弃 Bridge 消息且不影响 Topic 频率统计。元数据展示尺寸、编码、step、时间戳与原始字节数但不展开二进制内容。
 - Topic Info 通过 SSH 执行 Humble `ros2 topic info --no-daemon --spin-time 1 -v`，展示类型、Publisher/Subscription 数量、节点、GID 和 QoS，并支持手动刷新。
 - 发送 Tab 显示当前 Topic 与消息类型，要求 JSON 顶层为对象；前端与 Rust 后端双重校验格式、Topic、消息类型和 64 KiB 大小限制后，通过 `ros2 topic pub --once --wait-matching-subscriptions 0` 发布一帧。
 - 通用发送禁止目标为配置的电机命令 Topic；`/stm32/joint_commands` 仍必须使用 Motor Control 的安全确认与 Bridge 预检。
@@ -112,6 +114,7 @@
 | Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
 | Topic Graph | ROS 图请求、Sugiyama 重心排序和交叉消除、Publisher/Subscriber 方向、节点聚焦、Tab 与节点订阅、手动/30 秒刷新 | `src/bridge.test.ts`、`src/topicGraphLogic.test.ts`、`src/TopicGraph.test.tsx`、`src/App.test.tsx` |
 | Topic Inspector jq | 默认原始 JSON、jq 1.8.2 WASM 实际执行、管道/选择、单/多/空结果格式和表达式持久化 | `src/jqFilter.test.ts`、`src/topicInspectorLogic.test.ts`、`src/TopicInspector.test.tsx`、`src/App.test.tsx` |
+| 图像 Topic | Image WebSocket 二进制全速传输、动画帧合并绘制、RGB/BGR/RGBA/BGRA/Mono8/Mono16 转换、step/大小端、Canvas 预览及紧凑元数据 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`bridge/easy_debug_bridge/test/test_generic_topics.py`、`src/bridge.test.ts`、`src/imageTopicLogic.test.ts`、`src/RosImagePreview.test.tsx`、`src/TopicInspector.test.tsx` |
 | Topic Info / 单帧发送 | 三 Tab、无 daemon 详细查询、手动刷新、JSON 双重校验、消息类型/大小校验、无订阅者发布、电机命令禁发 | `src/TopicInspector.test.tsx`、`src/topicInspectorLogic.test.ts`、`src-tauri/src/lib.rs`、Jetson 隔离 Topic 验证 |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
@@ -121,7 +124,7 @@
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort 及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | 轨迹消息 | JointTrajectoryPoint 的 position/velocity/acceleration/effort/time_from_start JSON 编码及 Jetson 隔离 Topic 端到端订阅 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、Jetson `colcon test`/隔离验证 |
-| 通用消息 | ROS 2 introspection 动态解码；嵌套 Pose、动态 DiagnosticArray、Image uint8 数组端到端验证 | `bridge/easy_debug_bridge/test/test_generic_topics.py`、Jetson 隔离验证 |
+| 通用消息 | ROS 2 introspection 动态解码；嵌套 Pose、动态 DiagnosticArray、标准 Image 专用二进制路径端到端验证 | `bridge/easy_debug_bridge/test/test_generic_topics.py`、Jetson 隔离验证 |
 
 ## 10. 测试命令
 

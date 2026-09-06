@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BridgeClient } from "./bridge";
+import { BridgeClient, decodeBridgeEnvelope } from "./bridge";
 import { defaultProfile } from "./types";
 
 class FakeWebSocket {
@@ -7,9 +7,10 @@ class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   readyState = FakeWebSocket.OPEN;
   sent: string[] = [];
+  binaryType = "blob";
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
+  onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
   onclose: (() => void) | null = null;
 
   constructor(public url: string) { FakeWebSocket.instances.push(this); }
@@ -17,6 +18,7 @@ class FakeWebSocket {
   close() { this.readyState = 3; this.onclose?.(); }
   open() { this.onopen?.(); }
   message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
+  binaryMessage(value: ArrayBuffer) { this.onmessage?.({ data: value }); }
 }
 
 describe("BridgeClient", () => {
@@ -32,7 +34,26 @@ describe("BridgeClient", () => {
     expect(socket.url).toBe("ws://127.0.0.1:19001");
     socket.open();
     await connected;
+    expect(socket.binaryType).toBe("arraybuffer");
     expect(JSON.parse(socket.sent[0])).toEqual({ op: "hello" });
+  });
+
+  it("decodes a binary image envelope without Base64 copying", async () => {
+    const metadata = new TextEncoder().encode(JSON.stringify({
+      op: "topic_message",
+      topic: "/camera/color/image_raw",
+      data: { width: 1, height: 1, encoding: "rgb8", step: 3, data_length: 3 },
+    }));
+    const frame = new Uint8Array(8 + metadata.length + 3);
+    frame.set([0x52, 0x43, 0x49, 0x31]);
+    new DataView(frame.buffer).setUint32(4, metadata.length, false);
+    frame.set(metadata, 8);
+    frame.set([4, 5, 6], 8 + metadata.length);
+
+    const decoded = decodeBridgeEnvelope(frame.buffer);
+
+    expect(decoded).toMatchObject({ op: "topic_message", topic: "/camera/color/image_raw" });
+    expect([...(decoded.data as { data_bytes: Uint8Array }).data_bytes]).toEqual([4, 5, 6]);
   });
 
   it("correlates request responses and lists topics", async () => {

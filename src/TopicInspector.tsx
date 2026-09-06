@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TopicSample } from "./appLogic";
+import { imageMetadataJson, isRosImageType } from "./imageTopicLogic";
+import { RosImagePreview } from "./RosImagePreview";
 import { loadJqExpressions, validatePublishJson } from "./topicInspectorLogic";
 import type { ConnectionProfile } from "./types";
 
@@ -37,6 +39,7 @@ export function TopicInspector({
   const [publishing, setPublishing] = useState(false);
   const expression = selected ? expressions[selected] ?? "" : "";
   const commandTopicBlocked = selected === profile.commandTopic;
+  const imageTopic = isRosImageType(topicType);
   const latestSampleRef = useRef(sample);
   latestSampleRef.current = sample;
 
@@ -51,7 +54,7 @@ export function TopicInspector({
       return;
     }
     if (!expression.trim()) {
-      setOutput(rawJson(sample));
+      setOutput(imageTopic ? imageMetadataJson(sample?.data) : rawJson(sample));
       setJqError("");
       return;
     }
@@ -59,7 +62,7 @@ export function TopicInspector({
       setOutput("等待数据…");
       setJqError("");
     }
-  }, [expression, sample?.data, selected]);
+  }, [expression, imageTopic, sample?.data, selected]);
 
   useEffect(() => {
     const query = expression.trim();
@@ -165,9 +168,10 @@ export function TopicInspector({
 
       {tab === "data" && (
         <div className="inspector-tab-content data-tab-content">
-          {selected && <div className="topic-inspector-filter"><label>jq 过滤（可选）<textarea aria-label={`jq 过滤 ${selected}`} value={expression} spellCheck={false} onChange={(event) => setExpressions((current) => ({ ...current, [selected]: event.target.value }))} placeholder="留空显示原始 JSON，例如 .position[0]" /></label><span className={expression.trim() ? "enabled" : ""}>{expression.trim() ? "jq 已启用" : "未筛选 · 原始 JSON"}</span></div>}
+          {selected && <div className="topic-inspector-filter"><label>jq 过滤（可选）<textarea aria-label={`jq 过滤 ${selected}`} value={expression} spellCheck={false} onChange={(event) => setExpressions((current) => ({ ...current, [selected]: event.target.value }))} placeholder="留空显示原始数据，例如 .position[0]" /></label><span className={expression.trim() ? "enabled" : ""}>{expression.trim() ? "jq 已启用" : imageTopic ? "未筛选 · 图像预览 + 元数据" : "未筛选 · 原始 JSON"}</span></div>}
           {subscribeError && <div className="topic-inspector-error">订阅失败：{subscribeError}</div>}
           {jqError && <div className="topic-inspector-error">jq 错误：{jqError}</div>}
+          {!expression.trim() && imageTopic && <RosImagePreview data={sample?.data} />}
           <pre>{jqError ? "" : output}</pre>
         </div>
       )}

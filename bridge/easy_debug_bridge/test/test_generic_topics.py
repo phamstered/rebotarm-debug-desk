@@ -47,18 +47,46 @@ def send_json(sock, payload):
     sock.sendall(header + mask + bytes(value ^ mask[index % 4] for index, value in enumerate(data)))
 
 
-def receive_json(sock):
-    first, second = sock.recv(2)
-    length = second & 0x7F
-    if length == 126:
-        length = struct.unpack("!H", sock.recv(2))[0]
-    elif length == 127:
-        length = struct.unpack("!Q", sock.recv(8))[0]
+def receive_exact(sock, length):
     data = b""
     while len(data) < length:
-        data += sock.recv(length - len(data))
-    assert first & 0x0F == 1
-    return json.loads(data)
+        chunk = sock.recv(length - len(data))
+        if not chunk:
+            raise ConnectionError("WebSocket closed while receiving data")
+        data += chunk
+    return data
+
+
+def receive_frame(sock):
+    first, second = receive_exact(sock, 2)
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", receive_exact(sock, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", receive_exact(sock, 8))[0]
+    mask = receive_exact(sock, 4) if second & 0x80 else None
+    data = receive_exact(sock, length)
+    if mask:
+        data = bytes(value ^ mask[index % 4] for index, value in enumerate(data))
+    return bool(first & 0x80), first & 0x0F, data
+
+
+def receive_json(sock):
+    finished, opcode, data = receive_frame(sock)
+    assert opcode in (1, 2)
+    while not finished:
+        finished, continuation_opcode, chunk = receive_frame(sock)
+        assert continuation_opcode == 0
+        data += chunk
+    if opcode == 1:
+        return json.loads(data)
+    assert data[:4] == b"RCI1" and len(data) >= 8
+    metadata_length = struct.unpack("!I", data[4:8])[0]
+    payload_offset = 8 + metadata_length
+    assert payload_offset <= len(data)
+    message = json.loads(data[8:payload_offset])
+    message["data"]["data_bytes"] = data[payload_offset:]
+    return message
 
 
 def wait_for(sock, predicate):
@@ -115,7 +143,9 @@ def main():
         "{height: 1, width: 3, encoding: mono8, is_bigendian: 0, step: 3, data: [1, 128, 255]}",
         lambda data: (
             data["height"] == 1 and data["width"] == 3
-            and data["encoding"] == "mono8" and data["data"] == [1, 128, 255]
+            and data["encoding"] == "mono8"
+            and data["data_length"] == 3
+            and data["data_bytes"] == bytes([1, 128, 255])
         ) or (_ for _ in ()).throw(AssertionError(data)),
     )
     validate_topic(
