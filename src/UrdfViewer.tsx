@@ -18,7 +18,14 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader, { type URDFRobot } from "urdf-loader";
 import type { BridgeClient } from "./bridge";
-import { applyJointState, decodeBase64, loadPackageResourcesSequentially, resolvePackageRelative } from "./urdfLogic";
+import {
+  applyJointState,
+  applyUrdfVisualColors,
+  decodeBase64,
+  finalizeLoadedUrdfMesh,
+  loadPackageResourcesSequentially,
+  resolvePackageRelative,
+} from "./urdfLogic";
 
 type JointState = { name?: string[]; position?: number[] };
 
@@ -60,13 +67,13 @@ function Controls({ robot }: { robot: URDFRobot | null }) {
 function Scene({ robot }: { robot: URDFRobot | null }) {
   const grid = useMemo(() => new GridHelper(10, 20, 0x45637d, 0x24384a), []);
   const keyLight = useMemo(() => {
-    const light = new DirectionalLight(new Color("#ffffff"), 2.2);
+    const light = new DirectionalLight(new Color("#ffffff"), 1.15);
     light.position.set(3, 4, 5);
     return light;
   }, []);
   return (
     <>
-      <ambientLight intensity={1.2} />
+      <ambientLight intensity={0.55} />
       <primitive object={keyLight} />
       <primitive object={grid} />
       {robot && <primitive object={robot} rotation={[-Math.PI / 2, 0, 0]} />}
@@ -149,7 +156,12 @@ export function UrdfViewer({
         manager.onError = (url) => setError((current) => current || `资源加载失败：${url}`);
         const loader = new URDFLoader(manager);
         loader.loadMeshCb = (path, meshManager, done) => {
-          const complete = (object: Object3D) => done(object);
+          const complete = (object: Object3D) => {
+            // URDFLoader attaches the object synchronously in done(). Applying the
+            // color afterwards is required for nested meshes loaded asynchronously.
+            done(object);
+            finalizeLoadedUrdfMesh(object);
+          };
           const failed = (reason: unknown) => {
             const meshError = reason instanceof Error ? reason : new Error(String(reason));
             if (!disposed) setError(`网格解析失败：${path}（${meshError.message}）`);
@@ -170,6 +182,7 @@ export function UrdfViewer({
           }
         };
         const parsed = loader.parse(hydrated);
+        applyUrdfVisualColors(parsed);
         parsed.traverse((object) => {
           object.castShadow = true;
           object.receiveShadow = true;
