@@ -171,6 +171,10 @@ export default function App() {
       || topic.types.some((type) => type.toLocaleLowerCase().includes(query)),
     );
   }, [topicFilter, topics]);
+  const selectedTopicType = useMemo(
+    () => topics.find((topic) => topic.name === selected)?.types[0] ?? "",
+    [selected, topics],
+  );
 
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
@@ -642,7 +646,7 @@ export default function App() {
             expanded={panels.inspector}
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector selected={selected} sample={messages[selected]} subscribeError={topicSubscribeError} />
+          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} />
         </section>
       </section>
       <ResizeHandle
