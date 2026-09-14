@@ -1,6 +1,6 @@
 # Robot Console 基本功能与测试覆盖
 
-更新日期：2026-08-26
+更新日期：2026-09-14
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
@@ -64,6 +64,7 @@
 ## 5. URDF 与 Three.js
 
 - 从配置的 `std_msgs/msg/String` Topic 获取 URDF XML。
+- Bridge 对名称末段为 `/robot_description` 的 Topic 固定使用 `RELIABLE + TRANSIENT_LOCAL + KeepLast(1)` 订阅，不依赖 ROS graph 发现时序；即使 `robot_state_publisher` 仅在启动时发布一次，晚连接的上位机也能取得 DDS 保留的 URDF。
 - 使用 Three.js、React Three Fiber 和 `urdf-loader` 渲染机器人。
 - 保留 URDF `<visual>` 的内联或全局命名 RGBA 材质颜色；异步 STL、DAE、OBJ 网格挂载后再应用颜色，并保留网格纹理等材质属性。
 - Robot View 使用平衡的环境光和方向光，避免中间色机械臂因过曝显示成白色。
@@ -119,7 +120,7 @@
 | Topic Inspector jq | 默认原始 JSON、jq 1.8.2 WASM 实际执行、管道/选择、单/多/空结果格式和表达式持久化 | `src/jqFilter.test.ts`、`src/topicInspectorLogic.test.ts`、`src/TopicInspector.test.tsx`、`src/App.test.tsx` |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
-| URDF | package URI、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色 | `src/urdfLogic.test.ts` |
+| URDF | transient-local 晚加入 QoS、package URI、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts` |
 | 电机输入 | 默认 TRACK/Kp/Kd、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
 | 电机交互 | 安全确认、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |

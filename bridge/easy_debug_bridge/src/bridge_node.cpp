@@ -265,6 +265,11 @@ class BridgeNode : public rclcpp::Node {
   }
 
   rclcpp::QoS compatible_qos(const std::string &topic) {
+    // robot_state_publisher normally publishes the URDF once with transient-local durability.
+    // Do not depend on graph discovery timing here: a volatile late-joiner cannot recover it.
+    if (easy_debug_bridge::is_robot_description_topic(topic)) {
+      return rclcpp::QoS(1).reliable().transient_local();
+    }
     rclcpp::QoS qos(10);
     const auto publishers = get_publishers_info_by_topic(topic);
     if (publishers.empty()) return qos.best_effort().durability_volatile();
