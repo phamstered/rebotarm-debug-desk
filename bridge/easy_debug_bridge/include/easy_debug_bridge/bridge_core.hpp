@@ -46,4 +46,10 @@ inline std::string fully_qualified_node_name(const std::string &node_namespace,
   return result;
 }
 
+inline bool is_robot_description_topic(const std::string &topic) {
+  constexpr char basename[] = "/robot_description";
+  if (topic.size() < sizeof(basename) - 1) return false;
+  return topic.compare(topic.size() - (sizeof(basename) - 1), sizeof(basename) - 1, basename) == 0;
+}
+
 }  // namespace easy_debug_bridge

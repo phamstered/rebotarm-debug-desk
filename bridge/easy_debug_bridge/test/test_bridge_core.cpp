@@ -36,6 +36,10 @@ int main() {
          "/robot/driver");
   assert(easy_debug_bridge::fully_qualified_node_name("robot", "driver") ==
          "/robot/driver");
+  assert(easy_debug_bridge::is_robot_description_topic("/robot_description"));
+  assert(easy_debug_bridge::is_robot_description_topic("/arm/robot_description"));
+  assert(!easy_debug_bridge::is_robot_description_topic("/robot_description_semantic"));
+  assert(!easy_debug_bridge::is_robot_description_topic("/debug/robot_description_copy"));
 
   sequence = UINT32_MAX;
   const auto wrapped = easy_debug_bridge::allocate_sequences(sequence, 1);
