@@ -18,6 +18,8 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int32.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include "easy_debug_bridge/bridge_core.hpp"
 
 #include <algorithm>
@@ -264,6 +266,8 @@ class BridgeNode : public rclcpp::Node {
         send_resource(session, request.get<std::string>("uri", ""), request_id);
       } else if (op == "joint_command") {
         publish_joint_command(session, request, request_id);
+      } else if (op == "trajectory_command") {
+        publish_trajectory_command(session, request, request_id);
       } else {
         session->send(error_message(request_id, "未知操作：" + op));
       }
@@ -574,6 +578,78 @@ class BridgeNode : public rclcpp::Node {
                   ",\"mode\":" + std::to_string(command.mode) + "}");
   }
 
+  // 轨迹指令发往 JointTrajectoryController 的 ~/joint_trajectory 订阅，
+  // 因此 Topic 由前端按当前 active 的控制器指定，Bridge 只做校验和转发。
+  void publish_trajectory_command(const std::shared_ptr<WebSocketSession> &session,
+                                  const boost::property_tree::ptree &request,
+                                  const std::string &request_id) {
+    easy_debug_bridge::TrajectoryCommand command;
+    command.topic = request.get<std::string>("topic", "");
+    if (const auto names = request.get_child_optional("joint_names")) {
+      for (const auto &item : *names) {
+        command.joint_names.push_back(item.second.get_value<std::string>());
+      }
+    }
+    if (const auto points = request.get_child_optional("trajectory_points")) {
+      for (const auto &item : *points) {
+        const auto &node = item.second;
+        easy_debug_bridge::TrajectoryPointSpec point;
+        if (const auto positions = node.get_child_optional("positions")) {
+          for (const auto &value : *positions) {
+            point.positions.push_back(value.second.get_value<double>());
+          }
+        }
+        if (const auto velocities = node.get_child_optional("velocities")) {
+          for (const auto &value : *velocities) {
+            point.velocities.push_back(value.second.get_value<double>());
+          }
+        }
+        point.time_from_start = node.get<double>("time_from_start", 0.0);
+        command.points.push_back(std::move(point));
+      }
+    }
+
+    const auto validation = easy_debug_bridge::validate_trajectory_command(command);
+    if (validation != easy_debug_bridge::TrajectoryValidation::Ok) {
+      session->send(error_message(request_id, easy_debug_bridge::trajectory_validation_message(validation)));
+      return;
+    }
+
+    auto publisher = trajectory_publisher(command.topic);
+    if (publisher->get_subscription_count() == 0) {
+      session->send(error_message(request_id, "轨迹控制器订阅不可用"));
+      return;
+    }
+
+    trajectory_msgs::msg::JointTrajectory message;
+    message.header.stamp = now();
+    message.joint_names = command.joint_names;
+    message.points.reserve(command.points.size());
+    for (const auto &point : command.points) {
+      trajectory_msgs::msg::JointTrajectoryPoint target;
+      target.positions = point.positions;
+      target.velocities = point.velocities;
+      const auto stamp = easy_debug_bridge::duration_fields(point.time_from_start);
+      target.time_from_start.sec = stamp.first;
+      target.time_from_start.nanosec = stamp.second;
+      message.points.push_back(std::move(target));
+    }
+    publisher->publish(message);
+    session->send("{\"op\":\"trajectory_command_ack\",\"request_id\":" + json_quote(request_id) +
+                  ",\"joints\":" + std::to_string(command.joint_names.size()) +
+                  ",\"points\":" + std::to_string(command.points.size()) + "}");
+  }
+
+  rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
+  trajectory_publisher(const std::string &topic) {
+    std::lock_guard<std::mutex> lock(trajectory_mutex_);
+    auto &publisher = trajectory_publishers_[topic];
+    if (!publisher) {
+      publisher = create_publisher<trajectory_msgs::msg::JointTrajectory>(topic, rclcpp::QoS(10));
+    }
+    return publisher;
+  }
+
   int port_;
   std::string command_topic_;
   std::string status_topic_;
@@ -583,6 +659,9 @@ class BridgeNode : public rclcpp::Node {
   std::mutex subscription_mutex_;
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   rclcpp::Publisher<microros_stm32h723_bridge::msg::JointCommand>::SharedPtr command_publisher_;
+  std::mutex trajectory_mutex_;
+  std::unordered_map<std::string, rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr>
+      trajectory_publishers_;
   rclcpp::Subscription<microros_stm32h723_bridge::msg::HardwareStatus>::SharedPtr
       safety_status_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr safety_joint_subscription_;

@@ -13,6 +13,8 @@ export type ConnectionProfile = {
   jointStateTopic: string;
   commandTopic: string;
   statusTopic: string;
+  /** TCP（夹爪）link 名称；留空时按命名特征和运动链深度自动挑选。 */
+  tcpLink: string;
 };
 
 export type TopicInfo = {
@@ -61,6 +63,13 @@ export type RosControlStatus = {
   message: string;
 };
 
+export type TrajectoryPoint = {
+  positions: number[];
+  velocities?: number[];
+  /** 相对轨迹起点的时间，单位秒，必须严格递增。 */
+  time_from_start: number;
+};
+
 export type BridgeEnvelope = {
   op: string;
   request_id?: string;
@@ -82,6 +91,10 @@ export type BridgeEnvelope = {
   effort?: number;
   confirmation?: string;
   sequence?: number;
+  joint_names?: string[];
+  trajectory_points?: TrajectoryPoint[];
+  joints?: number;
+  points?: number;
 };
 
 export type HardwareStatus = {
@@ -108,4 +121,5 @@ export const defaultProfile: ConnectionProfile = {
   jointStateTopic: "/stm32/joint_states",
   commandTopic: "/stm32/joint_commands",
   statusTopic: "/stm32/status",
+  tcpLink: "",
 };

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import type { BridgeClient } from "./bridge";
 import {
   buildCalibrationReport,
@@ -59,11 +60,14 @@ export function Joint4CalibrationPage({
   bridge,
   controllerState,
   onRefreshControllers,
+  pageSwitch,
 }: {
   profile: ConnectionProfile;
   bridge: BridgeClient;
   controllerState?: string;
   onRefreshControllers(): void;
+  /** 顶部工具栏的页面切换按钮，由 App 注入以保证两个页面都能切换。 */
+  pageSwitch?: ReactNode;
 }) {
   const [status, setStatus] = useState<Joint4CalibrationStatus | null>(null);
   const [samples, setSamples] = useState<Joint4CalibrationSample[]>([]);
@@ -191,6 +195,7 @@ export function Joint4CalibrationPage({
     <main className="calibration-page">
       <header className="calibration-header">
         <div><strong>Joint4 Calibration</strong><span>多姿态重力与 camera_link 负载标定</span></div>
+        {pageSwitch}
         <div className="calibration-connection">
           <span className={`connection-light ${controllerActive && availability.statusFresh ? "online" : "offline"}`} />
           <strong>{controllerActive ? "Controller active" : `Controller ${controllerState ?? "未发现"}`}</strong>

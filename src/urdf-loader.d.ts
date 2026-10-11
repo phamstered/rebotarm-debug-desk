@@ -3,6 +3,7 @@ declare module "urdf-loader" {
 
   export interface URDFRobot extends Object3D {
     joints: Record<string, { setJointValue(value: number): void }>;
+    links: Record<string, Object3D>;
     setJointValue(name: string, value: number): void;
   }
 
