@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Mutex;
 use tauri::State;
@@ -56,6 +57,13 @@ struct RosControlStatus {
     message: String,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriggerServiceResponse {
+    success: bool,
+    message: String,
+}
+
 fn ssh_target(profile: &ConnectionProfile) -> String {
     if profile.username.trim().is_empty() {
         profile.host.clone()
@@ -71,9 +79,9 @@ fn is_safe_setup_script(path: &str) -> bool {
 
 fn valid_topic(topic: &str) -> bool {
     topic.starts_with('/')
-        && topic
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '/')
+        && topic.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '/'
+        })
 }
 
 fn valid_controller_name(name: &str) -> bool {
@@ -85,9 +93,9 @@ fn valid_controller_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 255
         && valid_start
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '/')
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '/'
+        })
 }
 
 fn controller_action_flag(action: &str) -> Option<&'static str> {
@@ -125,10 +133,83 @@ fn controller_switch_command(
     ))
 }
 
+fn joint4_calibration_service(action: &str) -> Option<&'static str> {
+    match action {
+        "begin_pose" => Some("/joint4_calibration_controller/begin_pose"),
+        "release_pose" => Some("/joint4_calibration_controller/release_pose"),
+        "capture_pose" => Some("/joint4_calibration_controller/capture_pose"),
+        "fit" => Some("/joint4_calibration_controller/fit"),
+        "reset" => Some("/joint4_calibration_controller/reset"),
+        _ => None,
+    }
+}
+
+fn joint4_calibration_service_command(
+    profile: &ConnectionProfile,
+    action: &str,
+) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    let service = joint4_calibration_service(action).ok_or("不支持的 joint4 标定操作")?;
+    Ok(format!(
+        "bash -lc 'source /opt/ros/humble/setup.bash; \
+         if [ -f \"{}\" ]; then source \"{}\"; fi; \
+         ROS_DOMAIN_ID={} timeout 10 ros2 service call {} std_srvs/srv/Trigger \"{{}}\" 2>&1'",
+        profile.ros_setup_script, profile.ros_setup_script, profile.ros_domain_id, service,
+    ))
+}
+
+fn parse_trigger_service_response(output: &str) -> Result<TriggerServiceResponse, String> {
+    let success = if output.contains("success=True") || output.contains("success: true") {
+        true
+    } else if output.contains("success=False") || output.contains("success: false") {
+        false
+    } else {
+        return Err("无法解析 Trigger 服务响应".into());
+    };
+    let message = ["message='", "message=\"", "message: '", "message: \""]
+        .iter()
+        .find_map(|marker| {
+            let start = output.rfind(marker)? + marker.len();
+            let quote = marker.chars().last()?;
+            let rest = &output[start..];
+            let end = rest.rfind(quote)?;
+            Some(rest[..end].replace("\\'", "'").replace("\\\"", "\""))
+        })
+        .unwrap_or_else(|| {
+            output
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("Trigger 服务已返回")
+                .trim()
+                .to_string()
+        });
+    Ok(TriggerServiceResponse { success, message })
+}
+
+fn validate_calibration_report(path: &str, content: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return Err("标定报告必须保存到绝对路径".into());
+    }
+    let extension = path.extension().and_then(|value| value.to_str());
+    if !matches!(extension, Some("json" | "csv")) {
+        return Err("标定报告只支持 .json 或 .csv".into());
+    }
+    if content.is_empty() || content.len() > 1_048_576 {
+        return Err("标定报告内容为空或超过 1 MiB".into());
+    }
+    Ok(())
+}
+
 fn parse_agent_status(output: &str) -> AgentServiceStatus {
     let mut status = AgentServiceStatus::default();
     for line in output.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         match key {
             "LoadState" => status.load_state = value.into(),
             "ActiveState" => status.active_state = value.into(),
@@ -287,10 +368,7 @@ async fn check_ros_controllers(profile: ConnectionProfile) -> Result<RosControlS
          if [ -f \"{}\" ]; then source \"{}\"; fi; \
          ROS_DOMAIN_ID={} timeout 5 ros2 control list_controllers \
          --spin-time 1 -c {} 2>&1'",
-        profile.ros_setup_script,
-        profile.ros_setup_script,
-        profile.ros_domain_id,
-        MANAGER
+        profile.ros_setup_script, profile.ros_setup_script, profile.ros_domain_id, MANAGER
     );
     let output = ssh_base(&profile)
         .arg("-o")
@@ -344,7 +422,10 @@ async fn switch_ros_controller(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
     if !output.status.success() {
-        return Err(format!("Controller 操作失败：{}", ros_control_error(&combined)));
+        return Err(format!(
+            "Controller 操作失败：{}",
+            ros_control_error(&combined)
+        ));
     }
     Ok(stdout
         .lines()
@@ -352,6 +433,37 @@ async fn switch_ros_controller(
         .find(|line| !line.trim().is_empty())
         .map(|line| strip_ansi(line.trim()))
         .unwrap_or_else(|| format!("Controller {controller_name} {action} 完成")))
+}
+
+#[tauri::command]
+async fn call_joint4_calibration_service(
+    profile: ConnectionProfile,
+    action: String,
+) -> Result<TriggerServiceResponse, String> {
+    let remote = joint4_calibration_service_command(&profile, &action)?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法执行 joint4 标定服务调用：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "joint4 标定服务调用失败：{}",
+            ros_control_error(&format!("{stdout}\n{stderr}"))
+        ));
+    }
+    parse_trigger_service_response(&stdout)
+}
+
+#[tauri::command]
+fn save_joint4_calibration_report(local_path: String, content: String) -> Result<(), String> {
+    validate_calibration_report(&local_path, &content)?;
+    std::fs::write(&local_path, content).map_err(|error| format!("标定报告保存失败：{error}"))
 }
 
 #[tauri::command]
@@ -462,12 +574,15 @@ async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
         .invoke_handler(tauri::generate_handler![
             check_ssh,
             check_micro_ros_agent,
             check_ros_controllers,
             switch_ros_controller,
+            call_joint4_calibration_service,
+            save_joint4_calibration_report,
             start_session,
             stop_session
         ])
@@ -481,11 +596,17 @@ mod tests {
 
     fn profile(username: &str) -> ConnectionProfile {
         ConnectionProfile {
-            host: "damiao".into(), ssh_port: 22, username: username.into(),
-            identity_file: String::new(), local_port: 18765, remote_port: 8765,
-            ros_domain_id: 0, ros_setup_script: "/opt/robot/install/setup.bash".into(),
+            host: "damiao".into(),
+            ssh_port: 22,
+            username: username.into(),
+            identity_file: String::new(),
+            local_port: 18765,
+            remote_port: 8765,
+            ros_domain_id: 0,
+            ros_setup_script: "/opt/robot/install/setup.bash".into(),
             joint_state_topic: "/stm32/joint_states".into(),
-            command_topic: "/stm32/joint_commands".into(), status_topic: "/stm32/status".into(),
+            command_topic: "/stm32/joint_commands".into(),
+            status_topic: "/stm32/status".into(),
         }
     }
 
@@ -510,16 +631,56 @@ mod tests {
 
     #[test]
     fn builds_safe_ros_controller_switch_commands() {
-        let activate = controller_switch_command(&profile(""), "arm_controller", "activate").unwrap();
+        let activate =
+            controller_switch_command(&profile(""), "arm_controller", "activate").unwrap();
         assert!(activate.contains("switch_controllers --activate arm_controller --strict"));
         assert!(activate.contains("--strict --spin-time 1"));
         assert!(!activate.contains("--switch-timeout"));
         assert!(activate.contains("ROS_DOMAIN_ID=0"));
         assert!(activate.contains("-c /controller_manager"));
-        let deactivate = controller_switch_command(&profile(""), "/arm/controller", "deactivate").unwrap();
+        let deactivate =
+            controller_switch_command(&profile(""), "/arm/controller", "deactivate").unwrap();
         assert!(deactivate.contains("--deactivate /arm/controller"));
         assert!(controller_switch_command(&profile(""), "arm;reboot", "activate").is_err());
         assert!(controller_switch_command(&profile(""), "arm_controller", "restart").is_err());
+    }
+
+    #[test]
+    fn restricts_and_parses_joint4_calibration_trigger_calls() {
+        let command = joint4_calibration_service_command(&profile(""), "capture_pose").unwrap();
+        assert!(command.contains("/joint4_calibration_controller/capture_pose"));
+        assert!(command.contains("std_srvs/srv/Trigger"));
+        assert!(command.contains("ROS_DOMAIN_ID=0"));
+        assert!(joint4_calibration_service_command(&profile(""), "shell;reboot").is_err());
+
+        assert_eq!(
+            parse_trigger_service_response(
+                "response:\nstd_srvs.srv.Trigger_Response(success=True, message='captured sample 4')\n",
+            )
+            .unwrap(),
+            TriggerServiceResponse {
+                success: true,
+                message: "captured sample 4".into(),
+            }
+        );
+        assert_eq!(
+            parse_trigger_service_response("success: false\nmessage: 'pose is not stable'\n")
+                .unwrap(),
+            TriggerServiceResponse {
+                success: false,
+                message: "pose is not stable".into(),
+            }
+        );
+        assert!(parse_trigger_service_response("service unavailable").is_err());
+    }
+
+    #[test]
+    fn validates_joint4_calibration_report_paths_and_sizes() {
+        assert!(validate_calibration_report("/tmp/joint4.json", "{}").is_ok());
+        assert!(validate_calibration_report("/tmp/joint4.csv", "pose,q4").is_ok());
+        assert!(validate_calibration_report("relative.json", "{}").is_err());
+        assert!(validate_calibration_report("/tmp/joint4.yaml", "x").is_err());
+        assert!(validate_calibration_report("/tmp/joint4.json", "").is_err());
     }
 
     #[test]
@@ -554,37 +715,50 @@ mod tests {
             "joint_state_broadcaster joint_state_broadcaster/JointStateBroadcaster \u{1b}[32mactive\u{1b}[0m\n\
              arm_controller joint_trajectory_controller/JointTrajectoryController inactive\n",
         );
-        assert_eq!(controllers, vec![
-            ControllerInfo {
-                name: "joint_state_broadcaster".into(),
-                type_name: "joint_state_broadcaster/JointStateBroadcaster".into(),
-                state: "active".into(),
-            },
-            ControllerInfo {
-                name: "arm_controller".into(),
-                type_name: "joint_trajectory_controller/JointTrajectoryController".into(),
-                state: "inactive".into(),
-            },
-        ]);
+        assert_eq!(
+            controllers,
+            vec![
+                ControllerInfo {
+                    name: "joint_state_broadcaster".into(),
+                    type_name: "joint_state_broadcaster/JointStateBroadcaster".into(),
+                    state: "active".into(),
+                },
+                ControllerInfo {
+                    name: "arm_controller".into(),
+                    type_name: "joint_trajectory_controller/JointTrajectoryController".into(),
+                    state: "inactive".into(),
+                },
+            ]
+        );
     }
 
     #[test]
     fn ignores_ros_cli_logs_and_summarizes_manager_timeout() {
         assert!(parse_controllers("[INFO] waiting for service\n").is_empty());
         assert_eq!(
-            ros_control_error("[WARN] Could not contact service /controller_manager/list_controllers"),
+            ros_control_error(
+                "[WARN] Could not contact service /controller_manager/list_controllers"
+            ),
             "controller_manager 服务不可用或查询超时"
         );
     }
 
     #[test]
     fn keeps_free_port_and_falls_back_when_preferred_is_busy() {
-        assert_eq!(choose_local_port_with(18765, |port| Ok(port)).unwrap(), 18765);
+        assert_eq!(
+            choose_local_port_with(18765, |port| Ok(port)).unwrap(),
+            18765
+        );
         let mut probes = Vec::new();
         let fallback = choose_local_port_with(18765, |port| {
             probes.push(port);
-            if port == 18765 { Err("busy".into()) } else { Ok(23456) }
-        }).unwrap();
+            if port == 18765 {
+                Err("busy".into())
+            } else {
+                Ok(23456)
+            }
+        })
+        .unwrap();
         assert_eq!(probes, vec![18765, 0]);
         assert_eq!(fallback, 23456);
     }

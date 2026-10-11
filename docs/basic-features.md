@@ -107,7 +107,15 @@
 - App Logo 使用简化双关节机械臂、金属材质和单一青色状态光，适配深色界面与 macOS Dock 小尺寸显示。
 - 设计源文件位于 `assets/logo/robot-console-icon.png`，应用内品牌图和 Tauri macOS Bundle 共用同一视觉资源。
 
-## 9. 单元测试覆盖矩阵
+## 9. Joint4 重力标定
+
+- 左侧 Calibration 页面订阅 `/joint4_calibration_controller/status`，展示关节位置、速度、模型/修正/所需力矩、参考位置、稳定时间与保护状态。
+- 标定流程通过受限的 `std_srvs/srv/Trigger` 服务执行 Begin、Capture、Release、Fit 和 Reset，界面不直接写入 URDF 或控制参数。
+- Capture 仅在 Controller active、状态新鲜、姿态保持稳定且确认手部支撑已撤掉后开放。
+- `safety_fault` 会锁定采样和拟合；托住 joint4 后可执行 Release 清除新版 Controller 的故障锁存。对旧版 Controller，姿态已释放且速度不超过 0.05 rad/s 时允许重新 Begin，以当前安全位置重建参考，避免界面与 Controller 互相锁死。
+- 标定采样和拟合结果可保存为本机 JSON/CSV 审计报告。
+
+## 10. 单元测试覆盖矩阵
 
 | 功能域 | 覆盖内容 | 测试位置 |
 |---|---|---|
@@ -128,8 +136,9 @@
 | 电机交互 | 安全确认、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort 及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
+| Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |
 
-## 10. 测试命令
+## 11. 测试命令
 
 每次功能变更必须执行：
 

@@ -3,6 +3,9 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { BridgeClient } from "./bridge";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
+import { AppNav } from "./AppNav";
+import type { AppPage } from "./AppNav";
+import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorControl } from "./MotorControl";
 import { TopicInspector } from "./TopicInspector";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosControlStatus, TopicInfo } from "./types";
@@ -131,6 +134,8 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 }
 
 export default function App() {
+  const [appPage, setAppPage] = useState<AppPage>(() => localStorage.getItem("robot-console-page") === "calibration" ? "calibration" : "dashboard");
+  const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
@@ -183,6 +188,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("easy-debug-layout", JSON.stringify(layout));
   }, [layout]);
+
+  useEffect(() => {
+    localStorage.setItem("robot-console-page", appPage);
+  }, [appPage]);
+
+  useEffect(() => {
+    localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
+  }, [navExpanded]);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
@@ -498,8 +511,23 @@ export default function App() {
     );
   }
 
+  const calibrationControllerState = rosControl?.controllers
+    .find((controller) => controller.name === "joint4_calibration_controller")?.state;
+
   return (
-    <main className="workspace" style={layoutStyle}>
+    <div className={`app-shell ${navExpanded ? "" : "nav-collapsed"}`}>
+      <AppNav page={appPage} expanded={navExpanded} onSelect={setAppPage} onToggle={() => setNavExpanded((current) => !current)} />
+      {!navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
+      <div className="app-page-content">
+      {appPage === "calibration" ? (
+        <Joint4CalibrationPage
+          profile={profile}
+          bridge={bridge}
+          controllerState={calibrationControllerState}
+          onRefreshControllers={() => void refreshRosControllers()}
+        />
+      ) : (
+      <main className="workspace" style={layoutStyle}>
       <header>
         <div className="brand compact"><img className="brand-mark" src={robotConsoleIcon} alt="" /><strong>Robot Console</strong></div>
         <span className="connected-dot" />{profile.name}
@@ -679,6 +707,9 @@ export default function App() {
           }
         }}
       />
-    </main>
+      </main>
+      )}
+      </div>
+    </div>
   );
 }

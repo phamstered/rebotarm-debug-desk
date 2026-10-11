@@ -350,4 +350,22 @@ describe("App workflow", () => {
     expect(screen.getByLabelText("jq 过滤 /stm32/status")).toHaveValue("");
     expect(screen.getByText("未筛选 · 原始 JSON")).toBeVisible();
   });
+
+  it("opens Joint4 Calibration from the collapsible main toolbar", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(screen.getByRole("button", { name: "Joint4 Calibration" }));
+
+    expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
+    expect(doubles.request).toHaveBeenCalledWith({
+      op: "subscribe",
+      topic: "/joint4_calibration_controller/status",
+      type: "std_msgs/msg/Float64MultiArray",
+    });
+
+    await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
+    await user.click(screen.getByRole("button", { name: "展开主工具栏" }));
+    expect(screen.getByRole("navigation", { name: "主工具栏" })).toHaveClass("expanded");
+  });
 });
