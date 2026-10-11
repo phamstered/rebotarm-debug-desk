@@ -111,6 +111,8 @@ Resource:
 }
 ```
 
+`uri` 仅接受 `package://<package>/<relative-path>`。Bridge 会在跟随资源符号链接前校验相对路径边界，因此兼容 ROS 2 `--symlink-install`，同时拒绝绝对路径、package 根目录和越过 package 目录的 `..` 路径。
+
 Error:
 
 ```json

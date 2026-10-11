@@ -33,7 +33,7 @@ The desktop never joins DDS directly. SSH provides authentication, host-key veri
 
 ## URDF assets
 
-The URDF XML remains a ROS Topic payload. For each `package://` URI, the desktop requests the resource from the Bridge. The Bridge resolves the package with `ament_index_cpp`, canonicalizes the path, rejects directory traversal and returns base64 bytes. The desktop creates temporary blob URLs for Three.js. Relative Collada textures are fetched and rewritten before loading.
+The URDF XML remains a ROS Topic payload. For each `package://` URI, the desktop requests the resource from the Bridge. The Bridge resolves the package with `ament_index_cpp`, lexically checks that the requested relative path stays inside the package before following resource symlinks, and returns base64 bytes. This preserves traversal protection while supporting ROS 2 `--symlink-install`. The desktop creates temporary blob URLs for Three.js. Relative Collada textures are fetched and rewritten before loading.
 
 ## Current limits
 

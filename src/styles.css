@@ -167,7 +167,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .controller-action-feedback.error { color: #e49a94; border-color: #57302e; background: #241514; }
 .controller-empty { padding: 12px 8px; color: #647f90; font-size: 10px; line-height: 1.45; text-align: center; }
 .controller-empty.error { color: #d48680; }
-.viewer { position: relative; height: calc(100% - 43px); }
+.viewer { position: relative; height: calc(100% - 43px); container-type: inline-size; }
 .topic-graph-view { height: calc(100% - 43px); min-height: 0; display: flex; flex-direction: column; background: #07131c; }
 .graph-loading { height: calc(100% - 43px); display: grid; place-items: center; color: #668496; font-size: 12px; background: #07131c; }
 .graph-toolbar { flex: 0 0 37px; display: flex; align-items: center; justify-content: space-between; padding: 0 9px 0 13px; color: #6f8b9e; border-bottom: 1px solid #172b39; font: 10px/1 "SFMono-Regular", monospace; }
@@ -192,9 +192,10 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .graph-node.selected rect, .graph-node.selected ellipse { fill: #1d504a; stroke: var(--cyan); stroke-width: 2; filter: drop-shadow(0 0 5px rgba(66, 214, 199, .35)); }
 .graph-node text { fill: #a9c0ce; font: 10px/1 "SFMono-Regular", monospace; pointer-events: none; }
 .graph-node.topic text { fill: #c3e8e2; }
-.viewer-placeholder, .viewer-error { position: absolute; z-index: 2; top: 18px; left: 50%; translate: -50% 0; padding: 8px 12px; border-radius: 7px; color: #9cb4c4; background: rgba(8, 20, 30, .86); font-size: 12px; pointer-events: none; }
-.viewer-error { color: #ffaaa6; border: 1px solid #54272d; }
-.viewer-overlay { position: absolute; z-index: 2; top: 14px; right: 14px; display: grid; gap: 5px; max-width: 300px; padding: 9px 11px; border: 1px solid #1d3444; border-radius: 8px; background: rgba(8, 20, 30, .82); color: #8fa9b9; font-size: 10px; pointer-events: none; }
+.viewer-placeholder { position: absolute; z-index: 2; top: 18px; left: 50%; translate: -50% 0; padding: 8px 12px; border-radius: 7px; color: #9cb4c4; background: rgba(8, 20, 30, .86); font-size: 12px; pointer-events: none; }
+.viewer-heads-up { position: absolute; z-index: 2; top: 14px; right: 14px; left: 14px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); align-items: start; gap: 14px; pointer-events: none; }
+.viewer-error { grid-column: 1; justify-self: center; max-width: min(100%, 640px); padding: 8px 12px; border: 1px solid #54272d; border-radius: 7px; color: #ffaaa6; background: rgba(8, 20, 30, .86); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.viewer-overlay { grid-column: 2; display: grid; gap: 5px; max-width: 300px; padding: 9px 11px; border: 1px solid #1d3444; border-radius: 8px; background: rgba(8, 20, 30, .82); color: #8fa9b9; font-size: 10px; }
 .viewer-overlay-row { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
 .viewer-overlay-row > span { flex: 0 0 auto; color: #5f7d90; white-space: nowrap; }
 .viewer-overlay-row > strong { color: #bcd0dc; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
@@ -207,6 +208,11 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .viewer-overlay-status.info { color: #9ec7e2; background: rgba(30, 62, 84, .55); }
 .viewer-overlay-status.success { color: #79d9c6; background: rgba(16, 62, 55, .55); }
 .viewer-overlay-status.error { color: #ffaaa6; background: rgba(84, 39, 45, .55); }
+@container (max-width: 620px) {
+  .viewer-heads-up { grid-template-columns: minmax(0, 1fr); }
+  .viewer-error, .viewer-overlay { grid-column: 1; }
+  .viewer-overlay { width: min(100%, 300px); justify-self: end; }
+}
 .controller-tag { margin-left: 6px; padding: 1px 5px; border: 1px solid #275c52; border-radius: 4px; color: #8adccc; background: #0b211d; font: 600 8px/1.5 "SFMono-Regular", monospace; }
 .data-section { min-height: 0; display: flex; flex-direction: column; }
 .motor-section.expanded { flex: 0 0 var(--right-top-size, 56%); }

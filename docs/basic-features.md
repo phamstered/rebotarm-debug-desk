@@ -74,10 +74,11 @@
 - 保留 URDF `<visual>` 的内联或全局命名 RGBA 材质颜色；异步 STL、DAE、OBJ 网格挂载后再应用颜色，并保留网格纹理等材质属性。
 - Robot View 使用平衡的环境光和方向光，避免中间色机械臂因过曝显示成白色。
 - 根据 `sensor_msgs/msg/JointState` 的 name/position 驱动 URDF 关节；缺少的位置值按 0 处理。
-- 通过 Bridge 获取 `package://` 资源，支持 STL、DAE、OBJ、PNG、JPG/JPEG。
+- 通过 Bridge 获取 `package://` 资源，支持 STL、DAE、OBJ、PNG、JPG/JPEG；兼容 ROS 2 `--symlink-install` 产生的 package 内资源链接，并在跟随链接前拒绝绝对路径与 `..` 目录穿越。
 - 解析 DAE 相对纹理路径，生成临时 Blob URL，并在资源释放时回收 URL。
-- Bridge 对 package 资源执行规范路径检查，禁止越过 package share 目录。
+- Bridge 对 package 资源先执行词法路径边界检查，再跟随 package 内的资源符号链接，禁止 URI 越过 package share 目录。
 - 大型 URDF 网格采用顺序加载，避免多个 Base64 WebSocket 响应同时排队；单个资源使用 30 秒超时，并在失败提示中显示具体 `package://` URI。
+- Robot View 的 URDF 错误与轨迹控制器状态使用同一个响应式 heads-up 网格排版，在常规和窄面板下不会互相覆盖。
 - Tauri CSP 同时允许 Three.js 通过 `connect-src blob:` 获取 STL/DAE/OBJ Blob；网格解析失败时显示 Blob 路径和底层错误原因。
 
 ## 6. MIT 电机控制
@@ -156,7 +157,7 @@
 | 图像 Topic | Image WebSocket 二进制全速传输、动画帧合并绘制、RGB/BGR/RGBA/BGRA/Mono8/Mono16 转换、step/大小端、Canvas 预览及紧凑元数据 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`bridge/easy_debug_bridge/test/test_image_topic.py`、`src/bridge.test.ts`、`src/imageTopicLogic.test.ts`、`src/RosImagePreview.test.tsx`、`src/TopicInspector.test.tsx` |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
-| URDF | transient-local 晚加入 QoS、package URI、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts` |
+| URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx` |
 | 电机输入 | 默认 TRACK/Kp/Kd、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
 | 电机交互 | 安全确认、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
