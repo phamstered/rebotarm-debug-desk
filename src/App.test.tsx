@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
+  save: vi.fn(),
   connect: vi.fn().mockResolvedValue(undefined),
   listTopics: vi.fn().mockResolvedValue([
     { name: "/robot_description", types: ["std_msgs/msg/String"] },
@@ -23,6 +24,7 @@ const doubles = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: doubles.save }));
 vi.mock("./bridge", () => ({
   BridgeClient: class {
     connect = doubles.connect;
@@ -73,6 +75,7 @@ describe("App workflow", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    doubles.save.mockResolvedValue("/tmp/robot-console-diagnostics.json");
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string }) => {
       if (command === "check_ssh") return Promise.resolve("ready");
@@ -92,6 +95,9 @@ describe("App workflow", () => {
       if (command === "switch_ros_controller") return Promise.resolve(
         `${args?.controllerName} ${args?.action} complete`,
       );
+      if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
+      if (command === "start_rosbag_recording") return Promise.resolve({ recording: true, pid: 42, outputPath: "/home/robot/robot-console-bags/run", message: "rosbag 录制已开始" });
+      if (command === "stop_rosbag_recording") return Promise.resolve({ recording: false, pid: 0, outputPath: "/home/robot/robot-console-bags/run", message: "rosbag 录制已停止" });
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -105,7 +111,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     expect(await screen.findByText("micro-ROS Agent：运行中")).toBeVisible();
     expect(screen.getByText("localhost:19001")).toBeVisible();
-    expect(screen.getByText("Robot Console")).toBeVisible();
+    expect(screen.getByRole("toolbar", { name: "应用工具栏" })).toBeVisible();
     expect(screen.getByRole("button", { name: /\/robot_description/ })).toBeVisible();
     expect(doubles.connect).toHaveBeenCalledWith(expect.objectContaining({ localPort: 19001, jointStateTopic: "/stm32/joint_states" }));
     expect(doubles.send).toHaveBeenCalledWith({ op: "subscribe", topic: "/stm32/joint_states", type: "sensor_msgs/msg/JointState" });
@@ -115,7 +121,7 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await screen.findByText("Robot Console");
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
     await user.click(screen.getByRole("button", { name: /\/stm32\/status/ }));
     act(() => {
       doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "old-session-urdf" });
@@ -127,7 +133,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "断开" }));
     await screen.findByRole("button", { name: "连接 Jetson" });
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await screen.findByText("Robot Console");
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
 
     expect(screen.getByTestId("urdf")).toHaveTextContent("empty");
     expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
@@ -459,20 +465,23 @@ describe("App workflow", () => {
     expect(screen.getByTitle("激活后可在 Robot View 拖拽 TCP 并下发轨迹")).toHaveTextContent("轨迹");
   });
 
-  it("puts page switch, view switch and a global refresh in the top toolbar", async () => {
+  it("keeps navigation out of the toolbar and restores center view tabs to the panel", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("joint_state_broadcaster");
 
     const toolbar = screen.getByRole("toolbar", { name: "应用工具栏" });
-    expect(toolbar).toContainElement(screen.getByRole("group", { name: "页面切换" }));
+    expect(within(toolbar).queryByText("Robot Console")).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "Dashboard" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Robot View" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Robot View" }).closest(".center-tabs")).not.toBeNull();
 
     const topicCalls = doubles.listTopics.mock.calls.length;
     const controllerCalls = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
-    await user.click(screen.getByRole("button", { name: "刷新 Topics 与 Controller列表" }));
+    await user.click(screen.getByRole("button", { name: "刷新全部状态" }));
     await waitFor(() => expect(doubles.listTopics.mock.calls.length).toBe(topicCalls + 1));
     await waitFor(() => expect(
       doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length,
@@ -483,17 +492,85 @@ describe("App workflow", () => {
     expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("keeps the page switch usable from the Calibration page", async () => {
+  it("pauses and resumes live topic data without disconnecting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "first" }));
+    expect(screen.getByTestId("urdf")).toHaveTextContent("first");
+
+    await user.click(screen.getByRole("button", { name: /暂停显示/ }));
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "paused" }));
+    expect(screen.getByTestId("urdf")).toHaveTextContent("first");
+    expect(screen.getByTestId("urdf")).not.toHaveTextContent("paused");
+
+    await user.click(screen.getByRole("button", { name: /继续显示/ }));
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "resumed" }));
+    expect(screen.getByTestId("urdf")).toHaveTextContent("resumed");
+    expect(doubles.close).not.toHaveBeenCalled();
+  });
+
+  it("starts and stops rosbag recording from the global toolbar", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("button", { name: /开始录制/ });
+
+    await user.click(screen.getByRole("button", { name: /开始录制/ }));
+    expect(doubles.invoke).toHaveBeenCalledWith("start_rosbag_recording", { profile: expect.any(Object) });
+    expect(await screen.findByRole("button", { name: /停止录制/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/rosbag 录制已开始/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /停止录制/ }));
+    expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording", { profile: expect.any(Object) });
+    expect(await screen.findByRole("button", { name: /开始录制/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("saves diagnostics, resets layout and persists connection and toolbar settings", async () => {
+    localStorage.setItem("easy-debug-layout", JSON.stringify({ leftWidth: 400, rightWidth: 500, leftTopRatio: 0.3, rightTopRatio: 0.7 }));
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
+
+    await user.click(screen.getByRole("button", { name: /诊断快照/ }));
+    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("save_diagnostics_snapshot", {
+      localPath: "/tmp/robot-console-diagnostics.json",
+      content: expect.stringContaining('"schemaVersion": 1'),
+    }));
+
+    await user.click(screen.getByRole("button", { name: /重置布局/ }));
+    const workspace = container.querySelector<HTMLElement>(".workspace")!;
+    expect(workspace.style.getPropertyValue("--left-width")).toBe("270px");
+    expect(workspace.style.getPropertyValue("--right-width")).toBe("330px");
+
+    await user.click(screen.getByRole("button", { name: /连接配置/ }));
+    const connectionDialog = screen.getByRole("dialog", { name: "连接配置" });
+    await user.clear(within(connectionDialog).getByLabelText("配置名称"));
+    await user.type(within(connectionDialog).getByLabelText("配置名称"), "next-jetson");
+    await user.click(within(connectionDialog).getByRole("button", { name: "保存配置" }));
+    expect(JSON.parse(localStorage.getItem("easy-debug-profile")!).name).toBe("next-jetson");
+
+    await user.click(screen.getByRole("button", { name: /设置/ }));
+    const settingsDialog = screen.getByRole("dialog", { name: "应用设置" });
+    const interval = within(settingsDialog).getByLabelText("Topics / Controller 自动刷新间隔（秒）");
+    await user.clear(interval);
+    await user.type(interval, "45");
+    await user.click(within(settingsDialog).getByRole("button", { name: "保存设置" }));
+    expect(JSON.parse(localStorage.getItem("robot-console-toolbar-settings")!)).toMatchObject({ refreshIntervalSeconds: 45 });
+  });
+
+  it("uses only the left navigation to enter and leave Calibration", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("joint_state_broadcaster");
 
-    await user.click(screen.getByRole("button", { name: "Calibration" }));
+    await user.click(screen.getByRole("button", { name: "Joint4 Calibration" }));
     expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
-    // 标定页没有工作区顶栏，但同一个页面切换分组仍在标题栏中，避免只能靠左侧导航返回。
-    const switcher = screen.getByRole("group", { name: "页面切换" });
-    await user.click(within(switcher).getByRole("button", { name: "Dashboard" }));
+    expect(screen.queryByRole("group", { name: "页面切换" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dashboard" }));
     expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
   });
 });

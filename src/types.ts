@@ -63,6 +63,13 @@ export type RosControlStatus = {
   message: string;
 };
 
+export type RosbagStatus = {
+  recording: boolean;
+  pid: number;
+  outputPath: string;
+  message: string;
+};
+
 export type TrajectoryPoint = {
   positions: number[];
   velocities?: number[];

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { BridgeClient } from "./bridge";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
@@ -8,17 +9,18 @@ import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorControl } from "./MotorControl";
 import { TopicInspector } from "./TopicInspector";
-import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosControlStatus, TopicInfo } from "./types";
+import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
-import { loadPanelState, loadProfile, nextTopicSample } from "./appLogic";
+import { defaultPanelState, loadPanelState, loadProfile, nextTopicSample } from "./appLogic";
 import type { CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
-import { clamp, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
+import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
 import type { LayoutSizes } from "./layoutLogic";
+import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
+import type { ToolbarSettings } from "./toolbarLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "connected" | "failed";
-const LIST_REFRESH_INTERVAL_MS = 30_000;
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
 
 const stageNames: Record<Stage, string> = {
@@ -115,25 +117,14 @@ function ResizeHandle({
   );
 }
 
-function PageSwitch({ page, onSelect }: { page: AppPage; onSelect(page: AppPage): void }) {
+function ModalShell({ title, onClose, children, actions }: { title: string; onClose(): void; children: ReactNode; actions: ReactNode }) {
   return (
-    <div className="toolbar-group" role="group" aria-label="页面切换">
-      <button
-        type="button"
-        className={page === "dashboard" ? "active" : ""}
-        aria-pressed={page === "dashboard"}
-        onClick={() => onSelect("dashboard")}
-      >
-        Dashboard
-      </button>
-      <button
-        type="button"
-        className={page === "calibration" ? "active" : ""}
-        aria-pressed={page === "calibration"}
-        onClick={() => onSelect("calibration")}
-      >
-        Calibration
-      </button>
+    <div className="modal-backdrop">
+      <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="toolbar-modal-title"><strong>{title}</strong><button type="button" aria-label={`关闭${title}`} onClick={onClose}>×</button></div>
+        <div className="toolbar-modal-content">{children}</div>
+        <div className="toolbar-modal-actions">{actions}</div>
+      </section>
     </div>
   );
 }
@@ -187,12 +178,23 @@ export default function App() {
   const [centerTab, setCenterTab] = useState<"robot" | "graph">("robot");
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
+  const [liveUpdates, setLiveUpdates] = useState(true);
+  const [rosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
+  const [toolbarBusy, setToolbarBusy] = useState<"record" | "diagnostics" | "">("");
+  const [toolbarNotice, setToolbarNotice] = useState("");
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [profileDraft, setProfileDraft] = useState<ConnectionProfile>(profile);
+  const [pendingProfile, setPendingProfile] = useState<ConnectionProfile | null>(null);
+  const [settings, setSettings] = useState<ToolbarSettings>(loadToolbarSettings);
+  const [settingsDraft, setSettingsDraft] = useState<ToolbarSettings>(settings);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const topicSidebarRef = useRef<HTMLElement>(null);
   const dataPanelRef = useRef<HTMLElement>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const connectionGenerationRef = useRef(0);
   const topicRefreshInFlightRef = useRef(false);
   const rosControlRefreshInFlightRef = useRef(false);
+  const liveUpdatesRef = useRef(true);
   const bridge = useMemo(() => new BridgeClient(), []);
   const filteredTopics = useMemo(() => {
     const query = topicFilter.trim().toLocaleLowerCase();
@@ -236,6 +238,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
   }, [navExpanded]);
+
+  useEffect(() => {
+    liveUpdatesRef.current = liveUpdates;
+  }, [liveUpdates]);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
@@ -393,6 +399,7 @@ export default function App() {
   useEffect(() => {
     return bridge.onMessage((message: BridgeEnvelope) => {
       if (message.op === "topic_message" && message.topic) {
+        if (!liveUpdatesRef.current) return;
         setMessages((current) => {
           const now = performance.now();
           const previous = current[message.topic!];
@@ -440,16 +447,16 @@ export default function App() {
 
   useEffect(() => {
     if (stage !== "connected") return;
-    const timer = window.setInterval(() => void refreshTopics(), LIST_REFRESH_INTERVAL_MS);
+    const timer = window.setInterval(() => void refreshTopics(), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [refreshTopics, stage]);
+  }, [refreshTopics, settings.refreshIntervalSeconds, stage]);
 
   useEffect(() => {
     if (stage !== "connected") return;
     void refreshRosControllers();
-    const timer = window.setInterval(() => void refreshRosControllers(), LIST_REFRESH_INTERVAL_MS);
+    const timer = window.setInterval(() => void refreshRosControllers(), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [refreshRosControllers, stage]);
+  }, [refreshRosControllers, settings.refreshIntervalSeconds, stage]);
 
   function clearConnectionData() {
     connectionGenerationRef.current += 1;
@@ -474,6 +481,10 @@ export default function App() {
     setControllerActionError("");
     setControlStreaming(false);
     setEffectiveLocalPort(null);
+    setLiveUpdates(true);
+    setRosbagStatus(null);
+    setToolbarBusy("");
+    setToolbarNotice("");
   }
 
   async function connect() {
@@ -502,6 +513,9 @@ export default function App() {
       bridge.send({ op: "subscribe", topic: profile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
       bridge.send({ op: "subscribe", topic: profile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
       setStage("connected");
+      void invoke<RosbagStatus>("get_rosbag_status", { profile })
+        .then(setRosbagStatus)
+        .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStage("failed");
@@ -518,7 +532,95 @@ export default function App() {
     bridge.close();
     await invoke("stop_session").catch(() => undefined);
     clearConnectionData();
+    if (pendingProfile) {
+      setProfile(pendingProfile);
+      setPendingProfile(null);
+    }
     setStage("idle");
+  }
+
+  function openConnectionSettings() {
+    setProfileDraft(pendingProfile ?? profile);
+    setConnectionDialogOpen(true);
+  }
+
+  function saveConnectionSettings() {
+    localStorage.setItem("easy-debug-profile", JSON.stringify(profileDraft));
+    setPendingProfile(profileDraft);
+    setConnectionDialogOpen(false);
+    setToolbarNotice("连接配置已保存，将在下次重连时生效");
+  }
+
+  function openToolbarSettings() {
+    setSettingsDraft(settings);
+    setSettingsDialogOpen(true);
+  }
+
+  function saveToolbarSettings() {
+    const next = {
+      refreshIntervalSeconds: Math.min(300, Math.max(5, Math.round(settingsDraft.refreshIntervalSeconds || 30))),
+      includeMessagePreviews: settingsDraft.includeMessagePreviews,
+    };
+    setSettings(next);
+    localStorage.setItem("robot-console-toolbar-settings", JSON.stringify(next));
+    setSettingsDialogOpen(false);
+    setToolbarNotice(`设置已保存：每 ${next.refreshIntervalSeconds} 秒自动刷新`);
+  }
+
+  function resetWorkspaceLayout() {
+    setLayout({ ...defaultLayoutSizes });
+    setPanels({ ...defaultPanelState });
+    setToolbarNotice("工作区布局已恢复默认值");
+  }
+
+  async function toggleRosbagRecording() {
+    if (toolbarBusy) return;
+    setToolbarBusy("record");
+    setToolbarNotice("");
+    try {
+      const command = rosbagStatus?.recording ? "stop_rosbag_recording" : "start_rosbag_recording";
+      const status = await invoke<RosbagStatus>(command, { profile });
+      setRosbagStatus(status);
+      setToolbarNotice(`${status.message}${status.outputPath ? `：${status.outputPath}` : ""}`);
+    } catch (reason) {
+      setToolbarNotice(`rosbag 操作失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setToolbarBusy("");
+    }
+  }
+
+  async function saveDiagnostics() {
+    if (toolbarBusy) return;
+    const localPath = await save({
+      title: "保存 Robot Console 诊断快照",
+      defaultPath: `robot-console-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!localPath) return;
+    setToolbarBusy("diagnostics");
+    setToolbarNotice("");
+    try {
+      await invoke("save_diagnostics_snapshot", {
+        localPath,
+        content: buildDiagnosticsSnapshot({
+          profile,
+          topics,
+          rosControl,
+          agentStatus,
+          agentError,
+          hardwareStatus,
+          selectedTopic: selected,
+          messages,
+          liveUpdates,
+          includeMessagePreviews: settings.includeMessagePreviews,
+        }),
+      });
+      setToolbarNotice(`诊断快照已保存：${localPath}`);
+    } catch (reason) {
+      setToolbarNotice(`诊断快照保存失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setToolbarBusy("");
+    }
   }
 
   async function selectTopic(topic: TopicInfo) {
@@ -565,38 +667,16 @@ export default function App() {
           bridge={bridge}
           controllerState={calibrationControllerState}
           onRefreshControllers={() => void refreshRosControllers()}
-          pageSwitch={<PageSwitch page={appPage} onSelect={setAppPage} />}
         />
       ) : (
       <main className="workspace" style={layoutStyle}>
       <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
-        <div className="brand compact"><img className="brand-mark" src={robotConsoleIcon} alt="" /><strong>Robot Console</strong></div>
-        <PageSwitch page={appPage} onSelect={setAppPage} />
-        <span className="toolbar-divider" aria-hidden="true" />
-        <div className="toolbar-group" role="tablist" aria-label="中心视图">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={centerTab === "robot"}
-            className={centerTab === "robot" ? "active" : ""}
-            onClick={() => setCenterTab("robot")}
-          >
-            Robot View
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={centerTab === "graph"}
-            className={centerTab === "graph" ? "active" : ""}
-            onClick={() => setCenterTab("graph")}
-          >
-            Topic Graph
-          </button>
-        </div>
+        <div className="toolbar-actions" role="group" aria-label="全局操作">
+          <button type="button" className="toolbar-action" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效"><span>⌁</span>连接配置</button>
         <button
           type="button"
-          className="toolbar-button"
-          aria-label="刷新 Topics 与 Controller列表"
+          className="toolbar-action"
+          aria-label="刷新全部状态"
           title="刷新 Topics 与 Controller 列表"
           disabled={topicRefreshing || rosControlRefreshing}
           onClick={() => {
@@ -604,8 +684,31 @@ export default function App() {
             void refreshRosControllers();
           }}
         >
-          <span>↻</span>
+          <span className={topicRefreshing || rosControlRefreshing ? "spin" : ""}>↻</span>全部刷新
         </button>
+          <button
+            type="button"
+            className={`toolbar-action ${liveUpdates ? "" : "active"}`}
+            aria-pressed={!liveUpdates}
+            onClick={() => {
+              setLiveUpdates((current) => !current);
+              setToolbarNotice(liveUpdates ? "实时数据显示已暂停；连接和 rosbag 录制不受影响" : "实时数据显示已恢复");
+            }}
+            title="暂停或恢复 Topic、JointState 与状态消息的界面更新"
+          ><span>{liveUpdates ? "Ⅱ" : "▶"}</span>{liveUpdates ? "暂停显示" : "继续显示"}</button>
+          <button
+            type="button"
+            className={`toolbar-action record ${rosbagStatus?.recording ? "active" : ""}`}
+            aria-pressed={Boolean(rosbagStatus?.recording)}
+            disabled={Boolean(toolbarBusy)}
+            onClick={() => void toggleRosbagRecording()}
+            title={rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
+          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
+          <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
+          <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title="恢复面板尺寸并展开全部面板"><span>⊞</span>重置布局</button>
+          <button type="button" className="toolbar-action" onClick={openToolbarSettings} title="配置自动刷新与诊断快照"><span>⚙</span>设置</button>
+        </div>
+        {toolbarNotice && <output className="toolbar-notice" title={toolbarNotice}>{toolbarNotice}</output>}
         <span className="toolbar-spacer" />
         <span className="connected-dot" />{profile.name}
         <span className="tunnel-port" title="SSH 本地转发端口">localhost:{effectiveLocalPort ?? profile.localPort}</span>
@@ -707,7 +810,10 @@ export default function App() {
       </aside>
       <section className="urdf-panel">
         <div className="panel-title center-tabs">
-          <strong>{centerTab === "robot" ? "Robot View" : "Topic Graph"}</strong>
+          <div className="center-tab-list" role="tablist" aria-label="中心视图">
+            <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
+            <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
+          </div>
           <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
         </div>
         {centerTab === "robot"
@@ -796,6 +902,28 @@ export default function App() {
       </main>
       )}
       </div>
+      {connectionDialogOpen && (
+        <ModalShell
+          title="连接配置"
+          onClose={() => setConnectionDialogOpen(false)}
+          actions={<><button type="button" className="ghost" onClick={() => setConnectionDialogOpen(false)}>取消</button><button type="button" className="primary" onClick={saveConnectionSettings}>保存配置</button></>}
+        >
+          <p className="modal-hint">当前连接不会被中断；保存的配置将在下次重连时生效。</p>
+          <ProfileForm profile={profileDraft} onChange={setProfileDraft} />
+        </ModalShell>
+      )}
+      {settingsDialogOpen && (
+        <ModalShell
+          title="应用设置"
+          onClose={() => setSettingsDialogOpen(false)}
+          actions={<><button type="button" className="ghost" onClick={() => setSettingsDialogOpen(false)}>取消</button><button type="button" className="primary" onClick={saveToolbarSettings}>保存设置</button></>}
+        >
+          <div className="settings-form">
+            <label>Topics / Controller 自动刷新间隔（秒）<input type="number" min="5" max="300" value={settingsDraft.refreshIntervalSeconds} onChange={(event) => setSettingsDraft((current) => ({ ...current, refreshIntervalSeconds: Number(event.target.value) }))} /></label>
+            <label className="settings-check"><input type="checkbox" checked={settingsDraft.includeMessagePreviews} onChange={(event) => setSettingsDraft((current) => ({ ...current, includeMessagePreviews: event.target.checked }))} />诊断快照包含最新消息摘要（单条最多 4 KiB）</label>
+          </div>
+        </ModalShell>
+      )}
     </div>
   );
 }
