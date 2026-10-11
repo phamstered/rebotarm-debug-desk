@@ -7,6 +7,7 @@
 ## 1. 连接与会话
 
 - 保存并恢复连接配置：SSH 主机、用户名、端口、私钥、ROS Domain、ROS 环境脚本及各 ROS Topic。
+- 连接后可从全局工具栏重新打开连接配置；保存不会中断当前 SSH/Bridge 会话，新值在下次重连时生效。
 - 自动迁移旧配置：旧 ROS setup 路径和 `/joint_states` 会迁移到当前默认值 `/stm32/joint_states`。
 - 依次执行 SSH 检查、micro-ROS Agent 状态检查、Jetson Bridge 启动、SSH 本地端口转发和 WebSocket 连接。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。
@@ -27,9 +28,9 @@
 - 点击 Topic 后创建只读订阅，并以 JSON 查看最新消息。
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
-- Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；刷新失败时保留现有列表并显示原因。
-- 顶部工具栏集中承载页面切换（Dashboard / Calibration）、中心视图切换（Robot View / Topic Graph）和一键刷新（同时刷新 Topics 与 Controller 列表）；右侧保留连接名、隧道端口、micro-ROS Agent 状态和断开按钮。Calibration 页标题栏提供同一组页面切换按钮，避免只能靠左侧导航返回。
-- 中心视图标题只显示当前视图名称与对应 Topic/说明，视图切换统一收在工具栏。
+- Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
+- 页面导航只保留在左侧 Navigation；Robot View / Topic Graph 作为中心面板标题栏内的局部 Tab。顶部工具栏不再重复品牌或导航。
+- 顶部工具栏提供连接配置、全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照、重置布局和应用设置；右侧保留连接名、隧道端口、micro-ROS Agent 状态和断开按钮。
 - Topics、ROS Control、Motor Control、Topic Inspector 四个区域可独立展开/收起，状态保存在本机；同一侧的另一个面板会自动使用释放出的高度。
 - Topics/ROS Control 和 Motor Control/Topic Inspector 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 30 秒只读刷新。
@@ -128,13 +129,23 @@
 - 下发失败或 IK 未收敛时把模型恢复到反馈位姿并在视图内展示原因，不隐藏失败。
 - Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求该 Topic 已有订阅者；关节名重复、点数/长度不一致、非有限数值以及非严格递增的 `time_from_start` 都会被拒绝。
 
-## 11. 单元测试覆盖矩阵
+## 11. 全局工具栏、诊断与 rosbag
+
+- “暂停显示”只冻结 WebView 对 Topic、JointState 和硬件状态消息的消费，不断开 Bridge，也不停止后台 rosbag；恢复后从下一条消息继续更新。
+- “全部刷新”同时刷新 Topics 和 ROS Control 列表，并复用各自的并发保护。
+- “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
+- rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Robot Console 不会自动停止录制；重新连接会恢复显示远端录制状态。
+- “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
+- “重置布局”恢复默认左右宽度、上下分割比例并展开四个数据面板；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
+
+## 12. 单元测试覆盖矩阵
 
 | 功能域 | 覆盖内容 | 测试位置 |
 |---|---|---|
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
 | 面板 | 默认/持久化状态、四个面板独立收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
-| 工具栏 | 页面切换、中心视图切换、一键刷新 Topics/Controller、Calibration 页可返回 | `src/App.test.tsx` |
+| 工具栏 | 导航职责分离、中心局部 Tab、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
+| rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
@@ -156,7 +167,7 @@
 | 轨迹下发 | 松手下发（成功/IK 未收敛/无 JointState/send 失败）、未激活拒发、active 控制器下发 JointTrajectory、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |
 | Bridge 轨迹 | Topic 白名单、关节名/点数/长度/有限值/时间递增校验、错误文案、Duration 拆分 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 
-## 12. 测试命令
+## 13. 测试命令
 
 每次功能变更必须执行：
 

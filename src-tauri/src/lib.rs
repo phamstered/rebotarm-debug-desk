@@ -59,6 +59,15 @@ struct RosControlStatus {
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RosbagStatus {
+    recording: bool,
+    pid: u32,
+    output_path: String,
+    message: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TriggerServiceResponse {
     success: bool,
     message: String,
@@ -202,6 +211,99 @@ fn validate_calibration_report(path: &str, content: &str) -> Result<(), String> 
         return Err("标定报告内容为空或超过 1 MiB".into());
     }
     Ok(())
+}
+
+fn validate_diagnostics_snapshot(path: &str, content: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return Err("诊断快照必须保存到绝对路径".into());
+    }
+    if path.extension().and_then(|value| value.to_str()) != Some("json") {
+        return Err("诊断快照只支持 .json".into());
+    }
+    if content.is_empty() || content.len() > 5 * 1_048_576 {
+        return Err("诊断快照内容为空或超过 5 MiB".into());
+    }
+    Ok(())
+}
+
+fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    let setup = format!(
+        "source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
+        profile.ros_setup_script, profile.ros_setup_script,
+    );
+    let paths = "mkdir -p \"$HOME/.cache/robot-console\" \"$HOME/robot-console-bags\"; \
+                 pid_file=\"$HOME/.cache/robot-console/rosbag.pid\"; \
+                 path_file=\"$HOME/.cache/robot-console/rosbag.path\"; ";
+    let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true); \
+                 case \"$pid\" in *[!0-9]*|\"\") alive=0 ;; \
+                 *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag record\"; then alive=1; else alive=0; fi ;; esac; ";
+    let body = match action {
+        "status" => format!(
+            "{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
+             if [ \"$alive\" = 1 ]; then printf \"RECORDING|%s|%s\\n\" \"$pid\" \"$output\"; \
+             else printf \"IDLE|0|%s\\n\" \"$output\"; fi"
+        ),
+        "start" => format!(
+            "{setup}{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
+             if [ \"$alive\" = 1 ]; then printf \"RECORDING|%s|%s\\n\" \"$pid\" \"$output\"; exit 0; fi; \
+             output=\"$HOME/robot-console-bags/robot-console-$(date +%Y%m%d-%H%M%S)\"; \
+             ROS_DOMAIN_ID={} nohup ros2 bag record -a -o \"$output\" \
+             >\"$HOME/.cache/robot-console/rosbag.log\" 2>&1 </dev/null & pid=$!; \
+             printf \"%s\\n\" \"$pid\" >\"$pid_file\"; printf \"%s\\n\" \"$output\" >\"$path_file\"; sleep 1; \
+             if ! kill -0 \"$pid\" 2>/dev/null; then cat \"$HOME/.cache/robot-console/rosbag.log\" >&2; exit 1; fi; \
+             printf \"STARTED|%s|%s\\n\" \"$pid\" \"$output\"",
+            profile.ros_domain_id,
+        ),
+        "stop" => format!(
+            "{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
+             if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$output\"; exit 0; fi; \
+             kill -INT \"$pid\"; \
+             for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+               if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; \
+             done; \
+             if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; \
+             rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$output\""
+        ),
+        _ => return Err("不支持的 rosbag 操作".into()),
+    };
+    Ok(format!("bash -lc '{body}'"))
+}
+
+fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
+    let line = output
+        .lines()
+        .rev()
+        .find(|line| {
+            ["STARTED|", "RECORDING|", "STOPPED|", "IDLE|"]
+                .iter()
+                .any(|prefix| line.starts_with(prefix))
+        })
+        .ok_or("无法解析 rosbag 状态")?;
+    let mut fields = line.splitn(3, '|');
+    let state = fields.next().unwrap_or_default();
+    let pid = fields
+        .next()
+        .unwrap_or_default()
+        .parse::<u32>()
+        .unwrap_or_default();
+    let output_path = fields.next().unwrap_or_default().to_string();
+    let recording = matches!(state, "STARTED" | "RECORDING");
+    Ok(RosbagStatus {
+        recording,
+        pid: if recording { pid } else { 0 },
+        output_path,
+        message: match state {
+            "STARTED" => "rosbag 录制已开始",
+            "RECORDING" => "rosbag 正在录制",
+            "STOPPED" => "rosbag 录制已停止",
+            _ => "rosbag 当前未录制",
+        }
+        .into(),
+    })
 }
 
 fn parse_agent_status(output: &str) -> AgentServiceStatus {
@@ -467,6 +569,55 @@ fn save_joint4_calibration_report(local_path: String, content: String) -> Result
 }
 
 #[tauri::command]
+fn save_diagnostics_snapshot(local_path: String, content: String) -> Result<(), String> {
+    validate_diagnostics_snapshot(&local_path, &content)?;
+    std::fs::write(&local_path, content).map_err(|error| format!("诊断快照保存失败：{error}"))
+}
+
+async fn run_rosbag_action(
+    profile: ConnectionProfile,
+    action: &str,
+) -> Result<RosbagStatus, String> {
+    let remote = rosbag_remote_command(&profile, action)?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法执行 rosbag 操作：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "rosbag 操作失败：{}",
+            stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("远端命令失败")
+        ));
+    }
+    parse_rosbag_status(&stdout)
+}
+
+#[tauri::command]
+async fn get_rosbag_status(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
+    run_rosbag_action(profile, "status").await
+}
+
+#[tauri::command]
+async fn start_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
+    run_rosbag_action(profile, "start").await
+}
+
+#[tauri::command]
+async fn stop_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
+    run_rosbag_action(profile, "stop").await
+}
+
+#[tauri::command]
 async fn start_session(
     profile: ConnectionProfile,
     state: State<'_, SessionState>,
@@ -583,6 +734,10 @@ pub fn run() {
             switch_ros_controller,
             call_joint4_calibration_service,
             save_joint4_calibration_report,
+            save_diagnostics_snapshot,
+            get_rosbag_status,
+            start_rosbag_recording,
+            stop_rosbag_recording,
             start_session,
             stop_session
         ])
@@ -681,6 +836,45 @@ mod tests {
         assert!(validate_calibration_report("relative.json", "{}").is_err());
         assert!(validate_calibration_report("/tmp/joint4.yaml", "x").is_err());
         assert!(validate_calibration_report("/tmp/joint4.json", "").is_err());
+    }
+
+    #[test]
+    fn validates_diagnostics_snapshot_paths_and_sizes() {
+        assert!(validate_diagnostics_snapshot("/tmp/robot-diagnostics.json", "{}").is_ok());
+        assert!(validate_diagnostics_snapshot("relative.json", "{}").is_err());
+        assert!(validate_diagnostics_snapshot("/tmp/robot-diagnostics.txt", "{}").is_err());
+        assert!(validate_diagnostics_snapshot("/tmp/robot-diagnostics.json", "").is_err());
+    }
+
+    #[test]
+    fn builds_and_parses_rosbag_recording_commands() {
+        let start = rosbag_remote_command(&profile(""), "start").unwrap();
+        assert!(start.contains("ROS_DOMAIN_ID=0 nohup ros2 bag record -a"));
+        assert!(start.contains("$HOME/robot-console-bags"));
+        assert!(start.contains("rosbag.pid"));
+        let stop = rosbag_remote_command(&profile(""), "stop").unwrap();
+        assert!(stop.contains("kill -INT"));
+        assert!(rosbag_remote_command(&profile(""), "delete").is_err());
+
+        assert_eq!(
+            parse_rosbag_status("noise\nSTARTED|42|/home/robot/robot-console-bags/run\n").unwrap(),
+            RosbagStatus {
+                recording: true,
+                pid: 42,
+                output_path: "/home/robot/robot-console-bags/run".into(),
+                message: "rosbag 录制已开始".into(),
+            }
+        );
+        assert_eq!(
+            parse_rosbag_status("STOPPED|0|/home/robot/robot-console-bags/run\n").unwrap(),
+            RosbagStatus {
+                recording: false,
+                pid: 0,
+                output_path: "/home/robot/robot-console-bags/run".into(),
+                message: "rosbag 录制已停止".into(),
+            }
+        );
+        assert!(parse_rosbag_status("unexpected").is_err());
     }
 
     #[test]

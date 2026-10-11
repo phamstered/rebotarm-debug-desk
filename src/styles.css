@@ -66,17 +66,17 @@ input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(66, 214, 199
   background: #071019;
 }
 header { grid-area: header; display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; padding: 0 16px; border-bottom: 1px solid var(--line); background: #0a1721; color: #9ab0bf; font-size: 13px; }
-header .compact { flex: 0 0 auto; margin: 0 2px 0 0; }
 .toolbar-spacer { flex: 1 1 auto; }
-.toolbar-divider { flex: 0 0 1px; width: 1px; height: 22px; background: #223a4a; }
-.toolbar-group { flex: 0 0 auto; display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid #223a4a; border-radius: 8px; background: #08141d; }
-.toolbar-group button { height: 27px; padding: 0 11px; color: #7892a4; border: 0; border-radius: 5px; background: transparent; font-size: 11px; font-weight: 700; white-space: nowrap; }
-.toolbar-group button:hover { color: #c8dce7; background: #112532; }
-.toolbar-group button.active { color: #dffefa; background: #17403f; box-shadow: inset 0 0 0 1px #28645f; }
-.toolbar-button { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 33px; height: 33px; padding: 0; color: #93afc0; border: 1px solid #294455; border-radius: 8px; background: #0a1721; font-size: 15px; }
-.toolbar-button:hover:not(:disabled) { color: #dffcff; border-color: #3b7d88; background: #102633; }
-.toolbar-button:disabled { cursor: wait; opacity: .72; }
-header .brand-mark { width: 30px; height: 30px; border-radius: 8px; font-size: 10px; }
+.toolbar-actions { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 5px; }
+.toolbar-action { flex: 0 0 auto; height: 31px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; color: #91a9b8; border: 1px solid #294455; border-radius: 7px; background: #0a1721; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.toolbar-action > span { min-width: 12px; color: #79c9ca; text-align: center; font-size: 13px; }
+.toolbar-action:hover:not(:disabled) { color: #dffcff; border-color: #3b7d88; background: #102633; }
+.toolbar-action.active { color: #dffefa; border-color: #35716c; background: #153b3a; }
+.toolbar-action.record.active { color: #ffd7d4; border-color: #8c413d; background: #401d1c; }
+.toolbar-action.record.active > span { color: #ff7169; }
+.toolbar-action:disabled { cursor: wait; opacity: .58; }
+.toolbar-action .spin { animation: panel-refresh-spin .8s linear infinite; }
+.toolbar-notice { flex: 1 1 140px; min-width: 60px; overflow: hidden; color: #7895a6; font: 9px/1.3 "SFMono-Regular", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .connected-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
 .tunnel-port { color: #698596; font: 10px/1 "SFMono-Regular", monospace; }
 header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent; border: 1px solid #284052; padding: 6px 12px; }
@@ -96,6 +96,10 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .panel-title > span, .panel-title .panel-meta { color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-title > span { margin-left: 10px; }
 .center-tabs { padding-left: 8px; text-transform: none; }
+.center-tab-list { align-self: stretch; display: flex; align-items: flex-end; gap: 2px; }
+.center-tab-list button { height: 34px; padding: 0 12px; color: #6f8b9e; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; font-size: 11px; font-weight: 750; }
+.center-tab-list button:hover { color: #bdd4df; background: #10212c; }
+.center-tab-list button.active { color: #dffefa; border-bottom-color: var(--cyan); }
 .panel-title-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .panel-toggle, .panel-refresh { flex: 0 0 24px; width: 24px; height: 24px; padding: 0; color: #93afc0; border: 1px solid #294455; border-radius: 6px; background: #0a1721; line-height: 20px; }
 .panel-toggle { font-size: 17px; }
@@ -105,6 +109,21 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .panel-refresh:disabled { cursor: wait; opacity: .72; }
 .panel-refresh.refreshing span { animation: panel-refresh-spin .8s linear infinite; }
 @keyframes panel-refresh-spin { to { rotate: 360deg; } }
+
+.modal-backdrop { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 28px; background: rgba(2, 8, 13, .72); backdrop-filter: blur(5px); }
+.toolbar-modal { width: min(780px, calc(100vw - 56px)); max-height: calc(100vh - 56px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #2a4556; border-radius: 14px; background: #0b1923; box-shadow: 0 28px 90px rgba(0, 0, 0, .55); }
+.toolbar-modal-title { flex: 0 0 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--line); color: #dcecf5; }
+.toolbar-modal-title button { width: 29px; height: 29px; padding: 0; color: #91a9b8; border: 1px solid #294455; border-radius: 7px; background: #0a1721; font-size: 18px; }
+.toolbar-modal-content { overflow: auto; padding: 18px; }
+.toolbar-modal-actions { flex: 0 0 55px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 16px; border-top: 1px solid var(--line); }
+.toolbar-modal-actions button { padding: 8px 13px; border: 1px solid #2d4b5d; border-radius: 7px; color: #a9c1cd; background: #0c202b; font-size: 11px; font-weight: 750; }
+.toolbar-modal-actions button.primary { color: #041316; border-color: var(--cyan); background: var(--cyan); }
+.modal-hint { margin: 0 0 16px; color: #7e9aaa; font-size: 11px; }
+.settings-form { display: grid; gap: 18px; }
+.settings-form label { max-width: 420px; }
+.settings-form input[type="number"] { max-width: 180px; }
+.settings-form .settings-check { display: flex; grid-template-columns: none; flex-direction: row; align-items: center; gap: 9px; }
+.settings-form input[type="checkbox"] { width: auto; }
 .sidebar-section { min-height: 0; display: flex; flex-direction: column; }
 .topics-section.expanded { flex: 0 0 var(--left-top-size, 64%); }
 .sidebar-section.collapsed { flex: 0 0 43px; min-height: 43px; max-height: 43px; }
