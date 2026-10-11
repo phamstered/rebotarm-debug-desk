@@ -1,6 +1,6 @@
 # Robot Console 基本功能与测试覆盖
 
-更新日期：2026-09-14
+更新日期：2026-10-11
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
@@ -28,6 +28,8 @@
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；刷新失败时保留现有列表并显示原因。
+- 顶部工具栏集中承载页面切换（Dashboard / Calibration）、中心视图切换（Robot View / Topic Graph）和一键刷新（同时刷新 Topics 与 Controller 列表）；右侧保留连接名、隧道端口、micro-ROS Agent 状态和断开按钮。Calibration 页标题栏提供同一组页面切换按钮，避免只能靠左侧导航返回。
+- 中心视图标题只显示当前视图名称与对应 Topic/说明，视图切换统一收在工具栏。
 - Topics、ROS Control、Motor Control、Topic Inspector 四个区域可独立展开/收起，状态保存在本机；同一侧的另一个面板会自动使用释放出的高度。
 - Topics/ROS Control 和 Motor Control/Topic Inspector 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 30 秒只读刷新。
@@ -96,7 +98,7 @@
 ## 7. WebSocket 协议
 
 - 使用 UTF-8 JSON 文本帧。
-- 支持 hello、topics、graph、subscribe、resource、joint_command 操作。
+- 支持 hello、topics、graph、subscribe、resource、joint_command、trajectory_command 操作。
 - request 使用 UUID 与 response/error 关联，超时或 Bridge error 会拒绝 Promise。
 - Bridge 断开会通知界面进入连接失败状态。
 - 完整字段参见 [protocol.md](protocol.md)。
@@ -115,12 +117,24 @@
 - `safety_fault` 会锁定采样和拟合；托住 joint4 后可执行 Release 清除新版 Controller 的故障锁存。对旧版 Controller，姿态已释放且速度不超过 0.05 rad/s 时允许重新 Begin，以当前安全位置重建参考，避免界面与 Controller 互相锁死。
 - 标定采样和拟合结果可保存为本机 JSON/CSV 审计报告。
 
-## 10. 单元测试覆盖矩阵
+## 10. TCP 拖拽轨迹下发
+
+- Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先，留空时在叶子 link 中按命名特征（tool0/tcp/gripper/ee_link/flange 等）加链深度自动挑选，并在视图右上角展示实际使用的 link。
+- 仅当 `/controller_manager` 存在 active 的轨迹控制器时开放拖拽；识别规则为类型 `joint_trajectory_controller/JointTrajectoryController` 优先、名称含 traj 次之。ROS Control 列表会用“轨迹”标记对应 Controller，Robot View 右上角显示其名称和 `/…/joint_trajectory` Topic。
+- 拖拽手柄跟随 TCP link 的世界位姿，并保持屏幕上的恒定尺寸；按住后鼠标移动映射到过 TCP 的正交平面（相机正对平面），拖拽期间暂停轨道相机；Esc 取消并把模型恢复到实时反馈位姿。
+- 拖拽过程按帧求位置逆解：有限差分雅可比 + 自适应阻尼最小二乘，关节限位钳制，单次下降卡住时做确定性随机重启。仅做位置求解，TCP 姿态保持不变；只有残差不超过 5 mm 才允许下发，下发成功时会把实际残差一并展示，避免暗示夹爪精确落在目标点上。
+- 正运动学和逆解保留 TCP 链上的 fixed joint 与工具偏移，避免夹爪长度被忽略；轨迹只包含可控关节，JointState 中的其他关节保持当前反馈值，因此轨迹携带的关节集合与控制器一致。拖拽期间预览位姿不被实时 JointState 覆盖。
+- 松开鼠标时按最新 JointState 重算一次并下发 `trajectory_msgs/msg/JointTrajectory`：第 1 点为当前反馈位置（短暂停留），第 2 点为目标位置，执行时长按最大关节位移在 0.4–6 s 内估算。
+- 下发失败或 IK 未收敛时把模型恢复到反馈位姿并在视图内展示原因，不隐藏失败。
+- Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求该 Topic 已有订阅者；关节名重复、点数/长度不一致、非有限数值以及非严格递增的 `time_from_start` 都会被拒绝。
+
+## 11. 单元测试覆盖矩阵
 
 | 功能域 | 覆盖内容 | 测试位置 |
 |---|---|---|
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
 | 面板 | 默认/持久化状态、四个面板独立收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
+| 工具栏 | 页面切换、中心视图切换、一键刷新 Topics/Controller、Calibration 页可返回 | `src/App.test.tsx` |
 | 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
@@ -137,8 +151,12 @@
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort 及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |
+| 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置逆解收敛与限位钳制、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
+| 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |
+| 轨迹下发 | 松手下发（成功/IK 未收敛/无 JointState/send 失败）、未激活拒发、active 控制器下发 JointTrajectory、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |
+| Bridge 轨迹 | Topic 白名单、关节名/点数/长度/有限值/时间递增校验、错误文案、Duration 拆分 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 
-## 11. 测试命令
+## 12. 测试命令
 
 每次功能变更必须执行：
 

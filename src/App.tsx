@@ -9,7 +9,9 @@ import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorControl } from "./MotorControl";
 import { TopicInspector } from "./TopicInspector";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosControlStatus, TopicInfo } from "./types";
+import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
+import type { TrajectorySendRequest } from "./UrdfViewer";
 import { loadPanelState, loadProfile, nextTopicSample } from "./appLogic";
 import type { CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
 import { clamp, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
@@ -113,6 +115,29 @@ function ResizeHandle({
   );
 }
 
+function PageSwitch({ page, onSelect }: { page: AppPage; onSelect(page: AppPage): void }) {
+  return (
+    <div className="toolbar-group" role="group" aria-label="页面切换">
+      <button
+        type="button"
+        className={page === "dashboard" ? "active" : ""}
+        aria-pressed={page === "dashboard"}
+        onClick={() => onSelect("dashboard")}
+      >
+        Dashboard
+      </button>
+      <button
+        type="button"
+        className={page === "calibration" ? "active" : ""}
+        aria-pressed={page === "calibration"}
+        onClick={() => onSelect("calibration")}
+      >
+        Calibration
+      </button>
+    </div>
+  );
+}
+
 function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChange(profile: ConnectionProfile): void }) {
   const field = <K extends keyof ConnectionProfile>(key: K, value: ConnectionProfile[K]) =>
     onChange({ ...profile, [key]: value });
@@ -129,6 +154,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
       <label>JointState Topic<input value={profile.jointStateTopic} onChange={(e) => field("jointStateTopic", e.target.value)} /></label>
       <label>Command Topic<input value={profile.commandTopic} onChange={(e) => field("commandTopic", e.target.value)} /></label>
       <label>Status Topic<input value={profile.statusTopic} onChange={(e) => field("statusTopic", e.target.value)} /></label>
+      <label>TCP Link<input value={profile.tcpLink} onChange={(e) => field("tcpLink", e.target.value)} placeholder="留空自动识别" /></label>
     </div>
   );
 }
@@ -180,6 +206,20 @@ export default function App() {
     () => topics.find((topic) => topic.name === selected)?.types[0] ?? "",
     [selected, topics],
   );
+  // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
+  const trajectoryController = useMemo(
+    () => findActiveTrajectoryController(rosControl?.controllers ?? []),
+    [rosControl],
+  );
+
+  const sendTrajectory = useCallback(async (request: TrajectorySendRequest) => {
+    const controller = trajectoryController;
+    if (!controller) throw new Error("没有激活的轨迹控制器");
+    await bridge.request({
+      ...createTrajectoryPayload(request.jointNames, request.points),
+      topic: controller.topic,
+    }, 30_000);
+  }, [bridge, trajectoryController]);
 
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
@@ -525,11 +565,48 @@ export default function App() {
           bridge={bridge}
           controllerState={calibrationControllerState}
           onRefreshControllers={() => void refreshRosControllers()}
+          pageSwitch={<PageSwitch page={appPage} onSelect={setAppPage} />}
         />
       ) : (
       <main className="workspace" style={layoutStyle}>
-      <header>
+      <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
         <div className="brand compact"><img className="brand-mark" src={robotConsoleIcon} alt="" /><strong>Robot Console</strong></div>
+        <PageSwitch page={appPage} onSelect={setAppPage} />
+        <span className="toolbar-divider" aria-hidden="true" />
+        <div className="toolbar-group" role="tablist" aria-label="中心视图">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={centerTab === "robot"}
+            className={centerTab === "robot" ? "active" : ""}
+            onClick={() => setCenterTab("robot")}
+          >
+            Robot View
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={centerTab === "graph"}
+            className={centerTab === "graph" ? "active" : ""}
+            onClick={() => setCenterTab("graph")}
+          >
+            Topic Graph
+          </button>
+        </div>
+        <button
+          type="button"
+          className="toolbar-button"
+          aria-label="刷新 Topics 与 Controller列表"
+          title="刷新 Topics 与 Controller 列表"
+          disabled={topicRefreshing || rosControlRefreshing}
+          onClick={() => {
+            void refreshTopics();
+            void refreshRosControllers();
+          }}
+        >
+          <span>↻</span>
+        </button>
+        <span className="toolbar-spacer" />
         <span className="connected-dot" />{profile.name}
         <span className="tunnel-port" title="SSH 本地转发端口">localhost:{effectiveLocalPort ?? profile.localPort}</span>
         <span
@@ -600,7 +677,10 @@ export default function App() {
             {controllerActionMessage && <div className="controller-action-feedback success">{controllerActionMessage}</div>}
             {rosControl?.controllers.map((controller) => (
               <div className="controller-item" key={controller.name}>
-                <div><span className={`controller-state ${controller.state}`} /> <strong>{controller.name}</strong></div>
+                <div>
+                  <span className={`controller-state ${controller.state}`} /> <strong>{controller.name}</strong>
+                  {isTrajectoryController(controller) && <span className="controller-tag" title="激活后可在 Robot View 拖拽 TCP 并下发轨迹">轨迹</span>}
+                </div>
                 <small title={controller.typeName}>{controller.typeName}</small>
                 <span className={`controller-state-label ${controller.state}`}>{controller.state}</span>
                 <button
@@ -627,14 +707,20 @@ export default function App() {
       </aside>
       <section className="urdf-panel">
         <div className="panel-title center-tabs">
-          <div className="center-tab-list" role="tablist" aria-label="中心视图">
-            <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
-            <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
-          </div>
+          <strong>{centerTab === "robot" ? "Robot View" : "Topic Graph"}</strong>
           <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
         </div>
         {centerTab === "robot"
-          ? <UrdfViewer xml={urdf} jointState={jointState} bridge={bridge} />
+          ? (
+            <UrdfViewer
+              xml={urdf}
+              jointState={jointState}
+              bridge={bridge}
+              tcpLink={profile.tcpLink}
+              trajectoryController={trajectoryController}
+              onSendTrajectory={sendTrajectory}
+            />
+          )
           : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
       </section>
       <section

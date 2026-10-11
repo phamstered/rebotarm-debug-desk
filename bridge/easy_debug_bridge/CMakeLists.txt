@@ -13,6 +13,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 find_package(microros_stm32h723_bridge REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system thread)
 
@@ -20,7 +21,7 @@ add_executable(bridge_node src/bridge_node.cpp)
 target_include_directories(bridge_node PRIVATE include)
 ament_target_dependencies(bridge_node
   ament_index_cpp rclcpp std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
-  microros_stm32h723_bridge)
+  trajectory_msgs microros_stm32h723_bridge)
 target_link_libraries(bridge_node Boost::system Boost::thread)
 
 install(TARGETS bridge_node DESTINATION lib/${PROJECT_NAME})

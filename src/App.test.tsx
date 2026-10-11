@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,7 +34,37 @@ vi.mock("./bridge", () => ({
     onMessage(listener: (message: unknown) => void) { doubles.listener = listener; return () => {}; }
   },
 }));
-vi.mock("./UrdfViewer", () => ({ UrdfViewer: ({ xml }: { xml: string }) => <div data-testid="urdf">{xml || "empty"}</div> }));
+vi.mock("./UrdfViewer", () => ({
+  UrdfViewer: ({ xml, trajectoryController, onSendTrajectory }: {
+    xml: string;
+    trajectoryController: { name: string; topic: string } | null;
+    onSendTrajectory(request: { jointNames: string[]; points: { positions: number[]; time_from_start: number }[] }): Promise<void>;
+  }) => (
+    <div data-testid="urdf">
+      <span>{xml || "empty"}</span>
+      <span data-testid="trajectory-controller">{trajectoryController ? `${trajectoryController.name}@${trajectoryController.topic}` : "none"}</span>
+      <button
+        type="button"
+        data-testid="send-trajectory"
+        onClick={() => {
+          void onSendTrajectory({
+            jointNames: ["joint1", "joint2"],
+            points: [
+              { positions: [0, 0], time_from_start: 0.1 },
+              { positions: [0.5, -0.2], time_from_start: 1.2 },
+            ],
+          }).catch((reason: unknown) => {
+            const node = document.querySelector<HTMLElement>("[data-testid='trajectory-error']");
+            if (node) node.textContent = `failed: ${reason instanceof Error ? reason.message : String(reason)}`;
+          });
+        }}
+      >
+        下发轨迹
+      </button>
+      <output data-testid="trajectory-error" />
+    </div>
+  ),
+}));
 vi.mock("./MotorControl", () => ({ MotorControl: () => <div data-testid="motor">motor</div> }));
 
 import App from "./App";
@@ -267,7 +297,7 @@ describe("App workflow", () => {
     const control = await screen.findByRole("region", { name: "ROS Control Controllers" });
     expect(control).toHaveTextContent("离线");
     expect(control).toHaveTextContent("controller_manager 服务不可用或查询超时");
-    expect(screen.getByText("Robot View")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Robot View" })).toBeVisible();
   });
 
   it("selects a topic and independently collapses all four data panels", async () => {
@@ -367,5 +397,103 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
     await user.click(screen.getByRole("button", { name: "展开主工具栏" }));
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toHaveClass("expanded");
+  });
+
+  it("refuses to send a trajectory while no trajectory controller is active", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("arm_controller");
+
+    // 默认 mock 中 arm_controller 是 inactive，因此不构成可下发的轨迹控制器。
+    expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("none");
+    await user.click(screen.getByTestId("send-trajectory"));
+    expect(await screen.findByTestId("trajectory-error")).toHaveTextContent("failed: 没有激活的轨迹控制器");
+    expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({ op: "trajectory_command" }));
+  });
+
+  it("sends a JointTrajectory to the active trajectory controller's topic", async () => {
+    doubles.invoke.mockImplementation((command: string) => {
+      if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "check_micro_ros_agent") return Promise.resolve({
+        loadState: "loaded", activeState: "active", subState: "running", result: "success",
+        mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
+      });
+      if (command === "check_ros_controllers") return Promise.resolve({
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "joint_state_broadcaster", typeName: "joint_state_broadcaster/JointStateBroadcaster", state: "active" },
+          { name: "arm/trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" },
+        ],
+        message: "",
+      });
+      if (command === "start_session") return Promise.resolve(19001);
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("arm/trajectory_controller");
+
+    expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("arm/trajectory_controller@/arm/trajectory_controller/joint_trajectory");
+    await user.click(screen.getByTestId("send-trajectory"));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({
+      op: "trajectory_command",
+      topic: "/arm/trajectory_controller/joint_trajectory",
+      joint_names: ["joint1", "joint2"],
+      trajectory_points: [
+        { positions: [0, 0], velocities: [], time_from_start: 0.1 },
+        { positions: [0.5, -0.2], velocities: [], time_from_start: 1.2 },
+      ],
+    }, 30_000));
+    expect(screen.getByTestId("trajectory-error")).toHaveTextContent("");
+  });
+
+  it("marks trajectory controllers in the ROS Control list", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const control = await screen.findByRole("region", { name: "ROS Control Controllers" });
+    expect(control).toHaveTextContent("轨迹");
+    expect(screen.getByTitle("激活后可在 Robot View 拖拽 TCP 并下发轨迹")).toHaveTextContent("轨迹");
+  });
+
+  it("puts page switch, view switch and a global refresh in the top toolbar", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("joint_state_broadcaster");
+
+    const toolbar = screen.getByRole("toolbar", { name: "应用工具栏" });
+    expect(toolbar).toContainElement(screen.getByRole("group", { name: "页面切换" }));
+    expect(screen.getByRole("tab", { name: "Robot View" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "false");
+
+    const topicCalls = doubles.listTopics.mock.calls.length;
+    const controllerCalls = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
+    await user.click(screen.getByRole("button", { name: "刷新 Topics 与 Controller列表" }));
+    await waitFor(() => expect(doubles.listTopics.mock.calls.length).toBe(topicCalls + 1));
+    await waitFor(() => expect(
+      doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length,
+    ).toBe(controllerCalls + 1));
+
+    await user.click(screen.getByRole("tab", { name: "Topic Graph" }));
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps the page switch usable from the Calibration page", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByText("joint_state_broadcaster");
+
+    await user.click(screen.getByRole("button", { name: "Calibration" }));
+    expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
+    // 标定页没有工作区顶栏，但同一个页面切换分组仍在标题栏中，避免只能靠左侧导航返回。
+    const switcher = screen.getByRole("group", { name: "页面切换" });
+    await user.click(within(switcher).getByRole("button", { name: "Dashboard" }));
+    expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
   });
 });
