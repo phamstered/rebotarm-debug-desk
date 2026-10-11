@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@react-three/fiber": "^9.3.0",
-    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/api": "~2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@types/three": "^0.179.0",
     "jq-wasm": "^3.0.0-jq-1.8.2",
