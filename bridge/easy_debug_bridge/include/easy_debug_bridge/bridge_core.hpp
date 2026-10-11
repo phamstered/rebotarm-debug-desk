@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -84,6 +86,26 @@ inline bool is_robot_description_topic(const std::string &topic) {
   constexpr char basename[] = "/robot_description";
   if (topic.size() < sizeof(basename) - 1) return false;
   return topic.compare(topic.size() - (sizeof(basename) - 1), sizeof(basename) - 1, basename) == 0;
+}
+
+// ROS 2 的 symlink-install 会把 package share 目录内的资源链接回源码树。
+// 安全边界因此必须针对用户请求的词法路径检查，不能对最终文件 canonicalize 后再比较，
+// 否则合法的 package:// mesh 会因为符号链接目标位于源码树而被误判为目录穿越。
+inline std::optional<std::filesystem::path> package_resource_path(
+    const std::filesystem::path &package_root, const std::filesystem::path &relative_path) {
+  if (relative_path.empty() || relative_path.is_absolute()) return std::nullopt;
+
+  const auto root = package_root.lexically_normal();
+  const auto relative = relative_path.lexically_normal();
+  if (relative.empty() || relative == ".") return std::nullopt;
+  const auto candidate = (root / relative).lexically_normal();
+  if (candidate == root) return std::nullopt;
+  auto root_part = root.begin();
+  auto candidate_part = candidate.begin();
+  for (; root_part != root.end(); ++root_part, ++candidate_part) {
+    if (candidate_part == candidate.end() || *root_part != *candidate_part) return std::nullopt;
+  }
+  return candidate;
 }
 
 // --- JointTrajectory 指令 ----------------------------------------------------

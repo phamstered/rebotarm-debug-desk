@@ -477,18 +477,24 @@ class BridgeNode : public rclcpp::Node {
     try {
       const auto root = std::filesystem::canonical(
           ament_index_cpp::get_package_share_directory(remainder.substr(0, slash)));
-      const auto path = std::filesystem::canonical(root / remainder.substr(slash + 1));
-      const auto root_text = root.native();
-      const auto path_text = path.native();
-      if (path_text.compare(0, root_text.size(), root_text) != 0 ||
-          (path_text.size() > root_text.size() && path_text[root_text.size()] != '/')) {
+      const auto path = easy_debug_bridge::package_resource_path(
+          root, std::filesystem::path(remainder.substr(slash + 1)));
+      if (!path) {
         session->send(error_message(request_id, "资源路径越过 package 目录"));
         return;
       }
-      std::ifstream file(path, std::ios::binary);
+      if (!std::filesystem::is_regular_file(*path)) {
+        session->send(error_message(request_id, "资源不存在或不是普通文件"));
+        return;
+      }
+      std::ifstream file(*path, std::ios::binary);
+      if (!file) {
+        session->send(error_message(request_id, "资源文件无法读取"));
+        return;
+      }
       std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), {});
       session->send("{\"op\":\"resource\",\"request_id\":" + json_quote(request_id) +
-                    ",\"uri\":" + json_quote(uri) + ",\"mime\":" + json_quote(mime_for(path)) +
+                    ",\"uri\":" + json_quote(uri) + ",\"mime\":" + json_quote(mime_for(*path)) +
                     ",\"base64\":" + json_quote(easy_debug_bridge::base64_encode(bytes)) + "}");
     } catch (const std::exception &error) {
       session->send(error_message(request_id, std::string("资源读取失败：") + error.what()));

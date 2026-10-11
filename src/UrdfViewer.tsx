@@ -32,6 +32,7 @@ import type { KinematicModel, Vec3 } from "./kinematicsLogic";
 import { applyTrajectoryPlan, dispatchTrajectory, planTrajectory } from "./trajectoryLogic";
 import type { TrajectoryController } from "./trajectoryLogic";
 import type { TrajectoryPoint } from "./types";
+import { ViewerHeadsUp } from "./ViewerHeadsUp";
 import {
   applyJointState,
   applyUrdfVisualColors,
@@ -508,8 +509,7 @@ export function UrdfViewer({
   return (
     <div className="viewer">
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
-      {overlayError && <div className="viewer-error">{overlayError}</div>}
-      <div className="viewer-overlay" aria-live="polite">
+      <ViewerHeadsUp error={overlayError}>
         <div className="viewer-overlay-row">
           <span>轨迹控制器</span>
           <strong className={trajectoryController ? "ok" : "muted"}>
@@ -539,7 +539,7 @@ export function UrdfViewer({
           </div>
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
-      </div>
+      </ViewerHeadsUp>
       <Canvas camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
         <Scene robot={robot} controlsEnabled={!dragging}>

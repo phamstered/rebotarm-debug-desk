@@ -41,6 +41,15 @@ int main() {
   assert(!easy_debug_bridge::is_robot_description_topic("/robot_description_semantic"));
   assert(!easy_debug_bridge::is_robot_description_topic("/debug/robot_description_copy"));
 
+  const std::filesystem::path package_root("/opt/robot/share/rebotarm_gazebo");
+  assert(easy_debug_bridge::package_resource_path(package_root, "meshes/base_link.STL") ==
+         package_root / "meshes/base_link.STL");
+  assert(easy_debug_bridge::package_resource_path(package_root, "meshes/../textures/base.png") ==
+         package_root / "textures/base.png");
+  assert(!easy_debug_bridge::package_resource_path(package_root, "../secret.txt"));
+  assert(!easy_debug_bridge::package_resource_path(package_root, "/etc/passwd"));
+  assert(!easy_debug_bridge::package_resource_path(package_root, "."));
+
   using easy_debug_bridge::TrajectoryCommand;
   using easy_debug_bridge::TrajectoryPointSpec;
   using easy_debug_bridge::TrajectoryValidation;
