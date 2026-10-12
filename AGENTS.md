@@ -1,6 +1,6 @@
-# Robot Console 开发规范
+# Robot Debug Desk 开发规范
 
-本文件适用于整个仓库。Robot Console 是运行在 macOS 的 Tauri/Rust + React/Three.js 上位机；ROS 2 Humble Bridge 运行在 Jetson/Ubuntu 22.04。Mac 不直接加入 DDS，桌面端通过 SSH 隧道访问 Jetson 上只监听 `127.0.0.1` 的 WebSocket Bridge。开始修改前先读相关的 `README.md`、`docs/architecture.md`、`docs/protocol.md` 和 `docs/basic-features.md`。
+本文件适用于整个仓库。**Robot Debug Desk**（仓库 [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)）是运行在 macOS 的 Tauri/Rust + React/Three.js 上位机；ROS 2 Humble Bridge 运行在 Jetson/Ubuntu 22.04。Mac 不直接加入 DDS，桌面端通过 SSH 隧道访问 Jetson 上只监听 `127.0.0.1` 的 WebSocket Bridge。开始修改前先读相关的 `README.md`、`docs/architecture.md`、`docs/protocol.md` 和 `docs/basic-features.md`。
 
 ## 1. 变更范围与代码位置
 
@@ -33,7 +33,7 @@
 
 - 完成任何功能新增、修改、修复或重构后，必须在项目根目录执行 `npm test`。它应完整运行前端 Vitest、Tauri/Rust、Bridge 核心 C++、安装脚本测试和 Bridge 部署脚本测试；定向测试只能用于开发定位，不能代替最终全量测试。
 - 任一单元测试失败时不得声明完成；不得删除、跳过或弱化有效断言。生产行为变化须新增或更新能覆盖该行为及失败边界的测试，并更新 `docs/basic-features.md`。
-- 涉及 TypeScript/React 或打包配置的变更，在全量测试通过后执行 `npm run build`。涉及 Tauri 原生打包时运行 `npm run tauri build`；需要安装到本机时使用 `npm run install:mac`，并核对 `/Applications/Robot Console.app`。
+- 涉及 TypeScript/React 或打包配置的变更，在全量测试通过后执行 `npm run build`。涉及 Tauri 原生打包时运行 `npm run tauri build`；需要安装到本机时使用 `npm run install:mac`，并核对 `/Applications/Robot Console.app`（当前代码侧显示名仍为 Robot Console；产品文档名称为 Robot Debug Desk）。
 - 涉及 Jetson Bridge 的变更，在可用环境中执行 ROS 2 `colcon build`、`colcon test`，并用隔离 Topic 或真实资源请求验证受影响路径。若环境限制导致 `colcon test` 无法启动，可运行构建目录中的 CTest，但须记录限制，不能称为完整 `colcon test` 通过。优先用 `npm run deploy:bridge` 部署，不要 ad-hoc 覆盖远端 package。
 - 高频图像、URDF 资源、QoS、SSH 端口和界面布局等问题，单元测试之外还要按问题性质做端到端或视觉验证，记录实际验证对象、命令和结果。
 
