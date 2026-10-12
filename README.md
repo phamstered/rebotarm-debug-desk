@@ -77,9 +77,21 @@ src-tauri/target/debug/bundle/macos/Robot Console.app
 
 Bridge 源码位于 `bridge/easy_debug_bridge`，依赖 ROS 2 Humble、Boost.Beast 和标准 ROS 消息包。
 
+优先使用仓库脚本部署（比较 → 同步 → `colcon build` → 校验；可选备份与重启）：
+
+```bash
+npm run deploy:bridge -- --dry-run
+npm run deploy:bridge -- --backup
+npm run deploy:bridge -- --skip-sync --skip-build --restart
+```
+
+脚本默认 SSH host `damiao`、远端工作区 `/home/jialiang/easy_debug_bridge`（同步到 `src/easy_debug_bridge/`）、ROS overlay `/home/jialiang/Project/leader_follower/install/setup.bash`、端口 `8765`。默认不同步删除远端多余文件；需要清理时再加 `--delete`。详见 `scripts/deploy-bridge.mjs --help` 与 `AGENTS.md`。
+
+首次手工初始化工作区（脚本也会 `mkdir -p` 远端 package 目录）仍可：
+
 ```bash
 mkdir -p ~/easy_debug_bridge/src
-cp -r easy_debug_bridge ~/easy_debug_bridge/src/
+# 推荐用 npm run deploy:bridge，而不是整目录 cp 覆盖
 cd ~/easy_debug_bridge
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select easy_debug_bridge
