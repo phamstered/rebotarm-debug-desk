@@ -1,0 +1,73 @@
+# Squash-merge PRs authored by the repo owner once CI succeeds.
+#
+# Why this exists:
+# - Repo is private; classic branch protection / rulesets are not available
+#   on Free (API returns 403). Native GitHub "Allow auto-merge" also does not
+#   stick here, and even when enabled it only helps when required checks are
+#   still pending (needs enforceable branch protection).
+# - So we gate in Actions: after the CI workflow completes successfully for a
+#   pull_request event, merge if the PR author is the owner allowlist below.
+#
+# Scope: owner PRs only (not Dependabot / outside collaborators).
+name: Auto-merge owner PRs
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    name: Squash-merge owner PR after green CI
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Find and squash-merge owner PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # Comma-separated GitHub logins whose PRs auto-merge after CI.
+          OWNER_ALLOWLIST: "phamstered"
+        run: |
+          set -euo pipefail
+          PR_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+            -H "Accept: application/vnd.github+json")
+          PR_NUMBER=$(printf '%s' "$PR_JSON" | jq -r '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No open PR for ${HEAD_SHA}; nothing to merge."
+            exit 0
+          fi
+          AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author --jq .author.login)
+          echo "PR #${PR_NUMBER} author=${AUTHOR}"
+          case ",${OWNER_ALLOWLIST}," in
+            *",${AUTHOR},"*) ;;
+            *)
+              echo "Author ${AUTHOR} not in OWNER_ALLOWLIST; skipping."
+              exit 0
+              ;;
+          esac
+          STATE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,mergeable,statusCheckRollup \
+            --jq '{state,mergeable,checks:(.statusCheckRollup//[]|map({name,status,conclusion}))}')
+          echo "$STATE" | jq .
+          if [ "$(echo "$STATE" | jq -r .state)" != "OPEN" ]; then
+            echo "PR not open; skipping."
+            exit 0
+          fi
+          # Prefer squash (repo allows it). Retry once on transient merge race.
+          if gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+            echo "Merged #${PR_NUMBER} via squash."
+            exit 0
+          fi
+          sleep 15
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,mergedAt
+          if [ "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --jq .state)" = "MERGED" ]; then
+            echo "PR already merged after race."
+            exit 0
+          fi
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
