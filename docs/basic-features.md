@@ -4,6 +4,9 @@
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
+macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
+`Robot Console.app` 安装到 `/Applications`，更新失败时恢复原安装。
+
 ## 0. Jetson Bridge 部署脚本
 
 - `npm run deploy:bridge`（`scripts/deploy-bridge.mjs`）用于把本地 `bridge/easy_debug_bridge` 同步到 Jetson colcon 工作区、执行 `colcon build`，并校验安装二进制与 `127.0.0.1:8765` 监听状态。
@@ -173,6 +176,8 @@
 | 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |
 | 轨迹下发 | 松手下发（成功/IK 未收敛/无 JointState/send 失败）、未激活拒发、active 控制器下发 JointTrajectory、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |
 | Bridge 轨迹 | Topic 白名单、关节名/点数/长度/有限值/时间递增校验、错误文案、Duration 拆分 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
+| macOS 安装 | release 构建后安装到 `/Applications`、失败回滚原安装 | `scripts/install-macos-app.node-test.mjs` |
+| Bridge 部署 | 参数解析、rsync 参数、远端脚本与校验输出解析 | `scripts/deploy-bridge.node-test.mjs` |
 
 ## 13. 测试命令
 
@@ -188,6 +193,7 @@ npm run build
 1. `npm run test:frontend`：Vitest + jsdom + Testing Library。
 2. `npm run test:rust`：Tauri/Rust 原生单元测试。
 3. `npm run test:bridge`：不依赖 ROS 安装的 Bridge 核心 C++ 单元测试。
-4. `npm run test:deploy`：Bridge 部署脚本（参数、rsync、校验解析）单元测试。
+4. `npm run test:install`：macOS `install:mac` 安装脚本单元测试。
+5. `npm run test:deploy`：Bridge 部署脚本（参数、rsync、校验解析）单元测试。
 
 Jetson、Fast DDS、micro-ROS Agent 和 STM32 属于外部进程/硬件边界，不能由本机单元测试替代。涉及这些边界的变更还需执行 ROS 2 `colcon test`、隔离测试 Topic 或安全的 DISABLE 验证，但外部验证不能取代上述全量单元测试。

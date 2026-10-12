@@ -63,9 +63,12 @@ npm run tauri dev
 生产构建：
 
 ```bash
-npm run build
-npm run tauri build
+npm run install:mac
 ```
+
+`install:mac` 会先构建 release 版 `Robot Console.app`，再安装到
+`/Applications/Robot Console.app`。更新已有安装时，会在新版本复制完成后替换；
+安装失败时恢复旧版本。仅需生成安装包时可运行 `npm run tauri build`。
 
 调试版 `.app` 位于：
 
