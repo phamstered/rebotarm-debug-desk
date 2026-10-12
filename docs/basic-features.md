@@ -1,8 +1,14 @@
 # Robot Console 基本功能与测试覆盖
 
-更新日期：2026-10-11
+更新日期：2026-10-12
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
+
+## 0. Jetson Bridge 部署脚本
+
+- `npm run deploy:bridge`（`scripts/deploy-bridge.mjs`）用于把本地 `bridge/easy_debug_bridge` 同步到 Jetson colcon 工作区、执行 `colcon build`，并校验安装二进制与 `127.0.0.1:8765` 监听状态。
+- 默认不同步删除远端 package 内多余文件；`--backup` 可在同步前打包远端副本；`--restart` 才重启 Bridge（避免把“已编译”当成“当前进程已更新”）。
+- 配置默认对齐 damiao Profile，可用 flags / `BRIDGE_DEPLOY_*` 覆盖。`npm run test:deploy` 覆盖参数解析、rsync 参数、远端脚本与校验输出解析，不要求真实 Jetson。
 
 ## 1. 连接与会话
 
@@ -182,5 +188,6 @@ npm run build
 1. `npm run test:frontend`：Vitest + jsdom + Testing Library。
 2. `npm run test:rust`：Tauri/Rust 原生单元测试。
 3. `npm run test:bridge`：不依赖 ROS 安装的 Bridge 核心 C++ 单元测试。
+4. `npm run test:deploy`：Bridge 部署脚本（参数、rsync、校验解析）单元测试。
 
 Jetson、Fast DDS、micro-ROS Agent 和 STM32 属于外部进程/硬件边界，不能由本机单元测试替代。涉及这些边界的变更还需执行 ROS 2 `colcon test`、隔离测试 Topic 或安全的 DISABLE 验证，但外部验证不能取代上述全量单元测试。
