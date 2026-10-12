@@ -13,7 +13,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 - `npm run deploy:bridge`（`scripts/deploy-bridge.mjs`）用于把本地 `bridge/easy_debug_bridge` 同步到 Jetson colcon 工作区、执行 `colcon build`，并校验安装二进制与 `127.0.0.1:8765` 监听状态。
 - 默认不同步删除远端 package 内多余文件；`--backup` 可在同步前打包远端副本；`--restart` 才重启 Bridge（避免把“已编译”当成“当前进程已更新”）。
-- 配置默认对齐 damiao Profile，可用 flags / `BRIDGE_DEPLOY_*` 覆盖。`npm run test:deploy` 覆盖参数解析、rsync 参数、远端脚本与校验输出解析，不要求真实 Jetson。
+- 配置有内置默认值，可用 flags / `BRIDGE_DEPLOY_*` 覆盖。`npm run test:deploy` 覆盖参数解析、rsync 参数、远端脚本与校验输出解析，不要求真实 Jetson。
 
 ## 1. 连接与会话
 

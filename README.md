@@ -123,7 +123,7 @@ npm run deploy:bridge -- --backup
 npm run deploy:bridge -- --skip-sync --skip-build --restart
 ```
 
-脚本默认 SSH host `damiao`、远端工作区 `/home/jialiang/easy_debug_bridge`（同步到 `src/easy_debug_bridge/`）、ROS overlay `/home/jialiang/Project/leader_follower/install/setup.bash`、端口 `8765`。默认不同步删除远端多余文件；需要清理时再加 `--delete`。详见 `scripts/deploy-bridge.mjs --help` 与 `AGENTS.md`。
+脚本连接 SSH host `<ssh-host>`（`--host` / `$BRIDGE_DEPLOY_HOST`），远端工作区 `/home/<jetson-user>/easy_debug_bridge`（即 `~/easy_debug_bridge`，同步到 `src/easy_debug_bridge/`；`--remote` / `$BRIDGE_DEPLOY_REMOTE`，须为绝对路径），ROS overlay `<ros-overlay>/install/setup.bash`（`--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP`），端口 `8765`（`--port` / `$BRIDGE_DEPLOY_PORT`）（内置默认值来自维护者环境，请按你的机器用 flags 或 `BRIDGE_DEPLOY_*` 覆盖）。默认不同步删除远端多余文件；需要清理时再加 `--delete`。详见 `scripts/deploy-bridge.mjs --help` 与 `AGENTS.md`。
 
 首次手工初始化工作区（脚本也会 `mkdir -p` 远端 package 目录）仍可：
 
@@ -135,19 +135,19 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select easy_debug_bridge
 ```
 
-## 当前 damiao 环境
+## 示例机器人环境
 
-Bridge 已部署并构建在：
+Bridge 部署并构建在 Jetson 工作区（示例）：
 
 ```text
-/home/jialiang/easy_debug_bridge
+/home/<jetson-user>/easy_debug_bridge
 ```
 
-默认连接配置：
+连接配置示例（应用内 Profile 可修改）：
 
 ```text
-SSH host: damiao
-ROS setup: /home/jialiang/Project/leader_follower/install/setup.bash
+SSH host: <ssh-host>
+ROS setup: <ros-overlay>/install/setup.bash
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description

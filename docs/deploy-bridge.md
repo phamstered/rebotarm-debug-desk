@@ -12,14 +12,15 @@ npm run deploy:bridge -- --skip-sync --skip-build --restart
 
 脚本：`scripts/deploy-bridge.mjs`（`npm run deploy:bridge`）。流程概览：比较 → 同步 → `colcon build` → 校验；可选备份与重启。
 
-## 默认参数（对齐 damiao Profile）
+## 参数
 
-| 项 | 默认 |
-|---|---|
-| SSH host | `damiao` |
-| 远端工作区 | `/home/jialiang/easy_debug_bridge`（同步到 `src/easy_debug_bridge/`） |
-| ROS overlay | `/home/jialiang/Project/leader_follower/install/setup.bash` |
-| 端口 | `8765` |
+| 项 | 示例值 | 覆盖方式 |
+|---| SSH host | `<ssh-host>` | `--host` / `$BRIDGE_DEPLOY_HOST` |
+| 远端工作区 | `/home/<jetson-user>/easy_debug_bridge`（同步到 `src/easy_debug_bridge/`，须绝对路径） | `--remote` / `$BRIDGE_DEPLOY_REMOTE` |
+| ROS overlay | `<ros-overlay>/install/setup.bash` | `--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP` |
+| 端口 | `8765` | `--port` / `$BRIDGE_DEPLOY_PORT` |
+
+脚本内置默认值来自维护者环境（见 `--help`），请按你的机器覆盖。
 
 可用 `--host` / `--remote` / `--ros-setup` / `--port` 或环境变量 `BRIDGE_DEPLOY_*` 覆盖。默认**不加** rsync `--delete`，以保留远端自定义消息/扩展；需要清理时再加 `--delete`。
 
