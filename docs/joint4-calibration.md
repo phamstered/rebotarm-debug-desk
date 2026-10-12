@@ -1,15 +1,17 @@
 # Joint4 多姿态标定操作指南
 
-本页面用于采集 joint4 多个静态姿态并请求 `joint4_calibration_controller` 进行重力与 camera_link 等效负载回归。结果只显示和保存；Robot Console 不会修改 URDF、控制器 YAML 或在线参数。
+适用于 **Robot Debug Desk**（仓库 [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)）。
+
+本页面用于采集 joint4 多个静态姿态并请求 `joint4_calibration_controller` 进行重力与 camera_link 等效负载回归。结果只显示和保存；Robot Debug Desk 不会修改 URDF、控制器 YAML 或在线参数。
 
 ## 前置条件
 
 1. 机械臂由操作者可靠托住，物理急停随时可用，周围没有人员和障碍物。
 2. Jetson 已按标定模式启动，`joint4_calibration_controller` 已加载并处于 `active`。
 3. 普通 `gravity_compensation_controller` 不得与标定控制器同时激活，两者会竞争相同 effort command interfaces。
-4. Robot Console 已连接 Jetson，Calibration 页面显示 `Controller active` 和 `status 10 Hz 正常`。
+4. Robot Debug Desk 已连接 Jetson，Calibration 页面显示 `Controller active` 和 `status 10 Hz 正常`。
 
-Robot Console 不负责自动激活控制器。请在 Dashboard 的 ROS Control 面板检查状态并显式操作。
+Robot Debug Desk 不负责自动激活控制器。请在 Dashboard 的 ROS Control 面板检查状态并显式操作。
 
 ## 单个姿态流程
 
@@ -38,7 +40,7 @@ CSV 保存本次界面记录的逐姿态数据和拟合字段；JSON 额外包�
 
 ## 异常与恢复
 
-出现下列任一情况时，Robot Console 会禁止采样：Controller 非 active、状态超过 1.5 秒未更新、`safety_fault`、保护阈值触发、状态格式错误或 Trigger 服务失败。
+出现下列任一情况时，Robot Debug Desk 会禁止采样：Controller 非 active、状态超过 1.5 秒未更新、`safety_fault`、保护阈值触发、状态格式错误或 Trigger 服务失败。
 
 恢复顺序：
 

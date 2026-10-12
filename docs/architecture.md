@@ -1,5 +1,9 @@
 # Architecture
 
+Product name: **Robot Debug Desk** · repository: [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk).
+
+The npm package remains `easy-debug`; Tauri `productName` / window title / `/Applications` install still ship as **Robot Console** (`Robot Console.app`) until a separate code rename.
+
 ## Data path
 
 ```text
@@ -9,7 +13,7 @@ Rust SSH session manager
       │ local port forwarding
       ▼
 Jetson 127.0.0.1:8765
-Robot Console ROS Bridge
+Robot Debug Desk ROS Bridge
       │ rclcpp / Fast DDS
       ▼
 ROS 2 Humble graph (including entities exposed by Micro XRCE-DDS Agent)
