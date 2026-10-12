@@ -115,15 +115,15 @@ export type HardwareStatus = {
 
 export const defaultProfile: ConnectionProfile = {
   id: crypto.randomUUID(),
-  name: "damiao",
-  host: "damiao",
+  name: "jetson",
+  host: "jetson",
   sshPort: 22,
   username: "",
   identityFile: "",
   localPort: 18765,
   remotePort: 8765,
   rosDomainId: 0,
-  rosSetupScript: "/home/jialiang/Project/leader_follower/install/setup.bash",
+  rosSetupScript: "leader_follower/install/setup.bash",
   urdfTopic: "/robot_description",
   jointStateTopic: "/stm32/joint_states",
   commandTopic: "/stm32/joint_commands",

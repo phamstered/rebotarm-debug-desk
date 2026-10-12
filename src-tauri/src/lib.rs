@@ -81,9 +81,24 @@ fn ssh_target(profile: &ConnectionProfile) -> String {
     }
 }
 
+/// Accepts an absolute path or a path relative to the remote user's home
+/// (SSH commands start in `$HOME`). Only `[A-Za-z0-9._-/]` are allowed;
+/// `~`, empty, `.`/`..` segments and segments starting with `-` are rejected.
 fn is_safe_setup_script(path: &str) -> bool {
-    path.chars()
+    if path.is_empty() || path.len() > 4096 {
+        return false;
+    }
+    if !path
+        .chars()
         .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        return false;
+    }
+    let body = path.strip_prefix('/').unwrap_or(path);
+    !body.is_empty()
+        && body.split('/').all(|segment| {
+            !segment.is_empty() && segment != "." && segment != ".." && !segment.starts_with('-')
+        })
 }
 
 fn valid_topic(topic: &str) -> bool {
@@ -751,7 +766,7 @@ mod tests {
 
     fn profile(username: &str) -> ConnectionProfile {
         ConnectionProfile {
-            host: "damiao".into(),
+            host: "jetson".into(),
             ssh_port: 22,
             username: username.into(),
             identity_file: String::new(),
@@ -767,14 +782,24 @@ mod tests {
 
     #[test]
     fn builds_ssh_target_with_optional_username() {
-        assert_eq!(ssh_target(&profile("")), "damiao");
-        assert_eq!(ssh_target(&profile("robot")), "robot@damiao");
+        assert_eq!(ssh_target(&profile("")), "jetson");
+        assert_eq!(ssh_target(&profile("robot")), "robot@jetson");
     }
 
     #[test]
     fn validates_setup_script_and_ros_topic_inputs() {
         assert!(is_safe_setup_script("/home/robot/ws_1/install/setup.bash"));
         assert!(!is_safe_setup_script("/tmp/setup.bash;reboot"));
+        assert!(is_safe_setup_script("leader_follower/install/setup.bash"));
+        assert!(!is_safe_setup_script(""));
+        assert!(!is_safe_setup_script("/"));
+        assert!(!is_safe_setup_script("~/ws/install/setup.bash"));
+        assert!(!is_safe_setup_script("../ws/install/setup.bash"));
+        assert!(!is_safe_setup_script("/opt/ws/../etc/setup.bash"));
+        assert!(!is_safe_setup_script("ws/./install/setup.bash"));
+        assert!(!is_safe_setup_script("ws//install/setup.bash"));
+        assert!(!is_safe_setup_script("-rf/setup.bash"));
+        assert!(!is_safe_setup_script("ws/install/setup.bash\"$(reboot)"));
         assert!(valid_topic("/stm32/joint_commands"));
         assert!(!valid_topic("stm32/joint_commands"));
         assert!(!valid_topic("/stm32/joint-commands"));

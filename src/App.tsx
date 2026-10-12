@@ -135,7 +135,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
   return (
     <div className="profile-grid">
       <label>配置名称<input value={profile.name} onChange={(e) => field("name", e.target.value)} /></label>
-      <label>SSH 主机<input value={profile.host} onChange={(e) => field("host", e.target.value)} placeholder="damiao" /></label>
+      <label>SSH 主机<input value={profile.host} onChange={(e) => field("host", e.target.value)} placeholder="jetson 或 user@192.168.x.x" /></label>
       <label>SSH 用户名<input value={profile.username} onChange={(e) => field("username", e.target.value)} placeholder="使用 ~/.ssh/config" /></label>
       <label>SSH 端口<input type="number" value={profile.sshPort} onChange={(e) => field("sshPort", Number(e.target.value))} /></label>
       <label>私钥路径<input value={profile.identityFile} onChange={(e) => field("identityFile", e.target.value)} placeholder="使用 SSH Agent / config" /></label>

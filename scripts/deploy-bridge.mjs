@@ -7,9 +7,11 @@ const scriptPath = fileURLToPath(import.meta.url);
 export const projectRoot = resolve(dirname(scriptPath), "..");
 
 export const DEFAULTS = Object.freeze({
-  host: "damiao",
-  remoteRoot: "/home/jialiang/easy_debug_bridge",
-  rosSetup: "/home/jialiang/Project/leader_follower/install/setup.bash",
+  // Generic SSH alias; set BRIDGE_DEPLOY_HOST or --host for your Jetson.
+  host: "jetson",
+  // Relative remote paths are resolved against the remote user's $HOME.
+  remoteRoot: "easy_debug_bridge",
+  rosSetup: "leader_follower/install/setup.bash",
   remotePort: 8765,
   packageName: "easy_debug_bridge",
   rosDomainId: 0,
@@ -160,10 +162,10 @@ export function resolveConfig(flags, env = process.env) {
   if (!isSafeRemotePath(remoteRoot) || !isSafeRemotePath(rosSetup)) {
     throw new DeployStageError(
       "config",
-      "Remote root or ROS setup path contains disallowed characters",
+      "Remote root or ROS setup path is unsafe (allowed: absolute or $HOME-relative paths of [A-Za-z0-9._-/], no ., .., ~ or leading -)",
     );
   }
-  if (!host.trim() || /[\s;|&$`]/.test(host)) {
+  if (!host.trim() || host.startsWith("-") || /[\s;|&$`'"\\<>()]/.test(host)) {
     throw new DeployStageError("config", `Unsafe SSH host: ${host}`);
   }
 
@@ -191,16 +193,30 @@ export function resolveConfig(flags, env = process.env) {
   };
 }
 
-/** @param {string} path */
+/**
+ * Remote paths may be absolute or relative to the remote user's $HOME.
+ * Only [A-Za-z0-9._-/] are allowed; `~`, `..`/`.` segments, empty segments
+ * and segments starting with `-` are rejected.
+ * @param {string} path
+ */
 export function isSafeRemotePath(path) {
-  return (
-    path.length > 0 &&
-    path.startsWith("/") &&
-    [...path].every(
-      (character) =>
-        /[A-Za-z0-9._\-/]/.test(character),
-    )
-  );
+  if (typeof path !== "string" || path.length === 0 || path.length > 4096) return false;
+  if (![...path].every((character) => /[A-Za-z0-9._\-/]/.test(character))) return false;
+  const body = path.startsWith("/") ? path.slice(1) : path;
+  const trimmed = body.endsWith("/") ? body.slice(0, -1) : body;
+  if (trimmed.length === 0) return false;
+  return trimmed
+    .split("/")
+    .every((segment) => segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith("-"));
+}
+
+/**
+ * Shell word for a validated remote path: absolute paths are quoted as-is,
+ * relative paths are anchored at the remote "$HOME".
+ * @param {string} path
+ */
+export function remotePathWord(path) {
+  return path.startsWith("/") ? shellQuote(path) : `"$HOME"/${shellQuote(path)}`;
 }
 
 /**
@@ -239,8 +255,8 @@ export function buildRemoteBackupScript(config) {
   const stamp = "$(date +%Y%m%d-%H%M%S)";
   return [
     "set -euo pipefail",
-    `ROOT=${shellQuote(config.remoteRoot)}`,
-    `PKG=${shellQuote(config.remotePackage)}`,
+    `ROOT=${remotePathWord(config.remoteRoot)}`,
+    `PKG=${remotePathWord(config.remotePackage)}`,
     `NAME=${shellQuote(config.packageName)}`,
     'if [ ! -d "$PKG" ]; then echo "Remote package missing: $PKG" >&2; exit 1; fi',
     `BACKUP_DIR="$ROOT/backup"`,
@@ -256,8 +272,8 @@ export function buildRemoteBuildScript(config) {
   return [
     "set -euo pipefail",
     "source /opt/ros/humble/setup.bash",
-    `if [ -f ${shellQuote(config.rosSetup)} ]; then source ${shellQuote(config.rosSetup)}; fi`,
-    `cd ${shellQuote(config.remoteRoot)}`,
+    `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
+    `cd ${remotePathWord(config.remoteRoot)}`,
     "mkdir -p src",
     `colcon build --symlink-install --packages-select ${shellQuote(config.packageName)}`,
     'echo "BUILD_OK"',
@@ -270,8 +286,8 @@ export function buildRemoteVerifyScript(config) {
   return [
     "set -euo pipefail",
     "source /opt/ros/humble/setup.bash",
-    `if [ -f ${shellQuote(config.rosSetup)} ]; then source ${shellQuote(config.rosSetup)}; fi`,
-    `source ${shellQuote(`${config.remoteRoot}/install/setup.bash`)}`,
+    `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
+    `source ${remotePathWord(`${config.remoteRoot}/install/setup.bash`)}`,
     `PKG=${shellQuote(config.packageName)}`,
     'BIN="$(ros2 pkg executables "$PKG" 2>/dev/null | awk \'/bridge_node/{print $2; exit}\')"',
     'PREFIX="$(ros2 pkg prefix "$PKG" 2>/dev/null || true)"',
@@ -283,7 +299,7 @@ export function buildRemoteVerifyScript(config) {
     '  RESOLVED=""',
     "fi",
     'echo "RESOLVED_BIN=${RESOLVED:-MISSING}"',
-    `echo "EXPECTED_PREFIX=${shellQuote(config.remoteRoot)}/install"`,
+    `echo "EXPECTED_PREFIX="${remotePathWord(config.remoteRoot)}"/install"`,
     `LISTEN="$(ss -ltnp 2>/dev/null | awk '/127\\.0\\.0\\.1:${port}[[:space:]]/{print; found=1} END{if(!found) print \"LISTEN_NONE\"}' || true)"`,
     'echo "LISTEN_LINE=$LISTEN"',
     "PID=\"$(echo \"$LISTEN\" | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | head -n1 || true)\"",
@@ -296,7 +312,7 @@ export function buildRemoteVerifyScript(config) {
     '  echo "PROC_EXE="',
     "fi",
     'if [ -z "${RESOLVED:-}" ] || [ "$RESOLVED" = "MISSING" ]; then echo "VERIFY_FAIL missing installed bridge_node" >&2; exit 2; fi',
-    `case "$RESOLVED" in ${shellQuote(config.remoteRoot)}/install/*) ;; *) echo "VERIFY_WARN resolved binary outside expected install tree: $RESOLVED" >&2 ;; esac`,
+    `case "$RESOLVED" in ${remotePathWord(config.remoteRoot)}/install/*) ;; *) echo "VERIFY_WARN resolved binary outside expected install tree: $RESOLVED" >&2 ;; esac`,
     'echo "VERIFY_OK"',
   ].join("\n");
 }
@@ -311,9 +327,9 @@ export function buildRemoteRestartScript(config) {
   return [
     "set -euo pipefail",
     "source /opt/ros/humble/setup.bash",
-    `if [ -f ${shellQuote(config.rosSetup)} ]; then source ${shellQuote(config.rosSetup)}; fi`,
-    `source ${shellQuote(`${config.remoteRoot}/install/setup.bash`)}`,
-    `pkill -TERM -f "^${shellEscapeRegex(`${config.remoteRoot}/install/${config.packageName}/lib/${config.packageName}/bridge_node`)} " >/dev/null 2>&1 || true`,
+    `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
+    `source ${remotePathWord(`${config.remoteRoot}/install/setup.bash`)}`,
+    `pkill -TERM -f "^${config.remoteRoot.startsWith("/") ? "" : "$HOME/"}${shellEscapeRegex(`${config.remoteRoot}/install/${config.packageName}/lib/${config.packageName}/bridge_node`)} " >/dev/null 2>&1 || true`,
     `for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! ss -ltn | grep -q ":${port} "; then break; fi; sleep 0.1; done`,
     `if ss -ltn | grep -q ":${port} "; then echo "RESTART_FAIL port ${port} still occupied" >&2; exit 1; fi`,
     `ROS_DOMAIN_ID=${config.rosDomainId} nohup ros2 run ${shellQuote(config.packageName)} bridge_node --ros-args -p port:=${port} -p joint_state_topic:=${shellQuote(config.jointStateTopic)} -p command_topic:=${shellQuote(config.commandTopic)} -p status_topic:=${shellQuote(config.statusTopic)} >/tmp/easy_debug_bridge.log 2>&1 </dev/null &`,
@@ -392,7 +408,7 @@ Deploy bridge/easy_debug_bridge to a Jetson colcon workspace, build, and verify.
 
 Options:
   --host <name>           SSH host (default: ${DEFAULTS.host} or BRIDGE_DEPLOY_HOST)
-  --remote <path>         Remote workspace root (default: ${DEFAULTS.remoteRoot})
+  --remote <path>         Remote workspace root, absolute or $HOME-relative (default: ${DEFAULTS.remoteRoot})
   --ros-setup <path>      Robot overlay setup.bash (default: ${DEFAULTS.rosSetup})
   --port <n>              Bridge listen port (default: ${DEFAULTS.remotePort})
   --ros-domain-id <n>     ROS_DOMAIN_ID for --restart (default: ${DEFAULTS.rosDomainId})
@@ -411,8 +427,9 @@ Environment overrides: BRIDGE_DEPLOY_HOST, BRIDGE_DEPLOY_REMOTE,
 BRIDGE_DEPLOY_ROS_SETUP, BRIDGE_DEPLOY_PORT, BRIDGE_DEPLOY_ROS_DOMAIN_ID,
 BRIDGE_DEPLOY_LOCAL.
 
-Built-in defaults reflect the maintainer's robot; override them with the
-flags/env above. Current defaults: SSH host ${DEFAULTS.host}, remote
+Built-in defaults are generic; override them with the flags/env above.
+Relative --remote/--ros-setup paths are resolved against the remote user's
+$HOME; the local package path is resolved against the repository root. Current defaults: SSH host ${DEFAULTS.host}, remote
 ${DEFAULTS.remoteRoot}, overlay ${DEFAULTS.rosSetup}, port ${DEFAULTS.remotePort}.
 Sync targets <remote>/src/${DEFAULTS.packageName}/ and does not use --delete
 unless requested, so remote-only custom files are preserved.
@@ -607,7 +624,7 @@ export async function deployBridge(config, deps = {}) {
         config,
         [
           "set -euo pipefail",
-          `mkdir -p ${shellQuote(config.remotePackage)}`,
+          `mkdir -p ${remotePathWord(config.remotePackage)}`,
         ].join("\n"),
       );
       const syncArgs = buildRsyncArgs({

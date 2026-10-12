@@ -20,9 +20,11 @@ import {
   deployBridge,
   DEFAULTS,
   shellQuote,
+  remotePathWord,
+  projectRoot,
 } from "./deploy-bridge.mjs";
 
-test("resolveConfig applies damiao defaults and env overrides", () => {
+test("resolveConfig applies generic defaults and env overrides", () => {
   const config = resolveConfig(
     {},
     {
@@ -48,24 +50,50 @@ test("parseArgs rejects unknown flags and unsafe hosts", () => {
     () => resolveConfig({ host: "bad;host" }, {}),
     (error) => error instanceof DeployStageError && error.stage === "config",
   );
-  assert.throws(
-    () => resolveConfig({ remoteRoot: "relative/path" }, {}),
-    DeployStageError,
-  );
+  assert.throws(() => resolveConfig({ host: "-oProxyCommand=x" }, {}), DeployStageError);
+  for (const remoteRoot of ["../escape", "ws/../../etc", "~/ws", "ws/-x", "/", "a b", "ws;reboot", "$(id)"]) {
+    assert.throws(() => resolveConfig({ remoteRoot }, {}), DeployStageError, remoteRoot);
+  }
+  assert.throws(() => resolveConfig({ rosSetup: "../setup.bash" }, {}), DeployStageError);
+});
+
+test("relative defaults resolve against remote $HOME and repo root", () => {
+  const config = resolveConfig({}, {});
+  assert.equal(config.host, "jetson");
+  assert.equal(config.remoteRoot, "easy_debug_bridge");
+  assert.equal(config.remotePackage, "easy_debug_bridge/src/easy_debug_bridge");
+  assert.equal(config.rosSetup, "leader_follower/install/setup.bash");
+  assert.equal(config.localPackage, join(projectRoot, "bridge", "easy_debug_bridge"));
+  assert.equal(remotePathWord("easy_debug_bridge"), `"$HOME"/'easy_debug_bridge'`);
+  assert.equal(remotePathWord("/opt/ws"), "'/opt/ws'");
+  const build = buildRemoteBuildScript(config);
+  assert.match(build, /cd "\$HOME"\/'easy_debug_bridge'/);
+  assert.match(build, /source "\$HOME"\/'leader_follower\/install\/setup\.bash'/);
+  const restart = buildRemoteRestartScript(config);
+  assert.match(restart, /pkill -TERM -f "\^\$HOME\/easy_debug_bridge\/install/);
 });
 
 test("isSafeRemotePath mirrors Tauri setup-script character rules", () => {
-  assert.equal(isSafeRemotePath("/home/jialiang/easy_debug_bridge"), true);
+  assert.equal(isSafeRemotePath("/home/robot/easy_debug_bridge"), true);
   assert.equal(isSafeRemotePath("/opt/ros/humble/setup.bash"), true);
+  assert.equal(isSafeRemotePath("easy_debug_bridge"), true);
+  assert.equal(isSafeRemotePath("ws/install/setup.bash"), true);
   assert.equal(isSafeRemotePath("/tmp/a;b"), false);
-  assert.equal(isSafeRemotePath("relative"), false);
+  assert.equal(isSafeRemotePath(""), false);
+  assert.equal(isSafeRemotePath("/"), false);
+  assert.equal(isSafeRemotePath("~/ws"), false);
+  assert.equal(isSafeRemotePath(".."), false);
+  assert.equal(isSafeRemotePath("ws/../etc"), false);
+  assert.equal(isSafeRemotePath("./ws"), false);
+  assert.equal(isSafeRemotePath("ws//x"), false);
+  assert.equal(isSafeRemotePath("-rf"), false);
 });
 
 test("buildRsyncArgs excludes build artifacts and supports dry-run/delete", () => {
   const args = buildRsyncArgs({
     localPackage: "/repo/bridge/easy_debug_bridge",
-    remotePackage: "/home/jialiang/easy_debug_bridge/src/easy_debug_bridge",
-    host: "damiao",
+    remotePackage: "/home/robot/easy_debug_bridge/src/easy_debug_bridge",
+    host: "jetson",
     dryRun: true,
     delete: true,
   });
@@ -76,12 +104,12 @@ test("buildRsyncArgs excludes build artifacts and supports dry-run/delete", () =
     assert.ok(args.includes(pattern), `missing exclude ${pattern}`);
   }
   assert.equal(args.at(-2), "/repo/bridge/easy_debug_bridge/");
-  assert.equal(args.at(-1), "damiao:/home/jialiang/easy_debug_bridge/src/easy_debug_bridge/");
+  assert.equal(args.at(-1), "jetson:/home/robot/easy_debug_bridge/src/easy_debug_bridge/");
   assert.equal(args.includes("-e"), true);
 });
 
 test("remote build/verify/backup/restart scripts source overlay and mark stages", () => {
-  const config = resolveConfig({ host: "damiao" }, {});
+  const config = resolveConfig({ host: "jetson" }, {});
   const build = buildRemoteBuildScript(config);
   assert.match(build, /source \/opt\/ros\/humble\/setup\.bash/);
   assert.match(build, /leader_follower\/install\/setup\.bash/);
@@ -108,11 +136,11 @@ test("remote build/verify/backup/restart scripts source overlay and mark stages"
 test("parseVerifyOutput detects listening, stale process, and ok", () => {
   const ok = parseVerifyOutput(
     [
-      "RESOLVED_BIN=/home/jialiang/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node",
-      "EXPECTED_PREFIX=/home/jialiang/easy_debug_bridge/install",
+      "RESOLVED_BIN=/home/robot/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node",
+      "EXPECTED_PREFIX=/home/robot/easy_debug_bridge/install",
       "LISTEN_LINE=LISTEN 0 128 127.0.0.1:8765 0.0.0.0:* users:((\"bridge_node\",pid=4242,fd=22))",
       "LISTEN_PID=4242",
-      "PROC_EXE=/home/jialiang/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node",
+      "PROC_EXE=/home/robot/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node",
       "PROC_START=Mon Oct 12 21:00:00 2026",
       "VERIFY_OK",
     ].join("\n"),
@@ -125,7 +153,7 @@ test("parseVerifyOutput detects listening, stale process, and ok", () => {
 
   const stale = parseVerifyOutput(
     [
-      "RESOLVED_BIN=/home/jialiang/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node",
+      "RESOLVED_BIN=/home/robot/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node",
       "LISTEN_LINE=LISTEN 0 128 127.0.0.1:8765 0.0.0.0:* users:((\"bridge_node\",pid=9,fd=3))",
       "LISTEN_PID=9",
       "PROC_EXE=/tmp/old_bridge_node",
@@ -165,7 +193,7 @@ test("assertLocalPackage accepts a minimal package tree", async (context) => {
 
 test("deployBridge dry-run compare path does not sync or build", async () => {
   const config = resolveConfig(
-    { dryRun: true, host: "damiao", localPackage: "bridge/easy_debug_bridge" },
+    { dryRun: true, host: "jetson", localPackage: "bridge/easy_debug_bridge" },
     {},
   );
   /** @type {string[]} */
@@ -198,7 +226,7 @@ test("deployBridge dry-run compare path does not sync or build", async () => {
 
 test("deployBridge maps unreachable host during compare to ssh stage", async () => {
   const config = resolveConfig(
-    { compareOnly: true, host: "damiao", localPackage: "bridge/easy_debug_bridge" },
+    { compareOnly: true, host: "jetson", localPackage: "bridge/easy_debug_bridge" },
     {},
   );
   await assert.rejects(
@@ -220,7 +248,7 @@ test("deployBridge maps unreachable host during compare to ssh stage", async () 
 
 test("deployBridge maps non-SSH rsync errors to compare stage", async () => {
   const config = resolveConfig(
-    { compareOnly: true, host: "damiao", localPackage: "bridge/easy_debug_bridge" },
+    { compareOnly: true, host: "jetson", localPackage: "bridge/easy_debug_bridge" },
     {},
   );
   await assert.rejects(
@@ -240,12 +268,9 @@ test("deployBridge maps non-SSH rsync errors to compare stage", async () => {
   );
 });
 
-test("defaults match README damiao profile", () => {
-  assert.equal(DEFAULTS.host, "damiao");
-  assert.equal(DEFAULTS.remoteRoot, "/home/jialiang/easy_debug_bridge");
-  assert.equal(
-    DEFAULTS.rosSetup,
-    "/home/jialiang/Project/leader_follower/install/setup.bash",
-  );
+test("defaults are generic and home-relative", () => {
+  assert.equal(DEFAULTS.host, "jetson");
+  assert.equal(DEFAULTS.remoteRoot, "easy_debug_bridge");
+  assert.equal(DEFAULTS.rosSetup, "leader_follower/install/setup.bash");
   assert.equal(DEFAULTS.remotePort, 8765);
 });
