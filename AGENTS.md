@@ -1,6 +1,6 @@
 # Robot Debug Desk 开发规范
 
-本文件适用于整个仓库。**Robot Debug Desk**（仓库 [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)）是运行在 macOS 的 Tauri/Rust + React/Three.js 上位机；ROS 2 Humble Bridge 运行在 Jetson/Ubuntu 22.04。Mac 不直接加入 DDS，桌面端通过 SSH 隧道访问 Jetson 上只监听 `127.0.0.1` 的 WebSocket Bridge。开始修改前先读相关的 `README.md`、`docs/architecture.md`、`docs/protocol.md` 和 `docs/basic-features.md`。
+本文件适用于整个仓库。**Robot Debug Desk**（仓库 [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)）是运行在 macOS 的 Tauri/Rust + React/Three.js 上位机；ROS 2 Humble Bridge 运行在 Jetson/Ubuntu 22.04。Mac 不直接加入 DDS，桌面端通过 SSH 隧道访问 Jetson 上只监听 `127.0.0.1` 的 WebSocket Bridge。开始修改前先读相关的 `README.md`、`docs/architecture.md`、`docs/protocol.md` 和 `docs/basic-features.md`。用户文档站点（VitePress / GitHub Pages）：[https://phamstered.github.io/robot-debug-desk/](https://phamstered.github.io/robot-debug-desk/)。本地预览：`npm run docs:dev`；构建：`npm run docs:build`。
 
 ## 1. 变更范围与代码位置
 

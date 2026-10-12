@@ -8,6 +8,7 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 | **仓库** | [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk) |
 | **npm 包名** | `easy-debug`（历史名，尚未改代码） |
 | **应用显示名** | Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`） |
+| **用户文档** | [https://phamstered.github.io/robot-debug-desk/](https://phamstered.github.io/robot-debug-desk/)（GitHub Pages） |
 
 > 本文档以 **Robot Debug Desk** 作为用户面向产品名；包名与 `.app` 显示名以当前代码为准，不会在文档 PR 中静默改名。
 
@@ -172,6 +173,7 @@ Bridge 建立隧道后可运行：
 node scripts/smoke-bridge.mjs 18765
 ```
 
+- 用户文档站点：[https://phamstered.github.io/robot-debug-desk/](https://phamstered.github.io/robot-debug-desk/)
 - 基本功能与测试覆盖：[docs/basic-features.md](docs/basic-features.md)
 - 协议说明：[docs/protocol.md](docs/protocol.md)
 - 架构说明：[docs/architecture.md](docs/architecture.md)

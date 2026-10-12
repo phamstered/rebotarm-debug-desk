@@ -14,7 +14,10 @@
     "test:deploy": "node --test scripts/deploy-bridge.node-test.mjs",
     "install:mac": "npm run tauri build && node scripts/install-macos-app.mjs",
     "deploy:bridge": "node scripts/deploy-bridge.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
     "@react-three/fiber": "^9.3.0",
@@ -38,6 +41,7 @@
     "jsdom": "^30.0.1",
     "typescript": "~5.8.3",
     "vite": "^7.1.3",
+    "vitepress": "^1.6.4",
     "vitest": "^4.1.10"
   }
 }
