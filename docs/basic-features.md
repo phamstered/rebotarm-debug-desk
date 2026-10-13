@@ -6,6 +6,8 @@
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
+面向操作的模块说明与流程图见 [功能概览](./features)；本文保留测试覆盖矩阵与更细的行为边界。
+
 macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 `Robot Console.app` 安装到 `/Applications`，更新失败时恢复原安装。
 

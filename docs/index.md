@@ -13,6 +13,9 @@ hero:
       text: 连接与 Bridge
       link: /connect
     - theme: alt
+      text: 功能概览
+      link: /features
+    - theme: alt
       text: GitHub
       link: https://github.com/phamstered/robot-debug-desk
 
@@ -39,7 +42,7 @@ features:
 
 1. [架构概览](./architecture) — 数据路径与信任边界
 2. [连接与 Bridge](./connect) — SSH、隧道、会话与默认 Profile
-3. [功能概览](./features) — 已实现能力摘要
+3. [功能概览](./features) — 模块说明、操作步骤与 Mermaid 流程图
 4. [macOS 安装](./install) — `npm run install:mac`
 5. [部署 Bridge](./deploy-bridge) — `npm run deploy:bridge`
 
