@@ -4,22 +4,26 @@ Product name: **Robot Debug Desk** · repository: [`phamstered/robot-debug-desk`
 
 The npm package remains `easy-debug`; Tauri `productName` / window title / `/Applications` install still ship as **Robot Console** (`Robot Console.app`) until a separate code rename.
 
-## Data path
+## 系统架构 · System architecture
 
-```text
-React/Three.js
-      │ Tauri invoke
-Rust SSH session manager
-      │ local port forwarding
-      ▼
-Jetson 127.0.0.1:8765
-Robot Debug Desk ROS Bridge
-      │ rclcpp / Fast DDS
-      ▼
-ROS 2 Humble graph (including entities exposed by Micro XRCE-DDS Agent)
-```
+桌面端通过 **SSH 隧道** 访问 Jetson 上只监听 `127.0.0.1` 的 WebSocket Bridge；**Mac 从不直接加入 DDS**。SSH 提供认证、主机密钥校验与传输加密。
 
-The desktop never joins DDS directly. SSH provides authentication, host-key verification and transport encryption. The Bridge is loopback-only.
+<SystemArchitecture />
+
+## 数据流 · Data flow
+
+遥测（Topics / HardwareStatus / JointState）经 Bridge 进入 App；控制（`joint_command` / `trajectory_command`）经 Bridge 下发到 ROS，并返回 ACK。断开连接时若电机命令流仍在运行，先请求 **DISABLE**。
+
+<DataFlowDiagram />
+
+字段与操作语义见 [Bridge 协议](./protocol)。
+
+## Data path（文字说明）
+
+1. React / Three.js UI 通过 Tauri `invoke` 驱动 Rust SSH session manager。
+2. Rust 建立本地端口转发：本机端口 → Jetson `127.0.0.1:8765`。
+3. WebView 连接本地转发端口上的 WebSocket。
+4. Jetson 上的 `easy_debug_bridge`（C++ / Boost.Beast / rclcpp）接入 ROS 2 Humble graph（含 Micro XRCE-DDS Agent 暴露的实体）。
 
 ## Connection sequence
 

@@ -14,15 +14,17 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 
 ## 架构一览
 
-```text
-macOS Robot Debug Desk (Tauri / React / Three.js)
-        │  SSH 隧道（本地端口 → Jetson 127.0.0.1:8765）
-        ▼
-Jetson / Ubuntu 22.04  ·  easy_debug_bridge (ROS 2 Humble)
-        │  DDS / topics / controllers / package:// 资源
-        ▼
-micro-ROS Agent · STM32 · URDF / cameras / controllers …
-```
+| 层 | 组件 |
+|---|---|
+| **macOS** | Robot Debug Desk（Tauri / React / Three.js）· Rust SSH 会话 |
+| **隧道** | `ssh -N -L` 本地端口 → Jetson `127.0.0.1:8765`（认证 / 主机密钥 / 加密） |
+| **Jetson** | `easy_debug_bridge`（C++ WebSocket · rclcpp）· **仅 loopback** |
+| **ROS 2** | Humble graph · Topics / Controllers / `package://` · URDF |
+| **固件** | micro-ROS Agent · STM32 · 电机（JointCommand / HardwareStatus） |
+
+数据流概要：Topics / HardwareStatus / JointState **入站** → App；`joint_command` / `trajectory_command` **出站** → ROS（含 ACK）；断开时若电机命令流在运行，先请求 **DISABLE**。
+
+交互式分层图与标注数据流见用户文档 **[架构](https://phamstered.github.io/robot-debug-desk/architecture)**（HTML 图，非 Mermaid）。源文件：[docs/architecture.md](docs/architecture.md)。
 
 Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。本机连接 Profile 中的「ROS 环境脚本」必须指向机器人工作空间的 `install/setup.bash`；Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 能解析 URDF 中的资源包。
 
