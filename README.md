@@ -28,67 +28,21 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 
 ## 功能概览
 
-### 连接与会话
+已实现能力的模块说明（做什么 / 怎么用 / 注意与边界）与 Mermaid 流程图见用户文档：
 
-- Jetson SSH 连接配置持久化（主机、用户、端口、私钥、ROS Domain、ROS setup、Topic 等）
-- 自动检查 SSH → micro-ROS Agent → 启动 Bridge → 本地端口转发 → WebSocket
-- 首选本地端口被占用时自动选空闲端口；退出时回收 SSH 隧道子进程
-- 每 5 秒检查 `micro-ros-agent-stm32h723.service`（运行 / 停止 / 检查失败）
-- 断开或重连时清空上一会话的 Topic、URDF、JointState、控制器与硬件状态；保留连接配置与布局偏好
+**[功能概览（完整）](docs/features.md)** · [Pages](https://phamstered.github.io/robot-debug-desk/features)
 
-### Topics
+| 模块 | 文档锚点 |
+|---|---|
+| 连接与会话 | [§1](docs/features.md#1-连接与会话) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_1-连接与会话) |
+| Topics / Graph / Inspector | [§2](docs/features.md#2-topics--graph--inspector) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_2-topics-graph-inspector) |
+| Robot View（URDF） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_3-robot-view-urdf) |
+| MIT 电机控制 | [§4](docs/features.md#4-mit-电机控制) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_4-mit-电机控制) |
+| TCP 拖拽轨迹 | [§5](docs/features.md#5-tcp-拖拽轨迹) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_5-tcp-拖拽轨迹) |
+| Joint4 标定 | [§6](docs/features.md#6-joint4-标定) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_6-joint4-标定) |
+| 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
 
-- ROS graph Topic 名称与类型发现；只读订阅、JSON 查看、频率与消息计数
-- Topic 搜索过滤；默认 30 秒自动刷新（可在设置中调整）
-- Topic Graph（近似 `rqt_graph`）与 Topic Inspector（本机 jq 1.8.2 WASM 过滤）
-- `sensor_msgs/msg/Image` Canvas 实时预览（二进制 WebSocket，避免 Base64 膨胀）
-- `/controller_manager` Controller 列表（名称、类型、状态）及 Activate / Deactivate
-
-第一版可解码的消息类型：
-
-- `std_msgs/msg/String` · `Bool` · `Float32` · `Float64` · `Int32` · `UInt32` · `Float32MultiArray` · `Float64MultiArray`
-- `sensor_msgs/msg/JointState` · `sensor_msgs/msg/Image`（预览路径）
-- `microros_stm32h723_bridge/msg/JointCommand` · `HardwareStatus`
-
-其他未注册类型仍会出现在 Topic 列表中，但内容查看会提示暂不支持。
-
-### URDF / Robot View
-
-- 从 `std_msgs/msg/String` Topic（默认 `/robot_description`）获取 URDF；晚加入订阅使用 `RELIABLE + TRANSIENT_LOCAL`
-- Three.js + React Three Fiber + `urdf-loader` 渲染；`JointState` 驱动关节
-- Jetson 侧解析并传输 `package://` STL / DAE / OBJ 与纹理（含 `--symlink-install` 链接，拒绝路径穿越）
-
-### MIT 电机控制
-
-控制面板发布到 `/stm32/joint_commands`（`microros_stm32h723_bridge/msg/JointCommand`）。界面支持多电机使能与 Position 滑块；Bridge 仅对用户使能且固件 `active_joint_mask` 覆盖的关节写入非零通道，其余写零。
-
-```text
-0 HOLD     锁存当前反馈位置并使用 Kp/Kd 保持
-1 TRACK    跟踪 position/velocity/kp/kd/effort
-2 RETURN   跟踪返回目标
-3 DISABLE  撤销电机使能
-```
-
-Bridge 与界面仅限制 Effort（`|effort| ≤ 1 Nm`）；Position / Velocity / Kp / Kd 不做上位机限幅。非 DISABLE 指令须完成界面安全解锁，并满足：command subscriber 存在、status / joint feedback 未过期、所选关节全部处于固件 `active_joint_mask`。界面按 20 Hz 发送；停止后固件约 100 ms 进入 HOLD、500 ms 后 DISABLE。「停止并 DISABLE」无需解锁且始终可用。
-
-### Joint4 标定
-
-- 左侧 Calibration 页订阅 `/joint4_calibration_controller/status`
-- 通过受限 `std_srvs/srv/Trigger` 执行 Begin / Capture / Release / Fit / Reset
-- Capture 需 Controller active、状态新鲜、姿态稳定，并确认手部支撑已撤掉
-- 采样与拟合结果可导出为本机 JSON / CSV 审计报告（详见 `docs/joint4-calibration.md`）
-
-### TCP 拖拽轨迹
-
-- 仅当存在 active 的 `JointTrajectoryController` 时开放 Robot View TCP 拖拽
-- 拖拽过程做位置 IK；松手后下发 `trajectory_msgs/msg/JointTrajectory` 到控制器的 `~/joint_trajectory`
-- Bridge 校验 Topic 白名单、关节名、点数、有限值与严格递增时间；IK 未收敛或缺新鲜 JointState 时拒发并显示原因
-
-### rosbag / 诊断
-
-- 工具栏「开始录制」经受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`（输出到 `$HOME/robot-console-bags/…`）
-- 「诊断快照」保存本机脱敏 JSON（连接信息、Topics、Controller、Agent、HardwareStatus 等；不含私钥路径）
-- 「暂停显示」只冻结 WebView 消费，不断开 Bridge，也不停止后台 rosbag
+行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 
 ## 本机开发
 
