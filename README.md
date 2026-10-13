@@ -30,7 +30,7 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 
 ## 功能概览
 
-已实现能力的模块说明（做什么 / 怎么用 / 注意与边界）与 Mermaid 流程图见用户文档：
+已实现能力的模块说明（做什么 / 怎么用 / 注意与边界）与 HTML 流程图见用户文档：
 
 **[功能概览（完整）](docs/features.md)** · [Pages](https://phamstered.github.io/robot-debug-desk/features)
 

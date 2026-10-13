@@ -38,13 +38,7 @@ URDF topic: /robot_description
 JointState topic: /stm32/joint_states
 ```
 
-```mermaid
-flowchart LR
-  A[SSH 检查] --> B[micro-ROS Agent]
-  B --> C[启动 Bridge<br/>若未监听]
-  C --> D["ssh -N -L<br/>本地端口转发"]
-  D --> E[WebSocket]
-```
+<ConnectionSessionFlow />
 
 ### 注意与边界
 
@@ -68,25 +62,7 @@ flowchart LR
 
 ### 界面结构
 
-```mermaid
-flowchart TB
-  subgraph nav [左侧 Navigation]
-    Dash[Dashboard]
-    Cal[Calibration]
-  end
-  subgraph center [中心面板局部 Tab]
-    RV[Robot View]
-    TG[Topic Graph]
-  end
-  subgraph side [可折叠侧栏]
-    Topics[Topics 列表 + 搜索]
-    RC[ROS Control]
-    Motor[Motor Control]
-    Insp[Topic Inspector]
-  end
-  Dash --> center
-  Dash --> side
-```
+<UiLayoutDiagram />
 
 ### 怎么用
 
@@ -143,14 +119,7 @@ flowchart TB
 3. 模型随 JointState 的 name/position 更新；缺少的位置按 0 处理。
 4. 视图内 heads-up 会显示 URDF 错误或轨迹控制器状态（与窄面板布局兼容，互不遮挡）。
 
-```mermaid
-flowchart LR
-  T["/robot_description<br/>String"] --> B[Bridge]
-  J["JointState Topic"] --> B
-  B -->|URDF XML| UI[Robot View]
-  B -->|package:// mesh/纹理| UI
-  B -->|关节位置| UI
-```
+<RobotViewDataFlow />
 
 ### 注意与边界
 
@@ -187,22 +156,7 @@ flowchart LR
 4. 选择 HOLD / TRACK / RETURN 等非 DISABLE 模式；预检通过后界面以 **20 Hz** 连续发送。
 5. 需要停机时点「停止并 DISABLE」——**无需解锁且始终可用**。
 
-```mermaid
-flowchart TD
-  Start[选择关节并使能] --> Unlock{安全确认?}
-  Unlock -->|否| Block[拒绝非 DISABLE]
-  Unlock -->|是| Pre[Bridge 预检]
-  Pre --> C1{subscriber?}
-  C1 -->|否| Fail[拒绝并提示]
-  Pre --> C2{反馈新鲜?}
-  C2 -->|否| Fail
-  Pre --> C3{掩码 ⊆ active_joint_mask?}
-  C3 -->|否| Fail
-  C1 -->|是| Ok
-  C2 -->|是| Ok
-  C3 -->|是| Ok[20 Hz 发送]
-  Ok --> Stop[停止并 DISABLE<br/>始终可用]
-```
+<MotorControlFlow />
 
 ### 注意与边界（请勿弱化）
 
@@ -231,18 +185,7 @@ flowchart TD
 3. 拖拽手柄（跟随 TCP 世界位姿、屏幕恒定尺寸）：按住后鼠标在过 TCP 的正交平面上移动；拖拽期间暂停轨道相机；**Esc** 取消并恢复到实时反馈位姿。
 4. 松手：按最新 JointState 重算 IK，下发轨迹——第 1 点为当前反馈（短暂停留），第 2 点为目标；时长按最大关节位移在 0.4–6 s 内估算。
 
-```mermaid
-flowchart TD
-  A{active JointTrajectoryController?} -->|否| X[拖拽不开放]
-  A -->|是| B[拖拽 TCP 手柄]
-  B --> C[逐帧位置 IK]
-  C --> D{残差 ≤ 5 mm?}
-  D -->|否| E[恢复反馈位姿并提示]
-  D -->|是| F[松手下发 JointTrajectory]
-  F --> G{Bridge 校验}
-  G -->|失败| E
-  G -->|成功| H[控制器执行]
-```
+<TcpTrajectoryFlow />
 
 ### 注意与边界
 
@@ -267,17 +210,7 @@ flowchart TD
 3. 单姿态：托住 → Begin Pose → 撤支撑 → 稳定后 Capture → 再托住 → Release；重复至至少 4 个姿态（推荐 6–8）。
 4. 全部释放后执行 Fit；可导出 JSON / CSV 审计报告。
 
-```mermaid
-flowchart TD
-  P[托住并移到姿态] --> B[Begin Pose]
-  B --> W[撤手部支撑]
-  W --> C[Capture Pose]
-  C --> R[托住 + Release]
-  R --> N{还需姿态?}
-  N -->|是| P
-  N -->|否| F[Fit]
-  F --> E[导出 JSON/CSV]
-```
+<Joint4CalibrationFlow />
 
 ### 注意与边界
 
@@ -307,16 +240,7 @@ flowchart TD
 | 重置布局 | 恢复默认左右宽度、上下分割并展开四个数据面板 |
 | 设置 | 自动刷新周期、诊断是否含消息摘要等 |
 
-```mermaid
-flowchart LR
-  TB[顶部工具栏] --> C[连接配置]
-  TB --> R[全部刷新]
-  TB --> P[暂停/恢复显示]
-  TB --> Bag[rosbag]
-  TB --> D[诊断快照]
-  TB --> L[重置布局 / 设置]
-  TB --> S[连接状态 · 断开]
-```
+<ToolbarOverview />
 
 ### 注意与边界
 
