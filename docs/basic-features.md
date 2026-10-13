@@ -1,6 +1,6 @@
 # Robot Debug Desk 基本功能与测试覆盖
 
-更新日期：2026-10-12
+更新日期：2026-10-13
 
 产品名：**Robot Debug Desk** · 仓库：[`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)。npm 包名仍为 `easy-debug`；Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`），文档不在此处静默改代码侧显示名。
 
@@ -98,16 +98,18 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 发布 Topic 默认为 `/stm32/joint_commands`，消息类型为 `JointCommand`。
 - 默认模式为 TRACK，默认 `Kp=8`、`Kd=2`。
 - 支持 HOLD、TRACK、RETURN、DISABLE 四种 `JointCommand.mode`。
-- Position、Velocity、Kp、Kd 不由上位机限幅；Effort 限制为 `[-1, 1] Nm`，所有字段必须为有限数字。
+- 多电机列表：每个关节可单独使能；Position 提供滑块与数值输入，行程 min/max 默认为 `±0.35 rad` 且可按关节配置（仅约束滑块，不做 Bridge 限幅）。
+- 仅对用户使能的关节发送非零命令通道，并通过 `active_joint_mask` 告知 Bridge；未使能通道保持 0。
+- Velocity、Kp、Kd、Effort 在 v1 仍为全局共享；Effort 限制为 `[-1, 1] Nm`，所有字段必须为有限数字。Position / Velocity / Kp / Kd 不由上位机限幅。
 - 允许自然输入负数、小数、输入中的末尾小数点以及逗号小数。
-- “使用当前位置”是唯一会把反馈位置写入 Position 的操作。
+- “使用当前位置”会把各关节反馈写入对应 Position；这是唯一自动写入 Position 的操作。
 - 安全确认在一次连接会话中只需勾选一次；DISABLE 后不会自动取消。
-- TRACK 等非 DISABLE 命令预检成功后以 20 Hz 连续发送。
-- Bridge 要求 command subscriber、最新 status/joint feedback 和 joint1 active；STM32 fault 由界面展示，最终执行安全由固件裁决。
+- TRACK 等非 DISABLE 命令预检成功后以 20 Hz 连续发送；至少使能一个电机。
+- Bridge 要求 command subscriber、最新 status/joint feedback（<1 s），且请求掩码全部落在固件 `active_joint_mask` 内；STM32 fault 由界面展示，最终执行安全由固件裁决。
 - DISABLE 将控制字段清零并发布 3 帧，各帧使用连续递增的 sequence，避免 `STALE_SEQUENCE`。
 - 显示 STM32 fault code 0–11 的英文名称和中文原因；未知编号显示 UNKNOWN。
 
-> STM32 固件仍有自己的最终限幅。例如当前固件 Position 上限为 `±0.35 rad`，`pos=0.6` 会被固件报告为 `FAULT 3 · COMMAND_LIMIT`。
+> STM32 固件仍有自己的最终限幅。例如当前固件 Position 上限约为 `±0.35 rad`，超出可能报告 `FAULT 3 · COMMAND_LIMIT`。界面默认行程与此对齐，但用户可放宽滑块范围。
 
 ## 7. WebSocket 协议
 
@@ -170,10 +172,10 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
 | URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx` |
-| 电机输入 | 默认 TRACK/Kp/Kd、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
-| 电机交互 | 安全确认、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
+| 电机输入 | 默认 TRACK/Kp/Kd、多电机使能掩码、行程默认 ±0.35、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
+| 电机交互 | 安全确认、每关节滑块/使能、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
-| Bridge 命令 | mode、ARMED、有限值、Effort 及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
+| Bridge 命令 | mode、ARMED、有限值、Effort、关节掩码解析/校验及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |
 | 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置逆解收敛与限位钳制、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
 | 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |

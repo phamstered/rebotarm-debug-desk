@@ -31,7 +31,7 @@
 
 ## MIT 电机控制
 
-发布到 `/stm32/joint_commands`（`JointCommand`）。当前固件仅激活 joint1，其余关节字段由 Bridge 写零。
+发布到 `/stm32/joint_commands`（`JointCommand`）。界面按关节列出使能开关与 Position 滑块（默认行程 ±0.35 rad，可配置）；只对用户使能且固件 `active_joint_mask` 覆盖的关节写入非零通道，其余写零。
 
 | mode | 含义 |
 |---|---|
@@ -40,7 +40,7 @@
 | 2 RETURN | 跟踪返回目标 |
 | 3 DISABLE | 撤销使能 |
 
-Effort 限幅 `|effort| ≤ 1 Nm`；Position / Velocity / Kp / Kd 不做上位机限幅。非 DISABLE 须安全解锁，并满足 subscriber / 反馈新鲜度 / joint1 active。界面 20 Hz 发送；「停止并 DISABLE」始终可用。
+Effort 限幅 `|effort| ≤ 1 Nm`；Position / Velocity / Kp / Kd 不做上位机限幅。非 DISABLE 须安全解锁，并满足 subscriber / 反馈新鲜度 / 所选关节均 active。界面 20 Hz 发送；「停止并 DISABLE」始终可用。
 
 ## Joint4 标定
 

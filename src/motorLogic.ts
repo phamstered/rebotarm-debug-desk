@@ -1,6 +1,24 @@
 export type CommandMode = 0 | 1 | 2 | 3;
-export type CommandValues = { position: number; velocity: number; kp: number; kd: number; effort: number };
-export type CommandInput = Record<keyof CommandValues, string>;
+export type SharedCommandInput = {
+  velocity: string;
+  kp: string;
+  kd: string;
+  effort: string;
+};
+export type MotorRowInput = {
+  enabled: boolean;
+  position: string;
+  min: string;
+  max: string;
+};
+export type CommandValues = {
+  positions: number[];
+  active_joint_mask: number;
+  velocity: number;
+  kp: number;
+  kd: number;
+  effort: number;
+};
 export type FaultInfo = { name: string; description: string };
 
 export const modes: { value: CommandMode; label: string; description: string }[] = [
@@ -13,6 +31,8 @@ export const modes: { value: CommandMode; label: string; description: string }[]
 export const DEFAULT_MODE: CommandMode = 1;
 export const DEFAULT_KP = "8";
 export const DEFAULT_KD = "2";
+export const DEFAULT_TRAVEL = 0.35;
+export const DEFAULT_JOINT_COUNT = 6;
 const decimalPattern = /^-?\d*(?:\.\d*)?$/;
 
 export const motorFaults: Record<number, FaultInfo> = {
@@ -35,30 +55,114 @@ export function normalizeDecimal(value: string): string | null {
   return decimalPattern.test(normalized) ? normalized : null;
 }
 
-export function parseCommandValues(input: CommandInput): { values?: CommandValues; error?: string } {
-  const fields = [
-    ["Position", input.position], ["Velocity", input.velocity], ["Kp", input.kp],
-    ["Kd", input.kd], ["Effort", input.effort],
+export function jointLabel(index: number): string {
+  return `joint${index + 1}`;
+}
+
+export function createDefaultMotors(count = DEFAULT_JOINT_COUNT): MotorRowInput[] {
+  return Array.from({ length: count }, () => ({
+    enabled: false,
+    position: "0",
+    min: String(-DEFAULT_TRAVEL),
+    max: String(DEFAULT_TRAVEL),
+  }));
+}
+
+/** Expand or trim motor rows when JointState length changes; preserve edits. */
+export function resizeMotors(motors: MotorRowInput[], count: number): MotorRowInput[] {
+  const target = Math.max(1, Math.min(32, count));
+  if (motors.length === target) return motors;
+  if (motors.length > target) return motors.slice(0, target);
+  return [...motors, ...createDefaultMotors(target - motors.length)];
+}
+
+export function buildActiveJointMask(enabled: boolean[]): number {
+  let mask = 0;
+  for (let index = 0; index < enabled.length && index < 32; index += 1) {
+    if (enabled[index]) mask |= 1 << index;
+  }
+  return mask;
+}
+
+export function parseTravelBound(raw: string, label: string): { value?: number; error?: string } {
+  const value = Number(raw);
+  if (raw.trim() === "" || !Number.isFinite(value)) return { error: `${label} 请输入有效数字` };
+  return { value };
+}
+
+export function parseCommandValues(
+  shared: SharedCommandInput,
+  motors: Pick<MotorRowInput, "enabled" | "position">[],
+): { values?: CommandValues; error?: string } {
+  const sharedFields = [
+    ["Velocity", shared.velocity],
+    ["Kp", shared.kp],
+    ["Kd", shared.kd],
+    ["Effort", shared.effort],
   ] as const;
-  const parsed: number[] = [];
-  for (const [label, raw] of fields) {
+  const sharedParsed: number[] = [];
+  for (const [label, raw] of sharedFields) {
     const value = Number(raw);
     if (raw.trim() === "" || !Number.isFinite(value)) return { error: `${label} 请输入有效数字` };
-    parsed.push(value);
+    sharedParsed.push(value);
   }
-  if (Math.abs(parsed[4]) > 1) return { error: "Effort 必须在 -1 到 1 之间" };
-  return { values: { position: parsed[0], velocity: parsed[1], kp: parsed[2], kd: parsed[3], effort: parsed[4] } };
+  if (Math.abs(sharedParsed[3]) > 1) return { error: "Effort 必须在 -1 到 1 之间" };
+
+  const enabledIndexes = motors
+    .map((motor, index) => (motor.enabled ? index : -1))
+    .filter((index) => index >= 0);
+  if (enabledIndexes.length === 0) return { error: "请至少使能一个电机" };
+
+  const positions = motors.map(() => 0);
+  for (const index of enabledIndexes) {
+    const raw = motors[index].position;
+    const value = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(value)) {
+      return { error: `${jointLabel(index)} Position 请输入有效数字` };
+    }
+    positions[index] = value;
+  }
+
+  return {
+    values: {
+      positions,
+      active_joint_mask: buildActiveJointMask(motors.map((motor) => motor.enabled)),
+      velocity: sharedParsed[0],
+      kp: sharedParsed[1],
+      kd: sharedParsed[2],
+      effort: sharedParsed[3],
+    },
+  };
 }
 
 export function createCommandPayload(mode: CommandMode, values?: CommandValues) {
+  if (mode === 3 || !values) {
+    return {
+      op: "joint_command" as const,
+      mode,
+      position: [] as number[],
+      velocity: 0,
+      kp: 0,
+      kd: 0,
+      effort: 0,
+      active_joint_mask: 0,
+      confirmation: "",
+    };
+  }
   return {
-    op: "joint_command", mode,
-    position: values?.position ?? 0, velocity: values?.velocity ?? 0,
-    kp: values?.kp ?? 0, kd: values?.kd ?? 0, effort: values?.effort ?? 0,
-    confirmation: mode === 3 ? "" : "ARMED",
+    op: "joint_command" as const,
+    mode,
+    position: values.positions,
+    velocity: values.velocity,
+    kp: values.kp,
+    kd: values.kd,
+    effort: values.effort,
+    active_joint_mask: values.active_joint_mask,
+    confirmation: "ARMED",
   };
 }
 
 export function faultInfo(code: number): FaultInfo {
   return motorFaults[code] ?? { name: "UNKNOWN", description: "未知 STM32 故障，请检查固件日志和 fault code 定义" };
 }
+

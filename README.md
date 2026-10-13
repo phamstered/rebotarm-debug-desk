@@ -60,7 +60,7 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 
 ### MIT 电机控制
 
-控制面板发布到 `/stm32/joint_commands`（`microros_stm32h723_bridge/msg/JointCommand`）。当前 STM32 固件仅激活 joint1，其余关节字段由 Bridge 写零。
+控制面板发布到 `/stm32/joint_commands`（`microros_stm32h723_bridge/msg/JointCommand`）。界面支持多电机使能与 Position 滑块；Bridge 仅对用户使能且固件 `active_joint_mask` 覆盖的关节写入非零通道，其余写零。
 
 ```text
 0 HOLD     锁存当前反馈位置并使用 Kp/Kd 保持
@@ -69,7 +69,7 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 3 DISABLE  撤销电机使能
 ```
 
-Bridge 与界面仅限制 Effort（`|effort| ≤ 1 Nm`）；Position / Velocity / Kp / Kd 不做上位机限幅。非 DISABLE 指令须完成界面安全解锁，并满足：command subscriber 存在、status / joint feedback 未过期、joint1 active。界面按 20 Hz 发送；停止后固件约 100 ms 进入 HOLD、500 ms 后 DISABLE。「停止并 DISABLE」无需解锁且始终可用。
+Bridge 与界面仅限制 Effort（`|effort| ≤ 1 Nm`）；Position / Velocity / Kp / Kd 不做上位机限幅。非 DISABLE 指令须完成界面安全解锁，并满足：command subscriber 存在、status / joint feedback 未过期、所选关节全部处于固件 `active_joint_mask`。界面按 20 Hz 发送；停止后固件约 100 ms 进入 HOLD、500 ms 后 DISABLE。「停止并 DISABLE」无需解锁且始终可用。
 
 ### Joint4 标定
 

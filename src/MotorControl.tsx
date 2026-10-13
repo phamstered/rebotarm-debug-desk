@@ -1,13 +1,35 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import type { HardwareStatus } from "./types";
-import { createCommandPayload, DEFAULT_KD, DEFAULT_KP, DEFAULT_MODE, faultInfo, modes, normalizeDecimal, parseCommandValues } from "./motorLogic";
-import type { CommandMode } from "./motorLogic";
+import {
+  createCommandPayload,
+  createDefaultMotors,
+  DEFAULT_JOINT_COUNT,
+  DEFAULT_KD,
+  DEFAULT_KP,
+  DEFAULT_MODE,
+  faultInfo,
+  jointLabel,
+  modes,
+  normalizeDecimal,
+  parseCommandValues,
+  parseTravelBound,
+  resizeMotors,
+} from "./motorLogic";
+import type { CommandMode, MotorRowInput } from "./motorLogic";
 
-type JointState = { position?: number[]; velocity?: number[]; effort?: number[] };
+type JointState = { name?: string[]; position?: number[]; velocity?: number[]; effort?: number[] };
+
 function updateDecimal(value: string, setter: (value: string) => void) {
   const normalized = normalizeDecimal(value);
   if (normalized !== null) setter(normalized);
+}
+
+function inferredJointCount(jointState: JointState | null): number {
+  const fromNames = jointState?.name?.length ?? 0;
+  const fromPositions = jointState?.position?.length ?? 0;
+  const count = Math.max(fromNames, fromPositions);
+  return count > 0 ? Math.min(32, count) : DEFAULT_JOINT_COUNT;
 }
 
 export function MotorControl({
@@ -22,7 +44,7 @@ export function MotorControl({
   onStreamingChange(streaming: boolean): void;
 }) {
   const [mode, setMode] = useState<CommandMode>(DEFAULT_MODE);
-  const [position, setPosition] = useState("0");
+  const [motors, setMotors] = useState<MotorRowInput[]>(() => createDefaultMotors());
   const [velocity, setVelocity] = useState("0");
   const [kp, setKp] = useState(DEFAULT_KP);
   const [kd, setKd] = useState(DEFAULT_KD);
@@ -31,6 +53,11 @@ export function MotorControl({
   const [streaming, setStreaming] = useState(false);
   const [result, setResult] = useState("");
   const timerRef = useRef<number | null>(null);
+
+  const jointCount = inferredJointCount(jointState);
+  useEffect(() => {
+    setMotors((current) => resizeMotors(current, jointCount));
+  }, [jointCount]);
 
   const stopTimer = () => {
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
@@ -56,6 +83,12 @@ export function MotorControl({
     onStreamingChange(false);
   }, [onStreamingChange]);
 
+  const updateMotor = (index: number, patch: Partial<MotorRowInput>) => {
+    setMotors((current) => current.map((motor, motorIndex) => (
+      motorIndex === index ? { ...motor, ...patch } : motor
+    )));
+  };
+
   async function start() {
     setResult("");
     if (mode === 3) {
@@ -66,7 +99,7 @@ export function MotorControl({
       setResult("请先勾选安全确认并解锁控制");
       return;
     }
-    const parsed = parseCommandValues({ position, velocity, kp, kd, effort });
+    const parsed = parseCommandValues({ velocity, kp, kd, effort }, motors);
     if (!parsed.values) {
       setResult(parsed.error ?? "控制参数无效");
       return;
@@ -102,15 +135,23 @@ export function MotorControl({
     }
   }
 
-  const useCurrentPosition = () => {
-    const current = jointState?.position?.[0];
-    if (Number.isFinite(current)) setPosition(String(Number(current)));
+  const useCurrentPositions = () => {
+    setMotors((current) => current.map((motor, index) => {
+      const feedback = jointState?.position?.[index];
+      if (!Number.isFinite(feedback)) return motor;
+      return { ...motor, position: String(Number(feedback)) };
+    }));
   };
+
   const selected = modes.find((item) => item.value === mode)!;
   const faultCode = status?.fault_code;
-  const currentFault = faultCode === undefined
-    ? null
-    : faultInfo(faultCode);
+  const currentFault = faultCode === undefined ? null : faultInfo(faultCode);
+  const enabledCount = useMemo(() => motors.filter((motor) => motor.enabled).length, [motors]);
+  const firmwareActive = status?.active_joints?.length
+    ? status.active_joints.map((index) => jointLabel(index)).join(", ")
+    : status?.active_joint_mask !== undefined
+      ? `mask 0x${status.active_joint_mask.toString(16)}`
+      : "-";
 
   return (
     <div className="motor-control">
@@ -118,8 +159,8 @@ export function MotorControl({
         <span className={faultCode === 0 ? "ok" : "fault"} title={currentFault?.description}>
           STM32 {status ? `${status.mode_name ?? status.mode} · fault ${faultCode} · ${currentFault?.name}` : "等待状态"}
         </span>
-        <span>p {jointState?.position?.[0]?.toFixed(4) ?? "-"}</span>
-        <span>v {jointState?.velocity?.[0]?.toFixed(4) ?? "-"}</span>
+        <span>使能 {enabledCount}/{motors.length}</span>
+        <span>固件 active {firmwareActive}</span>
       </div>
       {currentFault && faultCode !== 0 && (
         <div className="fault-detail" role="status">
@@ -135,17 +176,92 @@ export function MotorControl({
       </label>
       <p className="mode-description">{selected.description}</p>
 
-      <div className="command-grid">
-        <label>Position · rad<input type="text" inputMode="decimal" value={position} onChange={(event) => updateDecimal(event.target.value, setPosition)} /></label>
+      <div className="motor-list" role="list">
+        {motors.map((motor, index) => {
+          const minBound = parseTravelBound(motor.min, "min");
+          const maxBound = parseTravelBound(motor.max, "max");
+          const min = minBound.value ?? -0.35;
+          const max = maxBound.value ?? 0.35;
+          const sliderMin = Math.min(min, max);
+          const sliderMax = Math.max(min, max);
+          const feedback = jointState?.position?.[index];
+          const name = jointState?.name?.[index] ?? jointLabel(index);
+          return (
+            <div className={`motor-row${motor.enabled ? " enabled" : ""}`} role="listitem" key={name}>
+              <label className="motor-enable">
+                <input
+                  type="checkbox"
+                  checked={motor.enabled}
+                  disabled={streaming}
+                  aria-label={`${name} 使能`}
+                  onChange={(event) => updateMotor(index, { enabled: event.target.checked })}
+                />
+                <span>{name}</span>
+              </label>
+              <label className="motor-position">
+                <span className="motor-position-label">Position · rad</span>
+                <input
+                  type="range"
+                  min={sliderMin}
+                  max={sliderMax}
+                  step={0.001}
+                  disabled={streaming || !motor.enabled}
+                  value={Number(motor.position) || 0}
+                  aria-label={`${name} Position 滑块`}
+                  onChange={(event) => updateMotor(index, { position: event.target.value })}
+                />
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  disabled={streaming || !motor.enabled}
+                  value={motor.position}
+                  aria-label={`${name} Position · rad`}
+                  onChange={(event) => {
+                    const normalized = normalizeDecimal(event.target.value);
+                    if (normalized !== null) updateMotor(index, { position: normalized });
+                  }}
+                />
+              </label>
+              <div className="motor-travel">
+                <label>min
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    disabled={streaming}
+                    value={motor.min}
+                    aria-label={`${name} 行程 min`}
+                    onChange={(event) => updateDecimal(event.target.value, (value) => updateMotor(index, { min: value }))}
+                  />
+                </label>
+                <label>max
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    disabled={streaming}
+                    value={motor.max}
+                    aria-label={`${name} 行程 max`}
+                    onChange={(event) => updateDecimal(event.target.value, (value) => updateMotor(index, { max: value }))}
+                  />
+                </label>
+                <span className="motor-feedback" title="当前反馈">
+                  p {Number.isFinite(feedback) ? Number(feedback).toFixed(4) : "-"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="command-grid shared-command-grid">
         <label>Velocity · rad/s<input type="text" inputMode="decimal" value={velocity} onChange={(event) => updateDecimal(event.target.value, setVelocity)} /></label>
         <label>Kp<input type="text" inputMode="decimal" value={kp} onChange={(event) => updateDecimal(event.target.value, setKp)} /></label>
         <label>Kd<input type="text" inputMode="decimal" value={kd} onChange={(event) => updateDecimal(event.target.value, setKd)} /></label>
         <label>Effort · Nm<input type="text" inputMode="decimal" value={effort} onChange={(event) => updateDecimal(event.target.value, setEffort)} /></label>
-        <button className="use-current" onClick={useCurrentPosition}>使用当前位置</button>
+        <button className="use-current" onClick={useCurrentPositions}>使用当前位置</button>
       </div>
 
       <label className="arm-check">
-        <input type="checkbox" checked={armed} disabled={streaming || mode === 3} onChange={(event) => {
+        <input type="checkbox" checked={armed} disabled={streaming || mode === 3} aria-label="安全确认" onChange={(event) => {
           setArmed(event.target.checked);
         }} />
         我已确认机械臂周围安全，本次连接允许发送电机指令
@@ -157,9 +273,12 @@ export function MotorControl({
         </button>
         <button className="stop-command" onClick={disable}>停止并 DISABLE</button>
       </div>
-      {streaming && <div className="streaming-indicator"><span /> 正在发送 {selected.label}</div>}
+      {streaming && <div className="streaming-indicator"><span /> 正在发送 {selected.label}（{enabledCount} 关节）</div>}
       {result && <div className="command-result">{result}</div>}
-      <small className="safety-note">断开或停止发送后，固件将在 100 ms进入 HOLD，并在 500 ms后 DISABLE。</small>
+      <small className="safety-note">
+        仅对已使能且固件 active_joint_mask 覆盖的关节写入非零通道；其余通道保持 0。行程 min/max 只约束滑块范围（默认 ±0.35 rad），不做 Bridge 限幅。
+        断开或停止发送后，固件将在 100 ms进入 HOLD，并在 500 ms后 DISABLE。
+      </small>
     </div>
   );
 }
