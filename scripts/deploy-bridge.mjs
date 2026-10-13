@@ -411,7 +411,8 @@ Environment overrides: BRIDGE_DEPLOY_HOST, BRIDGE_DEPLOY_REMOTE,
 BRIDGE_DEPLOY_ROS_SETUP, BRIDGE_DEPLOY_PORT, BRIDGE_DEPLOY_ROS_DOMAIN_ID,
 BRIDGE_DEPLOY_LOCAL.
 
-Defaults match the damiao profile: SSH host damiao, remote
+Built-in defaults reflect the maintainer's robot; override them with the
+flags/env above. Current defaults: SSH host ${DEFAULTS.host}, remote
 ${DEFAULTS.remoteRoot}, overlay ${DEFAULTS.rosSetup}, port ${DEFAULTS.remotePort}.
 Sync targets <remote>/src/${DEFAULTS.packageName}/ and does not use --delete
 unless requested, so remote-only custom files are preserved.

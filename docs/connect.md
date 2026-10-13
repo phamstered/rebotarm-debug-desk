@@ -25,11 +25,11 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 
 连接后每 5 秒检查 `micro-ros-agent-stm32h723.service`，界面区分运行中、未运行与检查失败，并展示 loaded/active/substate、PID、开机启用状态等。
 
-## 默认 damiao Profile
+## Profile 示例
 
 ```text
-SSH host: damiao
-ROS setup: /home/jialiang/Project/leader_follower/install/setup.bash
+SSH host: <ssh-host>
+ROS setup: <ros-overlay>/install/setup.bash
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description
