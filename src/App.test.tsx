@@ -104,7 +104,7 @@ describe("App workflow", () => {
   });
 
   it("migrates the legacy topic, connects, discovers and subscribes topics", async () => {
-    localStorage.setItem("easy-debug-profile", JSON.stringify({ jointStateTopic: "/joint_states", host: "damiao" }));
+    localStorage.setItem("easy-debug-profile", JSON.stringify({ jointStateTopic: "/joint_states", host: "robot-host" }));
     const user = userEvent.setup();
     render(<App />);
     expect(screen.getByLabelText("JointState Topic")).toHaveValue("/stm32/joint_states");

@@ -15,12 +15,12 @@ npm run deploy:bridge -- --skip-sync --skip-build --restart
 ## 参数
 
 | 项 | 示例值 | 覆盖方式 |
-|---| SSH host | `<ssh-host>` | `--host` / `$BRIDGE_DEPLOY_HOST` |
-| 远端工作区 | `/home/<jetson-user>/easy_debug_bridge`（同步到 `src/easy_debug_bridge/`，须绝对路径） | `--remote` / `$BRIDGE_DEPLOY_REMOTE` |
-| ROS overlay | `<ros-overlay>/install/setup.bash` | `--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP` |
+|---| SSH host | `jetson`（通用别名） | `--host` / `$BRIDGE_DEPLOY_HOST` |
+| 远端工作区 | `easy_debug_bridge`（相对远端 `$HOME`；同步到 `src/easy_debug_bridge/`；可改为绝对路径） | `--remote` / `$BRIDGE_DEPLOY_REMOTE` |
+| ROS overlay | `leader_follower/install/setup.bash`（相对远端 `$HOME`） | `--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP` |
 | 端口 | `8765` | `--port` / `$BRIDGE_DEPLOY_PORT` |
 
-脚本内置默认值来自维护者环境（见 `--help`），请按你的机器覆盖。
+脚本内置默认值是通用值（见 `--help`），请按你的机器覆盖。本地 package 相对仓库根目录解析；远端相对路径以远端用户 `$HOME` 为基准。远端路径只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段；SSH host 拒绝空白、shell 元字符和以 `-` 开头的值。
 
 可用 `--host` / `--remote` / `--ros-setup` / `--port` 或环境变量 `BRIDGE_DEPLOY_*` 覆盖。默认**不加** rsync `--delete`，以保留远端自定义消息/扩展；需要清理时再加 `--delete`。
 

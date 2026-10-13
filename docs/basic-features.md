@@ -13,12 +13,13 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 - `npm run deploy:bridge`（`scripts/deploy-bridge.mjs`）用于把本地 `bridge/easy_debug_bridge` 同步到 Jetson colcon 工作区、执行 `colcon build`，并校验安装二进制与 `127.0.0.1:8765` 监听状态。
 - 默认不同步删除远端 package 内多余文件；`--backup` 可在同步前打包远端副本；`--restart` 才重启 Bridge（避免把“已编译”当成“当前进程已更新”）。
-- 配置有内置默认值，可用 flags / `BRIDGE_DEPLOY_*` 覆盖。`npm run test:deploy` 覆盖参数解析、rsync 参数、远端脚本与校验输出解析，不要求真实 Jetson。
+- 配置有内置通用默认值（host `jetson`，远端 `easy_debug_bridge`、overlay `leader_follower/install/setup.bash`，均相对远端 `$HOME`；本地 package 相对仓库根目录），可用 flags / `BRIDGE_DEPLOY_*` 覆盖。远端路径可为绝对路径或相对 `$HOME`，拒绝 `~`、`.`/`..`、空段、以 `-` 开头的段和 shell 元字符。`npm run test:deploy` 覆盖参数解析、rsync 参数、远端脚本与校验输出解析，不要求真实 Jetson。
 
 ## 1. 连接与会话
 
 - 保存并恢复连接配置：SSH 主机、用户名、端口、私钥、ROS Domain、ROS 环境脚本及各 ROS Topic。
 - 连接后可从全局工具栏重新打开连接配置；保存不会中断当前 SSH/Bridge 会话，新值在下次重连时生效。
+- 默认 Profile：SSH 主机 `jetson`，ROS 环境脚本 `leader_follower/install/setup.bash`（相对远端 `$HOME`）。ROS 环境脚本路径同样拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。
 - 自动迁移旧配置：旧 ROS setup 路径和 `/joint_states` 会迁移到当前默认值 `/stm32/joint_states`。
 - 依次执行 SSH 检查、micro-ROS Agent 状态检查、Jetson Bridge 启动、SSH 本地端口转发和 WebSocket 连接。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。

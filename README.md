@@ -123,7 +123,7 @@ npm run deploy:bridge -- --backup
 npm run deploy:bridge -- --skip-sync --skip-build --restart
 ```
 
-脚本连接 SSH host `<ssh-host>`（`--host` / `$BRIDGE_DEPLOY_HOST`），远端工作区 `/home/<jetson-user>/easy_debug_bridge`（即 `~/easy_debug_bridge`，同步到 `src/easy_debug_bridge/`；`--remote` / `$BRIDGE_DEPLOY_REMOTE`，须为绝对路径），ROS overlay `<ros-overlay>/install/setup.bash`（`--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP`），端口 `8765`（`--port` / `$BRIDGE_DEPLOY_PORT`）（内置默认值来自维护者环境，请按你的机器用 flags 或 `BRIDGE_DEPLOY_*` 覆盖）。默认不同步删除远端多余文件；需要清理时再加 `--delete`。详见 `scripts/deploy-bridge.mjs --help` 与 `AGENTS.md`。
+脚本默认连接 SSH host `jetson`（通用别名，`--host` / `$BRIDGE_DEPLOY_HOST`），远端工作区 `easy_debug_bridge`（相对远端用户 `$HOME`，即 `$HOME/easy_debug_bridge`，同步到 `src/easy_debug_bridge/`；`--remote` / `$BRIDGE_DEPLOY_REMOTE`，可为绝对路径或相对 `$HOME` 的路径），ROS overlay `leader_follower/install/setup.bash`（同样相对 `$HOME`；`--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP`），端口 `8765`（`--port` / `$BRIDGE_DEPLOY_PORT`）。本地 package 路径相对仓库根目录解析（由脚本位置推导）。远端路径只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。默认不同步删除远端多余文件；需要清理时再加 `--delete`。详见 `scripts/deploy-bridge.mjs --help` 与 `AGENTS.md`。
 
 首次手工初始化工作区（脚本也会 `mkdir -p` 远端 package 目录）仍可：
 
@@ -140,14 +140,14 @@ colcon build --symlink-install --packages-select easy_debug_bridge
 Bridge 部署并构建在 Jetson 工作区（示例）：
 
 ```text
-/home/<jetson-user>/easy_debug_bridge
+~/easy_debug_bridge   # 默认 easy_debug_bridge，相对远端 $HOME
 ```
 
 连接配置示例（应用内 Profile 可修改）：
 
 ```text
-SSH host: <ssh-host>
-ROS setup: <ros-overlay>/install/setup.bash
+SSH host: jetson                                  # 默认通用别名，按需修改
+ROS setup: leader_follower/install/setup.bash    # 默认，相对远端 $HOME；也可填绝对路径
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description

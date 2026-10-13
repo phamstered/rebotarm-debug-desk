@@ -9,6 +9,9 @@ export const defaultPanelState: PanelState = { topics: true, rosControl: true, m
 
 export function migrateProfile(saved: Partial<ConnectionProfile>): ConnectionProfile {
   const profile = { ...defaultProfile, ...saved } as ConnectionProfile;
+  // Legacy migration: exact-match a setup path that early builds saved to
+  // localStorage, so old configs move to the current default. This literal only
+  // matches stored data; it is never used as a default.
   if (profile.rosSetupScript === "/home/jialiang/Project/install/setup.bash") {
     profile.rosSetupScript = defaultProfile.rosSetupScript;
   }

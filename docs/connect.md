@@ -19,7 +19,7 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 ## Bridge 监听边界
 
 - Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
-- 「ROS 环境脚本」必须指向机器人工作空间的 `install/setup.bash`。Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 解析 URDF 中的 `package://` 资源。
+- 「ROS 环境脚本」必须指向机器人工作空间的 `install/setup.bash`，可为绝对路径或相对远端用户 `$HOME` 的路径（SSH 命令在 `$HOME` 下执行）；只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 解析 URDF 中的 `package://` 资源。
 
 ## micro-ROS Agent
 
@@ -28,8 +28,8 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 ## Profile 示例
 
 ```text
-SSH host: <ssh-host>
-ROS setup: <ros-overlay>/install/setup.bash
+SSH host: jetson                                  # 默认通用别名，按需修改
+ROS setup: leader_follower/install/setup.bash    # 默认，相对远端 $HOME；也可填绝对路径
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description

@@ -33,7 +33,7 @@ describe("global toolbar logic", () => {
       capturedAt: "2026-10-11T12:00:00.000Z",
     }));
     expect(snapshot.connection.identityFile).toBeUndefined();
-    expect(snapshot.connection.host).toBe("damiao");
+    expect(snapshot.connection.host).toBe("jetson");
     expect(snapshot.messageStats["/camera"].preview).toEqual(expect.objectContaining({ omitted: true }));
     expect(snapshot.capturedAt).toBe("2026-10-11T12:00:00.000Z");
   });

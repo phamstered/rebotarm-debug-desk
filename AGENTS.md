@@ -54,7 +54,7 @@ npm run test:deploy
 
 ## 5. Jetson Bridge 部署（脚本优先）
 
-仓库中的 `bridge/easy_debug_bridge` 与 Jetson colcon 工作区（如 `/home/<jetson-user>/easy_debug_bridge`，由 `$BRIDGE_DEPLOY_REMOTE` 指定）可能不一致。**不要**用 ad-hoc SSH/`scp`/`rsync` 整目录覆盖远端 package，也不要把 “colcon 成功” 当成 “当前进程已更新”。
+仓库中的 `bridge/easy_debug_bridge` 与 Jetson colcon 工作区（默认 `$HOME/easy_debug_bridge`，可由 `$BRIDGE_DEPLOY_REMOTE` 指定）可能不一致。**不要**用 ad-hoc SSH/`scp`/`rsync` 整目录覆盖远端 package，也不要把 “colcon 成功” 当成 “当前进程已更新”。
 
 统一使用：
 
@@ -64,7 +64,7 @@ npm run deploy:bridge -- --backup
 npm run deploy:bridge -- --skip-sync --skip-build --restart
 ```
 
-脚本：`scripts/deploy-bridge.mjs`。目标为 SSH host `<ssh-host>`，远端根目录 `/home/<jetson-user>/easy_debug_bridge`（同步到 `src/easy_debug_bridge/`），ROS overlay `<ros-overlay>/install/setup.bash`，端口 `8765`（内置默认值来自维护者环境，请按你的机器用 flags 或 `BRIDGE_DEPLOY_*` 覆盖）。可用 `--host` / `--remote` / `--ros-setup` / `--port` 或 `BRIDGE_DEPLOY_*` 覆盖。默认不加 rsync `--delete`，保留远端自定义消息/扩展。
+脚本：`scripts/deploy-bridge.mjs`。默认 SSH host `jetson`，远端根目录 `easy_debug_bridge`（相对远端 `$HOME`，同步到 `src/easy_debug_bridge/`），ROS overlay `leader_follower/install/setup.bash`（相对远端 `$HOME`），端口 `8765`（通用默认值，请按你的机器用 flags 或 `BRIDGE_DEPLOY_*` 覆盖）。可用 `--host` / `--remote` / `--ros-setup` / `--port` 或 `BRIDGE_DEPLOY_*` 覆盖。默认不加 rsync `--delete`，保留远端自定义消息/扩展。
 
 部署后校验清单（脚本默认打印）：
 
