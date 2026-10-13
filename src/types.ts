@@ -91,11 +91,14 @@ export type BridgeEnvelope = {
   mime?: string;
   base64?: string;
   mode?: number;
-  position?: number;
+  /** Scalar (legacy joint1) or per-joint positions matching Bridge array index. */
+  position?: number | number[];
   velocity?: number;
   kp?: number;
   kd?: number;
   effort?: number;
+  /** Bitmask of joints the UI wants to command; Bridge requires full firmware coverage. */
+  active_joint_mask?: number;
   confirmation?: string;
   sequence?: number;
   joint_names?: string[];

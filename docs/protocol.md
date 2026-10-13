@@ -33,16 +33,19 @@ MIT joint command:
   "op":"joint_command",
   "request_id":"uuid",
   "mode":1,
-  "position":0.1,
+  "position":[0.1,0.0,0.2,0.0,0.0,0.0],
   "velocity":0.0,
   "kp":8.0,
   "kd":2.0,
   "effort":0.0,
+  "active_joint_mask":5,
   "confirmation":"ARMED"
 }
 ```
 
-HOLD、TRACK和RETURN必须携带 `confirmation: "ARMED"`。DISABLE忽略输入值并将所有通道写零。
+`position` 可为标量（兼容旧客户端，仅驱动 joint1）或与 `JointCommand` 数组下标对齐的每关节数组。`active_joint_mask` 为客户端请求控制的关节位掩码（bit0=joint1）；省略时默认 `0x01`（仅 joint1）。Bridge 要求所选位全部落在固件 `HardwareStatus.active_joint_mask` 内，只对有效位写入非零通道，其余通道保持 0。v1 中 `velocity` / `kp` / `kd` / `effort` 仍为全局标量，复制到每个使能关节。
+
+HOLD、TRACK和RETURN必须携带 `confirmation: "ARMED"`。DISABLE忽略输入值并将所有通道写零；显式 `active_joint_mask: 0` 在非 DISABLE 下会被拒绝。
 
 JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint_trajectory` subscription):
 

@@ -505,16 +505,34 @@ class BridgeNode : public rclcpp::Node {
                              const boost::property_tree::ptree &request,
                              const std::string &request_id) {
     const int mode_value = request.get<int>("mode", -1);
-    const double position = request.get<double>("position", 0.0);
     const double velocity = request.get<double>("velocity", 0.0);
     const double kp = request.get<double>("kp", 0.0);
     const double kd = request.get<double>("kd", 0.0);
     const double effort = request.get<double>("effort", 0.0);
     const bool disable = mode_value == microros_stm32h723_bridge::msg::JointCommand::MODE_DISABLE;
 
-    const easy_debug_bridge::CommandFields fields{
-        mode_value, position, velocity, kp, kd, effort,
-        request.get<std::string>("confirmation", "")};
+    easy_debug_bridge::CommandFields fields;
+    fields.mode = mode_value;
+    fields.position = 0.0;
+    fields.velocity = velocity;
+    fields.kp = kp;
+    fields.kd = kd;
+    fields.effort = effort;
+    fields.confirmation = request.get<std::string>("confirmation", "");
+    if (const auto position_node = request.get_child_optional("position")) {
+      if (!position_node->empty()) {
+        for (const auto &item : *position_node) {
+          fields.positions.push_back(item.second.get_value<double>());
+        }
+      } else {
+        fields.position = position_node->get_value<double>();
+      }
+    }
+    if (request.get_child_optional("active_joint_mask")) {
+      fields.mask_specified = true;
+      fields.requested_joint_mask = request.get<uint32_t>("active_joint_mask", 0);
+    }
+
     switch (easy_debug_bridge::validate_command(fields)) {
       case easy_debug_bridge::CommandValidation::InvalidMode:
         session->send(error_message(request_id, "无效的 JointCommand.mode")); return;
@@ -524,6 +542,8 @@ class BridgeNode : public rclcpp::Node {
         session->send(error_message(request_id, "控制指令包含非有限数值")); return;
       case easy_debug_bridge::CommandValidation::EffortLimit:
         session->send(error_message(request_id, "超过安全限幅：|effort|≤1")); return;
+      case easy_debug_bridge::CommandValidation::EmptyJointMask:
+        session->send(error_message(request_id, "未选择要控制的关节")); return;
       case easy_debug_bridge::CommandValidation::Ok:
         break;
     }
@@ -534,6 +554,7 @@ class BridgeNode : public rclcpp::Node {
 
     microros_stm32h723_bridge::msg::JointCommand command;
     std::vector<uint32_t> sequences;
+    uint32_t effective_mask = 0;
     {
       std::lock_guard<std::mutex> lock(control_mutex_);
       const auto now_steady = std::chrono::steady_clock::now();
@@ -550,8 +571,12 @@ class BridgeNode : public rclcpp::Node {
           session->send(error_message(request_id, "STM32 status 或 joint feedback 已过期"));
           return;
         }
-        if ((latest_status_.active_joint_mask & 0x01U) == 0) {
-          session->send(error_message(request_id, "joint1 未处于 active_joint_mask"));
+        const uint32_t requested = easy_debug_bridge::requested_command_mask(fields);
+        effective_mask = easy_debug_bridge::resolve_command_mask(
+            requested, latest_status_.active_joint_mask);
+        if (effective_mask == 0) {
+          session->send(error_message(
+              request_id, "所选关节未全部处于固件 active_joint_mask"));
           return;
         }
       }
@@ -568,11 +593,22 @@ class BridgeNode : public rclcpp::Node {
     command.kd.fill(0.0F);
     command.effort.fill(0.0F);
     if (!disable) {
-      command.position[0] = static_cast<float>(position);
-      command.velocity[0] = static_cast<float>(velocity);
-      command.kp[0] = static_cast<float>(kp);
-      command.kd[0] = static_cast<float>(kd);
-      command.effort[0] = static_cast<float>(effort);
+      const size_t joint_count = command.position.size();
+      std::vector<double> positions(joint_count, 0.0);
+      std::vector<double> velocities(joint_count, 0.0);
+      std::vector<double> kps(joint_count, 0.0);
+      std::vector<double> kds(joint_count, 0.0);
+      std::vector<double> efforts(joint_count, 0.0);
+      easy_debug_bridge::fill_joint_command_channels(
+          effective_mask, fields, joint_count,
+          positions.data(), velocities.data(), kps.data(), kds.data(), efforts.data());
+      for (size_t index = 0; index < joint_count; ++index) {
+        command.position[index] = static_cast<float>(positions[index]);
+        command.velocity[index] = static_cast<float>(velocities[index]);
+        command.kp[index] = static_cast<float>(kps[index]);
+        command.kd[index] = static_cast<float>(kds[index]);
+        command.effort[index] = static_cast<float>(efforts[index]);
+      }
     }
     for (const uint32_t sequence : sequences) {
       command.sequence = sequence;

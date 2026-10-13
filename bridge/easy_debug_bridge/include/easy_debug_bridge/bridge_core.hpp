@@ -45,15 +45,23 @@ inline std::vector<uint8_t> binary_image_frame(
 
 struct CommandFields {
   int mode;
+  /** Legacy scalar position used when `positions` is empty (joint index 0). */
   double position;
+  /** Optional per-joint positions matching JointCommand array index. */
+  std::vector<double> positions;
   double velocity;
   double kp;
   double kd;
   double effort;
+  /** Joints the client wants to command. Ignored when `mask_specified` is false. */
+  uint32_t requested_joint_mask = 0;
+  bool mask_specified = false;
   std::string confirmation;
 };
 
-enum class CommandValidation { Ok, InvalidMode, NotArmed, NonFinite, EffortLimit };
+enum class CommandValidation {
+  Ok, InvalidMode, NotArmed, NonFinite, EffortLimit, EmptyJointMask
+};
 
 inline CommandValidation validate_command(const CommandFields &command) {
   if (command.mode < 0 || command.mode > 3) return CommandValidation::InvalidMode;
@@ -61,8 +69,59 @@ inline CommandValidation validate_command(const CommandFields &command) {
   if (!std::isfinite(command.position) || !std::isfinite(command.velocity) ||
       !std::isfinite(command.kp) || !std::isfinite(command.kd) ||
       !std::isfinite(command.effort)) return CommandValidation::NonFinite;
+  for (const double value : command.positions) {
+    if (!std::isfinite(value)) return CommandValidation::NonFinite;
+  }
   if (std::abs(command.effort) > 1.0) return CommandValidation::EffortLimit;
+  if (command.mode != 3 && command.mask_specified && command.requested_joint_mask == 0) {
+    return CommandValidation::EmptyJointMask;
+  }
   return CommandValidation::Ok;
+}
+
+/** Legacy clients omit the mask and still target joint1 (bit 0). */
+inline uint32_t requested_command_mask(const CommandFields &command) {
+  if (command.mask_specified) return command.requested_joint_mask;
+  return 0x01U;
+}
+
+/**
+ * Require every requested joint to be present in the firmware active mask.
+ * Returns 0 when the request is empty or not fully covered (caller should reject).
+ */
+inline uint32_t resolve_command_mask(uint32_t requested, uint32_t firmware_active) {
+  if (requested == 0) return 0;
+  if ((requested & firmware_active) != requested) return 0;
+  return requested;
+}
+
+inline double joint_position_value(const CommandFields &command, size_t index) {
+  if (index < command.positions.size()) return command.positions[index];
+  if (command.positions.empty() && index == 0) return command.position;
+  return 0.0;
+}
+
+/**
+ * Fill per-joint command channels. Unselected joints stay zero so firmware
+ * does not see INACTIVE_JOINT_COMMAND on inactive axes.
+ */
+inline void fill_joint_command_channels(
+    uint32_t effective_mask, const CommandFields &command, size_t joint_count,
+    double *position, double *velocity, double *kp, double *kd, double *effort) {
+  for (size_t index = 0; index < joint_count; ++index) {
+    position[index] = 0.0;
+    velocity[index] = 0.0;
+    kp[index] = 0.0;
+    kd[index] = 0.0;
+    effort[index] = 0.0;
+    if (index >= 32) continue;
+    if ((effective_mask & (uint32_t{1} << index)) == 0) continue;
+    position[index] = joint_position_value(command, index);
+    velocity[index] = command.velocity;
+    kp[index] = command.kp;
+    kd[index] = command.kd;
+    effort[index] = command.effort;
+  }
 }
 
 inline std::vector<uint32_t> allocate_sequences(uint32_t &current, unsigned count) {

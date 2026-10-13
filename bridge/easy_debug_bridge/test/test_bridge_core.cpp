@@ -8,8 +8,16 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
-  CommandFields command{1, 0.6, 0.2, 80.0, 12.0, 0.5, "ARMED"};
+  CommandFields command;
+  command.mode = 1;
+  command.position = 0.6;
+  command.velocity = 0.2;
+  command.kp = 80.0;
+  command.kd = 12.0;
+  command.effort = 0.5;
+  command.confirmation = "ARMED";
   assert(easy_debug_bridge::validate_command(command) == CommandValidation::Ok);
+  assert(easy_debug_bridge::requested_command_mask(command) == 0x01U);
 
   command.confirmation = "";
   assert(easy_debug_bridge::validate_command(command) == CommandValidation::NotArmed);
@@ -22,6 +30,51 @@ int main() {
   command.position = 0.0;
   command.effort = 1.01;
   assert(easy_debug_bridge::validate_command(command) == CommandValidation::EffortLimit);
+  command.effort = 0.5;
+  command.mask_specified = true;
+  command.requested_joint_mask = 0;
+  assert(easy_debug_bridge::validate_command(command) == CommandValidation::EmptyJointMask);
+  command.requested_joint_mask = 0x05U;
+  command.positions = {0.1, 0.0, 0.2};
+  assert(easy_debug_bridge::validate_command(command) == CommandValidation::Ok);
+  command.positions[1] = std::nan("");
+  assert(easy_debug_bridge::validate_command(command) == CommandValidation::NonFinite);
+  command.positions[1] = 0.0;
+
+  assert(easy_debug_bridge::resolve_command_mask(0x01U, 0x01U) == 0x01U);
+  assert(easy_debug_bridge::resolve_command_mask(0x05U, 0x01U) == 0);
+  assert(easy_debug_bridge::resolve_command_mask(0x05U, 0x07U) == 0x05U);
+  assert(easy_debug_bridge::resolve_command_mask(0U, 0xFFU) == 0);
+
+  double position[4] = {9, 9, 9, 9};
+  double velocity[4] = {9, 9, 9, 9};
+  double kp[4] = {9, 9, 9, 9};
+  double kd[4] = {9, 9, 9, 9};
+  double effort[4] = {9, 9, 9, 9};
+  easy_debug_bridge::fill_joint_command_channels(
+      0x05U, command, 4, position, velocity, kp, kd, effort);
+  assert(position[0] == 0.1 && position[1] == 0.0 && position[2] == 0.2 && position[3] == 0.0);
+  assert(velocity[0] == 0.2 && velocity[1] == 0.0 && velocity[2] == 0.2 && velocity[3] == 0.0);
+  assert(kp[0] == 80.0 && kp[2] == 80.0 && kp[1] == 0.0);
+  assert(kd[0] == 12.0 && effort[0] == 0.5 && effort[1] == 0.0);
+
+  CommandFields legacy;
+  legacy.mode = 1;
+  legacy.position = 0.35;
+  legacy.velocity = 0.0;
+  legacy.kp = 8.0;
+  legacy.kd = 2.0;
+  legacy.effort = 0.0;
+  legacy.confirmation = "ARMED";
+  double legacy_position[2] = {};
+  double legacy_velocity[2] = {};
+  double legacy_kp[2] = {};
+  double legacy_kd[2] = {};
+  double legacy_effort[2] = {};
+  easy_debug_bridge::fill_joint_command_channels(
+      0x01U, legacy, 2, legacy_position, legacy_velocity, legacy_kp, legacy_kd, legacy_effort);
+  assert(legacy_position[0] == 0.35 && legacy_position[1] == 0.0);
+  assert(legacy_kp[0] == 8.0 && legacy_kp[1] == 0.0);
 
   uint32_t sequence = 41;
   const auto track = easy_debug_bridge::allocate_sequences(sequence, 1);
