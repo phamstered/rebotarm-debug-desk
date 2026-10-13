@@ -306,7 +306,7 @@ describe("App workflow", () => {
     expect(screen.getByRole("tab", { name: "Robot View" })).toBeVisible();
   });
 
-  it("selects a topic and independently collapses all four data panels", async () => {
+  it("selects a topic and independently collapses all three dashboard data panels", async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
@@ -319,15 +319,13 @@ describe("App workflow", () => {
     expect(container.querySelector(".ros-control-panel")).toHaveClass("expanded");
     expect(screen.getByRole("button", { name: "展开Topics" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "收起ROS Control" }));
-    await user.click(screen.getByRole("button", { name: "收起Motor Control" }));
     await user.click(screen.getByRole("button", { name: "收起Topic Inspector" }));
     expect(container.querySelector(".ros-control-panel")).toHaveClass("collapsed");
-    expect(container.querySelector(".motor-section")).toHaveClass("collapsed");
     expect(container.querySelector(".inspector-section")).toHaveClass("collapsed");
-    await waitFor(() => expect(JSON.parse(localStorage.getItem("easy-debug-panels")!)).toEqual({ topics: false, rosControl: false, motor: false, inspector: false }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("easy-debug-panels")!)).toEqual({ topics: false, rosControl: false, inspector: false }));
   });
 
-  it("resizes all four panel groups with accessible splitters and persists the layout", async () => {
+  it("resizes dashboard columns and the left panel group with accessible splitters", async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
@@ -336,7 +334,6 @@ describe("App workflow", () => {
     const leftColumn = screen.getByRole("separator", { name: "调整 Topics 侧栏宽度" });
     const rightColumn = screen.getByRole("separator", { name: "调整数据侧栏宽度" });
     const leftRows = screen.getByRole("separator", { name: "调整 Topics 和 ROS Control 高度" });
-    const rightRows = screen.getByRole("separator", { name: "调整 Motor Control 和 Topic Inspector 高度" });
 
     leftColumn.focus();
     await user.keyboard("{ArrowRight}");
@@ -344,19 +341,15 @@ describe("App workflow", () => {
     await user.keyboard("{ArrowLeft}");
     leftRows.focus();
     await user.keyboard("{ArrowDown}");
-    rightRows.focus();
-    await user.keyboard("{ArrowUp}");
 
     const workspace = container.querySelector<HTMLElement>(".workspace")!;
     expect(workspace.style.getPropertyValue("--left-width")).toBe("282px");
     expect(workspace.style.getPropertyValue("--right-width")).toBe("342px");
     expect(workspace.style.getPropertyValue("--left-top-size")).toBe("67%");
-    expect(workspace.style.getPropertyValue("--right-top-size")).toBe("53%");
     await waitFor(() => expect(JSON.parse(localStorage.getItem("easy-debug-layout")!)).toMatchObject({
       leftWidth: 282,
       rightWidth: 342,
       leftTopRatio: 0.67,
-      rightTopRatio: 0.53,
     }));
   });
 
@@ -403,6 +396,22 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
     await user.click(screen.getByRole("button", { name: "展开主工具栏" }));
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toHaveClass("expanded");
+  });
+
+  it("opens Motor from the left navigation and restores Dashboard independently", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(screen.getByRole("button", { name: "Motor" }));
+
+    expect(await screen.findByRole("heading", { name: "Motor Control" })).toBeVisible();
+    expect(screen.getByTestId("motor")).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "Robot View" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("robot-console-page")).toBe("motor");
+
+    await user.click(screen.getByRole("button", { name: "Dashboard" }));
+    expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
+    expect(screen.queryByTestId("motor")).not.toBeInTheDocument();
   });
 
   it("refuses to send a trajectory while no trajectory controller is active", async () => {
@@ -528,7 +537,7 @@ describe("App workflow", () => {
   });
 
   it("saves diagnostics, resets layout and persists connection and toolbar settings", async () => {
-    localStorage.setItem("easy-debug-layout", JSON.stringify({ leftWidth: 400, rightWidth: 500, leftTopRatio: 0.3, rightTopRatio: 0.7 }));
+    localStorage.setItem("easy-debug-layout", JSON.stringify({ leftWidth: 400, rightWidth: 500, leftTopRatio: 0.3 }));
     const user = userEvent.setup();
     const { container } = render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));

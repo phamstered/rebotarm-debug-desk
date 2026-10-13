@@ -7,7 +7,7 @@ import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
 import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
-import { MotorControl } from "./MotorControl";
+import { MotorPage } from "./MotorPage";
 import { TopicInspector } from "./TopicInspector";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
@@ -151,7 +151,10 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 }
 
 export default function App() {
-  const [appPage, setAppPage] = useState<AppPage>(() => localStorage.getItem("robot-console-page") === "calibration" ? "calibration" : "dashboard");
+  const [appPage, setAppPage] = useState<AppPage>(() => {
+    const saved = localStorage.getItem("robot-console-page");
+    return saved === "motor" || saved === "calibration" ? saved : "dashboard";
+  });
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
   const [stage, setStage] = useState<Stage>("idle");
@@ -189,7 +192,6 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<ToolbarSettings>(settings);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const topicSidebarRef = useRef<HTMLElement>(null);
-  const dataPanelRef = useRef<HTMLElement>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const connectionGenerationRef = useRef(0);
   const topicRefreshInFlightRef = useRef(false);
@@ -278,13 +280,13 @@ export default function App() {
     }, event);
   };
 
-  const beginSplitResize = (side: "left" | "right", event: ReactPointerEvent<HTMLDivElement>) => {
-    const container = side === "left" ? topicSidebarRef.current : dataPanelRef.current;
+  const beginSplitResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const container = topicSidebarRef.current;
     if (!container) return;
     beginResize("row-resize", (pointer) => {
       const bounds = container.getBoundingClientRect();
       const ratio = resizeSplit(pointer.clientY, bounds.top, bounds.height);
-      setLayout((current) => ({ ...current, [side === "left" ? "leftTopRatio" : "rightTopRatio"]: ratio }));
+      setLayout((current) => ({ ...current, leftTopRatio: ratio }));
     }, event);
   };
 
@@ -297,18 +299,14 @@ export default function App() {
     });
   };
 
-  const nudgeSplit = (side: "left" | "right", delta: number) => {
-    setLayout((current) => {
-      const key = side === "left" ? "leftTopRatio" : "rightTopRatio";
-      return { ...current, [key]: clamp(current[key] + delta, 0.18, 0.82) };
-    });
+  const nudgeSplit = (delta: number) => {
+    setLayout((current) => ({ ...current, leftTopRatio: clamp(current.leftTopRatio + delta, 0.18, 0.82) }));
   };
 
   const layoutStyle = {
     "--left-width": `${layout.leftWidth}px`,
     "--right-width": `${layout.rightWidth}px`,
     "--left-top-size": `${Math.round(layout.leftTopRatio * 10_000) / 100}%`,
-    "--right-top-size": `${Math.round(layout.rightTopRatio * 10_000) / 100}%`,
   } as CSSProperties;
 
   const refreshTopics = useCallback(async () => {
@@ -668,6 +666,14 @@ export default function App() {
           controllerState={calibrationControllerState}
           onRefreshControllers={() => void refreshRosControllers()}
         />
+      ) : appPage === "motor" ? (
+        <MotorPage
+          bridge={bridge}
+          jointState={jointState}
+          status={hardwareStatus}
+          commandTopic={profile.commandTopic}
+          onStreamingChange={setControlStreaming}
+        />
       ) : (
       <main className="workspace" style={layoutStyle}>
       <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
@@ -755,11 +761,11 @@ export default function App() {
             label="调整 Topics 和 ROS Control 高度"
             value={layout.leftTopRatio * 100}
             className="row-resizer"
-            onPointerDown={(event) => beginSplitResize("left", event)}
+            onPointerDown={beginSplitResize}
             onKeyDown={(event) => {
               if (event.key === "ArrowUp" || event.key === "ArrowDown") {
                 event.preventDefault();
-                nudgeSplit("left", event.key === "ArrowUp" ? -0.03 : 0.03);
+                nudgeSplit(event.key === "ArrowUp" ? -0.03 : 0.03);
               }
             }}
           />
@@ -829,36 +835,7 @@ export default function App() {
           )
           : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
       </section>
-      <section
-        ref={dataPanelRef}
-        className={`data-panel ${panels.inspector ? "" : "inspector-collapsed"} ${panels.motor ? "" : "motor-collapsed"}`}
-      >
-        <section className={`data-section motor-section ${panels.motor ? "expanded" : "collapsed"}`}>
-          <PanelTitle
-            title="Motor Control"
-            meta={`${controlStreaming ? "● 20 Hz · " : ""}${profile.commandTopic} · MIT`}
-            expanded={panels.motor}
-            onToggle={() => togglePanel("motor")}
-          />
-          <div className="section-content motor-panel-content">
-            <MotorControl bridge={bridge} jointState={jointState} status={hardwareStatus} onStreamingChange={setControlStreaming} />
-          </div>
-        </section>
-        {panels.motor && panels.inspector && (
-          <ResizeHandle
-            orientation="horizontal"
-            label="调整 Motor Control 和 Topic Inspector 高度"
-            value={layout.rightTopRatio * 100}
-            className="row-resizer"
-            onPointerDown={(event) => beginSplitResize("right", event)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                event.preventDefault();
-                nudgeSplit("right", event.key === "ArrowUp" ? -0.03 : 0.03);
-              }
-            }}
-          />
-        )}
+      <section className="data-panel">
         <section className={`data-section inspector-section ${panels.inspector ? "expanded" : "collapsed"}`}>
           <PanelTitle
             title="Topic Inspector"

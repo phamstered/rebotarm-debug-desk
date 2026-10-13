@@ -13,11 +13,10 @@ describe("resizable workspace layout", () => {
   it("loads defaults and safely normalizes persisted values", () => {
     expect(loadLayoutSizes(storage(null))).toEqual(defaultLayoutSizes);
     expect(loadLayoutSizes(storage("bad"))).toEqual(defaultLayoutSizes);
-    expect(normalizeLayoutSizes({ leftWidth: 999, rightWidth: 10, leftTopRatio: -1, rightTopRatio: 2 })).toEqual({
+    expect(normalizeLayoutSizes({ leftWidth: 999, rightWidth: 10, leftTopRatio: -1 })).toEqual({
       leftWidth: 480,
       rightWidth: 260,
       leftTopRatio: 0.18,
-      rightTopRatio: 0.82,
     });
   });
 
