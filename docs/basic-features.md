@@ -43,10 +43,10 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
-- 页面导航只保留在左侧 Navigation；Robot View / Topic Graph 作为中心面板标题栏内的局部 Tab。顶部工具栏不再重复品牌或导航。
+- 页面导航只保留在左侧 Navigation，包含 Dashboard、Motor 和 Calibration；Robot View / Topic Graph 作为 Dashboard 中心面板标题栏内的局部 Tab。顶部工具栏不再重复品牌或导航。
 - 顶部工具栏提供连接配置、全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照、重置布局和应用设置；右侧保留连接名、隧道端口、micro-ROS Agent 状态和断开按钮。
-- Topics、ROS Control、Motor Control、Topic Inspector 四个区域可独立展开/收起，状态保存在本机；同一侧的另一个面板会自动使用释放出的高度。
-- Topics/ROS Control 和 Motor Control/Topic Inspector 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。
+- Dashboard 的 Topics、ROS Control、Topic Inspector 三个区域可独立展开/收起，状态保存在本机；Topics 与 ROS Control 会自动使用另一面板释放出的高度。
+- Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 30 秒只读刷新。
 - ROS Control 标题栏提供手动刷新按钮，与展开/收起按钮并列；手动与自动刷新具有并发保护。
 - 每个 Controller 可根据当前状态执行 Activate 或 Deactivate；操作通过 SSH 调用 Humble `ros2 control switch_controllers --strict`，完成后固定刷新一次列表并展示成功或错误信息。
@@ -97,6 +97,8 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 ## 6. MIT 电机控制
 
+- 左侧 Navigation 的 Motor 打开独立控制页面，默认提供 7 个关节控制行；收到更多 JointState 关节时会扩展列表，最多 32 个。
+- 页面采用关节目标区和共享 MIT 参数/安全操作区的双栏布局；较窄窗口自动改为单栏，操作区在宽屏滚动时保持可见。
 - 发布 Topic 默认为 `/stm32/joint_commands`，消息类型为 `JointCommand`。
 - 默认模式为 TRACK，默认 `Kp=8`、`Kd=2`。
 - 支持 HOLD、TRACK、RETURN、DISABLE 四种 `JointCommand.mode`。
@@ -107,6 +109,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - “使用当前位置”会把各关节反馈写入对应 Position；这是唯一自动写入 Position 的操作。
 - 安全确认在一次连接会话中只需勾选一次；DISABLE 后不会自动取消。
 - TRACK 等非 DISABLE 命令预检成功后以 20 Hz 连续发送；至少使能一个电机。
+- 离开 Motor 页面时停止定时发送；若正在发送或预检尚未完成，会额外请求 DISABLE，避免隐藏页面继续控制。
 - Bridge 要求 command subscriber、最新 status/joint feedback（<1 s），且请求掩码全部落在固件 `active_joint_mask` 内；STM32 fault 由界面展示，最终执行安全由固件裁决。
 - DISABLE 将控制字段清零并发布 3 帧，各帧使用连续递增的 sequence，避免 `STALE_SEQUENCE`。
 - 显示 STM32 fault code 0–11 的英文名称和中文原因；未知编号显示 UNKNOWN。
@@ -153,14 +156,14 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
 - rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Robot Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
 - “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
-- “重置布局”恢复默认左右宽度、上下分割比例并展开四个数据面板；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
+- “重置布局”恢复 Dashboard 默认左右宽度、Topics/ROS Control 分割比例并展开三个数据面板；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
 
 ## 12. 单元测试覆盖矩阵
 
 | 功能域 | 覆盖内容 | 测试位置 |
 |---|---|---|
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
-| 面板 | 默认/持久化状态、四个面板独立收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
+| 面板 | 默认/持久化状态、三个 Dashboard 面板独立收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
 | 工具栏 | 导航职责分离、中心局部 Tab、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
@@ -175,7 +178,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
 | URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx` |
 | 电机输入 | 默认 TRACK/Kp/Kd、多电机使能掩码、行程默认 ±0.35、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
-| 电机交互 | 安全确认、每关节滑块/使能、使用当前位置、20 Hz 流、DISABLE | `src/MotorControl.test.tsx` |
+| 电机交互 | 独立导航页、7 个默认关节、安全确认、每关节滑块/使能、使用当前位置、20 Hz 流、切页 DISABLE | `src/App.test.tsx`、`src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort、关节掩码解析/校验及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |

@@ -2,14 +2,12 @@ export type LayoutSizes = {
   leftWidth: number;
   rightWidth: number;
   leftTopRatio: number;
-  rightTopRatio: number;
 };
 
 export const defaultLayoutSizes: LayoutSizes = {
   leftWidth: 270,
   rightWidth: 330,
   leftTopRatio: 0.64,
-  rightTopRatio: 0.56,
 };
 
 const LEFT_MIN = 180;
@@ -33,7 +31,6 @@ export function normalizeLayoutSizes(saved: Partial<LayoutSizes>): LayoutSizes {
     leftWidth: clamp(finiteOr(saved.leftWidth, defaultLayoutSizes.leftWidth), LEFT_MIN, LEFT_MAX),
     rightWidth: clamp(finiteOr(saved.rightWidth, defaultLayoutSizes.rightWidth), RIGHT_MIN, RIGHT_MAX),
     leftTopRatio: clamp(finiteOr(saved.leftTopRatio, defaultLayoutSizes.leftTopRatio), RATIO_MIN, RATIO_MAX),
-    rightTopRatio: clamp(finiteOr(saved.rightTopRatio, defaultLayoutSizes.rightTopRatio), RATIO_MIN, RATIO_MAX),
   };
 }
 

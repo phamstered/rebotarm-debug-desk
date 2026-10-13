@@ -21,7 +21,7 @@ describe("motor command input", () => {
     expect(DEFAULT_KP).toBe("8");
     expect(DEFAULT_KD).toBe("2");
     expect(DEFAULT_TRAVEL).toBe(0.35);
-    expect(DEFAULT_JOINT_COUNT).toBe(6);
+    expect(DEFAULT_JOINT_COUNT).toBe(7);
     expect(createDefaultMotors()[0]).toMatchObject({
       enabled: false, position: "0", min: "-0.35", max: "0.35",
     });

@@ -25,7 +25,8 @@ describe("connection profile", () => {
 describe("panel and topic state", () => {
   it("loads defaults and merges persisted collapsed panels", () => {
     expect(loadPanelState(storage(null))).toEqual(defaultPanelState);
-    expect(loadPanelState(storage('{"topics":false}'))).toEqual({ topics: false, rosControl: true, motor: true, inspector: true });
+    expect(loadPanelState(storage('{"topics":false}'))).toEqual({ topics: false, rosControl: true, inspector: true });
+    expect(loadPanelState(storage('{"motor":false,"inspector":false}'))).toEqual({ topics: true, rosControl: true, inspector: false });
     expect(loadPanelState(storage("bad"))).toEqual(defaultPanelState);
   });
 

@@ -32,7 +32,7 @@ export const DEFAULT_MODE: CommandMode = 1;
 export const DEFAULT_KP = "8";
 export const DEFAULT_KD = "2";
 export const DEFAULT_TRAVEL = 0.35;
-export const DEFAULT_JOINT_COUNT = 6;
+export const DEFAULT_JOINT_COUNT = 7;
 const decimalPattern = /^-?\d*(?:\.\d*)?$/;
 
 export const motorFaults: Record<number, FaultInfo> = {

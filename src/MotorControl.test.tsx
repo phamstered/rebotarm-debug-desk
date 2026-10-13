@@ -80,7 +80,7 @@ describe("MotorControl", () => {
       kp: 8,
       kd: 2,
       active_joint_mask: 0x03,
-      position: [0, 0.2],
+      position: [0, 0.2, 0, 0, 0, 0, 0],
       confirmation: "ARMED",
     }));
     await vi.advanceTimersByTimeAsync(100);
@@ -92,6 +92,31 @@ describe("MotorControl", () => {
       mode: 3, active_joint_mask: 0, position: [],
     }));
     expect(screen.getByLabelText("安全确认")).toBeChecked();
+  });
+
+  it("sends DISABLE and never starts streaming when the page closes during preflight", async () => {
+    let finishPreflight: ((value: { op: string; sequence: number }) => void) | undefined;
+    const bridge = bridgeDouble();
+    bridge.request.mockImplementationOnce(() => new Promise((resolve) => { finishPreflight = resolve; }));
+    const { unmount } = render(
+      <MotorControl
+        bridge={bridge as unknown as BridgeClient}
+        jointState={{ name: ["joint1"], position: [0] }}
+        status={null}
+        onStreamingChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("joint1 使能"));
+    fireEvent.click(screen.getByLabelText("安全确认"));
+    fireEvent.click(screen.getByRole("button", { name: "开始 20 Hz 发送" }));
+    expect(bridge.request).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(bridge.request).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 3, active_joint_mask: 0, position: [],
+    }));
+    await act(async () => { finishPreflight?.({ op: "joint_command_ack", sequence: 43 }); });
+    expect(bridge.send).not.toHaveBeenCalled();
   });
 
   it("rejects out-of-range effort and empty enable set before sending", async () => {
@@ -134,6 +159,6 @@ describe("MotorControl", () => {
     const slider = screen.getByLabelText("joint1 Position 滑块");
     expect(slider).toHaveAttribute("min", "-0.35");
     expect(slider).toHaveAttribute("max", "0.35");
-    expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(7);
   });
 });

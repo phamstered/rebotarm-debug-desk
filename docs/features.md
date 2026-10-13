@@ -135,7 +135,7 @@ JointState topic: /stm32/joint_states
 
 ### 做什么
 
-侧栏 Motor Control 向 `/stm32/joint_commands`（`microros_stm32h723_bridge/msg/JointCommand`）发布 MIT 风格命令。界面按关节列出**使能开关**与 **Position 滑块**（默认行程 ±0.35 rad，可按关节配置）；只对用户使能且固件 `active_joint_mask` 覆盖的关节写入非零通道，其余写零。
+左侧 Navigation 的独立 Motor 页面向 `/stm32/joint_commands`（`microros_stm32h723_bridge/msg/JointCommand`）发布 MIT 风格命令。页面默认提供 7 个关节控制行，并将关节目标与共享参数/安全操作分区展示。每个关节都有**使能开关**与 **Position 滑块**（默认行程 ±0.35 rad，可按关节配置）；只对用户使能且固件 `active_joint_mask` 覆盖的关节写入非零通道，其余写零。
 
 ### 模式
 
@@ -150,11 +150,12 @@ JointState topic: /stm32/joint_states
 
 ### 怎么用
 
-1. 连接后展开 Motor Control；确认 HardwareStatus / JointState 反馈新鲜。
+1. 连接后从左侧 Navigation 打开 Motor；确认 HardwareStatus / JointState 反馈新鲜。
 2. 勾选界面**安全确认**（同一连接会话内只需一次；DISABLE 后不会自动取消）。
 3. 按需逐关节打开使能；用滑块或数值框设 Position。「使用当前位置」会把各关节反馈写入对应 Position（唯一自动写 Position 的操作）。
 4. 选择 HOLD / TRACK / RETURN 等非 DISABLE 模式；预检通过后界面以 **20 Hz** 连续发送。
 5. 需要停机时点「停止并 DISABLE」——**无需解锁且始终可用**。
+6. 离开 Motor 页面会停止持续发送；正在发送或预检尚未结束时，页面会请求 DISABLE。
 
 <MotorControlFlow />
 
@@ -237,7 +238,7 @@ JointState topic: /stm32/joint_states
 | 暂停显示 | 冻结 WebView 对 Topic / JointState / 硬件状态的消费 |
 | 开始 / 停止录制 | 受约束 SSH 在 Jetson 执行 `ros2 bag record -a` |
 | 诊断快照 | 本机保存脱敏 JSON |
-| 重置布局 | 恢复默认左右宽度、上下分割并展开四个数据面板 |
+| 重置布局 | 恢复 Dashboard 默认左右宽度、上下分割并展开三个数据面板 |
 | 设置 | 自动刷新周期、诊断是否含消息摘要等 |
 
 <ToolbarOverview />
@@ -248,7 +249,7 @@ JointState topic: /stm32/joint_states
 - rosbag 输出到 Jetson `$HOME/robot-console-bags/robot-console-<时间>`；PID / 路径记在 `$HOME/.cache/robot-console/`。停止时先 SIGINT 以便完成索引，超时再用 SIGTERM。
 - 停止/状态检查会校验进程存在且命令行为 `ros2 bag record`，避免误信号复用 PID。**断开桌面端不会自动停止录制**；重连会恢复显示远端录制状态。
 - 诊断快照含脱敏连接信息、Topics、Controller、Agent、HardwareStatus、选中 Topic 与统计；**不含** SSH 私钥路径；大消息预览约 4 KiB，文件上限约 5 MiB。
-- Topics、ROS Control、Motor Control、Topic Inspector 可独立展开/收起；侧栏宽与上下分割可拖动（含键盘微调），尺寸持久化。
+- Dashboard 的 Topics、ROS Control、Topic Inspector 可独立展开/收起；侧栏宽与 Topics/ROS Control 上下分割可拖动（含键盘微调），尺寸持久化。
 
 ---
 
