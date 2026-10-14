@@ -230,11 +230,8 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .resizing-panels, .resizing-panels * { user-select: none !important; }
 .data-panel pre { flex: 1; min-height: 0; margin: 0; padding: 14px; overflow: auto; color: #a9c5d8; background: #08131c; font: 12px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
 .topic-inspector-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.topic-inspector-filter { flex: 0 0 auto; display: grid; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); background: #0a1721; }
-.topic-inspector-filter textarea { min-height: 54px; resize: vertical; padding: 7px 8px; color: #d8edf6; border: 1px solid #294657; border-radius: 7px; background: #07131c; outline: none; font: 10px/1.45 "SFMono-Regular", monospace; }
-.topic-inspector-filter textarea:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(66, 214, 199, .09); }
-.topic-inspector-filter > span { color: #647f90; font: 9px/1 "SFMono-Regular", monospace; }
-.topic-inspector-filter > span.enabled { color: #75cfc4; }
+.topic-inspector-status { flex: 0 0 auto; display: flex; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); background: #0a1721; }
+.topic-inspector-status > span { color: #647f90; font: 9px/1 "SFMono-Regular", monospace; }
 .topic-inspector-error { flex: 0 0 auto; padding: 7px 10px; color: #eba09a; border-bottom: 1px solid #542d2c; background: #251515; font-size: 10px; }
 .topic-inspector-content > pre { flex: 1 1 auto; }
 .ros-image-preview { position: relative; flex: 1 1 auto; min-height: 160px; display: grid; place-items: center; overflow: hidden; padding: 10px; background: #050b10; border-bottom: 1px solid var(--line); }

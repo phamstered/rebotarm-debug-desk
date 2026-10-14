@@ -23,7 +23,7 @@ features:
   - title: Mac 不装 ROS
     details: 桌面端通过 SSH 本地端口转发访问 Jetson 上只监听 127.0.0.1 的 Bridge，不加入 DDS。
   - title: Topics · Graph · Inspector
-    details: Topic 发现与只读订阅、近似 rqt_graph 的拓扑图、本机 jq WASM 过滤与 Image Canvas 预览。
+    details: Topic 发现与只读订阅、近似 rqt_graph 的拓扑图、Topic Inspector 原始 JSON / 元数据与 Image Canvas 预览。
   - title: URDF · 电机 · 轨迹
     details: Three.js Robot View、MIT JointCommand 面板、Joint4 标定（重力辨识 UI 见设计草案），以及 active 轨迹控制器下的 TCP 拖拽下发。
 ---

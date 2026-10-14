@@ -1,22 +1,25 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TopicInspector } from "./TopicInspector";
 
 const sample = { data: { position: [0.2, 0.6], name: ["joint1"] }, count: 4, firstAt: 1, lastAt: 2, hz: 20 };
 
-describe("TopicInspector jq filtering", () => {
-  beforeEach(() => localStorage.clear());
-
+describe("TopicInspector", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it("shows raw JSON by default without a jq expression", () => {
+  it("shows raw JSON for selected topics", () => {
     render(<TopicInspector selected="/joint_states" sample={sample} />);
-    expect(screen.getByLabelText("jq 过滤 /joint_states")).toHaveValue("");
-    expect(screen.getByText("未筛选 · 原始 JSON")).toBeVisible();
+    expect(screen.getByText("原始 JSON")).toBeVisible();
     expect(screen.getByText(/"position": \[/)).toBeVisible();
+    expect(screen.queryByLabelText(/jq 过滤/)).not.toBeInTheDocument();
+  });
+
+  it("prompts to select a topic when none is selected", () => {
+    render(<TopicInspector selected="" sample={undefined} />);
+    expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
   });
 
   it("renders sensor_msgs/Image data as a canvas preview with compact metadata", async () => {
@@ -32,7 +35,7 @@ describe("TopicInspector jq filtering", () => {
       sample={{ ...sample, data: { width: 2, height: 1, encoding: "rgb8", step: 6, data_length: 6, data_base64: imageData } }}
     />);
 
-    expect(screen.getByText("未筛选 · 图像预览 + 元数据")).toBeVisible();
+    expect(screen.getByText("图像预览 + 元数据")).toBeVisible();
     expect(screen.getByText(/"data_length": 6/)).toBeVisible();
     expect(screen.queryByText(imageData)).not.toBeInTheDocument();
     await waitFor(() => expect(putImageData).toHaveBeenCalledOnce());
@@ -40,29 +43,9 @@ describe("TopicInspector jq filtering", () => {
     expect(screen.getByText("2 × 1 · rgb8")).toBeVisible();
   });
 
-  it("runs and persists a per-topic jq expression in Topic Inspector", async () => {
-    render(<TopicInspector selected="/joint_states" sample={sample} />);
-    fireEvent.change(screen.getByLabelText("jq 过滤 /joint_states"), { target: { value: ".position[1]" } });
-    await waitFor(() => expect(screen.getByText("0.6")).toBeVisible());
-    expect(screen.getByText("jq 已启用")).toBeVisible();
-    expect(JSON.parse(localStorage.getItem("robot-console-jq-filters")!)).toEqual({ "/joint_states": ".position[1]" });
-  });
-
-  it("keeps filtering when messages arrive faster than the expression debounce", async () => {
-    const { container, rerender } = render(<TopicInspector selected="/joint_states" sample={sample} />);
-    fireEvent.change(screen.getByLabelText("jq 过滤 /joint_states"), { target: { value: ".position[1]" } });
-    let position = 0.6;
-    const stream = window.setInterval(() => {
-      position += 0.01;
-      act(() => rerender(<TopicInspector
-        selected="/joint_states"
-        sample={{ ...sample, data: { ...sample.data, position: [0.2, position] } }}
-      />));
-    }, 20);
-    try {
-      await waitFor(() => expect(container.querySelector(".topic-inspector-content > pre")?.textContent).toMatch(/^0\.\d+$/));
-    } finally {
-      window.clearInterval(stream);
-    }
+  it("shows subscribe errors without hiding raw output", () => {
+    render(<TopicInspector selected="/joint_states" sample={sample} subscribeError="unsupported type" />);
+    expect(screen.getByText("订阅失败：unsupported type")).toBeVisible();
+    expect(screen.getByText(/"position": \[/)).toBeVisible();
   });
 });

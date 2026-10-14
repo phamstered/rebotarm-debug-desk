@@ -59,7 +59,7 @@ JointState topic: /stm32/joint_states
 
 ### 做什么
 
-浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里用本机 jq 过滤，并对 `sensor_msgs/msg/Image` 做 Canvas 预览。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
+浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
 
 ### 界面结构
 
@@ -79,11 +79,10 @@ JointState topic: /stm32/joint_states
 2. 布局近似 `rqt_graph`：Publisher 偏左、Topic 居中、Subscriber 偏右（Sugiyama 分层 + 重心排序减交叉）。
 3. 点击节点高亮一跳关联；点击 Topic 节点会订阅该 Topic，并送入右侧 Topic Inspector。
 
-**Topic Inspector / jq / 图像**
+**Topic Inspector / 图像**
 
-1. 在 Inspector 查看当前选中 Topic 的数据。
-2. 需要过滤时填写 jq 表达式（按 Topic 持久化；默认留空则显示原始 JSON）。使用浏览器内嵌 jq 1.8.2 WASM，不依赖 Jetson 安装 jq。
-3. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
+1. 在 Inspector 查看当前选中 Topic 的原始 JSON。
+2. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
 
 **ROS Control**
 
@@ -103,7 +102,7 @@ JointState topic: /stm32/joint_states
 - Graph 可展示 graph 中全部 Topic，但实时解码仍受 Bridge 消息类型注册表限制。
 - Image 由 Bridge 全速传二进制帧；Canvas 按动画帧合并绘制，不丢弃 Bridge 消息、不影响频率统计。
 - Controller 名称与操作类型在 Tauri/Rust 侧校验，拒绝含 shell 特殊字符的输入；manager 不可用时显示离线原因，不阻塞 Topic 浏览。
-- jq 语法错误、订阅失败与空输出分别展示，不会中断 Graph 刷新。
+- 订阅失败单独展示，不会中断 Graph 刷新。
 
 ---
 
