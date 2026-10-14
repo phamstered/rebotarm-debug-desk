@@ -11,6 +11,7 @@
 5. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
 6. [Joint4 标定](#_6-joint4-标定)
 7. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
+8. [重力辨识（设计草案）](#_8-重力辨识设计草案)
 
 ---
 
@@ -221,6 +222,8 @@ JointState topic: /stm32/joint_states
 
 完整步骤与故障恢复：[Joint4 标定操作指南](./joint4-calibration)。
 
+全臂一键重力 / 参数辨识（`/StartGravityID`）为**独立**设计页，Joint4 负载细标定仅作其可选子模式入口，见 [§8 重力辨识（设计草案）](#_8-重力辨识设计草案)。
+
 ---
 
 ## 7. 工具栏：rosbag / 诊断 / 布局
@@ -253,6 +256,24 @@ JointState topic: /stm32/joint_states
 
 ---
 
+## 8. 重力辨识（设计草案）
+
+> **未实现。** 本节与 [重力辨识 UI 设计](./gravity-identification) 仅作产品/协议对齐；正式行为以落地 PR 后的 `basic-features` 为准。
+
+### 做什么（规划）
+
+独立 **「重力辨识」** 页调用 ROS action `/StartGravityID`（`GravityIdentification`，见 [rebotarm-ros2-stack#12](https://github.com/phamstered/rebotarm-ros2-stack/pull/12)）：选择 `joint_mask`、Start/Abort、展示 phase / pose 进度与残差力矩，结果表含 `gravity_scales`、`torque_biases_nm`、RMSE、`yaml_path`，并可 Apply 到 `GravityCompensation`。
+
+Desk **只做 UI**；编排在 ros2-stack，固件 HOLD/fault 在 executor。与 [Joint4 标定](./joint4-calibration) 分离，Joint4 作为可选 payload 子模式入口。
+
+### 安全（规划，不得弱化）
+
+ARMED 门、运行中禁用 Motor 滑块与 TCP；Abort/超时/**命令丢失(fault 11)** → **HOLD**（非 DISABLE）；静置前馈用 TRACK@v≈0；Desk 断开再 cancel + 既有 DISABLE。故障码用现网十进制（如 4/7/11）。详见设计页。
+
+线框与 Bridge proposed op：[重力辨识 UI（设计草案）](./gravity-identification)。
+
+---
+
 ## 明确不在当前切片内
 
-见 [架构 · Current limits](./architecture#current-limits)：例如时间序列 Topic 图表、TF 可视化、rosbag 本地下载/索引/回放等仍属后续工作。
+见 [架构 · Current limits](./architecture#current-limits)：例如时间序列 Topic 图表、TF 可视化、rosbag 本地下载/索引/回放等仍属后续工作。重力辨识 UI / Bridge action 客户端见上节设计草案，尚未实现。

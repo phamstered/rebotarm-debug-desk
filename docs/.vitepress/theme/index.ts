@@ -9,6 +9,8 @@ import MotorControlFlow from '../components/MotorControlFlow.vue'
 import TcpTrajectoryFlow from '../components/TcpTrajectoryFlow.vue'
 import Joint4CalibrationFlow from '../components/Joint4CalibrationFlow.vue'
 import ToolbarOverview from '../components/ToolbarOverview.vue'
+import GravityIdentificationWireframe from '../components/GravityIdentificationWireframe.vue'
+import GravityIdentificationFlow from '../components/GravityIdentificationFlow.vue'
 import './diagrams.css'
 
 export default {
@@ -23,5 +25,7 @@ export default {
     app.component('TcpTrajectoryFlow', TcpTrajectoryFlow)
     app.component('Joint4CalibrationFlow', Joint4CalibrationFlow)
     app.component('ToolbarOverview', ToolbarOverview)
+    app.component('GravityIdentificationWireframe', GravityIdentificationWireframe)
+    app.component('GravityIdentificationFlow', GravityIdentificationFlow)
   },
 } satisfies Theme
