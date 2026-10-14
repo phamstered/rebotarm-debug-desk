@@ -12,6 +12,16 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 
 > 本文档以 **Robot Debug Desk** 作为用户面向产品名；包名与 `.app` 显示名以当前代码为准，不会在文档 PR 中静默改名。
 
+## 相关仓库 / 职责
+
+| 仓库 | 职责 | 文档 |
+|---|---|---|
+| [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk) | 上位机（本仓） | [Pages](https://phamstered.github.io/robot-debug-desk/) |
+| [`phamstered/rebotarm-ros2-stack`](https://github.com/phamstered/rebotarm-ros2-stack) | ROS 2 controller | [Pages](https://phamstered.github.io/rebotarm-ros2-stack/)（预期） |
+| [`phamstered/rebotarm-executor`](https://github.com/phamstered/rebotarm-executor) | FreeRTOS + micro-ROS 固件 | [Pages](https://phamstered.github.io/rebotarm-executor/)（预期） |
+
+后两仓若文档站点 404，需在对应仓库 **Settings → Pages → GitHub Actions** 启用（private 仓需 GitHub Pro）。
+
 ## 架构一览
 
 | 层 | 组件 |
