@@ -9,6 +9,7 @@ const doubles = vi.hoisted(() => ({
   listTopics: vi.fn().mockResolvedValue([
     { name: "/robot_description", types: ["std_msgs/msg/String"] },
     { name: "/stm32/status", types: ["microros_stm32h723_bridge/msg/HardwareStatus"] },
+    { name: "/stm32/joint_states", types: ["sensor_msgs/msg/JointState"] },
   ]),
   getGraph: vi.fn().mockResolvedValue({
     nodes: [
@@ -128,7 +129,7 @@ describe("App workflow", () => {
       doubles.listener?.({ op: "topic_message", topic: "/stm32/status", data: { fault_code: 4 } });
     });
     expect(screen.getByTestId("urdf")).toHaveTextContent("old-session-urdf");
-    expect(screen.getByText(/fault_code/)).toBeVisible();
+    expect(screen.getByText(/"fault_code": 4/)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "断开" }));
     await screen.findByRole("button", { name: "连接 Jetson" });
@@ -137,7 +138,7 @@ describe("App workflow", () => {
 
     expect(screen.getByTestId("urdf")).toHaveTextContent("empty");
     expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
-    expect(screen.queryByText(/fault_code/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"fault_code": 4/)).not.toBeInTheDocument();
   });
 
   it("does not let a delayed controller response from the old session repopulate state", async () => {
@@ -486,6 +487,7 @@ describe("App workflow", () => {
     expect(within(toolbar).queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Robot View" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "DataGraph" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Robot View" }).closest(".center-tabs")).not.toBeNull();
 
     const topicCalls = doubles.listTopics.mock.calls.length;
@@ -582,4 +584,38 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "Dashboard" }));
     expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
   });
+
+  it("adds numeric fields from Topic Inspector into DataGraph", async () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      setTransform: vi.fn(),
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      strokeRect: vi.fn(),
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("button", { name: /\/stm32\/joint_states/ });
+    await user.click(screen.getByRole("button", { name: /\/stm32\/joint_states/ }));
+    act(() => {
+      doubles.listener?.({
+        op: "topic_message",
+        topic: "/stm32/joint_states",
+        data: { name: ["j1", "j2"], position: [0.1, 0.2], effort: [1, 2, 3, 4, 5, 6, 7] },
+      });
+    });
+    expect(await screen.findByLabelText("可加入 DataGraph 的字段")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "加入 DataGraph：effort" }));
+    expect(screen.getByRole("tab", { name: "DataGraph" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByLabelText("DataGraph 实时曲线")).toBeVisible();
+    expect(screen.getByText(/7 条曲线/)).toBeVisible();
+    expect(screen.getByLabelText("DataGraph 曲线列表")).toBeVisible();
+    getContext.mockRestore();
+  });
+
 });

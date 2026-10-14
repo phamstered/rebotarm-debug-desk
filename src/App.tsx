@@ -8,7 +8,10 @@ import { AppNav } from "./AppNav";
 import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorPage } from "./MotorPage";
+import { DataGraph } from "./DataGraph";
 import { TopicInspector } from "./TopicInspector";
+import { addFieldsToSeries, removeSeries, updateSeriesFromMessage } from "./dataGraphLogic";
+import type { DataSeries } from "./dataGraphLogic";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
@@ -22,6 +25,7 @@ import type { ToolbarSettings } from "./toolbarLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "connected" | "failed";
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
+type CenterTab = "robot" | "graph" | "data";
 
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
@@ -178,7 +182,8 @@ export default function App() {
   const [controllerActionError, setControllerActionError] = useState("");
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
-  const [centerTab, setCenterTab] = useState<"robot" | "graph">("robot");
+  const [centerTab, setCenterTab] = useState<CenterTab>("robot");
+  const [dataSeries, setDataSeries] = useState<DataSeries[]>([]);
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
   const [liveUpdates, setLiveUpdates] = useState(true);
@@ -224,6 +229,22 @@ export default function App() {
       topic: controller.topic,
     }, 30_000);
   }, [bridge, trajectoryController]);
+
+  const addToDataGraph = useCallback((fieldPath: string) => {
+    if (!selected) return;
+    const sample = messages[selected];
+    if (!sample) return;
+    setDataSeries((current) => addFieldsToSeries(current, selected, fieldPath, sample.data));
+    setCenterTab("data");
+  }, [messages, selected]);
+
+  const removeDataSeries = useCallback((id: string) => {
+    setDataSeries((current) => removeSeries(current, id));
+  }, []);
+
+  const clearDataSeries = useCallback(() => {
+    setDataSeries([]);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
@@ -398,14 +419,15 @@ export default function App() {
     return bridge.onMessage((message: BridgeEnvelope) => {
       if (message.op === "topic_message" && message.topic) {
         if (!liveUpdatesRef.current) return;
+        const now = performance.now();
         setMessages((current) => {
-          const now = performance.now();
           const previous = current[message.topic!];
           return {
             ...current,
             [message.topic!]: nextTopicSample(previous, message.data, now),
           };
         });
+        setDataSeries((current) => updateSeriesFromMessage(current, message.topic!, message.data, now));
         if (message.topic === profile.urdfTopic && typeof message.data === "string") setUrdf(message.data);
         if (message.topic === profile.jointStateTopic && message.data && typeof message.data === "object") {
           setJointState(message.data as { name?: string[]; position?: number[] });
@@ -483,6 +505,7 @@ export default function App() {
     setRosbagStatus(null);
     setToolbarBusy("");
     setToolbarNotice("");
+    setDataSeries([]);
   }
 
   async function connect() {
@@ -819,8 +842,9 @@ export default function App() {
           <div className="center-tab-list" role="tablist" aria-label="中心视图">
             <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
             <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
+            <button type="button" role="tab" aria-selected={centerTab === "data"} className={centerTab === "data" ? "active" : ""} onClick={() => setCenterTab("data")}>DataGraph</button>
           </div>
-          <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
+          <span>{centerTab === "robot" ? profile.urdfTopic : centerTab === "graph" ? "ROS Node / Topic topology" : dataSeries.length ? `${dataSeries.length} series · 30s` : "数值字段实时曲线"}</span>
         </div>
         {centerTab === "robot"
           ? (
@@ -833,7 +857,16 @@ export default function App() {
               onSendTrajectory={sendTrajectory}
             />
           )
-          : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
+          : centerTab === "graph"
+            ? <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>
+            : (
+              <DataGraph
+                seriesList={dataSeries}
+                liveUpdates={liveUpdates}
+                onRemoveSeries={removeDataSeries}
+                onClearSeries={clearDataSeries}
+              />
+            )}
       </section>
       <section className="data-panel">
         <section className={`data-section inspector-section ${panels.inspector ? "expanded" : "collapsed"}`}>
@@ -843,7 +876,7 @@ export default function App() {
             expanded={panels.inspector}
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} />
+          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} onAddToDataGraph={addToDataGraph} />
         </section>
       </section>
       <ResizeHandle

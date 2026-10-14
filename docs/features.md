@@ -5,7 +5,7 @@
 ## 目录
 
 1. [连接与会话](#_1-连接与会话)
-2. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
+2. [Topics / Graph / Inspector / DataGraph](#_2-topics-graph-inspector)
 3. [Robot View（URDF）](#_3-robot-view-urdf)
 4. [MIT 电机控制](#_4-mit-电机控制)
 5. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
@@ -59,7 +59,7 @@ JointState topic: /stm32/joint_states
 
 ### 做什么
 
-浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
+浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入中心面板 **DataGraph** 做 30 秒滑动窗口实时曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
 
 ### 界面结构
 
@@ -83,6 +83,13 @@ JointState topic: /stm32/joint_states
 
 1. 在 Inspector 查看当前选中 Topic 的原始 JSON。
 2. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
+3. 对含有限数值字段的消息，Inspector 列出可绘图路径（标量或数值数组）；点击「加入 DataGraph」后切到中心 **DataGraph** Tab。数组字段展开为多条曲线（如 `effort` → `effort[0..n]`）。
+
+**DataGraph（v1）**
+
+1. 中心面板与 Robot View / Topic Graph 同级；默认滑动时间窗 **30 秒**。
+2. v1 仅支持**单 Topic、多数值字段**；从另一 Topic 加入字段时会替换现有曲线（多 Topic 叠加留待后续）。
+3. 可单独移除一条曲线或「清空曲线」；工具栏「暂停显示」同样冻结 DataGraph 采样更新。
 
 **ROS Control**
 

@@ -34,10 +34,11 @@ The npm package remains `easy-debug`; Tauri `productName` / window title / `/App
 5. WebView opens a WebSocket to the local forwarded port.
 6. UI requests Topic discovery and the node/topic endpoint graph, then subscribes to URDF and JointState topics.
 7. Topic Graph applies Sugiyama-style barycentric sweeps before rendering publisher → topic → subscriber SVG edges. Selecting a Topic creates a read-only Bridge subscription and opens it in Topic Inspector.
-8. Topic Inspector shows raw JSON for decoded samples (and compact metadata plus Canvas preview for Image topics).
-9. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every 30 seconds and shows controller names, types and states below Topics.
-10. With an active `JointTrajectoryController`, the Robot View shows a draggable TCP handle. A drag solves position-only IK against the URDF joint chain; releasing it publishes `trajectory_msgs/JointTrajectory` to the controller's `~/joint_trajectory` topic through the Bridge.
-11. Global toolbar operations that need host access bypass the WebSocket Bridge: Tauri runs a fixed, validated SSH command to start/stop `ros2 bag record -a`, while diagnostics snapshots are assembled in the WebView and written through a size- and extension-checked Rust command.
+8. DataGraph (center tab) plots numeric fields picked from Topic Inspector over a 30s sliding window; v1 is single-topic multi-field (arrays expand to series).
+9. Topic Inspector shows raw JSON for decoded samples (and compact metadata plus Canvas preview for Image topics).
+10. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every 30 seconds and shows controller names, types and states below Topics.
+11. With an active `JointTrajectoryController`, the Robot View shows a draggable TCP handle. A drag solves position-only IK against the URDF joint chain; releasing it publishes `trajectory_msgs/JointTrajectory` to the controller's `~/joint_trajectory` topic through the Bridge.
+12. Global toolbar operations that need host access bypass the WebSocket Bridge: Tauri runs a fixed, validated SSH command to start/stop `ros2 bag record -a`, while diagnostics snapshots are assembled in the WebView and written through a size- and extension-checked Rust command.
 
 ## URDF assets
 
