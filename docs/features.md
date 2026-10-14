@@ -268,7 +268,7 @@ Desk **只做 UI**；编排在 ros2-stack，固件 HOLD/fault 在 executor。与
 
 ### 安全（规划，不得弱化）
 
-ARMED 门、运行中禁用 Motor 滑块与 TCP、Abort/超时 → HOLD、断开 → cancel + 既有 DISABLE。详见设计页。
+ARMED 门、运行中禁用 Motor 滑块与 TCP；Abort/超时/**命令丢失(fault 11)** → **HOLD**（非 DISABLE）；静置前馈用 TRACK@v≈0；Desk 断开再 cancel + 既有 DISABLE。故障码用现网十进制（如 4/7/11）。详见设计页。
 
 线框与 Bridge proposed op：[重力辨识 UI（设计草案）](./gravity-identification)。
 

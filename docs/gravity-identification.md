@@ -12,7 +12,7 @@
 | 与 Joint4 | **分离**：本页默认全臂重力 ID；[Joint4 标定](./joint4-calibration) 作为 **可选子模式 / 负载细标定** 入口（`mode=PAYLOAD` 时链到现有 Calibration 页或高级选项） |
 | Desk 职责 | **仅 UI**：组 Goal、展示 Feedback/Result、Cancel、可选 Apply；不跑辨识算法、不写固件协议 |
 | 编排 | [`rebotarm-ros2-stack`](https://github.com/phamstered/rebotarm-ros2-stack) action 服务器 |
-| 固件 | [`rebotarm-executor`](https://github.com/phamstered/rebotarm-executor)：meas + HOLD/TRACK；abort/超时 → **HOLD** |
+| 固件 | [`rebotarm-executor`](https://github.com/phamstered/rebotarm-executor)（对齐 [PR #7](https://github.com/phamstered/rebotarm-executor/pull/7)）：meas + HOLD/TRACK；abort / **命令丢失** → **HOLD**（非 DISABLE）；静置前馈用 **TRACK @ v≈0**（现网 HOLD 清零 MIT effort） |
 
 不要与日常 `gravity_compensation_controller` 或手工 `joint4_calibration_controller` 同时抢 effort 接口；互斥切换由 **stack 编排**完成，Desk 只显示就绪/阻塞原因。
 
@@ -114,7 +114,32 @@
 
 **Result：** `gravity_scales`、`torque_biases_nm`、RMSE、`yaml_path`。
 
-**Safety：** abort / 超时 → **HOLD**（不自动 DISABLE）。
+**Safety：** abort / 超时 / **命令丢失（fault 11）** → **HOLD**（非 DISABLE）。静置采样若需重力前馈：host 用 **TRACK、velocity≈0、effort=前馈**（现网 HOLD 将 MIT effort 置 0）。
+
+### 3.3 固件故障码（现网十进制，权威在 executor）
+
+草案早期曾用十六进制位标志（如 `0x0001`）；**现网 `HardwareStatus.fault_code` 为 uint16 枚举十进制序号，Desk/Bridge 原样透传，勿按位掩码解析。** 与 [rebotarm-executor#7](https://github.com/phamstered/rebotarm-executor/pull/7) 对齐的会话别名：
+
+| 草案名 | 现网值 | 现网符号 | 会话内建议 |
+|---|---:|---|---|
+| `FAULT_NONE` | 0 | `MOTOR_FAULT_NONE` | 继续 |
+| `FAULT_STALE_SEQUENCE` | **4** | `MOTOR_FAULT_STALE_SEQUENCE` | abort；按现网清序列/重启 |
+| `FAULT_MOTOR` | **7** | `MOTOR_FAULT_DRIVE` | abort → HOLD；禁止继续激励 |
+| `FAULT_CMD_LOSS` | **11** | `MOTOR_FAULT_COMMAND_LOSS_LATCHED` | abort → **HOLD**（非 DISABLE） |
+| `FAULT_EFFORT_LIMIT`（近义） | 3 | `MOTOR_FAULT_COMMAND_LIMIT` | abort → HOLD（收命令时 kp/kd/effort 超限） |
+
+速度/位置偏离、夹爪未锁、会话拒绝等仍可为 **ROS 侧**码（建议高位 `0x8000 | local`），勿占用固件 0–12。
+
+### 3.4 辨识会话命令语义（现网）
+
+| 阶段 | Host → 固件 | 说明 |
+|---|---|---|
+| 静置 / 采样（需前馈） | **`TRACK`，`velocity≈0`，`effort`=重力前馈** | 现网 **HOLD 清零 MIT effort**；仅锁存位置 + kp/kd。采样读 `JointState.effort` |
+| 静置（无前馈） | `HOLD` | 可接受；effort 通道为 0 |
+| 换姿 | 短暂 `TRACK` | 到位后切回静置策略 |
+| Abort / cancel / 命令丢失 | → **HOLD** | **不**自动 DISABLE；DISABLE 仅走现有 `mode=3` / 断开会话 / 反馈超时等路径 |
+
+命令流须持续发送；host 侧 `command_timeout_ms` 期望对齐约 **100 ms**（与固件 `COMMAND_TIMEOUT_MS`）。超过约 500 ms 锁存 fault **11** 并 HOLD。
 
 ## 4. 安全（不得弱化）
 
@@ -126,9 +151,10 @@
    - 禁用 TCP 拖拽轨迹下发
    - 禁用与辨识互斥的 Joint4 Begin/Capture（若同会话打开）
 3. **Abort**：UI Abort → `gravity_id_cancel` → stack abort → 固件 **HOLD**；界面显示「已 HOLD」。
-4. **断开 / 重连**：若辨识仍在执行，先 cancel；再按现网「电机命令流在运行则 DISABLE」；清空会话标定/辨识状态，避免旧 Feedback 污染新连接。
-5. **急停与现场**：文档与 Joint4 相同——操作者托住/急停就绪；Desk 不替代物理急停。
-6. **Effort 等限幅**：Desk 可展示 Goal 上限，**不得**为「方便测试」删除确认、反馈新鲜度、fault 展示或 ARMED 门。
+4. **命令丢失（会话内）**：fault **11**（`FAULT_CMD_LOSS`）→ action ABORTING → **HOLD**；**不是** DISABLE。UI 展示十进制码与名称。
+5. **断开 / 重连**（Desk 会话结束）：若辨识仍在执行，先 cancel（目标 HOLD）；再按现网「电机命令流在运行则 DISABLE」清理上位机命令流；清空辨识状态，避免旧 Feedback 污染新连接。
+6. **急停与现场**：文档与 Joint4 相同——操作者托住/急停就绪；Desk 不替代物理急停。
+7. **Effort 等限幅**：Desk 可展示 Goal 上限，**不得**为「方便测试」删除确认、反馈新鲜度、fault 展示或 ARMED 门。
 
 ## 5. 仓库职责对照
 
@@ -136,20 +162,22 @@
 |---|---|---|
 | **robot-debug-desk** | 本设计 UI；日后 Bridge op + 页面 | 辨识算法、YAML 权威写入、固件超时策略 |
 | **rebotarm-ros2-stack** | `/StartGravityID` 状态机、激励、拟合、热加载 | 固件字节协议、Desk 布局 |
-| **rebotarm-executor** | meas、HOLD/TRACK、command-loss → HOLD、fault_code | 姿态规划、最小二乘、写 YAML |
+| **rebotarm-executor** | meas、HOLD/TRACK（静置前馈用 TRACK@v≈0）、command-loss → HOLD、十进制 fault_code | 姿态规划、最小二乘、写 YAML；不采用草案 hex 位标志 |
 
 ## 6. 实现前检查清单（后续 PR）
 
 - [ ] stack action 与 Feedback 字段稳定（对照 #12）
 - [ ] Bridge 实现 proposed op + 单测；同步 `docs/protocol.md`
 - [ ] 前端页面 + 与 Motor/TCP 互斥锁
-- [ ] 断开路径：cancel → HOLD / DISABLE 与现网一致
+- [ ] 会话内 command-loss / abort → HOLD；Desk 断开再走既有 DISABLE；fault 展示用十进制 4/7/11
+- [ ] 静置前馈：TRACK @ v≈0（勿假设 HOLD 保留 effort）
 - [ ] `docs/basic-features.md` 与功能概览改为「已实现」表述
 - [ ] `npm test` 全绿
 
 ## 参考
 
 - Stack 设计：[rebotarm-ros2-stack#12](https://github.com/phamstered/rebotarm-ros2-stack/pull/12) · `docs/gravity-identification.md`
+- 固件契约：[rebotarm-executor#7](https://github.com/phamstered/rebotarm-executor/pull/7) · `docs/ros2-interface.md`「重力辨识会话」
 - 现有手工标定：[Joint4 标定操作指南](./joint4-calibration)
 - 协议（已实现部分）：[Bridge 协议](./protocol)
 - 功能概览入口：[功能概览 · 重力辨识（设计）](./features#_8-重力辨识设计草案)

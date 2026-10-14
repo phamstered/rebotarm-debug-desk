@@ -2,8 +2,8 @@
   <figure class="rdd-diagram" role="img" aria-labelledby="rdd-gid-flow-title" aria-describedby="rdd-gid-flow-desc">
     <p id="rdd-gid-flow-title" class="rdd-diagram__title">重力辨识 · 职责与会话流（设计草案）</p>
     <p id="rdd-gid-flow-desc" class="rdd-diagram__sr">
-      Desk 发 StartGravityID；ros2-stack 编排激励与拟合；executor 仅 meas 加 HOLD。
-      Abort 或超时立即 HOLD；断开走既有 DISABLE。
+      Desk 发 StartGravityID；ros2-stack 编排激励与拟合；executor 仅 meas + HOLD/TRACK。
+      Abort / 超时 / 命令丢失(fault 11) → HOLD；静置前馈 TRACK@v≈0；Desk 断开再走既有 DISABLE。
     </p>
 
     <div class="rdd-panels rdd-panels--3" aria-hidden="true" style="margin-bottom:0.75rem">
@@ -27,8 +27,8 @@
         <p class="rdd-panel__title">rebotarm-executor</p>
         <div class="rdd-panel__items">
           <div class="rdd-panel__item">meas · JointState</div>
-          <div class="rdd-panel__item">HOLD / TRACK 命令</div>
-          <div class="rdd-panel__item">fault → HOLD</div>
+          <div class="rdd-panel__item">TRACK@v≈0 前馈 / HOLD</div>
+          <div class="rdd-panel__item">fault 11 → HOLD</div>
         </div>
       </div>
     </div>
@@ -46,7 +46,7 @@
       <div class="rdd-step-arrow"><span></span></div>
       <div class="rdd-step rdd-step--warn">
         <strong>(MOVING → SETTLE → CAPTURE)×N</strong>
-        <small>Feedback: phase · pose · residual</small>
+        <small>SETTLE/CAPTURE：TRACK@v≈0 + 前馈</small>
       </div>
       <div class="rdd-step-arrow"><span></span></div>
       <div class="rdd-step rdd-step--ok">
@@ -56,10 +56,10 @@
 
       <div class="rdd-branch rdd-branch--2" style="margin:0.35rem 0">
         <div class="rdd-branch__arm">
-          <span class="rdd-branch__label rdd-branch__label--no">Abort / fault / 超时</span>
+          <span class="rdd-branch__label rdd-branch__label--no">Abort / fault 11 / 超时</span>
           <div class="rdd-step rdd-step--danger">
             <strong>ABORTING → HOLD</strong>
-            <small>不自动 DISABLE</small>
+            <small>命令丢失非 DISABLE</small>
           </div>
         </div>
         <div class="rdd-branch__arm">
@@ -73,7 +73,7 @@
     </div>
 
     <p class="rdd-diagram__caption">
-      不要弱化电机安全门。辨识会话依赖 command-loss → HOLD；Desk 不得在会话中停发所需链路心跳以外的危险命令流。
+      不要弱化电机安全门。辨识会话 command-loss → HOLD（fault 11 十进制）；静置前馈用 TRACK@v≈0。Desk 不得在会话中停发命令流。
     </p>
   </figure>
 </template>

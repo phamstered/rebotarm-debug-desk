@@ -39,6 +39,7 @@
           </div>
           <div class="rdd-gid-row rdd-gid-row--meta">
             <span>max_effort / max_vel · command_timeout_ms</span>
+            <span>静置前馈 · TRACK @ v≈0（HOLD 清零 effort）</span>
           </div>
         </section>
 
@@ -53,7 +54,7 @@
             <span class="rdd-gid-btn rdd-gid-btn--danger">Abort</span>
             <span class="rdd-gid-btn">Apply → GravityCompensation</span>
           </div>
-          <p class="rdd-gid-hint">Abort / 超时 / 断开 → action cancel → 固件 HOLD；断开会话另走既有 DISABLE</p>
+          <p class="rdd-gid-hint">Abort / 超时 / 命令丢失(fault 11) → HOLD（非 DISABLE）；静置前馈 TRACK@v≈0；Desk 断开另走既有 DISABLE</p>
         </section>
 
         <section class="rdd-gid-card rdd-gid-card--wide">
@@ -69,7 +70,7 @@
             </div>
             <div class="rdd-gid-phase">
               <strong>fault</strong>
-              <span>0 · FAULT_NONE</span>
+              <span>0 · NONE · 现网十进制(例 4/7/11)</span>
             </div>
             <div class="rdd-gid-phase rdd-gid-phase--msg">
               <strong>message</strong>
@@ -106,7 +107,7 @@
     </div>
 
     <p class="rdd-diagram__caption">
-      Desk 只调 action；编排在 rebotarm-ros2-stack，HOLD/fault 在 rebotarm-executor。线框字段对齐 stack PR #12。
+      Desk 只调 action；编排在 ros2-stack，HOLD/fault 在 executor（#7：十进制 fault、command-loss→HOLD、TRACK@v≈0 前馈）。对齐 stack #12。
     </p>
   </figure>
 </template>
