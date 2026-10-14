@@ -384,6 +384,25 @@ describe("App workflow", () => {
     expect(screen.queryByLabelText(/jq 过滤/)).not.toBeInTheDocument();
   });
 
+  it("inspects a runtime-decoded controller state with nested arrays", async () => {
+    doubles.listTopics.mockResolvedValueOnce([
+      { name: "/arm/state", types: ["control_msgs/msg/JointTrajectoryControllerState"] },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: /\/arm\/state/ }));
+    expect(doubles.request).toHaveBeenCalledWith({
+      op: "subscribe", topic: "/arm/state", type: "control_msgs/msg/JointTrajectoryControllerState",
+    });
+    act(() => doubles.listener?.({
+      op: "topic_message", topic: "/arm/state",
+      data: { joint_names: ["joint1"], actual: { positions: [0.25], time_from_start: { sec: 1, nanosec: 0 } } },
+    }));
+    expect(screen.getByText(/"positions": \[/)).toBeVisible();
+    expect(screen.getByText("actual.positions")).toBeVisible();
+  });
+
   it("opens Joint4 Calibration from the collapsible main toolbar", async () => {
     const user = userEvent.setup();
     render(<App />);

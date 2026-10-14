@@ -89,6 +89,7 @@ export type BridgeEnvelope = {
   request_id?: string;
   topic?: string;
   type?: string;
+  /** ROS message content: scalars for legacy built-ins, structured fields for runtime-decoded types. */
   data?: unknown;
   topics?: TopicInfo[];
   nodes?: RosGraphNode[];

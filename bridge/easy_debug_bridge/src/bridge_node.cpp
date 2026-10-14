@@ -7,6 +7,8 @@
 #include <microros_stm32h723_bridge/msg/hardware_status.hpp>
 #include <microros_stm32h723_bridge/msg/joint_command.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/serialization.hpp>
+#include <rclcpp/typesupport_helpers.hpp>
 #include <rmw/types.h>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -21,6 +23,7 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include "easy_debug_bridge/bridge_core.hpp"
+#include "easy_debug_bridge/topic_json.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -77,7 +80,8 @@ static std::string number_array(const Container &values) {
   out << '[';
   for (size_t index = 0; index < values.size(); ++index) {
     if (index) out << ',';
-    out << std::setprecision(15) << values[index];
+    if (!std::isfinite(static_cast<long double>(values[index]))) out << "null";
+    else out << std::setprecision(15) << values[index];
   }
   out << ']';
   return out.str();
@@ -386,9 +390,20 @@ class BridgeNode : public rclcpp::Node {
       session->send(error_message(request_id, "Topic 和类型不能为空"));
       return;
     }
+    const auto discovered = get_topic_names_and_types();
+    const auto topic_types = discovered.find(topic);
+    if (topic_types != discovered.end() &&
+        std::find(topic_types->second.begin(), topic_types->second.end(), type) == topic_types->second.end()) {
+      session->send(error_message(request_id, "Topic 的实际类型与请求不符：" + type));
+      return;
+    }
     {
       std::lock_guard<std::mutex> lock(subscription_mutex_);
       if (subscriptions_.count(topic)) {
+        if (subscription_types_.at(topic) != type) {
+          session->send(error_message(request_id, "该 Topic 已按其他消息类型订阅：" + subscription_types_.at(topic)));
+          return;
+        }
         session->send("{\"op\":\"subscribed\",\"request_id\":" + json_quote(request_id) +
                       ",\"topic\":" + json_quote(topic) + "}");
         return;
@@ -398,10 +413,10 @@ class BridgeNode : public rclcpp::Node {
           [](const auto &m) { return json_quote(m.data); });
       } else if (type == "std_msgs/msg/Float64") {
         create_typed_subscription<std_msgs::msg::Float64>(topic,
-          [](const auto &m) { return std::to_string(m.data); });
+          [](const auto &m) { return std::isfinite(m.data) ? std::to_string(m.data) : std::string("null"); });
       } else if (type == "std_msgs/msg/Float32") {
         create_typed_subscription<std_msgs::msg::Float32>(topic,
-          [](const auto &m) { return std::to_string(m.data); });
+          [](const auto &m) { return std::isfinite(m.data) ? std::to_string(m.data) : std::string("null"); });
       } else if (type == "std_msgs/msg/Int32") {
         create_typed_subscription<std_msgs::msg::Int32>(topic,
           [](const auto &m) { return std::to_string(m.data); });
@@ -453,9 +468,51 @@ class BridgeNode : public rclcpp::Node {
                  ",\"fault_code\":" + std::to_string(m.fault_code) + "}";
         });
       } else {
-        session->send(error_message(request_id, "第一版暂不支持消息内容类型：" + type));
-        return;
+        try {
+          constexpr const char *identifier = "rosidl_typesupport_introspection_cpp";
+          auto library = rclcpp::get_typesupport_library(type, identifier);
+          const auto *handle = rclcpp::get_typesupport_handle(type, identifier, *library);
+          if (!handle || !handle->data) throw std::runtime_error("缺少消息字段描述");
+          const auto *members = static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(handle->data);
+          if (!members->init_function || !members->fini_function) {
+            throw std::runtime_error("缺少消息构造或释放函数");
+          }
+          auto serialization_library = rclcpp::get_typesupport_library(type, "rosidl_typesupport_cpp");
+          const auto *serialization_handle = rclcpp::get_typesupport_handle(
+              type, "rosidl_typesupport_cpp", *serialization_library);
+          if (!serialization_handle) throw std::runtime_error("缺少序列化类型支持");
+          auto serializer = std::make_shared<rclcpp::SerializationBase>(serialization_handle);
+          auto subscription = create_generic_subscription(
+              topic, type, compatible_qos(topic),
+              [this, topic, library, serialization_library, members, serializer](
+                  std::shared_ptr<rclcpp::SerializedMessage> serialized) {
+                try {
+                  void *storage = ::operator new(members->size_of_);
+                  try {
+                    members->init_function(storage, rosidl_runtime_cpp::MessageInitialization::ALL);
+                  } catch (...) {
+                    ::operator delete(storage);
+                    throw;
+                  }
+                  const auto cleanup = [members](void *value) {
+                    members->fini_function(value);
+                    ::operator delete(value);
+                  };
+                  std::unique_ptr<void, decltype(cleanup)> message(storage, cleanup);
+                  serializer->deserialize_message(serialized.get(), message.get());
+                  broadcast("{\"op\":\"topic_message\",\"topic\":" + json_quote(topic) +
+                            ",\"data\":" + easy_debug_bridge::message_to_json(message.get(), *members) + "}");
+                } catch (const std::exception &error) {
+                  RCLCPP_ERROR(get_logger(), "Topic %s 解码失败：%s", topic.c_str(), error.what());
+                }
+              });
+          subscriptions_[topic] = subscription;
+        } catch (const std::exception &error) {
+          session->send(error_message(request_id, "无法加载消息类型 " + type + "：" + error.what()));
+          return;
+        }
       }
+      subscription_types_[topic] = type;
     }
     session->send("{\"op\":\"subscribed\",\"request_id\":" + json_quote(request_id) +
                   ",\"topic\":" + json_quote(topic) + "}");
@@ -700,6 +757,7 @@ class BridgeNode : public rclcpp::Node {
   std::vector<std::weak_ptr<WebSocketSession>> sessions_;
   std::mutex subscription_mutex_;
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
+  std::unordered_map<std::string, std::string> subscription_types_;
   rclcpp::Publisher<microros_stm32h723_bridge::msg::JointCommand>::SharedPtr command_publisher_;
   std::mutex trajectory_mutex_;
   std::unordered_map<std::string, rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr>
