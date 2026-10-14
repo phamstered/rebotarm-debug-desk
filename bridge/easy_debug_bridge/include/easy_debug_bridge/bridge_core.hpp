@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -139,6 +140,22 @@ inline std::string fully_qualified_node_name(const std::string &node_namespace,
   result += node_name;
   while (result.size() > 1 && result.back() == '/') result.pop_back();
   return result;
+}
+
+inline bool is_valid_graph_name(const std::string &name) {
+  if (name.size() < 2 || name.size() > 255 || name.front() != '/' || name.back() == '/') return false;
+  bool previous_slash = true;
+  for (size_t index = 1; index < name.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(name[index]);
+    if (ch == '/') {
+      if (previous_slash) return false;
+      previous_slash = true;
+    } else {
+      if (!std::isalnum(ch) && ch != '_') return false;
+      previous_slash = false;
+    }
+  }
+  return true;
 }
 
 inline bool is_robot_description_topic(const std::string &topic) {

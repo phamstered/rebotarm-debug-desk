@@ -60,7 +60,7 @@ JointState topic: /stm32/joint_states
 
 ### 做什么
 
-浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的面板做 30 秒滑动窗口曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
+浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的面板做 30 秒滑动窗口曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
 
 ### 界面结构
 
@@ -77,14 +77,14 @@ JointState topic: /stm32/joint_states
 **Topic Graph**
 
 1. 在中心面板切到「Topic Graph」Tab；打开时立即加载，默认每 30 秒刷新，也可点「刷新 Graph」。
-2. 布局近似 `rqt_graph`：Publisher 偏左、Topic 居中、Subscriber 偏右（Sugiyama 分层 + 重心排序减交叉）。
-3. 点击节点高亮一跳关联；点击 Topic 节点会订阅该 Topic，并送入右侧 Topic Inspector。
+2. ROS Node 为圆角矩形、Topic 为椭圆，均使用界面的蓝青/青绿色；连接越多图形越大。力导向布局根据连接关系聚拢相关节点，并避开重叠。连线箭头保留发布/订阅方向，悬停可查看完整名称与关系。默认隐藏 Bridge 节点和私有 Topic，可用开关显示；共享机器人数据 Topic 仍显示。
+3. 点击 ROS Controller 卡片按实际 ROS 关系聚焦节点、Topic 和连线；点击图节点高亮一跳关联。点击左侧 Topic 也会打开 Graph 并聚焦。点击 Topic 图形订阅该 Topic，点击 Node 图形显示详情。
 
-**Topic Inspector / 图像**
+**Inspector / 图像**
 
-1. 在 Inspector 查看当前选中 Topic 的原始 JSON。
+1. 在 Inspector 的“数据”Tab 查看选中 Topic 的完整名称与原始 JSON；“详情”Tab 显示发布者、订阅者及各端点的 GID / QoS。选中 Node 后自动展示其发布、订阅、服务及客户端列表。Topics 列表的名称和类型悬停可查看全称。
 2. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
-3. 对含有限数值字段的消息，Inspector 列出可绘图路径（标量或数值数组）；点击「加入 Monitor」后跳到左侧导航 **Monitor** 页，写入当前选中面板。数组字段展开为多条曲线（如 `effort` → `effort[0..n]`）。
+3. 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，选择当前存在的目标面板后跳到 **Monitor** 页；Inspector JSON 与右键菜单使用紧凑字号。数组字段展开为多条曲线（如 `effort` → `effort[0..n]`）。
 
 **ROS Control**
 
@@ -108,13 +108,13 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ### 做什么
 
-在独立导航页用多面板查看数值时间序列：默认「Motor Torque」面板预置 JointState `effort[0..6]`；可从 Dashboard Inspector 加入字段。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。
+在独立导航页用多面板查看数值时间序列：默认「Motor Torque」面板预置 JointState `effort[0..6]`；可从 Topics Inspector 加入字段。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。
 
 ### 怎么用
 
 1. 左侧 Navigation 打开 **Monitor**。
 2. 面板：新建空面板 /「+转矩」模板、重命名、删除（删光后恢复默认转矩面板）。
-3. 曲线：Dashboard → Topic Inspector「加入 Monitor」；可单条移除或清空。v1 每面板仍为**单 Topic、多字段**（换 Topic 会替换该面板曲线）。
+3. 曲线：Topics → Inspector「加入 Monitor」；可单条移除或清空。v1 每面板仍为**单 Topic、多字段**（换 Topic 会替换该面板曲线）。
 4. 数据源切换「实时 / Bag 回放」。Bag 回放填写 Jetson 上的 bag 目录（如 `robot-console-bags/…`），开始/停止通过 SSH 执行 `ros2 bag play`（带 `--clock`）；**不是**本机解析 bag 文件。
 5. 工具栏「暂停显示」同样冻结 Monitor 采样。
 
@@ -236,7 +236,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 - Capture 仅在 Controller active、状态新鲜、姿态稳定且确认手部支撑已撤掉后开放。
 - `safety_fault` 会锁定采样与拟合；托住后可 Release 清除新版 Controller 的故障锁存。旧版兼容：姿态已释放且速度 ≤ 0.05 rad/s 时允许重新 Begin。
-- Robot Debug Desk **不负责**自动激活控制器；请在 Dashboard 的 ROS Control 面板显式操作。
+- Robot Debug Desk **不负责**自动激活控制器；请在 Topics 的 ROS Control 面板显式操作。
 
 完整步骤与故障恢复：[Joint4 标定操作指南](./joint4-calibration)。
 
@@ -259,7 +259,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 | 暂停显示 | 冻结 WebView 对 Topic / JointState / 硬件状态的消费 |
 | 开始 / 停止录制 | 受约束 SSH 在 Jetson 执行 `ros2 bag record -a` |
 | 诊断快照 | 本机保存脱敏 JSON |
-| 重置布局 | 恢复 Dashboard 默认左右宽度、上下分割并展开三个数据面板 |
+| 重置布局 | 恢复 Topics 默认左右宽度、上下分割并展开侧栏和数据面板 |
 | 设置 | 自动刷新周期、诊断是否含消息摘要等 |
 
 <ToolbarOverview />
@@ -270,7 +270,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 - rosbag 输出到 Jetson `$HOME/robot-console-bags/robot-console-<时间>`；PID / 路径记在 `$HOME/.cache/robot-console/`。停止时先 SIGINT 以便完成索引，超时再用 SIGTERM。
 - 停止/状态检查会校验进程存在且命令行为 `ros2 bag record`，避免误信号复用 PID。**断开桌面端不会自动停止录制**；重连会恢复显示远端录制状态。
 - 诊断快照含脱敏连接信息、Topics、Controller、Agent、HardwareStatus、选中 Topic 与统计；**不含** SSH 私钥路径；大消息预览约 4 KiB，文件上限约 5 MiB。
-- Dashboard 的 Topics、ROS Control、Topic Inspector 可独立展开/收起；侧栏宽与 Topics/ROS Control 上下分割可拖动（含键盘微调），尺寸持久化。
+- Topics 页的 Topics、ROS Control、Inspector 可独立展开/收起；左右侧栏可整列最小化，侧栏宽与 Topics/ROS Control 上下分割可拖动（含键盘微调），状态和尺寸持久化。
 
 ---
 

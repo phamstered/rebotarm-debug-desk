@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultPanelState, loadPanelState, loadProfile, migrateProfile, nextTopicSample } from "./appLogic";
+import { defaultPanelState, defaultSidebarState, loadPanelState, loadProfile, loadSidebarState, migrateProfile, nextTopicSample } from "./appLogic";
 import { defaultProfile } from "./types";
 
 const storage = (value: string | null) => ({ getItem: () => value });
@@ -28,6 +28,12 @@ describe("panel and topic state", () => {
     expect(loadPanelState(storage('{"topics":false}'))).toEqual({ topics: false, rosControl: true, inspector: true });
     expect(loadPanelState(storage('{"motor":false,"inspector":false}'))).toEqual({ topics: true, rosControl: true, inspector: false });
     expect(loadPanelState(storage("bad"))).toEqual(defaultPanelState);
+  });
+
+  it("loads persistent outer sidebar visibility", () => {
+    expect(loadSidebarState(storage(null))).toEqual(defaultSidebarState);
+    expect(loadSidebarState(storage('{"left":false}'))).toEqual({ left: false, right: true });
+    expect(loadSidebarState(storage("bad"))).toEqual(defaultSidebarState);
   });
 
   it("counts messages and calculates average frequency", () => {

@@ -1,4 +1,4 @@
-import type { BridgeEnvelope, ConnectionProfile, RosGraph, TopicInfo } from "./types";
+import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo } from "./types";
 
 type Listener = (message: BridgeEnvelope) => void;
 
@@ -136,5 +136,17 @@ export class BridgeClient {
   async getGraph(): Promise<RosGraph> {
     const response = await this.request({ op: "graph" });
     return { nodes: response.nodes ?? [], edges: response.edges ?? [] };
+  }
+
+  async getTopicInfo(topic: string): Promise<TopicDetails> {
+    const response = await this.request({ op: "topic_info", topic });
+    if (!response.topic_info) throw new Error("Bridge 未返回 Topic 详情");
+    return response.topic_info;
+  }
+
+  async getNodeInfo(node: string): Promise<NodeDetails> {
+    const response = await this.request({ op: "node_info", node });
+    if (!response.node_info) throw new Error("Bridge 未返回 Node 详情");
+    return response.node_info;
   }
 }

@@ -12,7 +12,7 @@ describe("AppNav", () => {
       <AppNav page="dashboard" expanded onSelect={onSelect} onToggle={onToggle} />,
     );
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Topics" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Monitor" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "Monitor" }));
@@ -20,7 +20,7 @@ describe("AppNav", () => {
 
     rerender(<AppNav page="monitor" expanded onSelect={onSelect} onToggle={onToggle} />);
     expect(screen.getByRole("button", { name: "Monitor" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Topics" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
     expect(onToggle).toHaveBeenCalledOnce();

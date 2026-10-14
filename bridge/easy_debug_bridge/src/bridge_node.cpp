@@ -10,6 +10,7 @@
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/typesupport_helpers.hpp>
 #include <rmw/types.h>
+#include <rmw/time.h>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -26,6 +27,7 @@
 #include "easy_debug_bridge/topic_json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -123,6 +125,103 @@ static std::string string_array(const std::vector<std::string> &values) {
   for (size_t index = 0; index < values.size(); ++index) {
     if (index) out << ',';
     out << json_quote(values[index]);
+  }
+  out << ']';
+  return out.str();
+}
+
+static std::string names_and_types_json(const std::map<std::string, std::vector<std::string>> &entries) {
+  std::ostringstream out;
+  out << '[';
+  bool first = true;
+  for (const auto &[name, types] : entries) {
+    if (!first) out << ',';
+    first = false;
+    out << "{\"name\":" << json_quote(name) << ",\"types\":" << string_array(types) << '}';
+  }
+  out << ']';
+  return out.str();
+}
+
+static std::string reliability_name(rmw_qos_reliability_policy_t value) {
+  switch (value) {
+    case RMW_QOS_POLICY_RELIABILITY_RELIABLE: return "RELIABLE";
+    case RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT: return "BEST_EFFORT";
+    case RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT: return "SYSTEM_DEFAULT";
+    default: return "UNKNOWN";
+  }
+}
+
+static std::string history_name(rmw_qos_history_policy_t value) {
+  switch (value) {
+    case RMW_QOS_POLICY_HISTORY_KEEP_LAST: return "KEEP_LAST";
+    case RMW_QOS_POLICY_HISTORY_KEEP_ALL: return "KEEP_ALL";
+    case RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT: return "SYSTEM_DEFAULT";
+    default: return "UNKNOWN";
+  }
+}
+
+static std::string durability_name(rmw_qos_durability_policy_t value) {
+  switch (value) {
+    case RMW_QOS_POLICY_DURABILITY_VOLATILE: return "VOLATILE";
+    case RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL: return "TRANSIENT_LOCAL";
+    case RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT: return "SYSTEM_DEFAULT";
+    default: return "UNKNOWN";
+  }
+}
+
+static std::string liveliness_name(rmw_qos_liveliness_policy_t value) {
+  switch (value) {
+    case RMW_QOS_POLICY_LIVELINESS_AUTOMATIC: return "AUTOMATIC";
+    case RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC: return "MANUAL_BY_TOPIC";
+    case RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT: return "SYSTEM_DEFAULT";
+    default: return "UNKNOWN";
+  }
+}
+
+static std::string duration_name(const rmw_time_t &value) {
+  const rmw_time_t infinite = RMW_DURATION_INFINITE;
+  const rmw_time_t unspecified = RMW_DURATION_UNSPECIFIED;
+  if (value.sec == infinite.sec && value.nsec == infinite.nsec) return "Infinite";
+  if (value.sec == unspecified.sec && value.nsec == unspecified.nsec) return "Default";
+  return std::to_string(value.sec) + "s " + std::to_string(value.nsec) + "ns";
+}
+
+static std::string gid_name(const std::array<uint8_t, RMW_GID_STORAGE_SIZE> &gid) {
+  std::ostringstream out;
+  for (size_t index = 0; index < gid.size(); ++index) {
+    if (index) out << '.';
+    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(gid[index]);
+  }
+  return out.str();
+}
+
+static std::string endpoint_json(const rclcpp::TopicEndpointInfo &endpoint) {
+  const auto &qos = endpoint.qos_profile().get_rmw_qos_profile();
+  std::ostringstream out;
+  out << "{\"node_name\":" << json_quote(endpoint.node_name())
+      << ",\"node_namespace\":" << json_quote(endpoint.node_namespace())
+      << ",\"topic_type\":" << json_quote(endpoint.topic_type())
+      << ",\"endpoint_type\":" << json_quote(endpoint.endpoint_type() == rclcpp::EndpointType::Publisher ? "PUBLISHER" : "SUBSCRIPTION")
+      << ",\"gid\":" << json_quote(gid_name(endpoint.endpoint_gid()))
+      << ",\"qos\":{\"reliability\":" << json_quote(reliability_name(qos.reliability))
+      << ",\"history\":" << json_quote(history_name(qos.history))
+      << ",\"depth\":" << qos.depth
+      << ",\"durability\":" << json_quote(durability_name(qos.durability))
+      << ",\"lifespan\":" << json_quote(duration_name(qos.lifespan))
+      << ",\"deadline\":" << json_quote(duration_name(qos.deadline))
+      << ",\"liveliness\":" << json_quote(liveliness_name(qos.liveliness))
+      << ",\"liveliness_lease_duration\":" << json_quote(duration_name(qos.liveliness_lease_duration))
+      << "}}";
+  return out.str();
+}
+
+static std::string endpoints_json(const std::vector<rclcpp::TopicEndpointInfo> &endpoints) {
+  std::ostringstream out;
+  out << '[';
+  for (size_t index = 0; index < endpoints.size(); ++index) {
+    if (index) out << ',';
+    out << endpoint_json(endpoints[index]);
   }
   out << ']';
   return out.str();
@@ -263,6 +362,10 @@ class BridgeNode : public rclcpp::Node {
         send_topics(session, request_id);
       } else if (op == "graph") {
         send_graph(session, request_id);
+      } else if (op == "topic_info") {
+        send_topic_info(session, request.get<std::string>("topic", ""), request_id);
+      } else if (op == "node_info") {
+        send_node_info(session, request.get<std::string>("node", ""), request_id);
       } else if (op == "subscribe") {
         subscribe(session, request.get<std::string>("topic", ""),
                   request.get<std::string>("type", ""), request_id);
@@ -371,6 +474,53 @@ class BridgeNode : public rclcpp::Node {
     }
     out << "]}";
     session->send(out.str());
+  }
+
+  void send_topic_info(const std::shared_ptr<WebSocketSession> &session,
+                       const std::string &topic, const std::string &request_id) {
+    if (!easy_debug_bridge::is_valid_graph_name(topic)) {
+      session->send(error_message(request_id, "无效 Topic 名称"));
+      return;
+    }
+    const auto topics = get_topic_names_and_types();
+    const auto found = topics.find(topic);
+    if (found == topics.end()) {
+      session->send(error_message(request_id, "Topic 不存在或已离线：" + topic));
+      return;
+    }
+    const auto publishers = get_publishers_info_by_topic(topic);
+    const auto subscriptions = get_subscriptions_info_by_topic(topic);
+    std::ostringstream out;
+    out << "{\"op\":\"topic_info\",\"request_id\":" << json_quote(request_id)
+        << ",\"topic_info\":{\"name\":" << json_quote(topic)
+        << ",\"types\":" << string_array(found->second)
+        << ",\"publishers\":" << endpoints_json(publishers)
+        << ",\"subscriptions\":" << endpoints_json(subscriptions) << "}}";
+    session->send(out.str());
+  }
+
+  void send_node_info(const std::shared_ptr<WebSocketSession> &session,
+                      const std::string &full_name, const std::string &request_id) {
+    if (!easy_debug_bridge::is_valid_graph_name(full_name)) {
+      session->send(error_message(request_id, "无效 Node 名称"));
+      return;
+    }
+    const auto graph_interface = get_node_graph_interface();
+    for (const auto &[name, node_namespace] : graph_interface->get_node_names_and_namespaces()) {
+      if (easy_debug_bridge::fully_qualified_node_name(node_namespace, name) != full_name) continue;
+      std::ostringstream out;
+      out << "{\"op\":\"node_info\",\"request_id\":" << json_quote(request_id)
+          << ",\"node_info\":{\"name\":" << json_quote(full_name)
+          << ",\"namespace\":" << json_quote(node_namespace)
+          << ",\"publishers\":" << names_and_types_json(graph_interface->get_publisher_names_and_types_by_node(name, node_namespace))
+          << ",\"subscriptions\":" << names_and_types_json(graph_interface->get_subscriber_names_and_types_by_node(name, node_namespace))
+          << ",\"services\":" << names_and_types_json(graph_interface->get_service_names_and_types_by_node(name, node_namespace))
+          << ",\"clients\":" << names_and_types_json(graph_interface->get_client_names_and_types_by_node(name, node_namespace))
+          << "}}";
+      session->send(out.str());
+      return;
+    }
+    session->send(error_message(request_id, "Node 不存在或已离线：" + full_name));
   }
 
   template <typename Message, typename Encoder>

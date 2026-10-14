@@ -89,7 +89,7 @@ export function DataGraph({
   liveUpdates,
   onRemoveSeries,
   onClearSeries,
-  emptyHint = "在右侧 Topic Inspector 选择数值字段并「加入 Monitor」",
+  emptyHint = "在右侧 Inspector 选择数值字段并「加入 Monitor」",
 }: {
   seriesList: DataSeries[];
   liveUpdates: boolean;
@@ -131,7 +131,7 @@ export function DataGraph({
       <div className="graph-toolbar data-graph-toolbar">
         <span>
           {seriesList.length === 0
-            ? "从 Topic Inspector 添加数值字段 · 默认窗口 30s"
+            ? "从 Inspector 添加数值字段 · 默认窗口 30s"
             : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${liveUpdates ? "" : " · 已暂停"}`}
         </span>
         <button type="button" onClick={onClearSeries} disabled={seriesList.length === 0}>清空曲线</button>

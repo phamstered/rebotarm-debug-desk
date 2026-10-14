@@ -89,6 +89,12 @@ int main() {
          "/robot/driver");
   assert(easy_debug_bridge::fully_qualified_node_name("robot", "driver") ==
          "/robot/driver");
+  assert(easy_debug_bridge::is_valid_graph_name("/stm32/joint_commands"));
+  assert(easy_debug_bridge::is_valid_graph_name("/arm/follow_joint_trajectory/_action/status"));
+  assert(!easy_debug_bridge::is_valid_graph_name("stm32/joint_commands"));
+  assert(!easy_debug_bridge::is_valid_graph_name("/stm32//status"));
+  assert(!easy_debug_bridge::is_valid_graph_name("/stm32/status/"));
+  assert(!easy_debug_bridge::is_valid_graph_name("/stm32/status;rm"));
   assert(easy_debug_bridge::is_robot_description_topic("/robot_description"));
   assert(easy_debug_bridge::is_robot_description_topic("/arm/robot_description"));
   assert(!easy_debug_bridge::is_robot_description_topic("/robot_description_semantic"));

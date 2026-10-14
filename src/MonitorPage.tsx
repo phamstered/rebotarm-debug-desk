@@ -165,7 +165,7 @@ export function MonitorPage({
           删除面板
         </button>
         <span className="monitor-panel-hint">
-          从 Dashboard → Topic Inspector「加入 Monitor」添加曲线；默认面板为 JointState effort 转矩模板。
+          从 Topics → Inspector 右键选择目标面板添加曲线；默认面板为 JointState effort 转矩模板。
         </span>
       </div>
 
@@ -213,7 +213,7 @@ export function MonitorPage({
         <DataGraph
           seriesList={panel.series}
           liveUpdates={liveUpdates && (mode === "live" || playing)}
-          emptyHint="从 Dashboard Topic Inspector 加入数值字段，或使用「+转矩」模板"
+          emptyHint="从 Topics 的 Inspector 加入数值字段，或使用「+转矩」模板"
           onRemoveSeries={(id) => onUpdatePanelSeries(panel.id, removeSeries(panel.series, id))}
           onClearSeries={() => onUpdatePanelSeries(panel.id, [])}
         />

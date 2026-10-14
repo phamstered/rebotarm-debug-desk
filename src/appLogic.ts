@@ -6,6 +6,17 @@ export type PanelState = Record<CollapsiblePanel, boolean>;
 export type TopicSample = { data: unknown; count: number; firstAt: number; lastAt: number; hz: number };
 
 export const defaultPanelState: PanelState = { topics: true, rosControl: true, inspector: true };
+export type SidebarState = { left: boolean; right: boolean };
+export const defaultSidebarState: SidebarState = { left: true, right: true };
+
+export function loadSidebarState(storage: Pick<Storage, "getItem"> = localStorage): SidebarState {
+  try {
+    const parsed = JSON.parse(storage.getItem("easy-debug-sidebars") ?? "null") as Partial<SidebarState> | null;
+    return { left: typeof parsed?.left === "boolean" ? parsed.left : true, right: typeof parsed?.right === "boolean" ? parsed.right : true };
+  } catch {
+    return { ...defaultSidebarState };
+  }
+}
 
 export function migrateProfile(saved: Partial<ConnectionProfile>): ConnectionProfile {
   const profile = { ...defaultProfile, ...saved } as ConnectionProfile;

@@ -19,7 +19,6 @@ import {
   renameMonitorPanel,
   saveMonitorWorkspace,
   selectMonitorPanel,
-  selectedMonitorPanel,
   updateMonitorFromMessage,
   updatePanelSeries,
 } from "./monitorLogic";
@@ -27,7 +26,7 @@ import type { MonitorWorkspace } from "./monitorLogic";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
-import { defaultPanelState, loadPanelState, loadProfile, nextTopicSample } from "./appLogic";
+import { defaultPanelState, defaultSidebarState, loadPanelState, loadProfile, loadSidebarState, nextTopicSample } from "./appLogic";
 import type { CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
 import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
 import type { LayoutSizes } from "./layoutLogic";
@@ -53,6 +52,8 @@ function PanelTitle({
   expanded,
   onToggle,
   onRefresh,
+  onCollapseSidebar,
+  collapseSidebarLabel,
   refreshing = false,
   className = "",
 }: {
@@ -61,6 +62,8 @@ function PanelTitle({
   expanded: boolean;
   onToggle(): void;
   onRefresh?(): void;
+  onCollapseSidebar?(): void;
+  collapseSidebarLabel?: string;
   refreshing?: boolean;
   className?: string;
 }) {
@@ -69,6 +72,7 @@ function PanelTitle({
       <strong>{title}</strong>
       <div className="panel-title-actions">
         <span className="panel-meta">{meta}</span>
+        {onCollapseSidebar && <button className="sidebar-rail-toggle" type="button" aria-label={collapseSidebarLabel} title={collapseSidebarLabel} onClick={onCollapseSidebar}>{collapseSidebarLabel === "收起右侧栏" ? "›" : "‹"}</button>}
         {onRefresh && (
           <button
             className={`panel-refresh ${refreshing ? "refreshing" : ""}`}
@@ -177,6 +181,7 @@ export default function App() {
   const [topics, setTopics] = useState<TopicInfo[]>([]);
   const [topicFilter, setTopicFilter] = useState("");
   const [selected, setSelected] = useState<string>("");
+  const [selectedNode, setSelectedNode] = useState("");
   const [topicSubscribeError, setTopicSubscribeError] = useState("");
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
   const [urdf, setUrdf] = useState("");
@@ -201,6 +206,8 @@ export default function App() {
   const [bagBusy, setBagBusy] = useState(false);
   const [bagNotice, setBagNotice] = useState("");
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
+  const [sidebars, setSidebars] = useState(loadSidebarState);
+  const [focusController, setFocusController] = useState("");
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [rosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
@@ -246,15 +253,15 @@ export default function App() {
     }, 30_000);
   }, [bridge, trajectoryController]);
 
-  const addToMonitor = useCallback((fieldPath: string) => {
+  const addToMonitor = useCallback((fieldPath: string, panelId: string) => {
     if (!selected) return;
     const sample = messages[selected];
     if (!sample) return;
     setMonitorWorkspace((current) => {
-      const panel = selectedMonitorPanel(current);
+      const panel = current.panels.find((entry) => entry.id === panelId);
       if (!panel) return current;
       const series = addFieldsToSeries(panel.series, selected, fieldPath, sample.data);
-      return updatePanelSeries(current, panel.id, series);
+      return selectMonitorPanel(updatePanelSeries(current, panel.id, series), panel.id);
     });
     setAppPage("monitor");
   }, [messages, selected]);
@@ -262,6 +269,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
   }, [panels]);
+
+  useEffect(() => {
+    localStorage.setItem("easy-debug-sidebars", JSON.stringify(sidebars));
+  }, [sidebars]);
 
   useEffect(() => {
     localStorage.setItem("easy-debug-layout", JSON.stringify(layout));
@@ -342,8 +353,8 @@ export default function App() {
   };
 
   const layoutStyle = {
-    "--left-width": `${layout.leftWidth}px`,
-    "--right-width": `${layout.rightWidth}px`,
+    "--left-width": `${sidebars.left ? layout.leftWidth : 30}px`,
+    "--right-width": `${sidebars.right ? layout.rightWidth : 30}px`,
     "--left-top-size": `${Math.round(layout.leftTopRatio * 10_000) / 100}%`,
   } as CSSProperties;
 
@@ -502,6 +513,7 @@ export default function App() {
     setTopics([]);
     setTopicFilter("");
     setSelected("");
+    setSelectedNode("");
     setTopicSubscribeError("");
     setMessages({});
     setUrdf("");
@@ -510,6 +522,7 @@ export default function App() {
     setAgentStatus(null);
     setAgentError("");
     setRosControl(null);
+    setFocusController("");
     setTopicRefreshing(false);
     setTopicRefreshError("");
     setRosControlRefreshing(false);
@@ -615,6 +628,7 @@ export default function App() {
   function resetWorkspaceLayout() {
     setLayout({ ...defaultLayoutSizes });
     setPanels({ ...defaultPanelState });
+    setSidebars({ ...defaultSidebarState });
     setToolbarNotice("工作区布局已恢复默认值");
   }
 
@@ -708,7 +722,11 @@ export default function App() {
   }
 
   async function selectTopic(topic: TopicInfo) {
+    const generation = connectionGenerationRef.current;
     setSelected(topic.name);
+    setSelectedNode("");
+    setFocusController("");
+    setCenterTab("graph");
     setTopicSubscribeError("");
     if (!topic.types[0]) {
       setTopicSubscribeError("该 Topic 没有可用消息类型");
@@ -717,7 +735,9 @@ export default function App() {
     try {
       await bridge.request({ op: "subscribe", topic: topic.name, type: topic.types[0] });
     } catch (reason) {
-      setTopicSubscribeError(reason instanceof Error ? reason.message : String(reason));
+      if (generation === connectionGenerationRef.current) {
+        setTopicSubscribeError(reason instanceof Error ? reason.message : String(reason));
+      }
     }
   }
 
@@ -778,7 +798,7 @@ export default function App() {
           onStreamingChange={setControlStreaming}
         />
       ) : (
-      <main className="workspace" style={layoutStyle}>
+      <main className={`workspace ${sidebars.right ? "" : "right-sidebar-collapsed"}`} style={layoutStyle}>
       <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
         <div className="toolbar-actions" role="group" aria-label="全局操作">
           <button type="button" className="toolbar-action" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效"><span>⌁</span>连接配置</button>
@@ -831,8 +851,9 @@ export default function App() {
       </header>
       <aside
         ref={topicSidebarRef}
-        className={`topic-sidebar ${panels.topics ? "" : "topics-pane-collapsed"} ${panels.rosControl ? "" : "control-pane-collapsed"}`}
+        className={`topic-sidebar ${sidebars.left ? "" : "sidebar-collapsed"} ${panels.topics ? "" : "topics-pane-collapsed"} ${panels.rosControl ? "" : "control-pane-collapsed"}`}
       >
+        {!sidebars.left && <button type="button" className="sidebar-rail-toggle" aria-label="展开左侧栏" title="展开左侧栏" onClick={() => setSidebars((current) => ({ ...current, left: true }))}>›</button>}
         <section className={`sidebar-section topics-section ${panels.topics ? "expanded" : "collapsed"}`}>
           <PanelTitle
             title="Topics"
@@ -840,6 +861,8 @@ export default function App() {
             expanded={panels.topics}
             onRefresh={() => void refreshTopics()}
             refreshing={topicRefreshing}
+            onCollapseSidebar={() => setSidebars((current) => ({ ...current, left: false }))}
+            collapseSidebarLabel="收起左侧栏"
             onToggle={() => togglePanel("topics")}
           />
           <div className="section-content topic-filter">
@@ -854,7 +877,7 @@ export default function App() {
           </div>
           <div className="section-content topic-list">
             {topicRefreshError && <div className="topic-list-error">刷新失败：{topicRefreshError}</div>}
-            {filteredTopics.map((topic) => <button key={topic.name} className={selected === topic.name ? "active" : ""} onClick={() => void selectTopic(topic)}><strong>{topic.name}</strong><small>{topic.types.join(", ")}</small></button>)}
+            {filteredTopics.map((topic) => <button key={topic.name} className={!selectedNode && selected === topic.name ? "active" : ""} title={`${topic.name}\n${topic.types.join(", ")}`} onClick={() => void selectTopic(topic)}><strong>{topic.name}</strong><small>{topic.types.join(", ")}</small></button>)}
             {topics.length > 0 && filteredTopics.length === 0 && <div className="topic-filter-empty">没有匹配的 Topic</div>}
           </div>
         </section>
@@ -889,6 +912,7 @@ export default function App() {
             {controllerActionMessage && <div className="controller-action-feedback success">{controllerActionMessage}</div>}
             {rosControl?.controllers.map((controller) => (
               <div className="controller-item" key={controller.name}>
+                <button type="button" className="controller-focus-button" aria-label={`在 Topic Graph 聚焦 Controller ${controller.name}`} title={`在 Topic Graph 聚焦 ${controller.name}`} onClick={() => { setFocusController(controller.name); setSelectedNode(`/${controller.name.replace(/^\/+/, "")}`); setCenterTab("graph"); }} />
                 <div>
                   <span className={`controller-state ${controller.state}`} /> <strong>{controller.name}</strong>
                   {isTrajectoryController(controller) && <span className="controller-tag" title="激活后可在 Robot View 拖拽 TCP 并下发轨迹">轨迹</span>}
@@ -936,20 +960,23 @@ export default function App() {
               onSendTrajectory={sendTrajectory}
             />
           )
-          : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
+          : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} onSelectNode={setSelectedNode} selectedTopic={selected} selectedNode={selectedNode} focusController={focusController} onClearControllerFocus={() => setFocusController("")} /></Suspense>}
       </section>
-      <section className="data-panel">
+      <section className={`data-panel ${sidebars.right ? "" : "sidebar-collapsed"}`}>
+        {!sidebars.right && <button type="button" className="sidebar-rail-toggle" aria-label="展开右侧栏" title="展开右侧栏" onClick={() => setSidebars((current) => ({ ...current, right: true }))}>‹</button>}
         <section className={`data-section inspector-section ${panels.inspector ? "expanded" : "collapsed"}`}>
           <PanelTitle
-            title="Topic Inspector"
-            meta={selected ? `${selected}${messages[selected] ? ` · ${messages[selected].hz.toFixed(1)} Hz · ${messages[selected].count} 条` : ""}` : "请选择 Topic"}
+            title="Inspector"
+            meta={selectedNode ? "已选择 Node" : selected ? (messages[selected] ? `${messages[selected].hz.toFixed(1)} Hz · ${messages[selected].count} 条` : "已选择 Topic") : "请选择 Topic / Node"}
             expanded={panels.inspector}
+            onCollapseSidebar={() => setSidebars((current) => ({ ...current, right: false }))}
+            collapseSidebarLabel="收起右侧栏"
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} onAddToDataGraph={addToMonitor} />
+          <TopicInspector bridge={bridge} selected={selected} selectedNode={selectedNode} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} monitorPanels={monitorWorkspace.panels} selectedMonitorPanelId={monitorWorkspace.selectedPanelId} onAddToDataGraph={addToMonitor} />
         </section>
       </section>
-      <ResizeHandle
+      {sidebars.left && <ResizeHandle
         orientation="vertical"
         label="调整 Topics 侧栏宽度"
         value={layout.leftWidth}
@@ -963,8 +990,8 @@ export default function App() {
             nudgeColumn("left", event.key === "ArrowLeft" ? -12 : 12);
           }
         }}
-      />
-      <ResizeHandle
+      />}
+      {sidebars.right && <ResizeHandle
         orientation="vertical"
         label="调整数据侧栏宽度"
         value={layout.rightWidth}
@@ -978,7 +1005,7 @@ export default function App() {
             nudgeColumn("right", event.key === "ArrowLeft" ? 12 : -12);
           }
         }}
-      />
+      />}
       </main>
       )}
       </div>

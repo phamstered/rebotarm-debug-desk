@@ -3,8 +3,7 @@ import type { RosGraph, RosGraphEdge, RosGraphNode } from "./types";
 export type PositionedGraphNode = RosGraphNode & {
   x: number;
   y: number;
-  width: number;
-  height: number;
+  radius: number;
 };
 
 export type GraphLayout = {
@@ -14,101 +13,149 @@ export type GraphLayout = {
   edges: RosGraphEdge[];
 };
 
-function stableBarycentricSort(
-  layer: RosGraphNode[],
-  neighbors: Map<string, Set<string>>,
-  opposite: RosGraphNode[],
-): RosGraphNode[] {
-  const positions = new Map(opposite.map((node, index) => [node.id, index]));
-  return layer
-    .map((node, index) => {
-      const connected = [...(neighbors.get(node.id) ?? [])]
-        .map((id) => positions.get(id))
-        .filter((value): value is number => value !== undefined);
-      return { node, index, barycenter: connected.length ? connected.reduce((sum, value) => sum + value, 0) / connected.length : Number.POSITIVE_INFINITY };
-    })
-    .sort((a, b) => a.barycenter - b.barycenter || a.index - b.index || a.node.label.localeCompare(b.node.label))
-    .map(({ node }) => node);
+export const GRAPH_BRIDGE_VISIBILITY_KEY = "robot-console-graph-show-bridge";
+
+export function loadBridgeVisibility(storage: Pick<Storage, "getItem"> = localStorage): boolean {
+  return storage.getItem(GRAPH_BRIDGE_VISIBILITY_KEY) === "true";
 }
 
-function alignedLayer(
-  nodes: RosGraphNode[],
-  x: number,
-  height: number,
-  neighbors: Map<string, Set<string>>,
-  topicY: Map<string, number>,
-): PositionedGraphNode[] {
-  const top = 48;
-  const bottom = height - 48;
-  const gap = nodes.length > 1 ? (bottom - top) / (nodes.length - 1) : 0;
-  const desired = nodes.map((node, index) => {
-    const values = [...(neighbors.get(node.id) ?? [])]
-      .map((id) => topicY.get(id))
-      .filter((value): value is number => value !== undefined);
-    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : top + gap * index;
-  });
-  const minimumGap = 54;
-  const placed: number[] = [];
-  desired.forEach((value, index) => placed.push(Math.max(value, index ? placed[index - 1] + minimumGap : top)));
-  const overflow = Math.max(0, (placed.at(-1) ?? bottom) - bottom);
-  const shifted = placed.map((value) => value - overflow);
-  const underflow = Math.max(0, top - (shifted[0] ?? top));
-  return nodes.map((node, index) => ({
-    ...node,
-    x,
-    y: shifted[index] + underflow,
-    width: 220,
-    height: 40,
-  }));
+export function isBridgeNode(node: RosGraphNode): boolean {
+  if (node.kind !== "node") return false;
+  const name = node.label.split("/").filter(Boolean).at(-1) ?? "";
+  return name === "bridge" || name === "bridge_node" || name.endsWith("_bridge") || name === "easy_debug_bridge";
 }
 
-export function layoutRosGraph(graph: RosGraph): GraphLayout {
-  let topics = graph.nodes.filter((node) => node.kind === "topic").sort((a, b) => a.label.localeCompare(b.label));
-  const rosNodes = graph.nodes.filter((node) => node.kind === "node").sort((a, b) => a.label.localeCompare(b.label));
-  const publishCounts = new Map<string, number>();
-  const subscribeCounts = new Map<string, number>();
-  const neighbors = new Map<string, Set<string>>();
-  const connect = (a: string, b: string) => {
-    if (!neighbors.has(a)) neighbors.set(a, new Set());
-    if (!neighbors.has(b)) neighbors.set(b, new Set());
-    neighbors.get(a)!.add(b);
-    neighbors.get(b)!.add(a);
-  };
-  graph.edges.forEach((edge) => {
-    connect(edge.source, edge.target);
-    if (edge.relation === "publish") publishCounts.set(edge.source, (publishCounts.get(edge.source) ?? 0) + 1);
-    else subscribeCounts.set(edge.target, (subscribeCounts.get(edge.target) ?? 0) + 1);
-  });
-  let left = rosNodes.filter((node) => (publishCounts.get(node.id) ?? 0) >= (subscribeCounts.get(node.id) ?? 0));
-  let right = rosNodes.filter((node) => !left.includes(node));
+export function graphEdgeKey(edge: RosGraphEdge): string {
+  return `${edge.source}\0${edge.target}\0${edge.relation}`;
+}
 
-  // Sugiyama-style crossing reduction: alternate barycentric sweeps over adjacent layers.
-  for (let sweep = 0; sweep < 8; sweep += 1) {
-    left = stableBarycentricSort(left, neighbors, topics);
-    topics = stableBarycentricSort(topics, neighbors, left);
-    right = stableBarycentricSort(right, neighbors, topics);
-    topics = stableBarycentricSort(topics, neighbors, right);
+export function filterBridgeGraph(graph: RosGraph, showBridge: boolean): RosGraph {
+  if (showBridge) return graph;
+  const hiddenNodes = new Set(graph.nodes.filter(isBridgeNode).map((node) => node.id));
+  const hiddenTopics = new Set(graph.nodes.filter((node) => node.kind === "topic" && node.label.split("/").some((segment) => /(?:^bridge$|_bridge$|^easy_debug_bridge$)/.test(segment))).map((node) => node.id));
+  const visible = new Set(graph.nodes.filter((node) => !hiddenNodes.has(node.id) && !hiddenTopics.has(node.id)).map((node) => node.id));
+  return { nodes: graph.nodes.filter((node) => visible.has(node.id)), edges: graph.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target)) };
+}
+
+export function controllerGraphFocus(graph: RosGraph, controllerName: string): { nodes: Set<string>; edges: Set<string> } {
+  const normalized = `/${controllerName.replace(/^\/+|\/+$/g, "")}`;
+  const exactNodes = graph.nodes.filter((node) => node.kind === "node" && node.label === normalized);
+  const basenameNodes = graph.nodes.filter((node) => node.kind === "node" && node.label.split("/").at(-1) === normalized.slice(1));
+  const matchedNodes = exactNodes.length ? exactNodes : basenameNodes.length === 1 ? basenameNodes : [];
+  const seeds = new Set([
+    ...matchedNodes.map((node) => node.id),
+    ...graph.nodes.filter((node) => node.kind === "topic" && node.label.startsWith(`${normalized}/`)).map((node) => node.id),
+  ]);
+  const nodes = new Set(seeds);
+  const edges = new Set<string>();
+  for (const edge of graph.edges) {
+    if (seeds.has(edge.source) || seeds.has(edge.target)) {
+      nodes.add(edge.source);
+      nodes.add(edge.target);
+      edges.add(graphEdgeKey(edge));
+    }
   }
+  return { nodes, edges };
+}
 
-  const largestLayer = Math.max(topics.length, left.length, right.length, 1);
-  const height = Math.max(560, 96 + (largestLayer - 1) * 64);
-  const topicGap = topics.length > 1 ? (height - 96) / (topics.length - 1) : 0;
-  const positionedTopics: PositionedGraphNode[] = topics.map((node, index) => ({
-    ...node,
-    x: 600,
-    y: 48 + topicGap * index,
-    width: 250,
-    height: 40,
-  }));
-  const topicY = new Map(positionedTopics.map((node) => [node.id, node.y]));
-  return {
-    width: 1200,
-    height,
-    nodes: [
-      ...alignedLayer(left, 140, height, neighbors, topicY),
-      ...positionedTopics,
-      ...alignedLayer(right, 1060, height, neighbors, topicY),
-    ],
-    edges: graph.edges,
+export function layoutRosGraph(graph: RosGraph, viewport: { width: number; height: number } = { width: 1200, height: 560 }): GraphLayout {
+  const nodeCount = graph.nodes.length;
+  const width = Math.max(680, Math.round(viewport.width), Math.ceil(Math.sqrt(nodeCount) * 142));
+  const height = Math.max(560, Math.round(viewport.height), Math.ceil(Math.sqrt(nodeCount) * 108));
+  const neighbors = new Map(graph.nodes.map((node) => [node.id, new Set<string>()]));
+  graph.edges.forEach(({ source, target }) => {
+    neighbors.get(source)?.add(target);
+    neighbors.get(target)?.add(source);
+  });
+  const sorted = [...graph.nodes].sort((a, b) =>
+    (neighbors.get(b.id)?.size ?? 0) - (neighbors.get(a.id)?.size ?? 0) || a.id.localeCompare(b.id));
+  const positioned: PositionedGraphNode[] = sorted.map((node, index) => {
+    const degree = neighbors.get(node.id)?.size ?? 0;
+    const radius = Math.min(42, (node.kind === "node" ? 20 : 16) + Math.sqrt(degree) * 4.5);
+    const angle = index * 2.399963229728653;
+    const distance = Math.sqrt(index) * 48;
+    return {
+      ...node,
+      x: width / 2 + Math.cos(angle) * distance,
+      y: height / 2 + Math.sin(angle) * distance,
+      radius,
+    };
+  });
+  const indexById = new Map(positioned.map((node, index) => [node.id, index]));
+  const links = graph.edges.flatMap((edge) => {
+    const source = indexById.get(edge.source);
+    const target = indexById.get(edge.target);
+    return source === undefined || target === undefined ? [] : [{ source, target }];
+  });
+  const velocity = positioned.map(() => ({ x: 0, y: 0 }));
+  const padding = 26;
+  const constrain = (node: PositionedGraphNode) => {
+    node.x = Math.max(node.radius + padding, Math.min(width - node.radius - padding, node.x));
+    node.y = Math.max(node.radius + padding, Math.min(height - node.radius - padding, node.y));
   };
+
+  // Deterministic force simulation: every refresh and resize converges from the same graph.
+  for (let iteration = 0; iteration < 190; iteration += 1) {
+    const forces = positioned.map((node) => ({
+      x: (width / 2 - node.x) * 0.0018,
+      y: (height / 2 - node.y) * 0.0018,
+    }));
+    for (let i = 0; i < positioned.length; i += 1) {
+      for (let j = i + 1; j < positioned.length; j += 1) {
+        const a = positioned[i]!;
+        const b = positioned[j]!;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const separation = a.radius + b.radius + 12;
+        const repulsion = 6800 / (distance * distance) + Math.max(0, separation - distance) * 0.13;
+        const fx = dx / distance * repulsion;
+        const fy = dy / distance * repulsion;
+        forces[i]!.x -= fx; forces[i]!.y -= fy;
+        forces[j]!.x += fx; forces[j]!.y += fy;
+      }
+    }
+    for (const { source, target } of links) {
+      const a = positioned[source]!;
+      const b = positioned[target]!;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distance = Math.max(1, Math.hypot(dx, dy));
+      const spring = (distance - a.radius - b.radius - 78) * 0.014;
+      const fx = dx / distance * spring;
+      const fy = dy / distance * spring;
+      forces[source]!.x += fx; forces[source]!.y += fy;
+      forces[target]!.x -= fx; forces[target]!.y -= fy;
+    }
+    positioned.forEach((node, index) => {
+      const motion = velocity[index]!;
+      motion.x = Math.max(-9, Math.min(9, (motion.x + forces[index]!.x) * 0.74));
+      motion.y = Math.max(-9, Math.min(9, (motion.y + forces[index]!.y) * 0.74));
+      node.x += motion.x;
+      node.y += motion.y;
+      constrain(node);
+    });
+  }
+  // The final collision pass keeps labels and circles from overlapping.
+  for (let iteration = 0; iteration < 40; iteration += 1) {
+    let moved = false;
+    for (let i = 0; i < positioned.length; i += 1) {
+      for (let j = i + 1; j < positioned.length; j += 1) {
+        const a = positioned[i]!;
+        const b = positioned[j]!;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const distance = Math.max(0.001, Math.hypot(dx, dy));
+        const overlap = a.radius + b.radius + 5 - distance;
+        if (overlap <= 0) continue;
+        const shift = overlap / 2 + 0.01;
+        a.x -= dx / distance * shift; a.y -= dy / distance * shift;
+        b.x += dx / distance * shift; b.y += dy / distance * shift;
+        constrain(a); constrain(b);
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  return { width, height, nodes: positioned, edges: graph.edges };
 }
