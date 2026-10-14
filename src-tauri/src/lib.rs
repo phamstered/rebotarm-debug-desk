@@ -68,6 +68,15 @@ struct RosbagStatus {
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RosbagPlayStatus {
+    playing: bool,
+    pid: u32,
+    bag_path: String,
+    message: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TriggerServiceResponse {
     success: bool,
     message: String,
@@ -316,6 +325,77 @@ fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
             "RECORDING" => "rosbag 正在录制",
             "STOPPED" => "rosbag 录制已停止",
             _ => "rosbag 当前未录制",
+        }
+        .into(),
+    })
+}
+
+fn rosbag_play_remote_command(
+    profile: &ConnectionProfile,
+    action: &str,
+    bag_path: &str,
+) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    if action != "status" && action != "stop" {
+        if bag_path.is_empty() || !is_safe_setup_script(bag_path) {
+            return Err("bag 路径包含不允许的字符".into());
+        }
+    } else if !bag_path.is_empty() && !is_safe_setup_script(bag_path) {
+        return Err("bag 路径包含不允许的字符".into());
+    }
+    let setup = format!(
+        "source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
+        profile.ros_setup_script, profile.ros_setup_script,
+    );
+    let paths = "mkdir -p \"$HOME/.cache/robot-console\";                  pid_file=\"$HOME/.cache/robot-console/rosbag-play.pid\";                  path_file=\"$HOME/.cache/robot-console/rosbag-play.path\"; ";
+    let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true);                  case \"$pid\" in *[!0-9]*|\"\") alive=0 ;;                  *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag play\"; then alive=1; else alive=0; fi ;; esac; ";
+    let body = match action {
+        "status" => format!(
+            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" = 1 ]; then printf \"PLAYING|%s|%s\\n\" \"$pid\" \"$bag\";              else printf \"IDLE|0|%s\\n\" \"$bag\"; fi"
+        ),
+        "start" => format!(
+            "{setup}{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" = 1 ]; then printf \"PLAYING|%s|%s\\n\" \"$pid\" \"$bag\"; exit 0; fi;              bag=\"{bag_path}\";              if [ ! -e \"$bag\" ]; then echo \"bag path not found: $bag\" >&2; exit 1; fi;              ROS_DOMAIN_ID={domain} nohup ros2 bag play \"$bag\" --clock              >\"$HOME/.cache/robot-console/rosbag-play.log\" 2>&1 </dev/null & pid=$!;              printf \"%s\\n\" \"$pid\" >\"$pid_file\"; printf \"%s\\n\" \"$bag\" >\"$path_file\"; sleep 1;              if ! kill -0 \"$pid\" 2>/dev/null; then cat \"$HOME/.cache/robot-console/rosbag-play.log\" >&2; exit 1; fi;              printf \"STARTED|%s|%s\\n\" \"$pid\" \"$bag\"",
+            bag_path = bag_path,
+            domain = profile.ros_domain_id,
+        ),
+        "stop" => format!(
+            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$bag\"; exit 0; fi;              kill -INT \"$pid\";              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25;              done;              if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi;              rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$bag\""
+        ),
+        _ => return Err("不支持的 rosbag 回放操作".into()),
+    };
+    Ok(format!("bash -lc '{body}'"))
+}
+
+fn parse_rosbag_play_status(output: &str) -> Result<RosbagPlayStatus, String> {
+    let line = output
+        .lines()
+        .rev()
+        .find(|line| {
+            ["STARTED|", "PLAYING|", "STOPPED|", "IDLE|"]
+                .iter()
+                .any(|prefix| line.starts_with(prefix))
+        })
+        .ok_or("无法解析 rosbag 回放状态")?;
+    let mut fields = line.splitn(3, '|');
+    let state = fields.next().unwrap_or_default();
+    let pid = fields
+        .next()
+        .unwrap_or_default()
+        .parse::<u32>()
+        .unwrap_or_default();
+    let bag_path = fields.next().unwrap_or_default().to_string();
+    let playing = matches!(state, "STARTED" | "PLAYING");
+    Ok(RosbagPlayStatus {
+        playing,
+        pid: if playing { pid } else { 0 },
+        bag_path,
+        message: match state {
+            "STARTED" => "rosbag 回放已开始",
+            "PLAYING" => "rosbag 正在回放",
+            "STOPPED" => "rosbag 回放已停止",
+            _ => "rosbag 当前未回放",
         }
         .into(),
     })
@@ -632,6 +712,53 @@ async fn stop_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatu
     run_rosbag_action(profile, "stop").await
 }
 
+async fn run_rosbag_play_action(
+    profile: ConnectionProfile,
+    action: &str,
+    bag_path: &str,
+) -> Result<RosbagPlayStatus, String> {
+    let remote = rosbag_play_remote_command(&profile, action, bag_path)?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法执行 rosbag 回放：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "rosbag 回放失败：{}",
+            stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("远端命令失败")
+        ));
+    }
+    parse_rosbag_play_status(&stdout)
+}
+
+#[tauri::command]
+async fn get_rosbag_play_status(profile: ConnectionProfile) -> Result<RosbagPlayStatus, String> {
+    run_rosbag_play_action(profile, "status", "").await
+}
+
+#[tauri::command]
+async fn start_rosbag_playback(
+    profile: ConnectionProfile,
+    bag_path: String,
+) -> Result<RosbagPlayStatus, String> {
+    run_rosbag_play_action(profile, "start", &bag_path).await
+}
+
+#[tauri::command]
+async fn stop_rosbag_playback(profile: ConnectionProfile) -> Result<RosbagPlayStatus, String> {
+    run_rosbag_play_action(profile, "stop", "").await
+}
+
 #[tauri::command]
 async fn start_session(
     profile: ConnectionProfile,
@@ -753,6 +880,9 @@ pub fn run() {
             get_rosbag_status,
             start_rosbag_recording,
             stop_rosbag_recording,
+            get_rosbag_play_status,
+            start_rosbag_playback,
+            stop_rosbag_playback,
             start_session,
             stop_session
         ])
@@ -900,6 +1030,47 @@ mod tests {
             }
         );
         assert!(parse_rosbag_status("unexpected").is_err());
+    }
+
+    #[test]
+    fn builds_and_parses_rosbag_playback_commands() {
+        let start = rosbag_play_remote_command(
+            &profile(""),
+            "start",
+            "robot-console-bags/robot-console-demo",
+        )
+        .unwrap();
+        assert!(start.contains("ROS_DOMAIN_ID=0 nohup ros2 bag play"));
+        assert!(start.contains("robot-console-bags/robot-console-demo"));
+        assert!(start.contains("rosbag-play.pid"));
+        assert!(start.contains("--clock"));
+        let stop = rosbag_play_remote_command(&profile(""), "stop", "").unwrap();
+        assert!(stop.contains("kill -INT"));
+        assert!(rosbag_play_remote_command(&profile(""), "start", "bad;rm").is_err());
+        assert!(rosbag_play_remote_command(&profile(""), "delete", "").is_err());
+
+        assert_eq!(
+            parse_rosbag_play_status(
+                "noise\nSTARTED|9|/home/robot/robot-console-bags/run\n"
+            )
+            .unwrap(),
+            RosbagPlayStatus {
+                playing: true,
+                pid: 9,
+                bag_path: "/home/robot/robot-console-bags/run".into(),
+                message: "rosbag 回放已开始".into(),
+            }
+        );
+        assert_eq!(
+            parse_rosbag_play_status("STOPPED|0|/home/robot/robot-console-bags/run\n").unwrap(),
+            RosbagPlayStatus {
+                playing: false,
+                pid: 0,
+                bag_path: "/home/robot/robot-console-bags/run".into(),
+                message: "rosbag 回放已停止".into(),
+            }
+        );
+        assert!(parse_rosbag_play_status("unexpected").is_err());
     }
 
     #[test]

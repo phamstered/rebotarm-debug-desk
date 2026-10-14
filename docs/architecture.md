@@ -55,7 +55,7 @@ Agents and developers should deploy the Jetson package with `npm run deploy:brid
 - Bridge subscriptions are shared by all connected WebSocket clients.
 - Message decoding uses an explicit standard-type registry.
 - Mesh transfer is base64 and held in memory; streaming is a later optimization.
-- Time-series Topic charts, TF visualization and rosbag playback are not part of this vertical slice. The toolbar can record all topics on the Jetson, but downloading, indexing and replaying a bag remain follow-up work.
+- Monitor provides live numeric charts and Jetson-side `ros2 bag play` (SSH); downloading, indexing and client-side bag parsing remain follow-up work. TF visualization is not part of this vertical slice. The toolbar can record all topics on the Jetson.
 - Topic Graph can visualize every discovered type, while live Topic Inspector viewing is limited to message types decoded by the Bridge registry.
 - ROS Control targets `/controller_manager` and supports controller Activate/Deactivate. Trajectory commands only reach the active `JointTrajectoryController`'s `~/joint_trajectory` topic; the Bridge rejects any other topic.
 - TCP dragging solves position only and keeps the end-effector orientation fixed.
