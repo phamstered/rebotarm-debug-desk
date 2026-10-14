@@ -93,15 +93,11 @@ JointState topic: /stm32/joint_states
 
 ### 可解码消息类型
 
-未注册类型仍可出现在列表中，但内容查看会提示暂不支持：
-
-- `std_msgs/msg/String` · `Bool` · `Float32` · `Float64` · `Int32` · `UInt32` · `Float32MultiArray` · `Float64MultiArray`
-- `sensor_msgs/msg/JointState` · `sensor_msgs/msg/Image`（预览路径）
-- `microros_stm32h723_bridge/msg/JointCommand` · `HardwareStatus`
+Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 `control_msgs/msg/JointTrajectoryControllerState` 等嵌套结构和数组。已知基础类型保留原有展示；`sensor_msgs/msg/Image` 使用专用二进制预览路径。
 
 ### 注意与边界
 
-- Graph 可展示 graph 中全部 Topic，但实时解码仍受 Bridge 消息类型注册表限制。
+- Graph 可展示 graph 中全部 Topic；实时解码要求 Bridge 运行环境中存在对应消息类型支持。类型支持缺失或请求类型与 Topic 不符时显示具体错误。
 - Image 由 Bridge 全速传二进制帧；Canvas 按动画帧合并绘制，不丢弃 Bridge 消息、不影响频率统计。
 - Controller 名称与操作类型在 Tauri/Rust 侧校验，拒绝含 shell 特殊字符的输入；manager 不可用时显示离线原因，不阻塞 Topic 浏览。
 - 订阅失败单独展示，不会中断 Graph 刷新。

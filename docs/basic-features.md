@@ -53,19 +53,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Controller 名称和操作类型在 Tauri/Rust 后端校验，拒绝包含 shell 特殊字符的输入。
 - 兼容 Jetson 当前 Humble `ros2controlcli` 的超时参数类型缺陷：不显式传入 `--switch-timeout`，使用其内部浮点默认值，并由外层进程提供 10 秒超时保护。
 - controller manager 服务不可用或查询超时时显示离线原因，不阻塞 Topic 浏览和其他功能。
-- 当前 Bridge 支持以下消息内容：
-
-  - `std_msgs/msg/String`
-  - `std_msgs/msg/Bool`
-  - `std_msgs/msg/Float32`
-  - `std_msgs/msg/Float64`
-  - `std_msgs/msg/Int32`
-  - `std_msgs/msg/UInt32`
-  - `std_msgs/msg/Float32MultiArray`
-  - `std_msgs/msg/Float64MultiArray`
-  - `sensor_msgs/msg/JointState`
-  - `microros_stm32h723_bridge/msg/JointCommand`
-  - `microros_stm32h723_bridge/msg/HardwareStatus`
+- Bridge 可订阅 Jetson 当前 ROS 环境中已安装类型支持的消息类型。已知的基础消息保留原有字段格式；其余类型通过 ROS 2 运行时字段描述递归转换为 JSON，包括 `control_msgs/msg/JointTrajectoryControllerState` 的嵌套字段和数组。类型支持缺失或请求类型与已发现的 Topic 不符时显示具体错误。
 
 ## 4. Topic Graph、Topic Inspector 与 Monitor
 
@@ -79,7 +67,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Monitor Bag 回放：经 Tauri SSH 在 Jetson 执行 `ros2 bag play <path> --clock`，曲线仍走 Bridge 实时订阅；本机解析 bag / 下载 / 索引未实现。路径校验与录制相同（拒绝 `~`、`.`/`..`、shell 元字符等）。
 - `sensor_msgs/msg/Image` Topic（包括 `/camera/color/image_raw`）在数据 Tab 使用 Canvas 实时预览，支持 rgb8、bgr8、rgba8、bgra8、mono8、mono16 及对应 OpenCV 8UC/16UC1 编码、行步长和大小端转换。
 - Image 数据由 Bridge 使用 WebSocket 二进制帧全速传输，帧头保留 JSON 元数据、像素保持原始字节，避免 Base64 膨胀和大 JSON 解析；Canvas 使用浏览器动画帧合并绘制，不丢弃 Bridge 消息且不影响 Topic 频率统计。元数据展示尺寸、编码、step、时间戳与原始字节数但不展开二进制内容。
-- Graph 可以展示 ROS graph 中的全部 Topic，但实时数据仍受 Bridge 消息类型注册表限制；不支持解码的消息类型会明确提示订阅失败。
+- Graph 可以展示 ROS graph 中的全部 Topic；实时内容解析要求对应消息类型支持已安装在运行中的 Bridge ROS 环境。64 位整数超过 JavaScript 安全整数范围时以十进制字符串传输，非有限浮点数转为 `null`。
 
 ## 5. URDF 与 Three.js
 
@@ -176,6 +164,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | Topic Inspector | 默认原始 JSON、图像预览与紧凑元数据、订阅失败提示、数值字段加入 Monitor | `src/TopicInspector.test.tsx`、`src/App.test.tsx` |
 | Monitor / DataGraph | 面板 CRUD、转矩模板、路径解析与数组展开、30s 窗口、Jetson bag play | `src/monitorLogic.test.ts`、`src/MonitorPage.test.tsx`、`src/dataGraphLogic.test.ts`、`src/DataGraph.test.tsx`、`src/App.test.tsx`、`src-tauri` rosbag play 测试 |
 | 图像 Topic | Image WebSocket 二进制全速传输、动画帧合并绘制、RGB/BGR/RGBA/BGRA/Mono8/Mono16 转换、step/大小端、Canvas 预览及紧凑元数据 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`bridge/easy_debug_bridge/test/test_image_topic.py`、`src/bridge.test.ts`、`src/imageTopicLogic.test.ts`、`src/RosImagePreview.test.tsx`、`src/TopicInspector.test.tsx` |
+| 通用 Topic 解码 | 已安装消息类型的嵌套字段、数组、时间与大整数，ControllerState Inspector 路由、错误类型拒绝 | `bridge/easy_debug_bridge/test/test_topic_json.cpp`、`bridge/easy_debug_bridge/test/test_generic_topic.py`（ROS 集成）、`src/App.test.tsx` |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
 | URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx` |
