@@ -2,7 +2,7 @@
   <figure class="rdd-diagram" role="img" aria-labelledby="rdd-ui-title" aria-describedby="rdd-ui-desc">
     <p id="rdd-ui-title" class="rdd-diagram__title">界面结构 · UI layout</p>
     <p id="rdd-ui-desc" class="rdd-diagram__sr">
-      左侧 Navigation 含 Dashboard、Motor 与 Calibration；Dashboard 中心面板局部 Tab 为 Robot View 与 Topic Graph；
+      左侧 Navigation 含 Dashboard、Motor 与 Calibration；Dashboard 中心面板局部 Tab 为 Robot View、Topic Graph 与 DataGraph；
       可折叠侧栏含 Topics 列表、ROS Control 与 Topic Inspector。Motor 是独立的七关节控制页。
     </p>
 
@@ -20,6 +20,7 @@
         <div class="rdd-panel__items">
           <div class="rdd-panel__item">Robot View</div>
           <div class="rdd-panel__item">Topic Graph</div>
+          <div class="rdd-panel__item">DataGraph</div>
         </div>
       </div>
       <div class="rdd-panel rdd-panel--side">

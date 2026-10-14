@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TopicInspector } from "./TopicInspector";
 
-const sample = { data: { position: [0.2, 0.6], name: ["joint1"] }, count: 4, firstAt: 1, lastAt: 2, hz: 20 };
+const sample = { data: { position: [0.2, 0.6], name: ["joint1"], effort: [1, 2, 3] }, count: 4, firstAt: 1, lastAt: 2, hz: 20 };
 
 describe("TopicInspector", () => {
   afterEach(() => {
@@ -47,5 +48,15 @@ describe("TopicInspector", () => {
     render(<TopicInspector selected="/joint_states" sample={sample} subscribeError="unsupported type" />);
     expect(screen.getByText("订阅失败：unsupported type")).toBeVisible();
     expect(screen.getByText(/"position": \[/)).toBeVisible();
+  });
+
+  it("lists numeric fields and invokes Add to DataGraph", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<TopicInspector selected="/joint_states" sample={sample} onAddToDataGraph={onAdd} />);
+    expect(screen.getByLabelText("可加入 DataGraph 的字段")).toBeVisible();
+    expect(screen.getByText("effort")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "加入 DataGraph：effort" }));
+    expect(onAdd).toHaveBeenCalledWith("effort");
   });
 });
