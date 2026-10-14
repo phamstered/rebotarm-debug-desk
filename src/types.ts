@@ -70,6 +70,13 @@ export type RosbagStatus = {
   message: string;
 };
 
+export type RosbagPlayStatus = {
+  playing: boolean;
+  pid: number;
+  bagPath: string;
+  message: string;
+};
+
 export type TrajectoryPoint = {
   positions: number[];
   velocities?: number[];

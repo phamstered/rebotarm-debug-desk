@@ -1,4 +1,4 @@
-/** Sliding-window live series for the DataGraph center tab (v1: single topic). */
+/** Sliding-window live series for Monitor panels / DataGraph charts (v1: single topic per panel). */
 
 export const DATA_GRAPH_WINDOW_MS = 30_000;
 export const DATA_GRAPH_MAX_POINTS = 8_000;

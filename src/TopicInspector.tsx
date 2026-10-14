@@ -44,8 +44,8 @@ export function TopicInspector({
       {subscribeError && <div className="topic-inspector-error">订阅失败：{subscribeError}</div>}
       {imageTopic && <RosImagePreview data={sample?.data} />}
       {numericFields.length > 0 && onAddToDataGraph && (
-        <div className="topic-inspector-fields" aria-label="可加入 DataGraph 的字段">
-          <div className="topic-inspector-fields-title">数值字段 → DataGraph</div>
+        <div className="topic-inspector-fields" aria-label="可加入 Monitor 的字段">
+          <div className="topic-inspector-fields-title">数值字段 → Monitor</div>
           <ul>
             {numericFields.map((field) => (
               <NumericFieldRow key={field.path} field={field} onAdd={() => onAddToDataGraph(field.path)} />
@@ -64,7 +64,7 @@ function NumericFieldRow({ field, onAdd }: { field: NumericFieldInfo; onAdd(): v
     <li>
       <code title={field.path}>{field.path}</code>
       <small>{detail}</small>
-      <button type="button" onClick={onAdd} aria-label={`加入 DataGraph：${field.path}`}>
+      <button type="button" onClick={onAdd} aria-label={`加入 Monitor：${field.path}`}>
         加入 DataGraph
       </button>
     </li>

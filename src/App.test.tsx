@@ -78,7 +78,7 @@ describe("App workflow", () => {
     vi.clearAllMocks();
     doubles.save.mockResolvedValue("/tmp/robot-console-diagnostics.json");
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
-    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string }) => {
+    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "check_micro_ros_agent") return Promise.resolve({
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
@@ -99,6 +99,9 @@ describe("App workflow", () => {
       if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
       if (command === "start_rosbag_recording") return Promise.resolve({ recording: true, pid: 42, outputPath: "/home/robot/robot-console-bags/run", message: "rosbag 录制已开始" });
       if (command === "stop_rosbag_recording") return Promise.resolve({ recording: false, pid: 0, outputPath: "/home/robot/robot-console-bags/run", message: "rosbag 录制已停止" });
+      if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
+      if (command === "start_rosbag_playback") return Promise.resolve({ playing: true, pid: 9, bagPath: args?.bagPath || "", message: "rosbag 回放已开始" });
+      if (command === "stop_rosbag_playback") return Promise.resolve({ playing: false, pid: 0, bagPath: "robot-console-bags/demo", message: "rosbag 回放已停止" });
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -487,7 +490,8 @@ describe("App workflow", () => {
     expect(within(toolbar).queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Robot View" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tab", { name: "DataGraph" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByRole("tab", { name: "DataGraph" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Monitor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Robot View" }).closest(".center-tabs")).not.toBeNull();
 
     const topicCalls = doubles.listTopics.mock.calls.length;
@@ -585,7 +589,7 @@ describe("App workflow", () => {
     expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
   });
 
-  it("adds numeric fields from Topic Inspector into DataGraph", async () => {
+  it("adds numeric fields from Topic Inspector into Monitor panels", async () => {
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       setTransform: vi.fn(),
       clearRect: vi.fn(),
@@ -609,12 +613,45 @@ describe("App workflow", () => {
         data: { name: ["j1", "j2"], position: [0.1, 0.2], effort: [1, 2, 3, 4, 5, 6, 7] },
       });
     });
-    expect(await screen.findByLabelText("可加入 DataGraph 的字段")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "加入 DataGraph：effort" }));
-    expect(screen.getByRole("tab", { name: "DataGraph" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByLabelText("可加入 Monitor 的字段")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "加入 Monitor：effort" }));
+    expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
+    expect(localStorage.getItem("robot-console-page")).toBe("monitor");
     expect(await screen.findByLabelText("DataGraph 实时曲线")).toBeVisible();
+    // Default torque template already has 7 effort series; adding effort again is a no-op for duplicates.
     expect(screen.getByText(/7 条曲线/)).toBeVisible();
     expect(screen.getByLabelText("DataGraph 曲线列表")).toBeVisible();
+    getContext.mockRestore();
+  });
+
+  it("opens Monitor from navigation with torque template and bag playback controls", async () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      setTransform: vi.fn(),
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      strokeRect: vi.fn(),
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(screen.getByRole("button", { name: "Monitor" }));
+    expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: /Motor Torque/ })).toBeVisible();
+    expect(screen.getByText(/7 条曲线/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Bag 回放" }));
+    await user.clear(screen.getByLabelText("Jetson bag 路径"));
+    await user.type(screen.getByLabelText("Jetson bag 路径"), "robot-console-bags/demo");
+    await user.click(screen.getByRole("button", { name: "开始回放" }));
+    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_rosbag_playback", {
+      profile: expect.any(Object),
+      bagPath: "robot-console-bags/demo",
+    }));
+    expect(await screen.findByRole("button", { name: /停止回放/ })).toBeVisible();
     getContext.mockRestore();
   });
 

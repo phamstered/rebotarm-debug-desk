@@ -8,11 +8,22 @@ import { AppNav } from "./AppNav";
 import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorPage } from "./MotorPage";
-import { DataGraph } from "./DataGraph";
+import { MonitorPage } from "./MonitorPage";
 import { TopicInspector } from "./TopicInspector";
-import { addFieldsToSeries, removeSeries, updateSeriesFromMessage } from "./dataGraphLogic";
-import type { DataSeries } from "./dataGraphLogic";
-import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
+import { addFieldsToSeries } from "./dataGraphLogic";
+import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
+import {
+  addMonitorPanel,
+  deleteMonitorPanel,
+  loadMonitorWorkspace,
+  renameMonitorPanel,
+  saveMonitorWorkspace,
+  selectMonitorPanel,
+  selectedMonitorPanel,
+  updateMonitorFromMessage,
+  updatePanelSeries,
+} from "./monitorLogic";
+import type { MonitorWorkspace } from "./monitorLogic";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
@@ -25,7 +36,7 @@ import type { ToolbarSettings } from "./toolbarLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "connected" | "failed";
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
-type CenterTab = "robot" | "graph" | "data";
+type CenterTab = "robot" | "graph";
 
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
@@ -157,7 +168,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 export default function App() {
   const [appPage, setAppPage] = useState<AppPage>(() => {
     const saved = localStorage.getItem("robot-console-page");
-    return saved === "motor" || saved === "calibration" ? saved : "dashboard";
+    return saved === "motor" || saved === "calibration" || saved === "monitor" ? saved : "dashboard";
   });
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
@@ -183,7 +194,12 @@ export default function App() {
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>("robot");
-  const [dataSeries, setDataSeries] = useState<DataSeries[]>([]);
+  const [monitorWorkspace, setMonitorWorkspace] = useState<MonitorWorkspace>(() =>
+    loadMonitorWorkspace(loadProfile().jointStateTopic),
+  );
+  const [rosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
+  const [bagBusy, setBagBusy] = useState(false);
+  const [bagNotice, setBagNotice] = useState("");
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
   const [liveUpdates, setLiveUpdates] = useState(true);
@@ -230,21 +246,18 @@ export default function App() {
     }, 30_000);
   }, [bridge, trajectoryController]);
 
-  const addToDataGraph = useCallback((fieldPath: string) => {
+  const addToMonitor = useCallback((fieldPath: string) => {
     if (!selected) return;
     const sample = messages[selected];
     if (!sample) return;
-    setDataSeries((current) => addFieldsToSeries(current, selected, fieldPath, sample.data));
-    setCenterTab("data");
+    setMonitorWorkspace((current) => {
+      const panel = selectedMonitorPanel(current);
+      if (!panel) return current;
+      const series = addFieldsToSeries(panel.series, selected, fieldPath, sample.data);
+      return updatePanelSeries(current, panel.id, series);
+    });
+    setAppPage("monitor");
   }, [messages, selected]);
-
-  const removeDataSeries = useCallback((id: string) => {
-    setDataSeries((current) => removeSeries(current, id));
-  }, []);
-
-  const clearDataSeries = useCallback(() => {
-    setDataSeries([]);
-  }, []);
 
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
@@ -257,6 +270,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("robot-console-page", appPage);
   }, [appPage]);
+
+  useEffect(() => {
+    saveMonitorWorkspace(monitorWorkspace);
+  }, [monitorWorkspace]);
 
   useEffect(() => {
     localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
@@ -427,7 +444,7 @@ export default function App() {
             [message.topic!]: nextTopicSample(previous, message.data, now),
           };
         });
-        setDataSeries((current) => updateSeriesFromMessage(current, message.topic!, message.data, now));
+        setMonitorWorkspace((current) => updateMonitorFromMessage(current, message.topic!, message.data, now));
         if (message.topic === profile.urdfTopic && typeof message.data === "string") setUrdf(message.data);
         if (message.topic === profile.jointStateTopic && message.data && typeof message.data === "object") {
           setJointState(message.data as { name?: string[]; position?: number[] });
@@ -503,9 +520,13 @@ export default function App() {
     setEffectiveLocalPort(null);
     setLiveUpdates(true);
     setRosbagStatus(null);
+    setRosbagPlayStatus(null);
+    setBagBusy(false);
+    setBagNotice("");
     setToolbarBusy("");
     setToolbarNotice("");
-    setDataSeries([]);
+    // Keep Monitor panel config; clear live points by reloading persisted configs without points.
+    setMonitorWorkspace(loadMonitorWorkspace(profile.jointStateTopic));
   }
 
   async function connect() {
@@ -537,6 +558,9 @@ export default function App() {
       void invoke<RosbagStatus>("get_rosbag_status", { profile })
         .then(setRosbagStatus)
         .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`));
+      void invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile })
+        .then(setRosbagPlayStatus)
+        .catch(() => undefined);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStage("failed");
@@ -607,6 +631,45 @@ export default function App() {
       setToolbarNotice(`rosbag 操作失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setToolbarBusy("");
+    }
+  }
+
+
+  async function refreshBagPlayStatus() {
+    try {
+      const status = await invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile });
+      setRosbagPlayStatus(status);
+      setBagNotice(status.message);
+    } catch (reason) {
+      setBagNotice(`无法读取 bag 回放状态：${reason instanceof Error ? reason.message : String(reason)}`);
+    }
+  }
+
+  async function startBagPlay(bagPath: string) {
+    setBagBusy(true);
+    setBagNotice("");
+    try {
+      const status = await invoke<RosbagPlayStatus>("start_rosbag_playback", { profile, bagPath });
+      setRosbagPlayStatus(status);
+      setBagNotice(status.message);
+    } catch (reason) {
+      setBagNotice(`bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBagBusy(false);
+    }
+  }
+
+  async function stopBagPlay() {
+    setBagBusy(true);
+    setBagNotice("");
+    try {
+      const status = await invoke<RosbagPlayStatus>("stop_rosbag_playback", { profile });
+      setRosbagPlayStatus(status);
+      setBagNotice(status.message);
+    } catch (reason) {
+      setBagNotice(`停止 bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBagBusy(false);
     }
   }
 
@@ -688,6 +751,23 @@ export default function App() {
           bridge={bridge}
           controllerState={calibrationControllerState}
           onRefreshControllers={() => void refreshRosControllers()}
+        />
+      ) : appPage === "monitor" ? (
+        <MonitorPage
+          workspace={monitorWorkspace}
+          jointStateTopic={profile.jointStateTopic}
+          liveUpdates={liveUpdates}
+          bagStatus={rosbagPlayStatus}
+          bagBusy={bagBusy}
+          bagNotice={bagNotice}
+          onSelectPanel={(panelId) => setMonitorWorkspace((current) => selectMonitorPanel(current, panelId))}
+          onAddPanel={(panel) => setMonitorWorkspace((current) => addMonitorPanel(current, panel))}
+          onRenamePanel={(panelId, name) => setMonitorWorkspace((current) => renameMonitorPanel(current, panelId, name))}
+          onDeletePanel={(panelId) => setMonitorWorkspace((current) => deleteMonitorPanel(current, panelId, profile.jointStateTopic))}
+          onUpdatePanelSeries={(panelId, series) => setMonitorWorkspace((current) => updatePanelSeries(current, panelId, series))}
+          onRefreshBagStatus={() => void refreshBagPlayStatus()}
+          onStartBagPlay={(bagPath) => void startBagPlay(bagPath)}
+          onStopBagPlay={() => void stopBagPlay()}
         />
       ) : appPage === "motor" ? (
         <MotorPage
@@ -842,9 +922,8 @@ export default function App() {
           <div className="center-tab-list" role="tablist" aria-label="中心视图">
             <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
             <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
-            <button type="button" role="tab" aria-selected={centerTab === "data"} className={centerTab === "data" ? "active" : ""} onClick={() => setCenterTab("data")}>DataGraph</button>
           </div>
-          <span>{centerTab === "robot" ? profile.urdfTopic : centerTab === "graph" ? "ROS Node / Topic topology" : dataSeries.length ? `${dataSeries.length} series · 30s` : "数值字段实时曲线"}</span>
+          <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
         </div>
         {centerTab === "robot"
           ? (
@@ -857,16 +936,7 @@ export default function App() {
               onSendTrajectory={sendTrajectory}
             />
           )
-          : centerTab === "graph"
-            ? <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>
-            : (
-              <DataGraph
-                seriesList={dataSeries}
-                liveUpdates={liveUpdates}
-                onRemoveSeries={removeDataSeries}
-                onClearSeries={clearDataSeries}
-              />
-            )}
+          : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} /></Suspense>}
       </section>
       <section className="data-panel">
         <section className={`data-section inspector-section ${panels.inspector ? "expanded" : "collapsed"}`}>
@@ -876,7 +946,7 @@ export default function App() {
             expanded={panels.inspector}
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} onAddToDataGraph={addToDataGraph} />
+          <TopicInspector selected={selected} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} onAddToDataGraph={addToMonitor} />
         </section>
       </section>
       <ResizeHandle

@@ -43,7 +43,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
-- 页面导航只保留在左侧 Navigation，包含 Dashboard、Motor 和 Calibration；Robot View / Topic Graph / DataGraph 作为 Dashboard 中心面板标题栏内的局部 Tab。顶部工具栏不再重复品牌或导航。
+- 页面导航只保留在左侧 Navigation，包含 Dashboard、Monitor、Motor 和 Calibration；Robot View / Topic Graph 作为 Dashboard 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
 - 顶部工具栏提供连接配置、全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照、重置布局和应用设置；右侧保留连接名、隧道端口、micro-ROS Agent 状态和断开按钮。
 - Dashboard 的 Topics、ROS Control、Topic Inspector 三个区域可独立展开/收起，状态保存在本机；Topics 与 ROS Control 会自动使用另一面板释放出的高度。
 - Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。
@@ -67,14 +67,16 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
   - `microros_stm32h723_bridge/msg/JointCommand`
   - `microros_stm32h723_bridge/msg/HardwareStatus`
 
-## 4. Topic Graph、Topic Inspector 与 DataGraph
+## 4. Topic Graph、Topic Inspector 与 Monitor
 
-- Robot View 同级提供 Topic Graph 与 DataGraph Tab。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。
+- Robot View 同级提供 Topic Graph Tab（DataGraph 已迁至 Monitor 导航页）。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。
 - Topic Graph 在打开时立即加载，默认每 30 秒自动刷新，也可点击“刷新 Graph”手动刷新；图变化不影响现有 Topic 数据订阅。
 - Graph 使用 Sugiyama 分层图的重心排序：Publisher 倾向左侧、Topic 居中、Subscriber 倾向右侧，通过多轮相邻层扫描减少连线交叉，并按相邻 Topic 平均位置对齐 ROS Node。
 - 点击任意节点会高亮其一跳关联节点和连线、弱化其他拓扑；点击 Topic 节点还会创建只读订阅，并将该 Topic 送入右侧 Topic Inspector。
 - Topic Inspector 显示当前选中 Topic 的原始 JSON；`sensor_msgs/msg/Image` 显示 Canvas 预览与紧凑元数据。订阅失败单独提示，不会中断 Graph 刷新。
-- Inspector 对有限数值叶子与数值数组列出「加入 DataGraph」；数组展开为 `field[0..n]` 多条曲线。v1 DataGraph 为单 Topic、多字段、默认 30 秒滑动窗口；从另一 Topic 加入时替换现有曲线。支持移除单条 / 清空全部；「暂停显示」同样冻结采样。
+- Inspector 对有限数值叶子与数值数组列出「加入 Monitor」；写入当前 Monitor 选中面板并跳转 Monitor 页。数组展开为 `field[0..n]` 多条曲线。
+- **Monitor** 导航页：多面板（创建/重命名/删除）；默认「Motor Torque」面板预置 JointState `effort[0..6]`。每面板 v1 为单 Topic、多字段、默认 30 秒滑动窗口；从另一 Topic 加入时替换该面板曲线。「暂停显示」同样冻结采样。
+- Monitor Bag 回放：经 Tauri SSH 在 Jetson 执行 `ros2 bag play <path> --clock`，曲线仍走 Bridge 实时订阅；本机解析 bag / 下载 / 索引未实现。路径校验与录制相同（拒绝 `~`、`.`/`..`、shell 元字符等）。
 - `sensor_msgs/msg/Image` Topic（包括 `/camera/color/image_raw`）在数据 Tab 使用 Canvas 实时预览，支持 rgb8、bgr8、rgba8、bgra8、mono8、mono16 及对应 OpenCV 8UC/16UC1 编码、行步长和大小端转换。
 - Image 数据由 Bridge 使用 WebSocket 二进制帧全速传输，帧头保留 JSON 元数据、像素保持原始字节，避免 Base64 膨胀和大 JSON 解析；Canvas 使用浏览器动画帧合并绘制，不丢弃 Bridge 消息且不影响 Topic 频率统计。元数据展示尺寸、编码、step、时间戳与原始字节数但不展开二进制内容。
 - Graph 可以展示 ROS graph 中的全部 Topic，但实时数据仍受 Bridge 消息类型注册表限制；不支持解码的消息类型会明确提示订阅失败。
@@ -163,7 +165,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 |---|---|---|
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
 | 面板 | 默认/持久化状态、三个 Dashboard 面板独立收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
-| 工具栏 | 导航职责分离、中心局部 Tab、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
+| 工具栏 | 导航职责分离、中心局部 Tab（Robot View / Topic Graph）、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
@@ -171,8 +173,8 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |
 | Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
 | Topic Graph | ROS 图请求、Sugiyama 重心排序和交叉消除、Publisher/Subscriber 方向、节点聚焦、Tab 与节点订阅、手动/30 秒刷新 | `src/bridge.test.ts`、`src/topicGraphLogic.test.ts`、`src/TopicGraph.test.tsx`、`src/App.test.tsx` |
-| Topic Inspector | 默认原始 JSON、图像预览与紧凑元数据、订阅失败提示、数值字段加入 DataGraph | `src/TopicInspector.test.tsx`、`src/App.test.tsx` |
-| DataGraph | 路径解析与数组展开、30s 滑动窗口环缓冲、单 Topic 多字段、清空/移除、中心 Tab | `src/dataGraphLogic.test.ts`、`src/DataGraph.test.tsx`、`src/App.test.tsx` |
+| Topic Inspector | 默认原始 JSON、图像预览与紧凑元数据、订阅失败提示、数值字段加入 Monitor | `src/TopicInspector.test.tsx`、`src/App.test.tsx` |
+| Monitor / DataGraph | 面板 CRUD、转矩模板、路径解析与数组展开、30s 窗口、Jetson bag play | `src/monitorLogic.test.ts`、`src/MonitorPage.test.tsx`、`src/dataGraphLogic.test.ts`、`src/DataGraph.test.tsx`、`src/App.test.tsx`、`src-tauri` rosbag play 测试 |
 | 图像 Topic | Image WebSocket 二进制全速传输、动画帧合并绘制、RGB/BGR/RGBA/BGRA/Mono8/Mono16 转换、step/大小端、Canvas 预览及紧凑元数据 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`bridge/easy_debug_bridge/test/test_image_topic.py`、`src/bridge.test.ts`、`src/imageTopicLogic.test.ts`、`src/RosImagePreview.test.tsx`、`src/TopicInspector.test.tsx` |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |

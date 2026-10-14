@@ -5,13 +5,14 @@
 ## 目录
 
 1. [连接与会话](#_1-连接与会话)
-2. [Topics / Graph / Inspector / DataGraph](#_2-topics-graph-inspector)
-3. [Robot View（URDF）](#_3-robot-view-urdf)
-4. [MIT 电机控制](#_4-mit-电机控制)
-5. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
-6. [Joint4 标定](#_6-joint4-标定)
-7. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
-8. [重力辨识（设计草案）](#_8-重力辨识设计草案)
+2. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
+3. [Monitor](#monitor)
+4. [Robot View（URDF）](#_3-robot-view-urdf)
+5. [MIT 电机控制](#_4-mit-电机控制)
+6. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
+7. [Joint4 标定](#_6-joint4-标定)
+8. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
+9. [重力辨识（设计草案）](#_8-重力辨识设计草案)
 
 ---
 
@@ -59,7 +60,7 @@ JointState topic: /stm32/joint_states
 
 ### 做什么
 
-浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入中心面板 **DataGraph** 做 30 秒滑动窗口实时曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
+浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Topic Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的面板做 30 秒滑动窗口曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
 
 ### 界面结构
 
@@ -83,13 +84,7 @@ JointState topic: /stm32/joint_states
 
 1. 在 Inspector 查看当前选中 Topic 的原始 JSON。
 2. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
-3. 对含有限数值字段的消息，Inspector 列出可绘图路径（标量或数值数组）；点击「加入 DataGraph」后切到中心 **DataGraph** Tab。数组字段展开为多条曲线（如 `effort` → `effort[0..n]`）。
-
-**DataGraph（v1）**
-
-1. 中心面板与 Robot View / Topic Graph 同级；默认滑动时间窗 **30 秒**。
-2. v1 仅支持**单 Topic、多数值字段**；从另一 Topic 加入字段时会替换现有曲线（多 Topic 叠加留待后续）。
-3. 可单独移除一条曲线或「清空曲线」；工具栏「暂停显示」同样冻结 DataGraph 采样更新。
+3. 对含有限数值字段的消息，Inspector 列出可绘图路径（标量或数值数组）；点击「加入 Monitor」后跳到左侧导航 **Monitor** 页，写入当前选中面板。数组字段展开为多条曲线（如 `effort` → `effort[0..n]`）。
 
 **ROS Control**
 
@@ -110,6 +105,27 @@ JointState topic: /stm32/joint_states
 - Image 由 Bridge 全速传二进制帧；Canvas 按动画帧合并绘制，不丢弃 Bridge 消息、不影响频率统计。
 - Controller 名称与操作类型在 Tauri/Rust 侧校验，拒绝含 shell 特殊字符的输入；manager 不可用时显示离线原因，不阻塞 Topic 浏览。
 - 订阅失败单独展示，不会中断 Graph 刷新。
+
+---
+
+## Monitor
+
+### 做什么
+
+在独立导航页用多面板查看数值时间序列：默认「Motor Torque」面板预置 JointState `effort[0..6]`；可从 Dashboard Inspector 加入字段。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。
+
+### 怎么用
+
+1. 左侧 Navigation 打开 **Monitor**。
+2. 面板：新建空面板 /「+转矩」模板、重命名、删除（删光后恢复默认转矩面板）。
+3. 曲线：Dashboard → Topic Inspector「加入 Monitor」；可单条移除或清空。v1 每面板仍为**单 Topic、多字段**（换 Topic 会替换该面板曲线）。
+4. 数据源切换「实时 / Bag 回放」。Bag 回放填写 Jetson 上的 bag 目录（如 `robot-console-bags/…`），开始/停止通过 SSH 执行 `ros2 bag play`（带 `--clock`）；**不是**本机解析 bag 文件。
+5. 工具栏「暂停显示」同样冻结 Monitor 采样。
+
+### 边界
+
+- 本机 bag 下载、索引、客户端解析尚未实现。
+- 回放与现场同时发布同一 Topic 时可能混叠；建议在离线/隔离会话使用回放。
 
 ---
 
@@ -282,4 +298,4 @@ ARMED 门、运行中禁用 Motor 滑块与 TCP；Abort/超时/**命令丢失(fa
 
 ## 明确不在当前切片内
 
-见 [架构 · Current limits](./architecture#current-limits)：例如时间序列 Topic 图表、TF 可视化、rosbag 本地下载/索引/回放等仍属后续工作。重力辨识 UI / Bridge action 客户端见上节设计草案，尚未实现。
+见 [架构 · Current limits](./architecture#current-limits)：例如 TF 可视化、rosbag 本地下载/索引/客户端解析等仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。重力辨识 UI / Bridge action 客户端见上节设计草案，尚未实现。

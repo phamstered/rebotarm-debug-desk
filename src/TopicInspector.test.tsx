@@ -50,13 +50,13 @@ describe("TopicInspector", () => {
     expect(screen.getByText(/"position": \[/)).toBeVisible();
   });
 
-  it("lists numeric fields and invokes Add to DataGraph", async () => {
+  it("lists numeric fields and invokes Add to Monitor", async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();
     render(<TopicInspector selected="/joint_states" sample={sample} onAddToDataGraph={onAdd} />);
-    expect(screen.getByLabelText("可加入 DataGraph 的字段")).toBeVisible();
+    expect(screen.getByLabelText("可加入 Monitor 的字段")).toBeVisible();
     expect(screen.getByText("effort")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "加入 DataGraph：effort" }));
+    await user.click(screen.getByRole("button", { name: "加入 Monitor：effort" }));
     expect(onAdd).toHaveBeenCalledWith("effort");
   });
 });

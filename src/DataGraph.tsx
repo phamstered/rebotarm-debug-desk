@@ -89,11 +89,13 @@ export function DataGraph({
   liveUpdates,
   onRemoveSeries,
   onClearSeries,
+  emptyHint = "在右侧 Topic Inspector 选择数值字段并「加入 Monitor」",
 }: {
   seriesList: DataSeries[];
   liveUpdates: boolean;
   onRemoveSeries(id: string): void;
   onClearSeries(): void;
+  emptyHint?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const seriesRef = useRef(seriesList);
@@ -137,7 +139,7 @@ export function DataGraph({
       <div className="data-graph-body">
         <div className="data-graph-canvas-wrap">
           {seriesList.length === 0 && (
-            <div className="graph-empty">在右侧 Topic Inspector 选择数值字段并「加入 DataGraph」</div>
+            <div className="graph-empty">{emptyHint}</div>
           )}
           <canvas ref={canvasRef} className="data-graph-canvas" aria-label="DataGraph 实时曲线" />
         </div>
