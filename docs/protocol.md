@@ -19,6 +19,16 @@ Messages are UTF-8 JSON WebSocket text frames.
 ```
 
 ```json
+{"op":"topic_info","request_id":"uuid","topic":"/stm32/joint_commands"}
+```
+
+```json
+{"op":"node_info","request_id":"uuid","node":"/microros_stm32h723_hardware"}
+```
+
+详情请求按需读取当前 ROS Graph；名称必须是合法的绝对 ROS 名称，已离线的 Topic / Node 返回带 `request_id` 的 error。
+
+```json
 {"op":"subscribe","request_id":"uuid","topic":"/joint_states","type":"sensor_msgs/msg/JointState"}
 ```
 
@@ -105,6 +115,28 @@ ROS node/topic graph:
 ```
 
 `relation` 为 `publish` 时方向是 ROS Node → Topic，为 `subscribe` 时方向是 Topic → ROS Node。Topic 节点可继续通过 `subscribe` 请求获取实时数据。
+
+Topic 详情（与 `ros2 topic info -v` 同类信息）：
+
+```json
+{
+  "op":"topic_info","request_id":"uuid",
+  "topic_info":{
+    "name":"/stm32/joint_commands",
+    "types":["microros_stm32h723_bridge/msg/JointCommand"],
+    "publishers":[{"node_name":"microros_stm32h723_hardware","node_namespace":"/","topic_type":"microros_stm32h723_bridge/msg/JointCommand","endpoint_type":"PUBLISHER","gid":"01.0f.3d.7c","qos":{"reliability":"BEST_EFFORT","history":"UNKNOWN","depth":0,"durability":"VOLATILE","lifespan":"Infinite","deadline":"Infinite","liveliness":"AUTOMATIC","liveliness_lease_duration":"Infinite"}}],
+    "subscriptions":[]
+  }
+}
+```
+
+`gid` 实际包含完整的 RMW GID 字节；示例为缩写。QoS 时长为 `Infinite`、`Default` 或 `<sec>s <nsec>ns`。端点数量以数组长度为准，响应反映请求时的发现快照。
+
+Node 详情：
+
+```json
+{"op":"node_info","request_id":"uuid","node_info":{"name":"/microros_stm32h723_hardware","namespace":"/","publishers":[{"name":"/stm32/joint_commands","types":["microros_stm32h723_bridge/msg/JointCommand"]}],"subscriptions":[],"services":[],"clients":[]}}
+```
 
 Resource:
 

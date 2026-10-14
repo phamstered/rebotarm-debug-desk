@@ -13,11 +13,13 @@ const doubles = vi.hoisted(() => ({
   ]),
   getGraph: vi.fn().mockResolvedValue({
     nodes: [
-      { id: "node:/stm32_bridge", label: "/stm32_bridge", kind: "node", types: [] },
+      { id: "node:/hardware_driver", label: "/hardware_driver", kind: "node", types: [] },
       { id: "topic:/stm32/status", label: "/stm32/status", kind: "topic", types: ["microros_stm32h723_bridge/msg/HardwareStatus"] },
     ],
-    edges: [{ source: "node:/stm32_bridge", target: "topic:/stm32/status", relation: "publish" }],
+    edges: [{ source: "node:/hardware_driver", target: "topic:/stm32/status", relation: "publish" }],
   }),
+  getTopicInfo: vi.fn().mockResolvedValue({ name: "/stm32/status", types: ["microros_stm32h723_bridge/msg/HardwareStatus"], publishers: [], subscriptions: [] }),
+  getNodeInfo: vi.fn().mockImplementation((node: string) => Promise.resolve({ name: node, namespace: "/", publishers: [], subscriptions: [], services: [], clients: [] })),
   send: vi.fn(),
   request: vi.fn().mockResolvedValue({ op: "joint_command_ack", sequence: 1 }),
   close: vi.fn(),
@@ -31,6 +33,8 @@ vi.mock("./bridge", () => ({
     connect = doubles.connect;
     listTopics = doubles.listTopics;
     getGraph = doubles.getGraph;
+    getTopicInfo = doubles.getTopicInfo;
+    getNodeInfo = doubles.getNodeInfo;
     send = doubles.send;
     request = doubles.request;
     close = doubles.close;
@@ -131,17 +135,19 @@ describe("App workflow", () => {
       doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "old-session-urdf" });
       doubles.listener?.({ op: "topic_message", topic: "/stm32/status", data: { fault_code: 4 } });
     });
+    await user.click(screen.getByRole("tab", { name: "Robot View" }));
     expect(screen.getByTestId("urdf")).toHaveTextContent("old-session-urdf");
-    expect(screen.getByText(/"fault_code": 4/)).toBeVisible();
+    expect(screen.getByLabelText("Topic JSON")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "断开" }));
     await screen.findByRole("button", { name: "连接 Jetson" });
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("toolbar", { name: "应用工具栏" });
 
+    await user.click(screen.getByRole("tab", { name: "Robot View" }));
     expect(screen.getByTestId("urdf")).toHaveTextContent("empty");
     expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
-    expect(screen.queryByText(/"fault_code": 4/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Topic JSON")).not.toBeInTheDocument();
   });
 
   it("does not let a delayed controller response from the old session repopulate state", async () => {
@@ -215,6 +221,30 @@ describe("App workflow", () => {
     expect(control).toHaveTextContent("arm_controller");
     expect(control).toHaveTextContent("inactive");
     expect(doubles.invoke).toHaveBeenCalledWith("check_ros_controllers", expect.objectContaining({ profile: expect.any(Object) }));
+  });
+
+  it("collapses and restores both outer sidebars", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("button", { name: "收起左侧栏" });
+    await user.click(screen.getByRole("button", { name: "收起左侧栏" }));
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+    expect(container.querySelector(".topic-sidebar")).toHaveClass("sidebar-collapsed");
+    expect(container.querySelector(".data-panel")).toHaveClass("sidebar-collapsed");
+    expect(container.querySelector<HTMLElement>(".workspace")?.style.getPropertyValue("--left-width")).toBe("30px");
+    await user.click(screen.getByRole("button", { name: "展开左侧栏" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    expect(JSON.parse(localStorage.getItem("easy-debug-sidebars")!)).toEqual({ left: true, right: true });
+  });
+
+  it("opens Topic Graph when focusing a ROS Controller", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: "在 Topic Graph 聚焦 Controller arm_controller" }));
+    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
   it("activates and deactivates controllers and refreshes the list after each operation", async () => {
@@ -323,7 +353,7 @@ describe("App workflow", () => {
     expect(container.querySelector(".ros-control-panel")).toHaveClass("expanded");
     expect(screen.getByRole("button", { name: "展开Topics" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "收起ROS Control" }));
-    await user.click(screen.getByRole("button", { name: "收起Topic Inspector" }));
+    await user.click(screen.getByRole("button", { name: "收起Inspector" }));
     expect(container.querySelector(".ros-control-panel")).toHaveClass("collapsed");
     expect(container.querySelector(".inspector-section")).toHaveClass("collapsed");
     await waitFor(() => expect(JSON.parse(localStorage.getItem("easy-debug-panels")!)).toEqual({ topics: false, rosControl: false, inspector: false }));
@@ -380,8 +410,21 @@ describe("App workflow", () => {
       topic: "/stm32/status",
       type: "microros_stm32h723_bridge/msg/HardwareStatus",
     });
-    expect(screen.getByText("原始 JSON")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "数据" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByLabelText(/jq 过滤/)).not.toBeInTheDocument();
+  });
+
+  it("focuses graph selection from the Topic list and inspects a selected Node", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: /\/stm32\/status/ }));
+    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("button", { name: "Topic /stm32/status" })).toHaveClass("selected");
+    await user.click(screen.getByRole("button", { name: "Node /hardware_driver" }));
+    expect(screen.getByRole("tab", { name: "详情" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(doubles.getNodeInfo).toHaveBeenCalledWith("/hardware_driver"));
+    expect(screen.getByText("Namespace")).toBeVisible();
   });
 
   it("inspects a runtime-decoded controller state with nested arrays", async () => {
@@ -399,8 +442,8 @@ describe("App workflow", () => {
       op: "topic_message", topic: "/arm/state",
       data: { joint_names: ["joint1"], actual: { positions: [0.25], time_from_start: { sec: 1, nanosec: 0 } } },
     }));
-    expect(screen.getByText(/"positions": \[/)).toBeVisible();
-    expect(screen.getByText("actual.positions")).toBeVisible();
+    expect(screen.getByLabelText("Topic JSON")).toBeVisible();
+    expect(screen.getByLabelText("Topic JSON").querySelector('[data-monitor-path="actual.positions"]')).toBeInTheDocument();
   });
 
   it("opens Joint4 Calibration from the collapsible main toolbar", async () => {
@@ -432,7 +475,7 @@ describe("App workflow", () => {
     expect(screen.queryByRole("tab", { name: "Robot View" })).not.toBeInTheDocument();
     expect(localStorage.getItem("robot-console-page")).toBe("motor");
 
-    await user.click(screen.getByRole("button", { name: "Dashboard" }));
+    await user.click(screen.getByRole("button", { name: "Topics" }));
     expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
     expect(screen.queryByTestId("motor")).not.toBeInTheDocument();
   });
@@ -505,7 +548,7 @@ describe("App workflow", () => {
 
     const toolbar = screen.getByRole("toolbar", { name: "应用工具栏" });
     expect(within(toolbar).queryByText("Robot Console")).not.toBeInTheDocument();
-    expect(within(toolbar).queryByRole("button", { name: "Dashboard" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "Topics" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Robot View" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "false");
@@ -604,7 +647,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "Joint4 Calibration" }));
     expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
     expect(screen.queryByRole("group", { name: "页面切换" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Dashboard" }));
+    await user.click(screen.getByRole("button", { name: "Topics" }));
     expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
   });
 
@@ -624,6 +667,10 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("button", { name: /\/stm32\/joint_states/ });
+    await user.click(screen.getByRole("button", { name: "Monitor" }));
+    await user.click(screen.getByRole("button", { name: "新建空面板" }));
+    await user.click(screen.getByRole("tab", { name: /Motor Torque/ }));
+    await user.click(screen.getByRole("button", { name: "Topics" }));
     await user.click(screen.getByRole("button", { name: /\/stm32\/joint_states/ }));
     act(() => {
       doubles.listener?.({
@@ -632,12 +679,14 @@ describe("App workflow", () => {
         data: { name: ["j1", "j2"], position: [0.1, 0.2], effort: [1, 2, 3, 4, 5, 6, 7] },
       });
     });
-    expect(await screen.findByLabelText("可加入 Monitor 的字段")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "加入 Monitor：effort" }));
+    const json = await screen.findByLabelText("Topic JSON");
+    await user.pointer({ keys: "[MouseRight]", target: json.querySelector('[data-monitor-path="effort"]') as Element });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+    await user.click(screen.getByRole("menuitem", { name: "New Panel" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(localStorage.getItem("robot-console-page")).toBe("monitor");
     expect(await screen.findByLabelText("DataGraph 实时曲线")).toBeVisible();
-    // Default torque template already has 7 effort series; adding effort again is a no-op for duplicates.
+    expect(screen.getByRole("tab", { name: /New Panel/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText(/7 条曲线/)).toBeVisible();
     expect(screen.getByLabelText("DataGraph 曲线列表")).toBeVisible();
     getContext.mockRestore();

@@ -40,6 +40,40 @@ export type RosGraph = {
   edges: RosGraphEdge[];
 };
 
+export type TopicEndpointInfo = {
+  node_name: string;
+  node_namespace: string;
+  topic_type: string;
+  endpoint_type: "PUBLISHER" | "SUBSCRIPTION";
+  gid: string;
+  qos: {
+    reliability: string;
+    history: string;
+    depth: number;
+    durability: string;
+    lifespan: string;
+    deadline: string;
+    liveliness: string;
+    liveliness_lease_duration: string;
+  };
+};
+
+export type TopicDetails = {
+  name: string;
+  types: string[];
+  publishers: TopicEndpointInfo[];
+  subscriptions: TopicEndpointInfo[];
+};
+
+export type NodeDetails = {
+  name: string;
+  namespace: string;
+  publishers: TopicInfo[];
+  subscriptions: TopicInfo[];
+  services: TopicInfo[];
+  clients: TopicInfo[];
+};
+
 export type AgentServiceStatus = {
   loadState: string;
   activeState: string;
@@ -88,12 +122,15 @@ export type BridgeEnvelope = {
   op: string;
   request_id?: string;
   topic?: string;
+  node?: string;
   type?: string;
   /** ROS message content: scalars for legacy built-ins, structured fields for runtime-decoded types. */
   data?: unknown;
   topics?: TopicInfo[];
   nodes?: RosGraphNode[];
   edges?: RosGraphEdge[];
+  topic_info?: TopicDetails;
+  node_info?: NodeDetails;
   message?: string;
   uri?: string;
   mime?: string;

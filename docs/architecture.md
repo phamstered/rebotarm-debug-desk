@@ -33,9 +33,9 @@ The npm package remains `easy-debug`; Tauri `productName` / window title / `/App
 4. Desktop starts `ssh -N -L` local forwarding.
 5. WebView opens a WebSocket to the local forwarded port.
 6. UI requests Topic discovery and the node/topic endpoint graph, then subscribes to URDF and JointState topics.
-7. Topic Graph applies Sugiyama-style barycentric sweeps before rendering publisher → topic → subscriber SVG edges. Selecting a Topic creates a read-only Bridge subscription and opens it in Topic Inspector.
-8. DataGraph (center tab) plots numeric fields picked from Topic Inspector over a 30s sliding window; v1 is single-topic multi-field (arrays expand to series).
-9. The Bridge uses installed ROS 2 type support to decode unfamiliar message types into nested JSON. Topic Inspector shows the resulting fields (and compact metadata plus Canvas preview for Image topics, which retain their binary transport).
+7. Topic Graph applies a deterministic force layout before rendering publisher → topic → subscriber SVG edges. A Node is a rounded rectangle and a Topic is an ellipse. Selecting a Topic creates a read-only Bridge subscription and focuses the graph; selecting a Node opens its details in Inspector.
+8. Inspector requests `topic_info` / `node_info` from Bridge on demand. The Bridge reads current ROS graph endpoint metadata, including GID and QoS, without running remote CLI commands. DataGraph in Monitor plots numeric fields picked from Inspector over a 30s sliding window; v1 is single-topic multi-field (arrays expand to series).
+9. The Bridge uses installed ROS 2 type support to decode unfamiliar message types into nested JSON. Inspector shows the resulting fields (and compact metadata plus Canvas preview for Image topics, which retain their binary transport).
 10. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every 30 seconds and shows controller names, types and states below Topics.
 11. With an active `JointTrajectoryController`, the Robot View shows a draggable TCP handle. A drag solves position-only IK against the URDF joint chain; releasing it publishes `trajectory_msgs/JointTrajectory` to the controller's `~/joint_trajectory` topic through the Bridge.
 12. Global toolbar operations that need host access bypass the WebSocket Bridge: Tauri runs a fixed, validated SSH command to start/stop `ros2 bag record -a`, while diagnostics snapshots are assembled in the WebView and written through a size- and extension-checked Rust command.
@@ -56,6 +56,6 @@ Agents and developers should deploy the Jetson package with `npm run deploy:brid
 - Message decoding uses an explicit standard-type registry.
 - Mesh transfer is base64 and held in memory; streaming is a later optimization.
 - Monitor provides live numeric charts and Jetson-side `ros2 bag play` (SSH); downloading, indexing and client-side bag parsing remain follow-up work. TF visualization is not part of this vertical slice. The toolbar can record all topics on the Jetson.
-- Topic Graph can visualize every discovered type, while live Topic Inspector viewing is limited to message types decoded by the Bridge registry.
+- Topic Graph can visualize every discovered type. Inspector detail queries read ROS graph metadata; live data viewing requires the corresponding message type support in the Bridge ROS environment.
 - ROS Control targets `/controller_manager` and supports controller Activate/Deactivate. Trajectory commands only reach the active `JointTrajectoryController`'s `~/joint_trajectory` topic; the Bridge rejects any other topic.
 - TCP dragging solves position only and keeps the end-effector orientation fixed.

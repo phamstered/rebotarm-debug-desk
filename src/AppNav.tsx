@@ -28,7 +28,7 @@ export function AppNav({ page, expanded, onSelect, onToggle }: {
     <nav className={`app-nav ${expanded ? "expanded" : "collapsed"}`} aria-label="主工具栏">
       <div className="app-nav-brand"><img src={robotConsoleIcon} alt="" /><span>Navigation</span></div>
       <div className="app-nav-items">
-        <button className={page === "dashboard" ? "active" : ""} aria-current={page === "dashboard" ? "page" : undefined} onClick={() => onSelect("dashboard")} title="Dashboard"><DashboardIcon /><span>Dashboard</span></button>
+        <button className={page === "dashboard" ? "active" : ""} aria-current={page === "dashboard" ? "page" : undefined} onClick={() => onSelect("dashboard")} title="Topics"><DashboardIcon /><span>Topics</span></button>
         <button className={page === "monitor" ? "active" : ""} aria-current={page === "monitor" ? "page" : undefined} onClick={() => onSelect("monitor")} title="Monitor"><MonitorIcon /><span>Monitor</span></button>
         <button className={page === "motor" ? "active" : ""} aria-current={page === "motor" ? "page" : undefined} onClick={() => onSelect("motor")} title="Motor"><MotorIcon /><span>Motor</span></button>
         <button className={page === "calibration" ? "active" : ""} aria-label="Joint4 Calibration" aria-current={page === "calibration" ? "page" : undefined} onClick={() => onSelect("calibration")} title="Joint4 Calibration"><CalibrationIcon /><span>Calibration</span></button>

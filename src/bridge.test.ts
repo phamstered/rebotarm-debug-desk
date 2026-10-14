@@ -91,6 +91,25 @@ describe("BridgeClient", () => {
     });
   });
 
+  it("requests topic endpoint QoS and node details with correlated responses", async () => {
+    const bridge = new BridgeClient();
+    const connected = bridge.connect(defaultProfile);
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    await connected;
+    const topicDetails = bridge.getTopicInfo("/stm32/joint_commands");
+    const topicRequest = JSON.parse(socket.sent.at(-1)!);
+    expect(topicRequest).toMatchObject({ op: "topic_info", topic: "/stm32/joint_commands" });
+    socket.message({ op: "topic_info", request_id: topicRequest.request_id, topic_info: { name: "/stm32/joint_commands", types: [], publishers: [], subscriptions: [] } });
+    await expect(topicDetails).resolves.toMatchObject({ name: "/stm32/joint_commands" });
+
+    const nodeDetails = bridge.getNodeInfo("/driver");
+    const nodeRequest = JSON.parse(socket.sent.at(-1)!);
+    expect(nodeRequest).toMatchObject({ op: "node_info", node: "/driver" });
+    socket.message({ op: "node_info", request_id: nodeRequest.request_id, node_info: { name: "/driver", namespace: "/", publishers: [], subscriptions: [], services: [], clients: [] } });
+    await expect(nodeDetails).resolves.toMatchObject({ name: "/driver" });
+  });
+
   it("rejects bridge errors and emits topic/disconnect events", async () => {
     const bridge = new BridgeClient();
     const connected = bridge.connect(defaultProfile);

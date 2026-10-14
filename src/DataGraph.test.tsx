@@ -18,7 +18,7 @@ const series: DataSeries[] = [
 describe("DataGraph", () => {
   it("shows empty guidance and disables clear", () => {
     render(<DataGraph seriesList={[]} liveUpdates onRemoveSeries={() => undefined} onClearSeries={() => undefined} />);
-    expect(screen.getByText(/从 Topic Inspector 添加数值字段/)).toBeVisible();
+    expect(screen.getByText(/从 Inspector 添加数值字段/)).toBeVisible();
     expect(screen.getByRole("button", { name: "清空曲线" })).toBeDisabled();
     expect(screen.getByLabelText("DataGraph 实时曲线")).toBeInTheDocument();
   });
