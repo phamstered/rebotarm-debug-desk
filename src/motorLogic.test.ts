@@ -12,6 +12,7 @@ import {
   motorFaults,
   normalizeDecimal,
   parseCommandValues,
+  parseTravelBound,
   resizeMotors,
 } from "./motorLogic";
 
@@ -98,5 +99,31 @@ describe("STM32 fault catalog", () => {
     expect(faultInfo(3)).toMatchObject({ name: "COMMAND_LIMIT" });
     expect(faultInfo(11).description).toContain("重启 STM32");
     expect(faultInfo(99).name).toBe("UNKNOWN");
+  });
+});
+
+
+describe("motor travel bounds and multi-joint enable", () => {
+  it("parses travel bounds and rejects blanks", () => {
+    expect(parseTravelBound("-0.5", "min")).toEqual({ value: -0.5 });
+    expect(parseTravelBound("0.35", "max")).toEqual({ value: 0.35 });
+    expect(parseTravelBound(" ", "min").error).toContain("有效数字");
+    expect(parseTravelBound("abc", "max").error).toContain("有效数字");
+  });
+
+  it("builds a multi-joint mask and zeros disabled positions", () => {
+    const motors = createDefaultMotors(7);
+    motors[0].enabled = true;
+    motors[0].position = "0.1";
+    motors[3].enabled = true;
+    motors[3].position = "0.4";
+    motors[6].enabled = true;
+    motors[6].position = "-0.2";
+    const parsed = parseCommandValues({ velocity: "0", kp: "8", kd: "2", effort: "0" }, motors);
+    expect(parsed.values?.active_joint_mask).toBe(0b1001001);
+    expect(parsed.values?.positions).toEqual([0.1, 0, 0, 0.4, 0, 0, -0.2]);
+    motors[3].position = "";
+    expect(parseCommandValues({ velocity: "0", kp: "8", kd: "2", effort: "0" }, motors).error)
+      .toContain("joint4 Position");
   });
 });

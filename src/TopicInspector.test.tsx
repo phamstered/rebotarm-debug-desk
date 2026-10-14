@@ -60,3 +60,45 @@ describe("TopicInspector", () => {
     expect(onAdd).toHaveBeenCalledWith("effort");
   });
 });
+
+  it("shows waiting placeholder until sample data arrives", () => {
+    render(<TopicInspector selected="/joint_states" sample={undefined} />);
+    expect(screen.getByText(/等待数据/)).toBeVisible();
+    expect(screen.queryByLabelText("可加入 Monitor 的字段")).not.toBeInTheDocument();
+  });
+
+  it("hides add-to-monitor without a callback", () => {
+    render(<TopicInspector selected="/joint_states" sample={sample} />);
+    expect(screen.queryByLabelText("可加入 Monitor 的字段")).not.toBeInTheDocument();
+  });
+
+  it("does not list Monitor fields for image topics even with a callback", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      putImageData: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    render(
+      <TopicInspector
+        selected="/camera"
+        topicType="sensor_msgs/msg/Image"
+        sample={{ ...sample, data: { width: 1, height: 1, encoding: "rgb8", step: 3, data_length: 3, data_base64: "AAA" } }}
+        onAddToDataGraph={() => undefined}
+      />,
+    );
+    expect(screen.queryByLabelText("可加入 Monitor 的字段")).not.toBeInTheDocument();
+  });
+
+  it("labels scalar and array numeric fields for Monitor", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(
+      <TopicInspector
+        selected="/js"
+        sample={{ data: { count: 4, effort: [1, 2] }, count: 1, firstAt: 1, lastAt: 1, hz: 1 }}
+        onAddToDataGraph={onAdd}
+      />,
+    );
+    expect(screen.getByText("scalar")).toBeVisible();
+    expect(screen.getByText("array[2]")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "加入 Monitor：count" }));
+    expect(onAdd).toHaveBeenCalledWith("count");
+  });
