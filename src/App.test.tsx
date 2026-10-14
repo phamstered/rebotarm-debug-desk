@@ -362,7 +362,7 @@ describe("App workflow", () => {
     await waitFor(() => expect(screen.getByTestId("urdf")).toHaveTextContent("<robot/>"));
   });
 
-  it("opens Topic Graph and subscribes a selected topic for jq inspection", async () => {
+  it("opens Topic Graph and subscribes a selected topic for inspection", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
@@ -376,8 +376,8 @@ describe("App workflow", () => {
       topic: "/stm32/status",
       type: "microros_stm32h723_bridge/msg/HardwareStatus",
     });
-    expect(screen.getByLabelText("jq 过滤 /stm32/status")).toHaveValue("");
-    expect(screen.getByText("未筛选 · 原始 JSON")).toBeVisible();
+    expect(screen.getByText("原始 JSON")).toBeVisible();
+    expect(screen.queryByLabelText(/jq 过滤/)).not.toBeInTheDocument();
   });
 
   it("opens Joint4 Calibration from the collapsible main toolbar", async () => {
