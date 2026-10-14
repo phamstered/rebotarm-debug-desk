@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  DATA_GRAPH_MAX_POINTS,
   DATA_GRAPH_WINDOW_MS,
   addFieldsToSeries,
   appendSeriesPoint,
   computePlotBounds,
+  createSeries,
   expandFieldPaths,
   getNumericAtPath,
   listNumericFields,
+  nextSeriesColor,
   parsePathSegments,
   prunePoints,
   removeSeries,
@@ -125,5 +128,89 @@ describe("dataGraphLogic series updates", () => {
     expect(bounds.maxT).toBe(1_000);
     expect(bounds.minY).toBeLessThan(10);
     expect(bounds.maxY).toBeGreaterThan(10);
+  });
+});
+
+describe("dataGraphLogic edge cases", () => {
+  it("rejects non-finite numbers and skips image payload keys", () => {
+    expect(getNumericAtPath({ x: Number.NaN }, "x")).toBeUndefined();
+    expect(getNumericAtPath({ x: Number.POSITIVE_INFINITY }, "x")).toBeUndefined();
+    expect(parsePathSegments("")).toEqual([]);
+    expect(listNumericFields({
+      data_base64: "abc",
+      data_length: 3,
+      width: 2,
+      nested: { ok: 1, bad: Number.NaN },
+    })).toEqual([
+      { path: "width", kind: "scalar" },
+      { path: "nested.ok", kind: "scalar" },
+    ]);
+  });
+
+  it("walks nested object arrays and returns empty for blank roots", () => {
+    expect(listNumericFields(null)).toEqual([]);
+    expect(listNumericFields(42)).toEqual([]);
+    expect(listNumericFields([{ a: 1 }, { a: 2 }])).toEqual([
+      { path: "[0].a", kind: "scalar" },
+      { path: "[1].a", kind: "scalar" },
+    ]);
+    expect(listNumericFields([])).toEqual([]);
+  });
+
+  it("keeps already-indexed paths and expands only finite numeric arrays", () => {
+    expect(expandFieldPaths("effort[2]", jointState)).toEqual(["effort[2]"]);
+    expect(expandFieldPaths("name", jointState)).toEqual([]);
+    expect(expandFieldPaths("position", { position: [] })).toEqual([]);
+  });
+
+  it("caps the ring buffer at DATA_GRAPH_MAX_POINTS inside the window", () => {
+    let series = {
+      id: seriesId("/js", "effort[0]"),
+      topic: "/js",
+      fieldPath: "effort[0]",
+      label: "/js · effort[0]",
+      color: "#42d6c7",
+      points: [] as { t: number; value: number }[],
+    };
+    const start = 1_000_000;
+    for (let i = 0; i < DATA_GRAPH_MAX_POINTS + 50; i += 1) {
+      series = appendSeriesPoint(series, start + i, i);
+    }
+    expect(series.points.length).toBe(DATA_GRAPH_MAX_POINTS);
+    expect(series.points[0]?.t).toBe(start + 50);
+    expect(series.points.at(-1)?.value).toBe(DATA_GRAPH_MAX_POINTS + 49);
+  });
+
+  it("prunes matching-topic series when the field is missing", () => {
+    const list = addFieldsToSeries([], "/js", "effort[0]", jointState, 0);
+    const pruned = updateSeriesFromMessage(list, "/js", { position: [1] }, DATA_GRAPH_WINDOW_MS + 10);
+    expect(pruned[0]?.points).toEqual([]);
+  });
+
+  it("pads equal and empty Y bounds for plotting", () => {
+    const flat = addFieldsToSeries([], "/js", "effort[0]", { effort: [5, 5, 5] }, 1_000);
+    const equal = computePlotBounds(flat, 1_000);
+    expect(equal.minY).toBeLessThan(5);
+    expect(equal.maxY).toBeGreaterThan(5);
+
+    const empty = computePlotBounds([], 500);
+    expect(empty).toEqual({
+      minT: 500 - DATA_GRAPH_WINDOW_MS,
+      maxT: 500,
+      minY: -1,
+      maxY: 1,
+    });
+  });
+
+  it("cycles series colors and creates labeled series", () => {
+    expect(nextSeriesColor(0)).toBe("#42d6c7");
+    expect(nextSeriesColor(10)).toBe(nextSeriesColor(0));
+    const created = createSeries("/t", "v", 1, { t: 3, value: 9 });
+    expect(created).toMatchObject({
+      id: "/t::v",
+      label: "/t · v",
+      color: nextSeriesColor(1),
+      points: [{ t: 3, value: 9 }],
+    });
   });
 });

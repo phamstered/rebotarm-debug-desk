@@ -162,3 +162,39 @@ describe("MotorControl", () => {
     expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(7);
   });
 });
+
+  it("updates slider bounds when travel min/max change and keeps disabled joints off the mask", async () => {
+    const bridge = bridgeDouble();
+    const user = userEvent.setup();
+    render(
+      <MotorControl
+        bridge={bridge as unknown as BridgeClient}
+        jointState={{ name: ["joint1", "joint2", "joint3"], position: [0, 0.1, 0.2] }}
+        status={null}
+        onStreamingChange={() => {}}
+      />,
+    );
+
+    const min = screen.getByLabelText("joint1 行程 min");
+    const max = screen.getByLabelText("joint1 行程 max");
+    await user.clear(min);
+    await user.type(min, "-0.1");
+    await user.clear(max);
+    await user.type(max, "0.2");
+    const slider = screen.getByLabelText("joint1 Position 滑块");
+    expect(slider).toHaveAttribute("min", "-0.1");
+    expect(slider).toHaveAttribute("max", "0.2");
+    expect(slider).toBeDisabled();
+
+    await user.click(screen.getByLabelText("joint1 使能"));
+    await user.click(screen.getByLabelText("joint3 使能"));
+    expect(screen.getByLabelText("joint1 Position 滑块")).not.toBeDisabled();
+    expect(screen.getByLabelText("joint2 Position 滑块")).toBeDisabled();
+
+    await user.click(screen.getByLabelText("安全确认"));
+    await user.click(screen.getByRole("button", { name: "开始 20 Hz 发送" }));
+    expect(bridge.request).toHaveBeenCalledWith(expect.objectContaining({
+      active_joint_mask: 0x05,
+      position: [0, 0, 0, 0, 0, 0, 0],
+    }));
+  });

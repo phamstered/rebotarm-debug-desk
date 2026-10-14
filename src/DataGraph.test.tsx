@@ -35,3 +35,27 @@ describe("DataGraph", () => {
     expect(onClear).toHaveBeenCalledOnce();
   });
 });
+
+  it("renders a custom empty hint and paused window label", () => {
+    const { rerender } = render(
+      <DataGraph
+        seriesList={[]}
+        liveUpdates
+        emptyHint="自定义空提示"
+        onRemoveSeries={() => undefined}
+        onClearSeries={() => undefined}
+      />,
+    );
+    expect(screen.getByText("自定义空提示")).toBeVisible();
+
+    rerender(
+      <DataGraph
+        seriesList={series}
+        liveUpdates={false}
+        onRemoveSeries={() => undefined}
+        onClearSeries={() => undefined}
+      />,
+    );
+    expect(screen.getByText(/已暂停/)).toBeVisible();
+    expect(screen.getByText(/窗口 30s/)).toBeVisible();
+  });
