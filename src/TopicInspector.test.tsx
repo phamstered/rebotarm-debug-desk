@@ -26,16 +26,18 @@ describe("TopicInspector", () => {
   it("adds a numeric array or nested scalar by right click and ignores strings", async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();
-    render(<TopicInspector selected="/joint_states" sample={{ ...sample, data: { ...sample.data, actual: { positions: [0.4, 0.5] } } }} monitorPanels={[{ id: "torque", name: "Motor Torque" }, { id: "custom", name: "Custom Plot" }]} selectedMonitorPanelId="torque" onAddToDataGraph={onAdd} />);
+    render(<TopicInspector selected="/joint_states" sample={{ ...sample, data: { ...sample.data, actual: { positions: [0.4, 0.5] } } }} monitorPanels={[{ id: "torque", name: "Motor Torque", panels: [{ id: "effort-panel", title: "Effort" }] }, { id: "custom", name: "Custom Plot", panels: [{ id: "plot-1", title: "Plot 1" }] }]} selectedMonitorPanelId="torque" onAddToDataGraph={onAdd} />);
     const json = screen.getByLabelText("Topic JSON");
     expect(screen.queryByLabelText("可加入 Monitor 的字段")).not.toBeInTheDocument();
     fireEvent.contextMenu(json.querySelector('[data-monitor-path="effort"]')!);
     expect(screen.getAllByRole("menuitem")).toHaveLength(2);
-    await user.click(screen.getByRole("menuitem", { name: "Custom Plot" }));
-    expect(onAdd).toHaveBeenCalledWith("effort", "custom");
+    await user.click(screen.getByRole("menuitem", { name: "Custom Plot›" }));
+    await user.click(screen.getByRole("menuitem", { name: "Plot 1" }));
+    expect(onAdd).toHaveBeenCalledWith("effort", "custom", "plot-1");
     fireEvent.contextMenu(json.querySelector('[data-monitor-path="actual.positions[0]"]')!);
-    await user.click(screen.getByRole("menuitem", { name: "Motor Torque当前" }));
-    expect(onAdd).toHaveBeenCalledWith("actual.positions[0]", "torque");
+    await user.click(screen.getByRole("menuitem", { name: "Motor Torque当前 ›" }));
+    await user.click(screen.getByRole("menuitem", { name: "＋ 新建 Panel" }));
+    expect(onAdd).toHaveBeenCalledWith("actual.positions[0]", "torque", null);
     fireEvent.contextMenu(screen.getByText('"joint1"'));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
@@ -45,17 +47,34 @@ describe("TopicInspector", () => {
     const props = { selected: "/joint_states", onAddToDataGraph: onAdd, monitorPanels: [{ id: "p1", name: "Plot 1" }] };
     const { rerender } = render(<TopicInspector {...props} sample={sample} />);
     fireEvent.contextMenu(screen.getByLabelText("Topic JSON").querySelector('[data-monitor-path="effort"]')!);
-    expect(screen.getByRole("menuitem", { name: "Plot 1" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Plot 1›" })).toBeVisible();
     rerender(<TopicInspector {...props} sample={{ ...sample, data: { ...sample.data, effort: [3, 4] } }} />);
-    expect(screen.getByRole("menuitem", { name: "Plot 1" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Plot 1›" })).toBeVisible();
   });
 
   it("distinguishes existing panels with the same name", () => {
     const onAdd = vi.fn();
     render(<TopicInspector selected="/joint_states" sample={sample} monitorPanels={[{ id: "first", name: "New Panel" }, { id: "second", name: "New Panel" }]} onAddToDataGraph={onAdd} />);
     fireEvent.contextMenu(screen.getByLabelText("Topic JSON").querySelector('[data-monitor-path="effort"]')!);
-    fireEvent.click(screen.getByRole("menuitem", { name: "New Panel (2)" }));
-    expect(onAdd).toHaveBeenCalledWith("effort", "second");
+    fireEvent.click(screen.getByRole("menuitem", { name: "New Panel (2)›" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "＋ 新建 Panel" }));
+    expect(onAdd).toHaveBeenCalledWith("effort", "second", null);
+  });
+
+  it("supports keyboard navigation between Dashboard and Panel levels", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<TopicInspector selected="/joint_states" sample={sample} monitorPanels={[{ id: "dash", name: "Metrics", panels: [{ id: "panel", title: "Combined" }] }]} onAddToDataGraph={onAdd} />);
+    fireEvent.contextMenu(screen.getByLabelText("Topic JSON").querySelector('[data-monitor-path="effort[0]"]')!);
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("menuitem", { name: "Combined" })).toBeVisible();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onAdd).toHaveBeenCalledWith("effort[0]", "dash", "panel");
+    fireEvent.contextMenu(screen.getByLabelText("Topic JSON").querySelector('[data-monitor-path="effort[1]"]')!);
+    await user.keyboard("{Enter}{ArrowLeft}");
+    expect(screen.getByRole("menuitem", { name: "Metrics›" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("shows verbose topic endpoint and QoS details on demand", async () => {

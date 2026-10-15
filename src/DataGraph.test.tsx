@@ -16,6 +16,23 @@ const series: DataSeries[] = [
 ];
 
 describe("DataGraph", () => {
+  it("draws point and time-bar styles using their canvas primitives", () => {
+    const context = {
+      setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(),
+      lineTo: vi.fn(), stroke: vi.fn(), strokeRect: vi.fn(), fillText: vi.fn(), arc: vi.fn(), fill: vi.fn(),
+      setLineDash: vi.fn(), measureText: vi.fn(() => ({ width: 10 })),
+    };
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    const props = { seriesList: [{ ...series[0]!, points: [{ t: 1_000, value: 10 }] }], liveUpdates: false, viewNow: 1_000, onRemoveSeries: () => undefined, onClearSeries: () => undefined };
+    const { rerender, unmount } = render(<DataGraph {...props} renderStyle="points" />);
+    expect(context.arc).toHaveBeenCalled();
+    context.fillRect.mockClear();
+    rerender(<DataGraph {...props} renderStyle="bars" />);
+    expect(context.fillRect.mock.calls.length).toBeGreaterThan(1);
+    unmount();
+    getContext.mockRestore();
+  });
+
   it("shows empty guidance and disables clear", () => {
     render(<DataGraph seriesList={[]} liveUpdates onRemoveSeries={() => undefined} onClearSeries={() => undefined} />);
     expect(screen.getByText(/从 Inspector 添加数值字段/)).toBeVisible();

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { DataGraph } from "./DataGraph";
-import type { MonitorCompactType, MonitorDashboard, MonitorLayoutPreset, MonitorWorkspace } from "./monitorLogic";
+import { MonitorChart } from "./MonitorChart";
+import type { MonitorChartConfig, MonitorCompactType, MonitorDashboard, MonitorLayoutPreset, MonitorWorkspace } from "./monitorLogic";
 import {
   MONITOR_GRID_COLS,
   MONITOR_PANEL_MIN_H,
@@ -48,6 +48,7 @@ export function MonitorPage({
   onDeleteDashboard,
   onLayoutChange,
   onRemovePanel,
+  onUpdatePanelChart,
   onClearPanels,
   onResetLayout,
   onApplyWorkspace,
@@ -74,6 +75,7 @@ export function MonitorPage({
   onDeleteDashboard(dashboardId: string): void;
   onLayoutChange(dashboardId: string, layout: Layout[]): void;
   onRemovePanel(dashboardId: string, panelId: string): void;
+  onUpdatePanelChart(dashboardId: string, panelId: string, chart: Partial<MonitorChartConfig>): void;
   onClearPanels(dashboardId: string): void;
   onResetLayout(dashboardId: string): void;
   /** Replace workspace after applying a layout preset (panels + lock/compact). */
@@ -265,20 +267,23 @@ export function MonitorPage({
     }
   };
 
-  const renderPanelChart = (panel: (typeof dashboard.panels)[number]) => (
-    <DataGraph
-      seriesList={[panel.series]}
-      liveUpdates={chartsLive}
-      compact
-      title={panel.title}
-      emptyHint="等待数据"
-      crosshairT={crosshairT}
-      onCrosshairChange={onCrosshairChange}
-      viewNow={viewNow}
-      onRemoveSeries={() => onRemovePanel(dashboard.id, panel.id)}
-      onClearSeries={() => onRemovePanel(dashboard.id, panel.id)}
-    />
-  );
+  const renderPanelChart = (panel: (typeof dashboard.panels)[number]) => <MonitorChart
+    panel={panel} liveUpdates={chartsLive} crosshairT={crosshairT}
+    onCrosshairChange={onCrosshairChange} viewNow={viewNow}
+    onChartChange={(chart) => onUpdatePanelChart(dashboard.id, panel.id, chart)}
+  />;
+
+  const renderChartControls = (panel: (typeof dashboard.panels)[number]) => <div className="monitor-chart-controls" onDoubleClick={(event) => event.stopPropagation()}>
+    <select aria-label={`${panel.title} 图表类型`} value={panel.chart.type} onChange={(event) => onUpdatePanelChart(dashboard.id, panel.id, { type: event.target.value as MonitorChartConfig["type"] })}>
+      <option value="time-series">时序图</option><option value="bar">柱状图</option><option value="pie">环形图</option><option value="gauge">Gauge</option>
+    </select>
+    {panel.chart.type === "time-series" && <select aria-label={`${panel.title} 时序样式`} value={panel.chart.timeStyle} onChange={(event) => onUpdatePanelChart(dashboard.id, panel.id, { timeStyle: event.target.value as MonitorChartConfig["timeStyle"] })}>
+      <option value="line">折线</option><option value="points">点</option><option value="bars">柱</option>
+    </select>}
+    {panel.chart.type === "bar" && <select aria-label={`${panel.title} 条形方向`} value={panel.chart.barOrientation} onChange={(event) => onUpdatePanelChart(dashboard.id, panel.id, { barOrientation: event.target.value as MonitorChartConfig["barOrientation"] })}>
+      <option value="vertical">竖向</option><option value="horizontal">横向</option>
+    </select>}
+  </div>;
 
   return (
     <main className="monitor-page">
@@ -606,6 +611,7 @@ export function MonitorPage({
               onDoubleClick={() => toggleMaximize(maximizedPanel.id)}
             >
               <span className="monitor-panel-drag-label">{maximizedPanel.title}</span>
+              {renderChartControls(maximizedPanel)}
               <button
                 type="button"
                 className="monitor-panel-restore"
@@ -618,7 +624,7 @@ export function MonitorPage({
               <button
                 type="button"
                 className="monitor-panel-remove"
-                aria-label={`移除 ${maximizedPanel.series.fieldPath}`}
+                aria-label={`移除 ${maximizedPanel.title}`}
                 title="移除 Panel"
                 onClick={() => onRemovePanel(dashboard.id, maximizedPanel.id)}
                 onDoubleClick={(event) => event.stopPropagation()}
@@ -635,7 +641,7 @@ export function MonitorPage({
             containerPadding={[0, 0]}
             layout={layout}
             draggableHandle=".monitor-panel-drag"
-            draggableCancel="button,input,textarea,a"
+            draggableCancel="button,input,select,textarea,a"
             isDraggable={!layoutLocked}
             isResizable={!layoutLocked}
             compactType={compactType}
@@ -652,10 +658,11 @@ export function MonitorPage({
                   onDoubleClick={() => toggleMaximize(panel.id)}
                 >
                   <span className="monitor-panel-drag-label">{panel.title}</span>
+                  {renderChartControls(panel)}
                   <button
                     type="button"
                     className="monitor-panel-remove"
-                    aria-label={`移除 ${panel.series.fieldPath}`}
+                    aria-label={`移除 ${panel.title}`}
                     title="移除 Panel"
                     onClick={() => onRemovePanel(dashboard.id, panel.id)}
                     onDoubleClick={(event) => event.stopPropagation()}

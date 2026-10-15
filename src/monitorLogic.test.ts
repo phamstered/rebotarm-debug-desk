@@ -8,6 +8,7 @@ import {
   MONITOR_STORAGE_VERSION,
   addMonitorDashboard,
   addPanelsToDashboard,
+  addSeriesToDashboardPanel,
   applyLayoutPresetToDashboard,
   clearDashboardPanels,
   createDefaultMonitorWorkspace,
@@ -39,11 +40,42 @@ import {
   setMonitorLayoutLocked,
   updateDashboardLayout,
   updateMonitorFromMessage,
+  updatePanelChart,
   updatePanelSeries,
   upsertLayoutPreset,
 } from "./monitorLogic";
 
 describe("monitorLogic torque dashboard", () => {
+  it("adds an array into one new Panel, then deduplicates fields in an existing Panel", () => {
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const dashboardId = workspace.selectedDashboardId;
+    const fields = createTorqueSeries("/sensor", 2);
+    const created = addSeriesToDashboardPanel(workspace, dashboardId, null, fields);
+    const panel = created.dashboards[0]!.panels.at(-1)!;
+    expect(panel.series.fieldPath).toBe("effort[0]");
+    expect(panel.additionalSeries.map((series) => series.fieldPath)).toEqual(["effort[1]"]);
+    const duplicate = addSeriesToDashboardPanel(created, dashboardId, panel.id, [fields[1]!, fields[1]!]);
+    expect(duplicate.dashboards[0]!.panels.at(-1)!.additionalSeries).toHaveLength(1);
+    const next = updateMonitorFromMessage(duplicate, "/sensor", { effort: [4, 8] }, 1_000);
+    expect(next.dashboards[0]!.panels.at(-1)!.additionalSeries[0]!.points).toEqual([{ t: 1_000, value: 8 }]);
+    expect(addSeriesToDashboardPanel(workspace, "missing", null, fields)).toBe(workspace);
+  });
+
+  it("persists multi-series chart settings and migrates an older single-series Panel", () => {
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const dashboardId = workspace.selectedDashboardId;
+    const panelId = workspace.dashboards[0]!.panels[0]!.id;
+    workspace = addSeriesToDashboardPanel(workspace, dashboardId, panelId, createTorqueSeries("/sensor", 1));
+    workspace = updatePanelChart(workspace, dashboardId, panelId, { type: "gauge", gaugeMin: -10, gaugeMax: 10, gaugeThreshold: 7 });
+    const persisted = persistMonitorWorkspace(workspace);
+    const restored = hydrateMonitorWorkspace(persisted, "/js");
+    expect(restored.dashboards[0]!.panels[0]!.additionalSeries).toHaveLength(1);
+    expect(restored.dashboards[0]!.panels[0]!.chart).toMatchObject({ type: "gauge", gaugeMin: -10, gaugeMax: 10, gaugeThreshold: 7 });
+    const old = structuredClone(persisted);
+    delete old.dashboards[0]!.panels[0]!.additionalSeries;
+    delete old.dashboards[0]!.panels[0]!.chart;
+    expect(hydrateMonitorWorkspace(old, "/js").dashboards[0]!.panels[0]!.chart.type).toBe("time-series");
+  });
   it("builds effort[0..n) series on the joint-state topic", () => {
     const series = createTorqueSeries("/stm32/joint_states", 7);
     expect(series).toHaveLength(DEFAULT_TORQUE_JOINT_COUNT);
@@ -376,6 +408,19 @@ describe("monitorLogic interaction prefs and reset layout", () => {
 
 
 describe("monitorLogic layout presets", () => {
+  it("round-trips extra fields and chart type through a layout preset", () => {
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const dashboardId = workspace.selectedDashboardId;
+    const panelId = workspace.dashboards[0]!.panels[0]!.id;
+    workspace = addSeriesToDashboardPanel(workspace, dashboardId, panelId, createTorqueSeries("/other", 1));
+    workspace = updatePanelChart(workspace, dashboardId, panelId, { type: "pie" });
+    const preset = createLayoutPresetFromDashboard(workspace.dashboards[0]!, "Mixed")!;
+    const imported = hydrateLayoutPresetBundle(JSON.parse(exportLayoutPresetsJson([preset])))[0]!;
+    const applied = applyLayoutPresetToDashboard(workspace, dashboardId, imported);
+    expect(applied.dashboards[0]!.panels[0]!.additionalSeries[0]!.topic).toBe("/other");
+    expect(applied.dashboards[0]!.panels[0]!.chart.type).toBe("pie");
+  });
+
   it("saves and loads named presets from storage", () => {
     const workspace = createDefaultMonitorWorkspace("/js");
     const dashboard = workspace.dashboards[0]!;

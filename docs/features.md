@@ -104,7 +104,7 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 1. 在 Inspector 的“数据”Tab 查看选中 Topic 的完整名称与原始 JSON；“详情”Tab 显示发布者、订阅者及各端点的 GID / QoS。选中 Node 后自动展示其发布、订阅、服务及客户端列表。Topics 列表的名称和类型悬停可查看全称。
 2. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
-3. 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，选择当前存在的目标**仪表盘**后跳到 **Monitor** 页并为每个字段创建 Panel；Inspector JSON 与右键菜单使用紧凑字号。数组字段展开为多个 Panel（如 `effort` → `effort[0..n]`）。
+3. 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，先选目标**仪表盘**，再选已有 Panel 或「新建 Panel」。数组字段展开为同一个 Panel 中的多条序列（如 `effort` → `effort[0..n]`）；Inspector JSON 与右键菜单使用紧凑字号。
 
 **ROS Control**
 
@@ -128,13 +128,13 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ### 做什么
 
-在独立导航页用 Grafana / Foxglove 式 **Dashboard → Panel → Chart** 查看数值时间序列：默认「Motor Torque」**仪表盘**含 7 个可拖拽/缩放 **Panel**，各显示 JointState `effort[0..6]` 一张 Chart（共享 30s 时间窗与**共享准星**）；可从 Topics Inspector 向目标仪表盘追加 Panel。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。布局与锁定/紧凑偏好写入 localStorage（schema v2；旧版标签页配置自动迁移）。支持**命名布局预设**（保存/加载当前 Panel 网格，导出/导入 JSON，localStorage 持久化）。
+在独立导航页用 Grafana / Foxglove 式 **Dashboard → Panel → Chart** 查看数值数据：默认「Motor Torque」**仪表盘**含 7 个可拖拽/缩放 **Panel**，各显示 JointState `effort[0..6]`（共享 30s 时间窗与**共享准星**）。Topics Inspector 可把数值加入已有 Panel，或创建新 Panel。Panel 可切换时序图（折线、点、时间柱）、柱状图（字段最新值，横向或竖向）、环形图（正值占比）和 Gauge（最新值、可设最小/最大值及阈值）。同一套数据支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。布局、图表类型与锁定/紧凑偏好写入 localStorage（schema v2；旧版配置自动迁移）。支持**命名布局预设**（保存/加载当前 Panel 网格及图表设置，导出/导入 JSON，localStorage 持久化）。
 
 ### 怎么用
 
 1. 左侧 Navigation 打开 **Monitor**。
 2. 仪表盘：新建空仪表盘 /「+转矩」模板、重命名、删除（删光后恢复默认转矩仪表盘）。
-3. 面板：在网格中拖拽标题栏移动、拖角缩放；**双击标题栏最大化**，再双击或点「恢复网格」还原；可移除单个 Panel 或「清空面板」。Topics → Inspector「加入 Monitor 仪表盘」会为展开的字段各建一个 Panel。
+3. 面板：在网格中拖拽标题栏移动、拖角缩放；**双击标题栏最大化**，再双击或点「恢复网格」还原；可移除单个 Panel 或「清空面板」。标题栏可选择图表类型与相应样式。Topics → Inspector 右键菜单按 Dashboard → Panel 两级选择，也可在目标 Dashboard 新建 Panel。
 4. **布局预设**：为当前仪表盘命名并「保存布局」；点击预设名加载；可「导出 JSON / 导入 JSON」。
 5. 网格工具栏：**暂停跟随 / 跟随实时**（与全局「暂停显示」同源：冻结采样并冻结时间窗，恢复后跳回实时尾部）、**锁定布局**、**紧凑排列**、**重置布局**（按默认 12 列打包，如 Motor Torque 7 Panel）。
 6. 悬停任一 Chart 显示**共享准星**（同时间戳对齐各 Panel）。Bag 回放时准星与曲线优先使用消息 `header.stamp` 或 `/clock`（订阅 `rosgraph_msgs/msg/Clock`），否则回退墙钟。

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { TopicSample } from "./appLogic";
 import type { BridgeClient } from "./bridge";
 import { imageMetadataJson, isRosImageType } from "./imageTopicLogic";
@@ -89,9 +89,9 @@ export function TopicInspector({
   topicType?: string;
   sample: TopicSample | undefined;
   subscribeError?: string;
-  monitorPanels?: Array<{ id: string; name: string }>;
+  monitorPanels?: Array<{ id: string; name: string; panels?: Array<{ id: string; title: string }> }>;
   selectedMonitorPanelId?: string;
-  onAddToDataGraph?(fieldPath: string, panelId: string): void;
+  onAddToDataGraph?(fieldPath: string, dashboardId: string, panelId: string | null): void;
 }) {
   const imageTopic = isRosImageType(topicType);
   const [tab, setTab] = useState<"data" | "details">("data");
@@ -100,7 +100,8 @@ export function TopicInspector({
   const [detailsError, setDetailsError] = useState("");
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsRevision, setDetailsRevision] = useState(0);
-  const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ path: string; x: number; y: number; dashboardId: string | null } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const panelNameCounts = new Map<string, number>();
   monitorPanels.forEach((panel) => panelNameCounts.set(panel.name, (panelNameCounts.get(panel.name) ?? 0) + 1));
   const panelOrdinal = new Map<string, number>();
@@ -135,14 +136,32 @@ export function TopicInspector({
     window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", escape); };
   }, [menu]);
+  useEffect(() => {
+    if (menu) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [menu?.dashboardId, menu?.path]);
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!menu) return;
+    if (event.key === "ArrowLeft" && menu.dashboardId) {
+      event.preventDefault();
+      setMenu({ ...menu, dashboardId: null });
+    } else if (event.key === "ArrowRight" && !menu.dashboardId) {
+      const dashboardId = (document.activeElement as HTMLElement | null)?.dataset.dashboardId;
+      if (dashboardId) { event.preventDefault(); setMenu({ ...menu, dashboardId }); }
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      if (buttons[next]) { event.preventDefault(); buttons[next].focus(); }
+    }
+  };
   const openMenu = (event: MouseEvent<HTMLElement>) => {
     if (!onAddToDataGraph || selectedNode || tab !== "data") return;
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-monitor-path]");
     const path = target?.dataset.monitorPath;
     if (!path) return;
     event.preventDefault();
-    const menuHeight = Math.min(320, 34 + monitorPanels.length * 30);
-    setMenu({ path, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 224)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)) });
+    const menuHeight = Math.min(320, 68 + Math.max(monitorPanels.length, ...monitorPanels.map((dashboard) => dashboard.panels?.length ?? 0)) * 30);
+    setMenu({ path, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 232)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)), dashboardId: null });
   };
   return (
     <div className="section-content topic-inspector-content">
@@ -179,17 +198,23 @@ export function TopicInspector({
           <NodeResourceList title="Clients" entries={nodeDetails.clients} />
         </>}
       </div>}
-      {menu && <div className="inspector-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
-        <div className="inspector-context-heading" title={menu.path}>加入 Monitor 仪表盘 · {menu.path}</div>
-        {monitorPanels.map((panel) => {
-          const ordinal = (panelOrdinal.get(panel.name) ?? 0) + 1;
-          panelOrdinal.set(panel.name, ordinal);
-          const label = (panelNameCounts.get(panel.name) ?? 0) > 1 ? `${panel.name} (${ordinal})` : panel.name;
-          return <button key={panel.id} type="button" role="menuitem" title={label} onClick={() => { onAddToDataGraph?.(menu.path, panel.id); setMenu(null); }}>
-            <span>{label}</span>{panel.id === selectedMonitorPanelId && <span className="inspector-context-current">当前</span>}
-          </button>;
-        })}
-        {monitorPanels.length === 0 && <div className="inspector-context-empty">暂无仪表盘</div>}
+      {menu && <div ref={menuRef} className="inspector-context-menu" role="menu" aria-label="加入 Monitor" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()} onKeyDown={onMenuKeyDown}>
+        <div className="inspector-context-heading" title={menu.path}>{menu.dashboardId ? "选择 Panel" : "选择 Dashboard"} · {menu.path}</div>
+        {menu.dashboardId ? <>
+          <button type="button" role="menuitem" onClick={() => setMenu({ ...menu, dashboardId: null })}>← 返回 Dashboard</button>
+          {(monitorPanels.find((dashboard) => dashboard.id === menu.dashboardId)?.panels ?? []).map((panel) => <button key={panel.id} type="button" role="menuitem" onClick={() => { onAddToDataGraph?.(menu.path, menu.dashboardId!, panel.id); setMenu(null); }}><span title={panel.title}>{panel.title}</span></button>)}
+          <button type="button" role="menuitem" className="inspector-context-new" onClick={() => { onAddToDataGraph?.(menu.path, menu.dashboardId!, null); setMenu(null); }}>＋ 新建 Panel</button>
+        </> : <>
+          {monitorPanels.map((dashboard) => {
+            const ordinal = (panelOrdinal.get(dashboard.name) ?? 0) + 1;
+            panelOrdinal.set(dashboard.name, ordinal);
+            const label = (panelNameCounts.get(dashboard.name) ?? 0) > 1 ? `${dashboard.name} (${ordinal})` : dashboard.name;
+            return <button key={dashboard.id} type="button" role="menuitem" aria-haspopup="menu" data-dashboard-id={dashboard.id} title={label} onClick={() => setMenu({ ...menu, dashboardId: dashboard.id })}>
+              <span>{label}</span>{dashboard.id === selectedMonitorPanelId ? <span className="inspector-context-current">当前 ›</span> : <span>›</span>}
+            </button>;
+          })}
+          {monitorPanels.length === 0 && <div className="inspector-context-empty">暂无仪表盘</div>}
+        </>}
       </div>}
     </div>
   );

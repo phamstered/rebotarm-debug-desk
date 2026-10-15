@@ -18,7 +18,7 @@ import { addFieldsToSeries } from "./dataGraphLogic";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
 import {
   addMonitorDashboard,
-  addPanelsToDashboard,
+  addSeriesToDashboardPanel,
   clearDashboardPanels,
   deleteMonitorDashboard,
   loadMonitorWorkspace,
@@ -30,6 +30,7 @@ import {
   setMonitorCompactType,
   setMonitorLayoutLocked,
   updateDashboardLayout,
+  updatePanelChart,
   updateMonitorFromMessage,
 } from "./monitorLogic";
 import type { MonitorWorkspace } from "./monitorLogic";
@@ -426,7 +427,7 @@ export default function App() {
     }, 30_000);
   }, [bridge, trajectoryController]);
 
-  const addToMonitor = useCallback((fieldPath: string, dashboardId: string) => {
+  const addToMonitor = useCallback((fieldPath: string, dashboardId: string, panelId: string | null) => {
     if (!selected) return;
     const sample = messages[selected];
     if (!sample) return;
@@ -434,7 +435,7 @@ export default function App() {
       const dashboard = current.dashboards.find((entry) => entry.id === dashboardId);
       if (!dashboard) return current;
       const series = addFieldsToSeries([], selected, fieldPath, sample.data);
-      return addPanelsToDashboard(current, dashboard.id, series);
+      return addSeriesToDashboardPanel(current, dashboard.id, panelId, series);
     });
     setAppPage("monitor");
   }, [messages, selected]);
@@ -1313,6 +1314,7 @@ export default function App() {
           onDeleteDashboard={(dashboardId) => setMonitorWorkspace((current) => deleteMonitorDashboard(current, dashboardId, profile.jointStateTopic))}
           onLayoutChange={(dashboardId, layout) => setMonitorWorkspace((current) => updateDashboardLayout(current, dashboardId, layout))}
           onRemovePanel={(dashboardId, panelId) => setMonitorWorkspace((current) => removePanelFromDashboard(current, dashboardId, panelId))}
+          onUpdatePanelChart={(dashboardId, panelId, chart) => setMonitorWorkspace((current) => updatePanelChart(current, dashboardId, panelId, chart))}
           onClearPanels={(dashboardId) => setMonitorWorkspace((current) => clearDashboardPanels(current, dashboardId))}
           onResetLayout={(dashboardId) => setMonitorWorkspace((current) => resetDashboardPanelLayouts(current, dashboardId))}
           onApplyWorkspace={(next) => setMonitorWorkspace(next)}
