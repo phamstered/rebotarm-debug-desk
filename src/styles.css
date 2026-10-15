@@ -192,7 +192,13 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .graph-edge.related:not(.dimmed) { stroke-width: 1.6; }
 .graph-edge.dimmed { opacity: .045; }
 .graph-canvas marker path { fill: #83bac0; }
-.graph-node { cursor: pointer; outline: none; transition: opacity .14s ease; }
+.graph-node { cursor: grab; outline: none; transition: opacity .14s ease; }
+.graph-node.dragging, .graph-canvas.dragging { cursor: grabbing; }
+.graph-flow-particle { fill: #9be7ff; opacity: .85; pointer-events: none; }
+.graph-flow-particle.subscribe { fill: #9dffc0; }
+.graph-flow-particle.dimmed { opacity: .05; }
+.graph-edge-group.dimmed .graph-flow-particle { opacity: .05; }
+
 .graph-node.dimmed { opacity: .12; }
 .graph-node rect, .graph-node ellipse { vector-effect: non-scaling-stroke; stroke-width: 1.5; transition: fill .12s ease, stroke .12s ease; }
 .graph-node.node rect { fill: #103044; stroke: #548da8; }
