@@ -33,6 +33,7 @@ import {
   updateMonitorFromMessage,
 } from "./monitorLogic";
 import type { MonitorWorkspace } from "./monitorLogic";
+import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
@@ -372,6 +373,11 @@ export default function App() {
   const [rosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
   const [bagBusy, setBagBusy] = useState(false);
   const [bagNotice, setBagNotice] = useState("");
+  const [bagClockMs, setBagClockMs] = useState<number | null>(null);
+  const [bagOriginMs, setBagOriginMs] = useState<number | null>(null);
+  const [bagWallStartedAtMs, setBagWallStartedAtMs] = useState<number | null>(null);
+  const bagPlayingRef = useRef(false);
+  const bagClockMsRef = useRef<number | null>(null);
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [sidebars, setSidebars] = useState(loadSidebarState);
   const [focusController, setFocusController] = useState("");
@@ -624,12 +630,27 @@ export default function App() {
     return bridge.onMessage((message: BridgeEnvelope) => {
       if (message.op === "topic_message" && message.topic) {
         if (!liveUpdatesRef.current) return;
-        const now = performance.now();
+        const wallNow = performance.now();
+        const resolved = resolveMonitorSampleTimeMs({
+          bagPlaying: bagPlayingRef.current,
+          topic: message.topic,
+          data: message.data,
+          wallNowMs: wallNow,
+          bagClockMs: bagClockMsRef.current,
+        });
+        if (bagPlayingRef.current) {
+          bagClockMsRef.current = resolved.bagClockMs;
+          if (resolved.bagClockMs != null) {
+            setBagClockMs(resolved.bagClockMs);
+            setBagOriginMs((origin) => origin ?? resolved.bagClockMs);
+          }
+        }
+        const now = resolved.sampleMs;
         setMessages((current) => {
           const previous = current[message.topic!];
           return {
             ...current,
-            [message.topic!]: nextTopicSample(previous, message.data, now),
+            [message.topic!]: nextTopicSample(previous, message.data, wallNow),
           };
         });
         setMonitorWorkspace((current) => updateMonitorFromMessage(current, message.topic!, message.data, now));
@@ -734,6 +755,11 @@ export default function App() {
     setLiveUpdates(true);
     setRosbagStatus(null);
     setRosbagPlayStatus(null);
+    setBagClockMs(null);
+    setBagOriginMs(null);
+    setBagWallStartedAtMs(null);
+    bagPlayingRef.current = false;
+    bagClockMsRef.current = null;
     setBagBusy(false);
     setBagNotice("");
     setToolbarBusy("");
@@ -957,6 +983,15 @@ export default function App() {
       const status = await invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile });
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
+      bagPlayingRef.current = Boolean(status.playing);
+      if (!status.playing) {
+        bagClockMsRef.current = null;
+        setBagClockMs(null);
+        setBagOriginMs(null);
+        setBagWallStartedAtMs(null);
+      } else if (bagWallStartedAtMs == null) {
+        setBagWallStartedAtMs(performance.now());
+      }
     } catch (reason) {
       setBagNotice(`无法读取 bag 回放状态：${reason instanceof Error ? reason.message : String(reason)}`);
     }
@@ -969,14 +1004,34 @@ export default function App() {
       const status = await invoke<RosbagPlayStatus>("start_rosbag_playback", { profile, bagPath });
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
+      bagPlayingRef.current = Boolean(status.playing);
+      bagClockMsRef.current = null;
+      setBagClockMs(null);
+      setBagOriginMs(null);
+      setBagWallStartedAtMs(status.playing ? performance.now() : null);
+      if (status.playing) {
+        try {
+          await bridge.request({
+            op: "subscribe",
+            topic: "/clock",
+            type: "rosgraph_msgs/msg/Clock",
+          });
+        } catch (reason) {
+          setBagNotice(
+            `${status.message}（/clock 订阅未成功：${reason instanceof Error ? reason.message : String(reason)}；将回退消息 stamp / 墙钟）`,
+          );
+        }
+      }
     } catch (reason) {
+      bagPlayingRef.current = false;
+      setBagWallStartedAtMs(null);
       setBagNotice(`bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBagBusy(false);
     }
   }
 
-  async function stopBagPlay() {
+    async function stopBagPlay() {
     setBagBusy(true);
     setBagNotice("");
     try {
@@ -986,6 +1041,11 @@ export default function App() {
     } catch (reason) {
       setBagNotice(`停止 bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
+      bagPlayingRef.current = false;
+      bagClockMsRef.current = null;
+      setBagClockMs(null);
+      setBagOriginMs(null);
+      setBagWallStartedAtMs(null);
       setBagBusy(false);
     }
   }
@@ -1244,6 +1304,9 @@ export default function App() {
           bagStatus={rosbagPlayStatus}
           bagBusy={bagBusy}
           bagNotice={bagNotice}
+          bagClockMs={bagClockMs}
+          bagOriginMs={bagOriginMs}
+          bagWallStartedAtMs={bagWallStartedAtMs}
           onSelectDashboard={(dashboardId) => setMonitorWorkspace((current) => selectMonitorDashboard(current, dashboardId))}
           onAddDashboard={(dashboard) => setMonitorWorkspace((current) => addMonitorDashboard(current, dashboard))}
           onRenameDashboard={(dashboardId, name) => setMonitorWorkspace((current) => renameMonitorDashboard(current, dashboardId, name))}
@@ -1252,6 +1315,7 @@ export default function App() {
           onRemovePanel={(dashboardId, panelId) => setMonitorWorkspace((current) => removePanelFromDashboard(current, dashboardId, panelId))}
           onClearPanels={(dashboardId) => setMonitorWorkspace((current) => clearDashboardPanels(current, dashboardId))}
           onResetLayout={(dashboardId) => setMonitorWorkspace((current) => resetDashboardPanelLayouts(current, dashboardId))}
+          onApplyWorkspace={(next) => setMonitorWorkspace(next)}
           onToggleLiveUpdates={() => {
             setLiveUpdates((current) => !current);
             setToolbarNotice(liveUpdates ? "Monitor / 实时显示已暂停：采样与时间窗冻结" : "已恢复跟随实时尾部");

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MonitorPage } from "./MonitorPage";
 import {
   addMonitorDashboard,
@@ -24,6 +24,7 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     onRemovePanel: () => undefined,
     onClearPanels: () => undefined,
     onResetLayout: () => undefined,
+    onApplyWorkspace: () => undefined,
     onToggleLiveUpdates: () => undefined,
     onSetLayoutLocked: () => undefined,
     onSetCompactType: () => undefined,
@@ -35,6 +36,10 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("MonitorPage", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it("renders default torque dashboard panels and supports create/rename/delete", async () => {
     const user = userEvent.setup();
     let workspace = createDefaultMonitorWorkspace("/stm32/joint_states");
@@ -278,5 +283,64 @@ describe("MonitorPage", () => {
     );
     expect(screen.getByText(/布局已锁定/)).toBeVisible();
     expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
+
+  it("saves and loads layout presets from the toolbar", async () => {
+    const user = userEvent.setup();
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const onApplyWorkspace = vi.fn((next) => {
+      workspace = next;
+    });
+    const { rerender } = render(
+      <MonitorPage
+        workspace={workspace}
+        {...baseProps({ jointStateTopic: "/js", onApplyWorkspace })}
+      />,
+    );
+    await user.type(screen.getByLabelText("布局预设名称"), "我的布局");
+    await user.click(screen.getByRole("button", { name: "保存布局" }));
+    expect(screen.getByText(/已保存布局「我的布局」/)).toBeVisible();
+    expect(screen.getByTitle("加载布局 我的布局")).toBeVisible();
+
+    workspace = addMonitorDashboard(workspace, createEmptyDashboard("Empty", "dash-empty"));
+    rerender(
+      <MonitorPage
+        workspace={workspace}
+        {...baseProps({ jointStateTopic: "/js", onApplyWorkspace })}
+      />,
+    );
+    await user.click(screen.getByTitle("加载布局 我的布局"));
+    expect(onApplyWorkspace).toHaveBeenCalled();
+    expect(onApplyWorkspace.mock.calls.at(-1)![0].dashboards.find((d: { id: string }) => d.id === "dash-empty").panels).toHaveLength(7);
+  });
+
+  it("shows bag playbar with pause and 1x controls while playing", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    const onStart = vi.fn();
+    const workspace = createDefaultMonitorWorkspace("/js");
+    render(
+      <MonitorPage
+        workspace={workspace}
+        {...baseProps({
+          jointStateTopic: "/js",
+          bagStatus: { playing: true, pid: 9, bagPath: "robot-console-bags/demo", message: "playing" },
+          bagClockMs: 20_000,
+          bagOriginMs: 10_000,
+          bagWallStartedAtMs: 100,
+          onStopBagPlay: onStop,
+          onStartBagPlay: onStart,
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Bag 回放" }));
+    expect(screen.getByRole("group", { name: "回放控制条" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "播放 1x" })).toBeDisabled();
+    expect(screen.getByText("1x")).toBeVisible();
+    expect(screen.getByLabelText("已播放时长")).toHaveTextContent("0:10");
+    expect(screen.getAllByText(/时间轴：bag/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "暂停" }));
+    expect(onStop).toHaveBeenCalledOnce();
   });
 });
