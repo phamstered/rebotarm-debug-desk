@@ -2,10 +2,10 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: 'Robot Debug Desk',
+  title: 'Rebotarm Debug Desk',
   description:
     'macOS ROS 2 Humble debug console — Tauri + React + Three.js, Jetson WebSocket Bridge over SSH',
-  base: '/robot-debug-desk/',
+  base: '/rebotarm-debug-desk/',
   cleanUrls: true,
   ignoreDeadLinks: true,
   themeConfig: {
@@ -18,7 +18,7 @@ export default defineConfig({
       { text: '部署 Bridge', link: '/deploy-bridge' },
       {
         text: 'GitHub',
-        link: 'https://github.com/phamstered/robot-debug-desk',
+        link: 'https://github.com/phamstered/rebotarm-debug-desk',
       },
     ],
     sidebar: [
@@ -46,13 +46,13 @@ export default defineConfig({
     socialLinks: [
       {
         icon: 'github',
-        link: 'https://github.com/phamstered/robot-debug-desk',
+        link: 'https://github.com/phamstered/rebotarm-debug-desk',
       },
     ],
     outline: { level: [2, 3] },
     search: { provider: 'local' },
     footer: {
-      message: 'User docs for Robot Debug Desk',
+      message: 'User docs for Rebotarm Debug Desk',
       copyright: 'Source: README.md and docs/ in the repository',
     },
   },

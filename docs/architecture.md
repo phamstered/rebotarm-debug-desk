@@ -1,8 +1,8 @@
 # Architecture
 
-Product name: **Robot Debug Desk** · repository: [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk).
+Product name: **Rebotarm Debug Desk** · repository: [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk).
 
-The npm package remains `easy-debug`; Tauri `productName` / window title / `/Applications` install still ship as **Robot Console** (`Robot Console.app`) until a separate code rename.
+The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `/Applications` install still ship as **Robot Console** (`Robot Console.app`) until a separate code rename.
 
 ## 系统架构 · System architecture
 

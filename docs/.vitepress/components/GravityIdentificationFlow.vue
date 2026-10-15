@@ -8,7 +8,7 @@
 
     <div class="rdd-panels rdd-panels--3" aria-hidden="true" style="margin-bottom:0.75rem">
       <div class="rdd-panel rdd-panel--nav">
-        <p class="rdd-panel__title">robot-debug-desk</p>
+        <p class="rdd-panel__title">rebotarm-debug-desk</p>
         <div class="rdd-panel__items">
           <div class="rdd-panel__item">UI · Goal / Feedback / Result</div>
           <div class="rdd-panel__item">ARMED · Start / Abort</div>

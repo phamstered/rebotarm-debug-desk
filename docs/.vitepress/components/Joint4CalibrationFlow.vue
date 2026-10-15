@@ -56,7 +56,7 @@
     </div>
 
     <p class="rdd-diagram__caption">
-      Robot Debug Desk 不自动激活控制器；请在 Dashboard 的 ROS Control 面板显式操作。
+      Rebotarm Debug Desk 不自动激活控制器；请在 Dashboard 的 ROS Control 面板显式操作。
     </p>
   </figure>
 </template>

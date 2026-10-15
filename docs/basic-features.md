@@ -1,8 +1,8 @@
-# Robot Debug Desk 基本功能与测试覆盖
+# Rebotarm Debug Desk 基本功能与测试覆盖
 
 更新日期：2026-10-14
 
-产品名：**Robot Debug Desk** · 仓库：[`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)。npm 包名仍为 `easy-debug`；Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`），文档不在此处静默改代码侧显示名。
+产品名：**Rebotarm Debug Desk** · 仓库：[`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)。npm 包名为 `rebotarm-debug-desk`；Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`），文档不在此处静默改代码侧显示名。
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
@@ -116,7 +116,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 ## 8. App 品牌与图标
 
-- 用户面向产品名为 **Robot Debug Desk**；当前代码侧应用显示名（Tauri `productName` / Dock / `.app`）仍为 **Robot Console**。
+- 用户面向产品名为 **Rebotarm Debug Desk**；当前代码侧应用显示名（Tauri `productName` / Dock / `.app`）仍为 **Robot Console**。
 - App Logo 使用简化双关节机械臂、金属材质和单一青色状态光，适配深色界面与 macOS Dock 小尺寸显示。
 - 设计源文件位于 `assets/logo/robot-console-icon.png`，应用内品牌图和 Tauri macOS Bundle 共用同一视觉资源。
 
@@ -144,7 +144,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - “暂停显示”只冻结 WebView 对 Topic、JointState 和硬件状态消息的消费，不断开 Bridge，也不停止后台 rosbag；恢复后从下一条消息继续更新。
 - “全部刷新”同时刷新 Topics 和 ROS Control 列表，并复用各自的并发保护。
 - “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
-- rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Robot Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
+- rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Rebotarm Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
 - “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
 - “重置布局”恢复 Topics 页默认左右宽度、Topics/ROS Control 分割比例并展开侧栏和数据面板；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
 
