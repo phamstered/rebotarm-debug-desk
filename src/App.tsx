@@ -20,8 +20,11 @@ import {
   loadMonitorWorkspace,
   removePanelFromDashboard,
   renameMonitorDashboard,
+  resetDashboardPanelLayouts,
   saveMonitorWorkspace,
   selectMonitorDashboard,
+  setMonitorCompactType,
+  setMonitorLayoutLocked,
   updateDashboardLayout,
   updateMonitorFromMessage,
 } from "./monitorLogic";
@@ -790,6 +793,13 @@ export default function App() {
           onLayoutChange={(dashboardId, layout) => setMonitorWorkspace((current) => updateDashboardLayout(current, dashboardId, layout))}
           onRemovePanel={(dashboardId, panelId) => setMonitorWorkspace((current) => removePanelFromDashboard(current, dashboardId, panelId))}
           onClearPanels={(dashboardId) => setMonitorWorkspace((current) => clearDashboardPanels(current, dashboardId))}
+          onResetLayout={(dashboardId) => setMonitorWorkspace((current) => resetDashboardPanelLayouts(current, dashboardId))}
+          onToggleLiveUpdates={() => {
+            setLiveUpdates((current) => !current);
+            setToolbarNotice(liveUpdates ? "Monitor / 实时显示已暂停：采样与时间窗冻结" : "已恢复跟随实时尾部");
+          }}
+          onSetLayoutLocked={(locked) => setMonitorWorkspace((current) => setMonitorLayoutLocked(current, locked))}
+          onSetCompactType={(compactType) => setMonitorWorkspace((current) => setMonitorCompactType(current, compactType))}
           onRefreshBagStatus={() => void refreshBagPlayStatus()}
           onStartBagPlay={(bagPath) => void startBagPlay(bagPath)}
           onStopBagPlay={() => void stopBagPlay()}

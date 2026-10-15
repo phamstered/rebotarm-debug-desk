@@ -448,9 +448,67 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   font-size: 12px;
   color: #9bb4c5;
+}
+.monitor-grid-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.monitor-grid-actions button {
+  height: 28px;
+  padding: 0 10px;
+  color: #9db6c6;
+  border: 1px solid #294252;
+  border-radius: 7px;
+  background: #08131c;
+  font-size: 11px;
+}
+.monitor-grid-actions button:hover:not(:disabled) {
+  color: #e5fffb;
+  border-color: #3a6a66;
+}
+.monitor-grid-actions button.active {
+  color: #e5fffb;
+  border-color: #275550;
+  background: #153834;
+}
+.monitor-grid-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.monitor-panel-maximized {
+  flex: 1 1 auto;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #1b3141;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #07131c;
+}
+.monitor-panel-maximized .data-graph-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.monitor-panel-restore {
+  margin-left: auto;
+  height: 18px;
+  padding: 0 8px;
+  color: #8cc8c4;
+  border: 1px solid #2a4b52;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+.monitor-panel-tile.layout-locked .monitor-panel-drag {
+  cursor: default;
 }
 .monitor-grid-empty {
   flex: 1 1 auto;
