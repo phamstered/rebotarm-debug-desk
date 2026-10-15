@@ -13,14 +13,17 @@ import { TopicInspector } from "./TopicInspector";
 import { addFieldsToSeries } from "./dataGraphLogic";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
 import {
-  addMonitorPanel,
-  deleteMonitorPanel,
+  addMonitorDashboard,
+  addPanelsToDashboard,
+  clearDashboardPanels,
+  deleteMonitorDashboard,
   loadMonitorWorkspace,
-  renameMonitorPanel,
+  removePanelFromDashboard,
+  renameMonitorDashboard,
   saveMonitorWorkspace,
-  selectMonitorPanel,
+  selectMonitorDashboard,
+  updateDashboardLayout,
   updateMonitorFromMessage,
-  updatePanelSeries,
 } from "./monitorLogic";
 import type { MonitorWorkspace } from "./monitorLogic";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
@@ -253,15 +256,15 @@ export default function App() {
     }, 30_000);
   }, [bridge, trajectoryController]);
 
-  const addToMonitor = useCallback((fieldPath: string, panelId: string) => {
+  const addToMonitor = useCallback((fieldPath: string, dashboardId: string) => {
     if (!selected) return;
     const sample = messages[selected];
     if (!sample) return;
     setMonitorWorkspace((current) => {
-      const panel = current.panels.find((entry) => entry.id === panelId);
-      if (!panel) return current;
-      const series = addFieldsToSeries(panel.series, selected, fieldPath, sample.data);
-      return selectMonitorPanel(updatePanelSeries(current, panel.id, series), panel.id);
+      const dashboard = current.dashboards.find((entry) => entry.id === dashboardId);
+      if (!dashboard) return current;
+      const series = addFieldsToSeries([], selected, fieldPath, sample.data);
+      return addPanelsToDashboard(current, dashboard.id, series);
     });
     setAppPage("monitor");
   }, [messages, selected]);
@@ -780,11 +783,13 @@ export default function App() {
           bagStatus={rosbagPlayStatus}
           bagBusy={bagBusy}
           bagNotice={bagNotice}
-          onSelectPanel={(panelId) => setMonitorWorkspace((current) => selectMonitorPanel(current, panelId))}
-          onAddPanel={(panel) => setMonitorWorkspace((current) => addMonitorPanel(current, panel))}
-          onRenamePanel={(panelId, name) => setMonitorWorkspace((current) => renameMonitorPanel(current, panelId, name))}
-          onDeletePanel={(panelId) => setMonitorWorkspace((current) => deleteMonitorPanel(current, panelId, profile.jointStateTopic))}
-          onUpdatePanelSeries={(panelId, series) => setMonitorWorkspace((current) => updatePanelSeries(current, panelId, series))}
+          onSelectDashboard={(dashboardId) => setMonitorWorkspace((current) => selectMonitorDashboard(current, dashboardId))}
+          onAddDashboard={(dashboard) => setMonitorWorkspace((current) => addMonitorDashboard(current, dashboard))}
+          onRenameDashboard={(dashboardId, name) => setMonitorWorkspace((current) => renameMonitorDashboard(current, dashboardId, name))}
+          onDeleteDashboard={(dashboardId) => setMonitorWorkspace((current) => deleteMonitorDashboard(current, dashboardId, profile.jointStateTopic))}
+          onLayoutChange={(dashboardId, layout) => setMonitorWorkspace((current) => updateDashboardLayout(current, dashboardId, layout))}
+          onRemovePanel={(dashboardId, panelId) => setMonitorWorkspace((current) => removePanelFromDashboard(current, dashboardId, panelId))}
+          onClearPanels={(dashboardId) => setMonitorWorkspace((current) => clearDashboardPanels(current, dashboardId))}
           onRefreshBagStatus={() => void refreshBagPlayStatus()}
           onStartBagPlay={(bagPath) => void startBagPlay(bagPath)}
           onStopBagPlay={() => void stopBagPlay()}
@@ -973,7 +978,7 @@ export default function App() {
             collapseSidebarLabel="收起右侧栏"
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector bridge={bridge} selected={selected} selectedNode={selectedNode} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} monitorPanels={monitorWorkspace.panels} selectedMonitorPanelId={monitorWorkspace.selectedPanelId} onAddToDataGraph={addToMonitor} />
+          <TopicInspector bridge={bridge} selected={selected} selectedNode={selectedNode} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} monitorPanels={monitorWorkspace.dashboards} selectedMonitorPanelId={monitorWorkspace.selectedDashboardId} onAddToDataGraph={addToMonitor} />
         </section>
       </section>
       {sidebars.left && <ResizeHandle

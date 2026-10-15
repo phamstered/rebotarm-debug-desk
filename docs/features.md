@@ -60,7 +60,7 @@ JointState topic: /stm32/joint_states
 
 ### 做什么
 
-浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的面板做 30 秒滑动窗口曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
+浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的仪表盘 Panel 做 30 秒滑动窗口曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
 
 ### 界面结构
 
@@ -85,7 +85,7 @@ JointState topic: /stm32/joint_states
 
 1. 在 Inspector 的“数据”Tab 查看选中 Topic 的完整名称与原始 JSON；“详情”Tab 显示发布者、订阅者及各端点的 GID / QoS。选中 Node 后自动展示其发布、订阅、服务及客户端列表。Topics 列表的名称和类型悬停可查看全称。
 2. 对 `sensor_msgs/msg/Image`：数据 Tab 用 Canvas 实时预览（rgb8 / bgr8 / rgba8 / bgra8 / mono8 / mono16 等）；Bridge 走二进制 WebSocket，避免 Base64 膨胀。
-3. 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，选择当前存在的目标面板后跳到 **Monitor** 页；Inspector JSON 与右键菜单使用紧凑字号。数组字段展开为多条曲线（如 `effort` → `effort[0..n]`）。
+3. 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，选择当前存在的目标**仪表盘**后跳到 **Monitor** 页并为每个字段创建 Panel；Inspector JSON 与右键菜单使用紧凑字号。数组字段展开为多个 Panel（如 `effort` → `effort[0..n]`）。
 
 **ROS Control**
 
@@ -109,13 +109,13 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ### 做什么
 
-在独立导航页用多面板查看数值时间序列：默认「Motor Torque」面板以 7 张独立图显示 JointState `effort[0..6]`（共享时间窗）；可从 Topics Inspector 加入字段。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。
+在独立导航页用 Grafana 式 **Dashboard → Panel → Chart** 查看数值时间序列：默认「Motor Torque」**仪表盘**含 7 个可拖拽/缩放 **Panel**，各显示 JointState `effort[0..6]` 一张 Chart（共享时间窗）；可从 Topics Inspector 向目标仪表盘追加 Panel。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。布局写入 localStorage（schema v2；旧版标签页配置自动迁移）。
 
 ### 怎么用
 
 1. 左侧 Navigation 打开 **Monitor**。
-2. 面板：新建空面板 /「+转矩」模板、重命名、删除（删光后恢复默认转矩面板）。
-3. 曲线：Topics → Inspector「加入 Monitor」；可单条移除或清空。v1 每面板仍为**单 Topic、多字段**（换 Topic 会替换该面板曲线）。
+2. 仪表盘：新建空仪表盘 /「+转矩」模板、重命名、删除（删光后恢复默认转矩仪表盘）。
+3. 面板：在网格中拖拽标题栏移动、拖角缩放；可移除单个 Panel 或「清空面板」。Topics → Inspector「加入 Monitor 仪表盘」会为展开的字段各建一个 Panel。
 4. 数据源切换「实时 / Bag 回放」。Bag 回放填写 Jetson 上的 bag 目录（如 `robot-console-bags/…`），开始/停止通过 SSH 执行 `ros2 bag play`（带 `--clock`）；**不是**本机解析 bag 文件。
 5. 工具栏「暂停显示」同样冻结 Monitor 采样。
 

@@ -435,15 +435,16 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .monitor-bag-status.error { color: #ffb4ad; }
 .monitor-chart { flex: 1 1 auto; min-height: 0; margin: 12px 22px 18px; border: 1px solid #1b3141; border-radius: 10px; overflow: hidden; background: #07131c; }
 .monitor-chart .data-graph-view { height: 100%; }
-.monitor-chart-grid-wrap {
+.monitor-grid-wrap {
   flex: 1 1 auto;
   min-height: 0;
   margin: 12px 22px 18px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: auto;
 }
-.monitor-chart-grid-toolbar {
+.monitor-grid-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -451,29 +452,69 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   font-size: 12px;
   color: #9bb4c5;
 }
-.monitor-chart-grid {
+.monitor-grid-empty {
+  flex: 1 1 auto;
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  color: #5f7c8c;
+  font-size: 12px;
+  border: 1px dashed #1e3646;
+  border-radius: 10px;
+  background: #07131c;
+}
+.monitor-grid {
   flex: 1 1 auto;
   min-height: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(140px, 1fr);
-  gap: 10px;
-  overflow: auto;
+  width: 100%;
 }
-.monitor-chart-cell {
-  min-height: 140px;
+.monitor-panel-tile {
+  display: flex;
+  flex-direction: column;
   border: 1px solid #1b3141;
   border-radius: 10px;
   overflow: hidden;
   background: #07131c;
 }
-.monitor-chart-cell .data-graph-view { height: 100%; }
-.data-graph-view.compact .data-graph-toolbar { padding: 4px 8px; font-size: 11px; }
-.data-graph-view.compact .data-graph-body { min-height: 0; }
-.data-graph-view.compact .data-graph-canvas-wrap { min-height: 110px; }
-@media (min-width: 1200px) {
-  .monitor-chart-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.monitor-panel-drag {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  color: #7f97a7;
+  background: #0a1721;
+  border-bottom: 1px solid #1b3141;
+  cursor: grab;
+  font-size: 10px;
+  user-select: none;
+}
+.monitor-panel-drag:active { cursor: grabbing; }
+.monitor-panel-drag-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitor-panel-tile .data-graph-view { flex: 1 1 auto; min-height: 0; height: auto; }
+.monitor-panel-meta .monitor-clear-panels {
+  color: #9db6c6;
+  border-color: #294252;
+  background: #08131c;
+}
+.monitor-panel-meta .monitor-clear-panels:disabled { opacity: 0.45; }
+.data-graph-view.compact .data-graph-toolbar {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.data-graph-view.compact .data-graph-body { min-height: 0; height: calc(100% - 28px); }
+.data-graph-view.compact .data-graph-canvas-wrap { min-height: 0; height: 100%; }
+.react-grid-item.react-grid-placeholder {
+  background: rgba(44, 140, 132, 0.28) !important;
+  border-radius: 10px;
+}
+.react-resizable-handle::after {
+  border-color: #5f8f8a !important;
 }
 
 .app-shell.nav-collapsed .monitor-page-header { padding-left: 28px; }

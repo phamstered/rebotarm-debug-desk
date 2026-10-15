@@ -180,7 +180,7 @@ export function TopicInspector({
         </>}
       </div>}
       {menu && <div className="inspector-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
-        <div className="inspector-context-heading" title={menu.path}>加入 Monitor · {menu.path}</div>
+        <div className="inspector-context-heading" title={menu.path}>加入 Monitor 仪表盘 · {menu.path}</div>
         {monitorPanels.map((panel) => {
           const ordinal = (panelOrdinal.get(panel.name) ?? 0) + 1;
           panelOrdinal.set(panel.name, ordinal);
@@ -189,7 +189,7 @@ export function TopicInspector({
             <span>{label}</span>{panel.id === selectedMonitorPanelId && <span className="inspector-context-current">当前</span>}
           </button>;
         })}
-        {monitorPanels.length === 0 && <div className="inspector-context-empty">暂无面板</div>}
+        {monitorPanels.length === 0 && <div className="inspector-context-empty">暂无仪表盘</div>}
       </div>}
     </div>
   );
