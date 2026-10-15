@@ -3,18 +3,26 @@ import {
   DEFAULT_MONITOR_DASHBOARD_NAME,
   DEFAULT_MONITOR_PANEL_NAME,
   DEFAULT_TORQUE_JOINT_COUNT,
+  MONITOR_LAYOUT_PRESETS_KEY,
   MONITOR_STORAGE_KEY,
   MONITOR_STORAGE_VERSION,
   addMonitorDashboard,
   addPanelsToDashboard,
+  applyLayoutPresetToDashboard,
   clearDashboardPanels,
   createDefaultMonitorWorkspace,
   createEmptyDashboard,
+  createLayoutPresetFromDashboard,
   createTorqueDashboard,
   createTorqueSeries,
+  deleteLayoutPreset,
   deleteMonitorDashboard,
+  exportLayoutPresetsJson,
+  hydrateLayoutPresetBundle,
   hydrateMonitorWorkspace,
+  importLayoutPresetsJson,
   isSafeBagPath,
+  loadLayoutPresets,
   loadMonitorWorkspace,
   migrateV1PanelToDashboard,
   packPanelLayouts,
@@ -23,6 +31,7 @@ import {
   removePanelFromDashboard,
   renameMonitorDashboard,
   resetDashboardPanelLayouts,
+  saveLayoutPresets,
   saveMonitorWorkspace,
   selectMonitorDashboard,
   selectedMonitorDashboard,
@@ -31,6 +40,7 @@ import {
   updateDashboardLayout,
   updateMonitorFromMessage,
   updatePanelSeries,
+  upsertLayoutPreset,
 } from "./monitorLogic";
 
 describe("monitorLogic torque dashboard", () => {
@@ -364,3 +374,82 @@ describe("monitorLogic interaction prefs and reset layout", () => {
   });
 });
 
+
+describe("monitorLogic layout presets", () => {
+  it("saves and loads named presets from storage", () => {
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const dashboard = workspace.dashboards[0]!;
+    const preset = createLayoutPresetFromDashboard(dashboard, "Torque 7", {
+      layoutLocked: true,
+      compactType: null,
+    });
+    expect(preset).not.toBeNull();
+    expect(preset!.panels).toHaveLength(7);
+    expect(preset!.name).toBe("Torque 7");
+
+    const storage = {
+      data: new Map<string, string>(),
+      getItem(key: string) {
+        return this.data.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        this.data.set(key, value);
+      },
+    };
+    saveLayoutPresets([preset!], storage);
+    expect(storage.data.has(MONITOR_LAYOUT_PRESETS_KEY)).toBe(true);
+    const loaded = loadLayoutPresets(storage);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]!.name).toBe("Torque 7");
+    expect(loaded[0]!.layoutLocked).toBe(true);
+    expect(loaded[0]!.compactType).toBeNull();
+  });
+
+  it("applies a preset onto a dashboard and replaces panels", () => {
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const empty = createEmptyDashboard("Empty", "dash-empty");
+    workspace = addMonitorDashboard(workspace, empty);
+    const torque = createDefaultMonitorWorkspace("/js").dashboards[0]!;
+    const preset = createLayoutPresetFromDashboard(torque, "From torque")!;
+    workspace = applyLayoutPresetToDashboard(workspace, "dash-empty", preset);
+    const applied = workspace.dashboards.find((d) => d.id === "dash-empty")!;
+    expect(applied.name).toBe("Empty");
+    expect(applied.panels).toHaveLength(7);
+    expect(applied.panels[0]!.series.fieldPath).toBe("effort[0]");
+    expect(applied.panels[0]!.layout).toMatchObject({ x: 0, y: 0, w: 4, h: 2 });
+  });
+
+  it("exports and imports JSON without clobbering existing ids", () => {
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const preset = createLayoutPresetFromDashboard(workspace.dashboards[0]!, "A")!;
+    const json = exportLayoutPresetsJson([preset]);
+    expect(json).toContain('"version": 1');
+    expect(hydrateLayoutPresetBundle(JSON.parse(json))).toHaveLength(1);
+
+    const existing = [preset];
+    const result = importLayoutPresetsJson(json, existing);
+    expect(result.error).toBeUndefined();
+    expect(result.imported).toBe(1);
+    expect(result.presets).toHaveLength(2);
+    expect(result.presets[1]!.id).not.toBe(preset.id);
+    expect(result.presets[1]!.name).toBe("A");
+
+    const bad = importLayoutPresetsJson("{not json", existing);
+    expect(bad.imported).toBe(0);
+    expect(bad.error).toBeTruthy();
+  });
+
+  it("upserts and deletes presets", () => {
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const a = createLayoutPresetFromDashboard(workspace.dashboards[0]!, "A", { id: "layout-a" })!;
+    const b = createLayoutPresetFromDashboard(workspace.dashboards[0]!, "B", { id: "layout-b" })!;
+    let list = upsertLayoutPreset([], a);
+    list = upsertLayoutPreset(list, { ...a, name: "A2" });
+    expect(list).toHaveLength(1);
+    expect(list[0]!.name).toBe("A2");
+    list = upsertLayoutPreset(list, b);
+    expect(list).toHaveLength(2);
+    list = deleteLayoutPreset(list, "layout-a");
+    expect(list.map((p) => p.id)).toEqual(["layout-b"]);
+  });
+});

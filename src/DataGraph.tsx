@@ -149,7 +149,10 @@ export function DataGraph({
   /** Shared crosshair timestamp (ms, performance clock); null hides the cursor. */
   crosshairT?: number | null;
   onCrosshairChange?(t: number | null): void;
-  /** When follow is off, freeze the window end at this time; null = use performance.now(). */
+  /**
+   * Explicit window end time (ms). Used for paused follow and bag `/clock` timelines.
+   * When null, charts slide with performance.now() (live wall clock).
+   */
   viewNow?: number | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -163,7 +166,7 @@ export function DataGraph({
   viewNowRef.current = viewNow;
 
   const resolveNow = () => {
-    if (!liveRef.current && viewNowRef.current != null) return viewNowRef.current;
+    if (viewNowRef.current != null) return viewNowRef.current;
     return performance.now();
   };
 

@@ -1,18 +1,31 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { DataGraph } from "./DataGraph";
-import type { MonitorCompactType, MonitorDashboard, MonitorWorkspace } from "./monitorLogic";
+import type { MonitorCompactType, MonitorDashboard, MonitorLayoutPreset, MonitorWorkspace } from "./monitorLogic";
 import {
   MONITOR_GRID_COLS,
   MONITOR_PANEL_MIN_H,
   MONITOR_PANEL_MIN_W,
+  applyLayoutPresetToDashboard,
   createEmptyDashboard,
+  createLayoutPresetFromDashboard,
   createTorqueDashboard,
+  deleteLayoutPreset,
+  exportLayoutPresetsJson,
+  importLayoutPresetsJson,
   isSafeBagPath,
+  loadLayoutPresets,
+  saveLayoutPresets,
   selectedMonitorDashboard,
+  upsertLayoutPreset,
 } from "./monitorLogic";
+import {
+  BAG_SEEK_CAVEAT_ZH,
+  buildBagPlaybarView,
+  resolveMonitorViewNowMs,
+} from "./monitorTimeline";
 import type { RosbagPlayStatus } from "./types";
 
 const ReactGridLayout = WidthProvider(GridLayout);
@@ -26,6 +39,9 @@ export function MonitorPage({
   bagStatus,
   bagBusy,
   bagNotice,
+  bagClockMs = null,
+  bagOriginMs = null,
+  bagWallStartedAtMs = null,
   onSelectDashboard,
   onAddDashboard,
   onRenameDashboard,
@@ -34,6 +50,7 @@ export function MonitorPage({
   onRemovePanel,
   onClearPanels,
   onResetLayout,
+  onApplyWorkspace,
   onToggleLiveUpdates,
   onSetLayoutLocked,
   onSetCompactType,
@@ -47,6 +64,10 @@ export function MonitorPage({
   bagStatus: RosbagPlayStatus | null;
   bagBusy: boolean;
   bagNotice: string;
+  /** Latest bag-domain clock (ms) while playing; null when live/unknown. */
+  bagClockMs?: number | null;
+  bagOriginMs?: number | null;
+  bagWallStartedAtMs?: number | null;
   onSelectDashboard(dashboardId: string): void;
   onAddDashboard(dashboard: MonitorDashboard): void;
   onRenameDashboard(dashboardId: string, name: string): void;
@@ -55,6 +76,8 @@ export function MonitorPage({
   onRemovePanel(dashboardId: string, panelId: string): void;
   onClearPanels(dashboardId: string): void;
   onResetLayout(dashboardId: string): void;
+  /** Replace workspace after applying a layout preset (panels + lock/compact). */
+  onApplyWorkspace(workspace: MonitorWorkspace): void;
   onToggleLiveUpdates(): void;
   onSetLayoutLocked(locked: boolean): void;
   onSetCompactType(compactType: MonitorCompactType): void;
@@ -70,6 +93,11 @@ export function MonitorPage({
   const [crosshairT, setCrosshairT] = useState<number | null>(null);
   const [frozenNow, setFrozenNow] = useState<number | null>(null);
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
+  const [layoutPresets, setLayoutPresets] = useState<MonitorLayoutPreset[]>(() => loadLayoutPresets());
+  const [presetName, setPresetName] = useState("");
+  const [presetNotice, setPresetNotice] = useState("");
+  const [wallTick, setWallTick] = useState(() => performance.now());
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setRenameValue(dashboard?.name ?? "");
@@ -86,11 +114,27 @@ export function MonitorPage({
 
   useEffect(() => {
     if (!liveUpdates) {
-      setFrozenNow((prev) => prev ?? performance.now());
+      setFrozenNow((prev) => {
+        if (prev != null) return prev;
+        if (mode === "bag" && bagClockMs != null) return bagClockMs;
+        return performance.now();
+      });
     } else {
       setFrozenNow(null);
     }
-  }, [liveUpdates]);
+  }, [liveUpdates, mode, bagClockMs]);
+
+  useEffect(() => {
+    saveLayoutPresets(layoutPresets);
+  }, [layoutPresets]);
+
+  const playing = Boolean(bagStatus?.playing);
+
+  useEffect(() => {
+    if (!playing) return;
+    const id = window.setInterval(() => setWallTick(performance.now()), 250);
+    return () => window.clearInterval(id);
+  }, [playing]);
 
   const onCrosshairChange = useCallback((t: number | null) => {
     setCrosshairT(t);
@@ -111,15 +155,39 @@ export function MonitorPage({
     [dashboard?.panels, workspace.layoutLocked],
   );
 
+  const playbar = useMemo(
+    () =>
+      buildBagPlaybarView({
+        playing,
+        wallStartedAtMs: bagWallStartedAtMs,
+        bagOriginMs,
+        bagClockMs,
+        wallNowMs: wallTick,
+      }),
+    [playing, bagWallStartedAtMs, bagOriginMs, bagClockMs, wallTick],
+  );
+
+  const viewNow = resolveMonitorViewNowMs({
+    bagPlaying: mode === "bag" && playing,
+    bagClockMs,
+    wallNowMs: wallTick,
+    frozenNowMs: frozenNow,
+  });
+
   if (!dashboard) return null;
 
-  const playing = Boolean(bagStatus?.playing);
   const chartsLive = liveUpdates && (mode === "live" || playing);
   const layoutLocked = workspace.layoutLocked;
   const compactType = workspace.compactType;
   const maximizedPanel = maximizedPanelId
     ? dashboard.panels.find((panel) => panel.id === maximizedPanelId)
     : undefined;
+  const timelineHint =
+    mode === "bag" && playing
+      ? bagClockMs != null
+        ? " · 时间轴：bag `/clock` / stamp"
+        : " · 时间轴：墙钟（等待 `/clock`）"
+      : "";
 
   const commitRename = () => {
     if (renameValue.trim() && renameValue.trim() !== dashboard.name) {
@@ -143,6 +211,60 @@ export function MonitorPage({
     setMaximizedPanelId((current) => (current === panelId ? null : panelId));
   };
 
+  const savePreset = () => {
+    const preset = createLayoutPresetFromDashboard(dashboard, presetName || dashboard.name, {
+      layoutLocked: workspace.layoutLocked,
+      compactType: workspace.compactType,
+    });
+    if (!preset) {
+      setPresetNotice("请输入布局名称");
+      return;
+    }
+    setLayoutPresets((current) => upsertLayoutPreset(current, preset));
+    setPresetName("");
+    setPresetNotice(`已保存布局「${preset.name}」`);
+  };
+
+  const loadPreset = (presetId: string) => {
+    const preset = layoutPresets.find((entry) => entry.id === presetId);
+    if (!preset) return;
+    onApplyWorkspace(applyLayoutPresetToDashboard(workspace, dashboard.id, preset));
+    setPresetNotice(`已加载布局「${preset.name}」`);
+  };
+
+  const removePreset = (presetId: string) => {
+    const preset = layoutPresets.find((entry) => entry.id === presetId);
+    setLayoutPresets((current) => deleteLayoutPreset(current, presetId));
+    if (preset) setPresetNotice(`已删除布局「${preset.name}」`);
+  };
+
+  const exportPresets = () => {
+    const blob = new Blob([exportLayoutPresetsJson(layoutPresets)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "monitor-layout-presets.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setPresetNotice("已导出布局预设 JSON");
+  };
+
+  const onImportFile = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const result = importLayoutPresetsJson(text, layoutPresets);
+      if (result.error) {
+        setPresetNotice(`导入失败：${result.error}`);
+        return;
+      }
+      setLayoutPresets(result.presets);
+      setPresetNotice(`已导入 ${result.imported} 个布局预设`);
+    } catch (reason) {
+      setPresetNotice(`导入失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    }
+  };
+
   const renderPanelChart = (panel: (typeof dashboard.panels)[number]) => (
     <DataGraph
       seriesList={[panel.series]}
@@ -152,7 +274,7 @@ export function MonitorPage({
       emptyHint="等待数据"
       crosshairT={crosshairT}
       onCrosshairChange={onCrosshairChange}
-      viewNow={frozenNow}
+      viewNow={viewNow}
       onRemoveSeries={() => onRemovePanel(dashboard.id, panel.id)}
       onClearSeries={() => onRemovePanel(dashboard.id, panel.id)}
     />
@@ -163,7 +285,7 @@ export function MonitorPage({
       <header className="monitor-page-header">
         <div>
           <h1>Monitor</h1>
-          <span>Dashboard / Panel / Chart · 共享准星 · 拖拽缩放 · 实时或 rosbag 回放</span>
+          <span>Dashboard / Panel / Chart · 布局预设 · 共享准星 · Bag `/clock` 时间轴</span>
         </div>
         <div className="monitor-mode" role="group" aria-label="数据源">
           <button
@@ -255,6 +377,76 @@ export function MonitorPage({
         </span>
       </div>
 
+      <section className="monitor-layout-presets" aria-label="布局预设">
+        <div className="monitor-layout-presets-row">
+          <label>
+            布局预设名称
+            <input
+              value={presetName}
+              aria-label="布局预设名称"
+              placeholder={dashboard.name}
+              onChange={(event) => setPresetName(event.target.value)}
+            />
+          </label>
+          <button type="button" className="ghost" onClick={savePreset}>
+            保存布局
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={layoutPresets.length === 0}
+            onClick={exportPresets}
+          >
+            导出 JSON
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => importInputRef.current?.click()}
+          >
+            导入 JSON
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            aria-label="导入布局预设 JSON"
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              void onImportFile(file);
+              event.target.value = "";
+            }}
+          />
+        </div>
+        {layoutPresets.length > 0 && (
+          <ul className="monitor-layout-preset-list">
+            {layoutPresets.map((preset) => (
+              <li key={preset.id}>
+                <button
+                  type="button"
+                  className="monitor-layout-preset-load"
+                  title={`加载布局 ${preset.name}`}
+                  onClick={() => loadPreset(preset.id)}
+                >
+                  {preset.name}
+                  <small>{preset.panels.length} Panel</small>
+                </button>
+                <button
+                  type="button"
+                  className="ghost monitor-layout-preset-delete"
+                  aria-label={`删除布局 ${preset.name}`}
+                  onClick={() => removePreset(preset.id)}
+                >
+                  删除
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {presetNotice && <p className="monitor-layout-preset-notice">{presetNotice}</p>}
+      </section>
+
       {mode === "bag" && (
         <section className="monitor-bag" aria-label="rosbag 回放">
           <div className="monitor-bag-row">
@@ -283,9 +475,51 @@ export function MonitorPage({
               </button>
             )}
           </div>
+
+          <div className="monitor-playbar" role="group" aria-label="回放控制条">
+            <button
+              type="button"
+              className="monitor-playbar-btn"
+              disabled={bagBusy || playing}
+              title="以 1x 在 Jetson 上执行 ros2 bag play --clock"
+              onClick={startPlay}
+            >
+              播放 1x
+            </button>
+            <button
+              type="button"
+              className="monitor-playbar-btn"
+              disabled={bagBusy || !playing}
+              title="暂停即停止回放（远端无保位 pause / seek）"
+              onClick={onStopBagPlay}
+            >
+              暂停
+            </button>
+            <span className="monitor-playbar-rate" title="当前仅支持 1x">
+              {playbar.rateLabel}
+            </span>
+            <div className="monitor-playbar-track" aria-hidden="true">
+              <div
+                className={`monitor-playbar-fill ${playing ? "indeterminate" : ""}`}
+                style={
+                  playbar.progressRatio == null
+                    ? undefined
+                    : { width: `${Math.round(playbar.progressRatio * 100)}%` }
+                }
+              />
+            </div>
+            <span className="monitor-playbar-time" aria-label="已播放时长">
+              {playbar.elapsedLabel}
+            </span>
+            <span className="monitor-playbar-status">{playbar.statusLabel}</span>
+          </div>
           <p className="monitor-bag-note">
-            回放在 Jetson 上执行 <code>ros2 bag play</code>，经 Bridge 订阅进入同一套曲线（非本机解析 bag）。
-            请确保录制中的 Topic 已在 Monitor 面板配置；本机下载 / 索引 / 客户端解析仍属后续工作。
+            回放在 Jetson 上执行 <code>ros2 bag play --clock</code>，经 Bridge 订阅进入同一套曲线（非本机解析 bag）。
+            图表与准星在收到消息 stamp 或 <code>/clock</code> 时使用 bag 时间轴。
+            {" "}
+            {BAG_SEEK_CAVEAT_ZH}
+            {" "}
+            进度为已播放估算（总时长未知）；scrub/seek 为后续工作。
           </p>
           {(pathError || bagNotice || bagStatus?.message) && (
             <p className={`monitor-bag-status ${pathError ? "error" : ""}`}>
@@ -307,6 +541,7 @@ export function MonitorPage({
               ? (chartsLive ? " · 跟随实时尾部" : " · 等待数据源（Bag 未播放）")
               : " · 已暂停（采样与窗口均冻结）"}
             {layoutLocked ? " · 布局已锁定" : ""}
+            {timelineHint}
           </span>
           <div className="monitor-grid-actions">
             <button

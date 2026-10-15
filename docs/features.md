@@ -128,22 +128,24 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ### 做什么
 
-在独立导航页用 Grafana 式 **Dashboard → Panel → Chart** 查看数值时间序列：默认「Motor Torque」**仪表盘**含 7 个可拖拽/缩放 **Panel**，各显示 JointState `effort[0..6]` 一张 Chart（共享 30s 时间窗与**共享准星**）；可从 Topics Inspector 向目标仪表盘追加 Panel。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。布局与锁定/紧凑偏好写入 localStorage（schema v2；旧版标签页配置自动迁移）。
+在独立导航页用 Grafana / Foxglove 式 **Dashboard → Panel → Chart** 查看数值时间序列：默认「Motor Torque」**仪表盘**含 7 个可拖拽/缩放 **Panel**，各显示 JointState `effort[0..6]` 一张 Chart（共享 30s 时间窗与**共享准星**）；可从 Topics Inspector 向目标仪表盘追加 Panel。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。布局与锁定/紧凑偏好写入 localStorage（schema v2；旧版标签页配置自动迁移）。支持**命名布局预设**（保存/加载当前 Panel 网格，导出/导入 JSON，localStorage 持久化）。
 
 ### 怎么用
 
 1. 左侧 Navigation 打开 **Monitor**。
 2. 仪表盘：新建空仪表盘 /「+转矩」模板、重命名、删除（删光后恢复默认转矩仪表盘）。
 3. 面板：在网格中拖拽标题栏移动、拖角缩放；**双击标题栏最大化**，再双击或点「恢复网格」还原；可移除单个 Panel 或「清空面板」。Topics → Inspector「加入 Monitor 仪表盘」会为展开的字段各建一个 Panel。
-4. 网格工具栏：**暂停跟随 / 跟随实时**（与全局「暂停显示」同源：冻结采样并冻结时间窗，恢复后跳回实时尾部）、**锁定布局**、**紧凑排列**、**重置布局**（按默认 12 列打包，如 Motor Torque 7 Panel）。
-5. 悬停任一 Chart 显示**共享准星**（同时间戳对齐各 Panel）。
-6. 数据源切换「实时 / Bag 回放」。Bag 回放填写 Jetson 上的 bag 目录（如 `robot-console-bags/…`），开始/停止通过 SSH 执行 `ros2 bag play`（带 `--clock`）；**不是**本机解析 bag 文件。
+4. **布局预设**：为当前仪表盘命名并「保存布局」；点击预设名加载；可「导出 JSON / 导入 JSON」。
+5. 网格工具栏：**暂停跟随 / 跟随实时**（与全局「暂停显示」同源：冻结采样并冻结时间窗，恢复后跳回实时尾部）、**锁定布局**、**紧凑排列**、**重置布局**（按默认 12 列打包，如 Motor Torque 7 Panel）。
+6. 悬停任一 Chart 显示**共享准星**（同时间戳对齐各 Panel）。Bag 回放时准星与曲线优先使用消息 `header.stamp` 或 `/clock`（订阅 `rosgraph_msgs/msg/Clock`），否则回退墙钟。
+7. 数据源切换「实时 / Bag 回放」。Bag 回放填写 Jetson 上的 bag 目录（如 `robot-console-bags/…`），**播放条**提供「播放 1x / 暂停」与已播放时长估算（1x）；开始/停止通过现有 Tauri SSH `ros2 bag play --clock` 启停；**不是**本机解析 bag 文件。
 
 ### 边界
 
 - 本机 bag 下载、索引、客户端解析尚未实现。
+- 远端 Bridge/SSH **不支持** bag seek/scrub 或保位 pause；播放条「暂停」即停止回放，再次播放从 bag 开头。进度条为已播放估算（总时长未知），seek 为后续工作。
 - 回放与现场同时发布同一 Topic 时可能混叠；建议在离线/隔离会话使用回放。
-- 后续可选：effort 参考线、bag `/clock` 对齐、告警阈值、CSV 导出、时间刷缩放、联动 Y 轴。
+- 后续可选：effort 参考线、告警阈值、CSV 导出、时间刷缩放、联动 Y 轴、bag 元数据时长与 seek。
 
 ---
 

@@ -699,3 +699,249 @@ export function isSafeBagPath(path: string): boolean {
     (segment) => segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith("-"),
   );
 }
+
+/* ── Layout presets (Foxglove-style named panel layouts) ─────────────────── */
+
+export const MONITOR_LAYOUT_PRESETS_KEY = "robot-console-monitor-layout-presets";
+export const MONITOR_LAYOUT_PRESETS_VERSION = 1 as const;
+
+export type MonitorLayoutPresetPanel = {
+  title: string;
+  layout: GridLayoutItem;
+  series: { topic: string; fieldPath: string; color: string };
+};
+
+export type MonitorLayoutPreset = {
+  id: string;
+  name: string;
+  savedAt: string;
+  panels: MonitorLayoutPresetPanel[];
+  layoutLocked?: boolean;
+  compactType?: MonitorCompactType;
+};
+
+export type MonitorLayoutPresetBundle = {
+  version: typeof MONITOR_LAYOUT_PRESETS_VERSION;
+  presets: MonitorLayoutPreset[];
+};
+
+export function newLayoutPresetId(): string {
+  return `layout-${crypto.randomUUID()}`;
+}
+
+export function createLayoutPresetFromDashboard(
+  dashboard: MonitorDashboard,
+  name: string,
+  options?: { layoutLocked?: boolean; compactType?: MonitorCompactType; id?: string; savedAt?: string },
+): MonitorLayoutPreset | null {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  return {
+    id: options?.id ?? newLayoutPresetId(),
+    name: trimmed,
+    savedAt: options?.savedAt ?? new Date().toISOString(),
+    layoutLocked: options?.layoutLocked,
+    compactType: options?.compactType,
+    panels: dashboard.panels.map((panel) => ({
+      title: panel.title,
+      layout: {
+        i: panel.id,
+        x: panel.layout.x,
+        y: panel.layout.y,
+        w: panel.layout.w,
+        h: panel.layout.h,
+      },
+      series: {
+        topic: panel.series.topic,
+        fieldPath: panel.series.fieldPath,
+        color: panel.series.color,
+      },
+    })),
+  };
+}
+
+function hydratePresetPanel(
+  entry: MonitorLayoutPresetPanel,
+  panelIndex: number,
+): MonitorPanel {
+  const id = newPanelId();
+  const topic = entry.series?.topic || "";
+  const fieldPath = entry.series?.fieldPath || `field[${panelIndex}]`;
+  const created = createSeries(topic, fieldPath, panelIndex);
+  const layout = entry.layout ?? {
+    i: id,
+    x: 0,
+    y: 0,
+    w: MONITOR_PANEL_DEFAULT_W,
+    h: MONITOR_PANEL_DEFAULT_H,
+  };
+  return {
+    id,
+    title: entry.title?.trim() || fieldPath,
+    layout: {
+      i: id,
+      x: Number.isFinite(layout.x) ? layout.x : 0,
+      y: Number.isFinite(layout.y) ? layout.y : 0,
+      w: Number.isFinite(layout.w) && layout.w > 0 ? layout.w : MONITOR_PANEL_DEFAULT_W,
+      h: Number.isFinite(layout.h) && layout.h > 0 ? layout.h : MONITOR_PANEL_DEFAULT_H,
+    },
+    series: {
+      ...created,
+      color: entry.series?.color || created.color,
+      points: [],
+    },
+  };
+}
+
+/** Replace panels on a dashboard from a named layout preset (keeps dashboard id/name). */
+export function applyLayoutPresetToDashboard(
+  workspace: MonitorWorkspace,
+  dashboardId: string,
+  preset: MonitorLayoutPreset,
+): MonitorWorkspace {
+  const panels = (preset.panels ?? []).map((entry, index) => hydratePresetPanel(entry, index));
+  return {
+    ...workspace,
+    layoutLocked:
+      preset.layoutLocked === undefined ? workspace.layoutLocked : Boolean(preset.layoutLocked),
+    compactType:
+      preset.compactType === undefined
+        ? workspace.compactType
+        : normalizeCompactType(preset.compactType),
+    dashboards: workspace.dashboards.map((dashboard) => {
+      if (dashboard.id !== dashboardId) return dashboard;
+      return { ...dashboard, panels };
+    }),
+  };
+}
+
+export function normalizeLayoutPreset(raw: unknown): MonitorLayoutPreset | null {
+  if (!raw || typeof raw !== "object") return null;
+  const entry = raw as Partial<MonitorLayoutPreset>;
+  const name = typeof entry.name === "string" ? entry.name.trim() : "";
+  if (!name) return null;
+  const panels = Array.isArray(entry.panels) ? entry.panels : [];
+  const normalizedPanels: MonitorLayoutPresetPanel[] = [];
+  for (const panel of panels) {
+    if (!panel || typeof panel !== "object") continue;
+    const series = (panel as MonitorLayoutPresetPanel).series;
+    if (!series || typeof series.topic !== "string" || typeof series.fieldPath !== "string") continue;
+    const layout = (panel as MonitorLayoutPresetPanel).layout;
+    normalizedPanels.push({
+      title: typeof (panel as MonitorLayoutPresetPanel).title === "string"
+        ? (panel as MonitorLayoutPresetPanel).title
+        : series.fieldPath,
+      layout: {
+        i: typeof layout?.i === "string" ? layout.i : `panel-${normalizedPanels.length}`,
+        x: Number.isFinite(layout?.x) ? layout!.x : 0,
+        y: Number.isFinite(layout?.y) ? layout!.y : 0,
+        w: Number.isFinite(layout?.w) && layout!.w > 0 ? layout!.w : MONITOR_PANEL_DEFAULT_W,
+        h: Number.isFinite(layout?.h) && layout!.h > 0 ? layout!.h : MONITOR_PANEL_DEFAULT_H,
+      },
+      series: {
+        topic: series.topic,
+        fieldPath: series.fieldPath,
+        color: typeof series.color === "string" ? series.color : "#42d6c7",
+      },
+    });
+  }
+  return {
+    id: typeof entry.id === "string" && entry.id ? entry.id : newLayoutPresetId(),
+    name,
+    savedAt: typeof entry.savedAt === "string" ? entry.savedAt : new Date().toISOString(),
+    panels: normalizedPanels,
+    layoutLocked: entry.layoutLocked === undefined ? undefined : Boolean(entry.layoutLocked),
+    compactType: entry.compactType === undefined ? undefined : normalizeCompactType(entry.compactType),
+  };
+}
+
+export function hydrateLayoutPresetBundle(raw: unknown): MonitorLayoutPreset[] {
+  if (!raw || typeof raw !== "object") return [];
+  const bundle = raw as Partial<MonitorLayoutPresetBundle>;
+  const list = Array.isArray(bundle.presets)
+    ? bundle.presets
+    : Array.isArray(raw)
+      ? (raw as unknown[])
+      : [];
+  const presets: MonitorLayoutPreset[] = [];
+  for (const entry of list) {
+    const preset = normalizeLayoutPreset(entry);
+    if (preset) presets.push(preset);
+  }
+  return presets;
+}
+
+export function persistLayoutPresetBundle(presets: MonitorLayoutPreset[]): MonitorLayoutPresetBundle {
+  return { version: MONITOR_LAYOUT_PRESETS_VERSION, presets };
+}
+
+export function loadLayoutPresets(
+  storage: Pick<Storage, "getItem"> = localStorage,
+): MonitorLayoutPreset[] {
+  try {
+    const raw = storage.getItem(MONITOR_LAYOUT_PRESETS_KEY);
+    if (!raw) return [];
+    return hydrateLayoutPresetBundle(JSON.parse(raw) as unknown);
+  } catch {
+    return [];
+  }
+}
+
+export function saveLayoutPresets(
+  presets: MonitorLayoutPreset[],
+  storage: Pick<Storage, "setItem"> = localStorage,
+): void {
+  storage.setItem(MONITOR_LAYOUT_PRESETS_KEY, JSON.stringify(persistLayoutPresetBundle(presets)));
+}
+
+export function upsertLayoutPreset(
+  presets: MonitorLayoutPreset[],
+  preset: MonitorLayoutPreset,
+): MonitorLayoutPreset[] {
+  const index = presets.findIndex((entry) => entry.id === preset.id);
+  if (index < 0) return [...presets, preset];
+  const next = presets.slice();
+  next[index] = preset;
+  return next;
+}
+
+export function deleteLayoutPreset(
+  presets: MonitorLayoutPreset[],
+  presetId: string,
+): MonitorLayoutPreset[] {
+  return presets.filter((entry) => entry.id !== presetId);
+}
+
+export function exportLayoutPresetsJson(presets: MonitorLayoutPreset[]): string {
+  return `${JSON.stringify(persistLayoutPresetBundle(presets), null, 2)}\n`;
+}
+
+export function importLayoutPresetsJson(
+  json: string,
+  existing: MonitorLayoutPreset[],
+): { presets: MonitorLayoutPreset[]; imported: number; error?: string } {
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    const incoming = hydrateLayoutPresetBundle(parsed);
+    if (incoming.length === 0) {
+      return { presets: existing, imported: 0, error: "JSON 中没有可用的布局预设" };
+    }
+    let next = existing;
+    for (const preset of incoming) {
+      // Re-id on import to avoid clobbering local ids with same name.
+      const withNewId: MonitorLayoutPreset = {
+        ...preset,
+        id: newLayoutPresetId(),
+        savedAt: new Date().toISOString(),
+      };
+      next = upsertLayoutPreset(next, withNewId);
+    }
+    return { presets: next, imported: incoming.length };
+  } catch (reason) {
+    return {
+      presets: existing,
+      imported: 0,
+      error: reason instanceof Error ? reason.message : String(reason),
+    };
+  }
+}
