@@ -170,7 +170,7 @@ button.ghost.disconnect-btn:hover {
   grid-template-areas: "header header header" "topics urdf data";
   background: #071019;
 }
-header { grid-area: header; display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; padding: 0 16px; border-bottom: 1px solid var(--line); background: #0a1721; color: #9ab0bf; font-size: 13px; }
+.workspace > .app-toolbar { grid-area: header; display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; padding: 0 16px; border-bottom: 1px solid var(--line); background: #0a1721; color: #9ab0bf; font-size: 13px; }
 .toolbar-spacer { flex: 1 1 auto; }
 .toolbar-actions { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 5px; }
 .toolbar-action { flex: 0 0 auto; height: 31px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; color: #91a9b8; border: 1px solid #294455; border-radius: 7px; background: #0a1721; font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -1015,13 +1015,14 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 
 .app-main-column {
   min-width: 0; min-height: 0; display: grid;
-  grid-template-rows: 46px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100vh; overflow: hidden;
 }
 .connected-topbar {
-  display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden;
-  padding: 0 12px; border-bottom: 1px solid var(--line); background: #0a1721; color: #9ab0bf; font-size: 12px;
+  display: flex; flex-wrap: wrap; align-content: center; align-items: center; gap: 6px 8px; min-width: 0; min-height: 46px;
+  padding: 6px 12px; border-bottom: 1px solid var(--line); background: #0a1721; color: #9ab0bf; font-size: 12px;
 }
+.connected-topbar .connect-status-strip.compact { flex: 0 0 auto; }
 .connected-topbar .connected-host-name {
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c5d8e2; font-weight: 650;
 }
@@ -1029,6 +1030,9 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .connected-topbar .switch-host { color: #dffefa; border-color: #35716c; background: #153b3a; }
 .connected-topbar .switch-host:hover { border-color: #42d6c7; }
 .app-shell.nav-collapsed .connected-topbar { padding-left: 28px; }
+@media (max-width: 1600px) {
+  .connected-topbar .connect-status-strip.compact { order: 1; flex: 1 1 100%; }
+}
 .app-page-content { height: 100%; }
 .status-page, .workspace { height: 100%; }
 .status-card.highlighted {

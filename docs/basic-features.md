@@ -50,6 +50,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
 - 页面导航只保留在左侧 Navigation，**Status** 为第一项（只读状态总览卡片网格），其后为 Topics、Monitor、Motor 和 Calibration；Robot View / Topic Graph 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
 - **Status** 页复用现有连接态：SSH/隧道端口、Bridge WS + hello 的 `bridge_version`/`bridge_build_id`（若有）、micro-ROS Agent（`check_micro_ros_agent`）、HardwareStatus（fault_code/mode）、JointState 冒烟与 Hz、`check_ros_controllers` 的 active 列表、ROS_DOMAIN_ID 提示；systemd Bridge 单元 journal 与 USB CDC 在无 API 时显示「未知」。只读，无一键升级全部或自动刷写 STM32。
+- 已连接工具条固定在主区域顶部；窄窗口时状态灯换到下一行，Status 的说明和卡片在工具条下方独立滚动，不与连接控件重叠。
 - 已连接顶部工具条提供「切换主机」、连接配置、设置、压缩状态灯（含 ROS 就绪 / Bridge 版本徽章 / Fault 芯片 / Domain 提示）、连接名、隧道端口、Agent 与断开；Topics 页工具栏保留全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照与重置布局。
 - Topics 页的 Topics、ROS Control、Inspector 三个区域可独立展开/收起；左右侧栏也可整列最小化并恢复，状态保存在本机。Topics 与 ROS Control 会自动使用另一面板释放出的高度。
 - Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。Topic 名称与类型悬停显示全称。
@@ -159,7 +160,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | 功能域 | 覆盖内容 | 测试位置 |
 |---|---|---|
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
-| 面板 | 默认/持久化状态、三个内容面板与左右侧栏收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
+| 面板 | 默认/持久化状态、三个内容面板与左右侧栏收起、宽高分隔条和尺寸边界、已连接工具条与 Status 卡片的网格区域隔离 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx`、`src/styles.test.ts` |
 | 工具栏 | 导航职责分离、中心局部 Tab（Robot View / Topic Graph）、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→会话→Bridge→Agent、状态灯/步骤/可读错误/最近主机、JointState 冒烟、实际端口、基础订阅、重连会话数据清理、版本检查与升级提示 | `src/App.test.tsx`、`src/appLogic.test.ts`、`src/bridge.test.ts` |
