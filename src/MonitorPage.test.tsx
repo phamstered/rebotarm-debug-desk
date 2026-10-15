@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MonitorPage } from "./MonitorPage";
@@ -6,6 +6,7 @@ import {
   addMonitorDashboard,
   createDefaultMonitorWorkspace,
   createEmptyDashboard,
+  updateDashboardLayout,
 } from "./monitorLogic";
 
 function baseProps(overrides: Record<string, unknown> = {}) {
@@ -22,6 +23,10 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     onLayoutChange: () => undefined,
     onRemovePanel: () => undefined,
     onClearPanels: () => undefined,
+    onResetLayout: () => undefined,
+    onToggleLiveUpdates: () => undefined,
+    onSetLayoutLocked: () => undefined,
+    onSetCompactType: () => undefined,
     onRefreshBagStatus: () => undefined,
     onStartBagPlay: () => undefined,
     onStopBagPlay: () => undefined,
@@ -178,5 +183,100 @@ describe("MonitorPage", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "停止回放" }));
     expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it("exposes follow / lock / compact / reset layout controls", async () => {
+    const user = userEvent.setup();
+    const onToggleLiveUpdates = vi.fn();
+    const onSetLayoutLocked = vi.fn();
+    const onSetCompactType = vi.fn();
+    const onResetLayout = vi.fn();
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const { rerender } = render(
+      <MonitorPage
+        workspace={workspace}
+        {...baseProps({
+          jointStateTopic: "/js",
+          onToggleLiveUpdates,
+          onSetLayoutLocked,
+          onSetCompactType,
+          onResetLayout,
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/跟随实时尾部/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "暂停跟随" }));
+    expect(onToggleLiveUpdates).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: "锁定布局" }));
+    expect(onSetLayoutLocked).toHaveBeenCalledWith(true);
+
+    await user.click(screen.getByRole("button", { name: "紧凑排列" }));
+    expect(onSetCompactType).toHaveBeenCalledWith(null);
+
+    await user.click(screen.getByRole("button", { name: "重置布局" }));
+    expect(onResetLayout).toHaveBeenCalledWith(workspace.selectedDashboardId);
+
+    workspace = { ...workspace, layoutLocked: true, compactType: null };
+    rerender(
+      <MonitorPage
+        workspace={workspace}
+        {...baseProps({
+          jointStateTopic: "/js",
+          liveUpdates: false,
+          onToggleLiveUpdates,
+          onSetLayoutLocked,
+          onSetCompactType,
+          onResetLayout,
+        })}
+      />,
+    );
+    expect(screen.getByText(/已暂停（采样与窗口均冻结）/)).toBeVisible();
+    expect(screen.getByText(/布局已锁定/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "解锁布局" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "紧凑排列" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "跟随实时" })).toBeVisible();
+  });
+
+  it("maximizes a panel on double-click and restores via button", async () => {
+    const user = userEvent.setup();
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const panel = workspace.dashboards[0]!.panels[0]!;
+    render(<MonitorPage workspace={workspace} {...baseProps({ jointStateTopic: "/js" })} />);
+
+    expect(screen.getByLabelText("effort[6] 曲线")).toBeVisible();
+    const handles = screen.getAllByTitle(/双击最大化/);
+    fireEvent.doubleClick(handles[0]!);
+
+    expect(screen.getByText(/最大化 · effort\[0\]/)).toBeVisible();
+    expect(screen.queryByLabelText("effort[6] 曲线")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
+    expect(panel.title).toBe("effort[0]");
+
+    await user.click(screen.getByRole("button", { name: "恢复网格" }));
+    expect(screen.getByLabelText("effort[6] 曲线")).toBeVisible();
+    expect(screen.queryByText(/最大化 ·/)).not.toBeInTheDocument();
+  });
+
+  it("does not call onLayoutChange while layout is locked", () => {
+    const onLayoutChange = vi.fn();
+    let workspace = createDefaultMonitorWorkspace("/js");
+    workspace = {
+      ...workspace,
+      layoutLocked: true,
+    };
+    // scramble then lock — page should ignore layout events when locked
+    workspace = updateDashboardLayout(workspace, workspace.selectedDashboardId, [
+      { i: workspace.dashboards[0]!.panels[0]!.id, x: 0, y: 0, w: 6, h: 3 },
+    ]);
+    render(
+      <MonitorPage
+        workspace={workspace}
+        {...baseProps({ jointStateTopic: "/js", onLayoutChange })}
+      />,
+    );
+    expect(screen.getByText(/布局已锁定/)).toBeVisible();
+    expect(onLayoutChange).not.toHaveBeenCalled();
   });
 });

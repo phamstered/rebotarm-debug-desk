@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { DataGraph } from "./DataGraph";
-import type { MonitorDashboard, MonitorWorkspace } from "./monitorLogic";
+import type { MonitorCompactType, MonitorDashboard, MonitorWorkspace } from "./monitorLogic";
 import {
   MONITOR_GRID_COLS,
   MONITOR_PANEL_MIN_H,
@@ -33,6 +33,10 @@ export function MonitorPage({
   onLayoutChange,
   onRemovePanel,
   onClearPanels,
+  onResetLayout,
+  onToggleLiveUpdates,
+  onSetLayoutLocked,
+  onSetCompactType,
   onRefreshBagStatus,
   onStartBagPlay,
   onStopBagPlay,
@@ -50,6 +54,10 @@ export function MonitorPage({
   onLayoutChange(dashboardId: string, layout: Layout[]): void;
   onRemovePanel(dashboardId: string, panelId: string): void;
   onClearPanels(dashboardId: string): void;
+  onResetLayout(dashboardId: string): void;
+  onToggleLiveUpdates(): void;
+  onSetLayoutLocked(locked: boolean): void;
+  onSetCompactType(compactType: MonitorCompactType): void;
   onRefreshBagStatus(): void;
   onStartBagPlay(bagPath: string): void;
   onStopBagPlay(): void;
@@ -59,6 +67,9 @@ export function MonitorPage({
   const [bagPath, setBagPath] = useState(bagStatus?.bagPath || "robot-console-bags/");
   const [renameValue, setRenameValue] = useState(dashboard?.name ?? "");
   const [pathError, setPathError] = useState("");
+  const [crosshairT, setCrosshairT] = useState<number | null>(null);
+  const [frozenNow, setFrozenNow] = useState<number | null>(null);
+  const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
 
   useEffect(() => {
     setRenameValue(dashboard?.name ?? "");
@@ -67,6 +78,23 @@ export function MonitorPage({
   useEffect(() => {
     if (bagStatus?.bagPath) setBagPath(bagStatus.bagPath);
   }, [bagStatus?.bagPath]);
+
+  useEffect(() => {
+    setMaximizedPanelId(null);
+    setCrosshairT(null);
+  }, [dashboard?.id]);
+
+  useEffect(() => {
+    if (!liveUpdates) {
+      setFrozenNow((prev) => prev ?? performance.now());
+    } else {
+      setFrozenNow(null);
+    }
+  }, [liveUpdates]);
+
+  const onCrosshairChange = useCallback((t: number | null) => {
+    setCrosshairT(t);
+  }, []);
 
   const layout = useMemo(
     () =>
@@ -78,14 +106,20 @@ export function MonitorPage({
         h: panel.layout.h,
         minW: MONITOR_PANEL_MIN_W,
         minH: MONITOR_PANEL_MIN_H,
+        static: workspace.layoutLocked,
       })),
-    [dashboard?.panels],
+    [dashboard?.panels, workspace.layoutLocked],
   );
 
   if (!dashboard) return null;
 
   const playing = Boolean(bagStatus?.playing);
   const chartsLive = liveUpdates && (mode === "live" || playing);
+  const layoutLocked = workspace.layoutLocked;
+  const compactType = workspace.compactType;
+  const maximizedPanel = maximizedPanelId
+    ? dashboard.panels.find((panel) => panel.id === maximizedPanelId)
+    : undefined;
 
   const commitRename = () => {
     if (renameValue.trim() && renameValue.trim() !== dashboard.name) {
@@ -105,12 +139,31 @@ export function MonitorPage({
     onStartBagPlay(trimmed);
   };
 
+  const toggleMaximize = (panelId: string) => {
+    setMaximizedPanelId((current) => (current === panelId ? null : panelId));
+  };
+
+  const renderPanelChart = (panel: (typeof dashboard.panels)[number]) => (
+    <DataGraph
+      seriesList={[panel.series]}
+      liveUpdates={chartsLive}
+      compact
+      title={panel.title}
+      emptyHint="等待数据"
+      crosshairT={crosshairT}
+      onCrosshairChange={onCrosshairChange}
+      viewNow={frozenNow}
+      onRemoveSeries={() => onRemovePanel(dashboard.id, panel.id)}
+      onClearSeries={() => onRemovePanel(dashboard.id, panel.id)}
+    />
+  );
+
   return (
     <main className="monitor-page">
       <header className="monitor-page-header">
         <div>
           <h1>Monitor</h1>
-          <span>Dashboard / Panel / Chart · 拖拽缩放 · 实时或 rosbag 回放</span>
+          <span>Dashboard / Panel / Chart · 共享准星 · 拖拽缩放 · 实时或 rosbag 回放</span>
         </div>
         <div className="monitor-mode" role="group" aria-label="数据源">
           <button
@@ -198,7 +251,7 @@ export function MonitorPage({
           清空面板
         </button>
         <span className="monitor-panel-hint">
-          从 Topics → Inspector 右键选择目标仪表盘添加 Panel；拖拽面板标题栏移动、拖角缩放。Motor Torque 默认含 effort[0..6]。
+          悬停任一 Chart 显示共享准星；双击 Panel 标题栏最大化。从 Topics → Inspector 添加 Panel。
         </span>
       </div>
 
@@ -243,17 +296,91 @@ export function MonitorPage({
       )}
 
       <div className="monitor-grid-wrap">
-        <div className="monitor-grid-toolbar">
+        <div className="monitor-grid-toolbar" role="toolbar" aria-label="Monitor 布局与跟随">
           <span>
             {dashboard.panels.length === 0
               ? "空仪表盘"
-              : `${dashboard.panels.length} 个 Panel · 窗口 30s`}
-            {chartsLive ? "" : " · 已暂停"}
+              : maximizedPanel
+                ? `最大化 · ${maximizedPanel.title}`
+                : `${dashboard.panels.length} 个 Panel · 窗口 30s`}
+            {liveUpdates
+              ? (chartsLive ? " · 跟随实时尾部" : " · 等待数据源（Bag 未播放）")
+              : " · 已暂停（采样与窗口均冻结）"}
+            {layoutLocked ? " · 布局已锁定" : ""}
           </span>
+          <div className="monitor-grid-actions">
+            <button
+              type="button"
+              className={liveUpdates ? "" : "active"}
+              aria-pressed={!liveUpdates}
+              title={liveUpdates ? "暂停采样并冻结时间窗，便于查看尖峰" : "恢复采样并跳回实时尾部"}
+              onClick={onToggleLiveUpdates}
+            >
+              {liveUpdates ? "暂停跟随" : "跟随实时"}
+            </button>
+            <button
+              type="button"
+              className={layoutLocked ? "active" : ""}
+              aria-pressed={layoutLocked}
+              title="锁定后禁止拖拽与缩放"
+              onClick={() => onSetLayoutLocked(!layoutLocked)}
+            >
+              {layoutLocked ? "解锁布局" : "锁定布局"}
+            </button>
+            <button
+              type="button"
+              className={compactType === "vertical" ? "active" : ""}
+              aria-pressed={compactType === "vertical"}
+              title="开启后自动纵向紧凑填补空隙；关闭则允许留白"
+              onClick={() =>
+                onSetCompactType(compactType === "vertical" ? null : "vertical")
+              }
+            >
+              紧凑排列
+            </button>
+            <button
+              type="button"
+              disabled={dashboard.panels.length === 0 || Boolean(maximizedPanel)}
+              title="恢复默认 12 列网格打包（如 Motor Torque 7 Panel）"
+              onClick={() => onResetLayout(dashboard.id)}
+            >
+              重置布局
+            </button>
+            {maximizedPanel && (
+              <button
+                type="button"
+                className="active"
+                aria-label="恢复网格"
+                title="退出最大化，回到网格"
+                onClick={() => setMaximizedPanelId(null)}
+              >
+                恢复网格
+              </button>
+            )}
+          </div>
         </div>
         {dashboard.panels.length === 0 ? (
           <div className="monitor-grid-empty" role="status">
             从 Topics → Inspector 加入数值字段，或使用「+转矩」模板
+          </div>
+        ) : maximizedPanel ? (
+          <div className="monitor-panel-maximized" data-panel-id={maximizedPanel.id}>
+            <div
+              className="monitor-panel-drag"
+              title="双击恢复网格"
+              onDoubleClick={() => toggleMaximize(maximizedPanel.id)}
+            >
+              <span className="monitor-panel-drag-label">{maximizedPanel.title}</span>
+              <button
+                type="button"
+                className="monitor-panel-restore"
+                aria-label="退出最大化"
+                onClick={() => setMaximizedPanelId(null)}
+              >
+                恢复
+              </button>
+            </div>
+            {renderPanelChart(maximizedPanel)}
           </div>
         ) : (
           <ReactGridLayout
@@ -265,23 +392,24 @@ export function MonitorPage({
             layout={layout}
             draggableHandle=".monitor-panel-drag"
             draggableCancel="button,input,textarea,a"
-            onLayoutChange={(next) => onLayoutChange(dashboard.id, next)}
-            compactType="vertical"
+            isDraggable={!layoutLocked}
+            isResizable={!layoutLocked}
+            compactType={compactType}
+            onLayoutChange={(next) => {
+              if (layoutLocked) return;
+              onLayoutChange(dashboard.id, next);
+            }}
           >
             {dashboard.panels.map((panel) => (
               <div key={panel.id} className="monitor-panel-tile" data-panel-id={panel.id}>
-                <div className="monitor-panel-drag" title="拖拽移动">
+                <div
+                  className="monitor-panel-drag"
+                  title={layoutLocked ? "布局已锁定 · 双击最大化" : "拖拽移动 · 双击最大化"}
+                  onDoubleClick={() => toggleMaximize(panel.id)}
+                >
                   <span className="monitor-panel-drag-label">{panel.title}</span>
                 </div>
-                <DataGraph
-                  seriesList={[panel.series]}
-                  liveUpdates={chartsLive}
-                  compact
-                  title={panel.title}
-                  emptyHint="等待数据"
-                  onRemoveSeries={() => onRemovePanel(dashboard.id, panel.id)}
-                  onClearSeries={() => onRemovePanel(dashboard.id, panel.id)}
-                />
+                {renderPanelChart(panel)}
               </div>
             ))}
           </ReactGridLayout>

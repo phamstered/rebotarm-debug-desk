@@ -11,9 +11,12 @@ import {
   listNumericFields,
   nextSeriesColor,
   parsePathSegments,
+  nearestValueAtTime,
+  plotXFromTimestamp,
   prunePoints,
   removeSeries,
   seriesId,
+  timestampFromPlotX,
   updateSeriesFromMessage,
 } from "./dataGraphLogic";
 
@@ -214,3 +217,28 @@ describe("dataGraphLogic edge cases", () => {
     });
   });
 });
+
+describe("dataGraphLogic crosshair mapping", () => {
+  it("maps plot x to timestamp and back within the window", () => {
+    const minT = 1000;
+    const maxT = 4000;
+    expect(timestampFromPlotX(52, 52, 300, minT, maxT)).toBe(minT);
+    expect(timestampFromPlotX(52 + 300, 52, 300, minT, maxT)).toBe(maxT);
+    expect(timestampFromPlotX(52 + 150, 52, 300, minT, maxT)).toBe(2500);
+    expect(plotXFromTimestamp(2500, 52, 300, minT, maxT)).toBe(202);
+    expect(timestampFromPlotX(-10, 52, 300, minT, maxT)).toBe(minT);
+  });
+
+  it("reads the nearest sample at or before the crosshair time", () => {
+    const points = [
+      { t: 100, value: 1 },
+      { t: 200, value: 2 },
+      { t: 300, value: 3 },
+    ];
+    expect(nearestValueAtTime(points, 250)).toBe(2);
+    expect(nearestValueAtTime(points, 300)).toBe(3);
+    expect(nearestValueAtTime(points, 50)).toBeUndefined();
+    expect(nearestValueAtTime([], 100)).toBeUndefined();
+  });
+});
+

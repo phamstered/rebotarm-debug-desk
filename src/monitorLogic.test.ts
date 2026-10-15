@@ -22,9 +22,12 @@ import {
   persistMonitorWorkspace,
   removePanelFromDashboard,
   renameMonitorDashboard,
+  resetDashboardPanelLayouts,
   saveMonitorWorkspace,
   selectMonitorDashboard,
   selectedMonitorDashboard,
+  setMonitorCompactType,
+  setMonitorLayoutLocked,
   updateDashboardLayout,
   updateMonitorFromMessage,
   updatePanelSeries,
@@ -268,7 +271,12 @@ describe("monitorLogic persistence migration and helpers", () => {
 
     expect(updatePanelSeries(workspace, "nope", []).dashboards[0]!.panels).toHaveLength(7);
     expect(selectMonitorDashboard(workspace, "nope")).toBe(workspace);
-    expect(selectedMonitorDashboard({ dashboards: [], selectedDashboardId: "x" })).toBeUndefined();
+    expect(selectedMonitorDashboard({
+      dashboards: [],
+      selectedDashboardId: "x",
+      layoutLocked: false,
+      compactType: "vertical",
+    })).toBeUndefined();
   });
 
   it("skips empty dashboards during live updates", () => {
@@ -287,3 +295,72 @@ describe("monitorLogic persistence migration and helpers", () => {
     expect(isSafeBagPath("bags/./nested")).toBe(false);
   });
 });
+
+describe("monitorLogic interaction prefs and reset layout", () => {
+  it("defaults layoutUnlocked with vertical compact and persists prefs", () => {
+    const workspace = createDefaultMonitorWorkspace("/js");
+    expect(workspace.layoutLocked).toBe(false);
+    expect(workspace.compactType).toBe("vertical");
+    const persisted = persistMonitorWorkspace(workspace);
+    expect(persisted.layoutLocked).toBe(false);
+    expect(persisted.compactType).toBe("vertical");
+
+    const locked = setMonitorLayoutLocked(workspace, true);
+    expect(locked.layoutLocked).toBe(true);
+    expect(setMonitorLayoutLocked(locked, true)).toBe(locked);
+
+    const free = setMonitorCompactType(locked, null);
+    expect(free.compactType).toBe(null);
+    expect(setMonitorCompactType(free, null)).toBe(free);
+
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+    saveMonitorWorkspace(free, storage);
+    const loaded = loadMonitorWorkspace("/js", storage);
+    expect(loaded.layoutLocked).toBe(true);
+    expect(loaded.compactType).toBe(null);
+  });
+
+  it("hydrates missing prefs from v2 and v1 shapes", () => {
+    const v2 = hydrateMonitorWorkspace({
+      version: 2,
+      selectedDashboardId: "d1",
+      dashboards: [{ id: "d1", name: "D", panels: [] }],
+    }, "/js");
+    expect(v2.layoutLocked).toBe(false);
+    expect(v2.compactType).toBe("vertical");
+
+    const v1 = hydrateMonitorWorkspace({
+      selectedPanelId: "p1",
+      panels: [{ id: "p1", name: "Old", series: [] }],
+    }, "/js");
+    expect(v1.layoutLocked).toBe(false);
+    expect(v1.compactType).toBe("vertical");
+  });
+
+  it("repacks dashboard panels into the default 12-col grid", () => {
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const dashboardId = workspace.selectedDashboardId;
+    const panelId = workspace.dashboards[0]!.panels[0]!.id;
+    workspace = updateDashboardLayout(workspace, dashboardId, [
+      { i: panelId, x: 9, y: 8, w: 3, h: 4 },
+    ]);
+    expect(workspace.dashboards[0]!.panels[0]!.layout).toMatchObject({ x: 9, y: 8, w: 3, h: 4 });
+
+    workspace = resetDashboardPanelLayouts(workspace, dashboardId);
+    expect(workspace.dashboards[0]!.panels.map((panel) => panel.layout)).toEqual([
+      { i: workspace.dashboards[0]!.panels[0]!.id, x: 0, y: 0, w: 4, h: 2 },
+      { i: workspace.dashboards[0]!.panels[1]!.id, x: 4, y: 0, w: 4, h: 2 },
+      { i: workspace.dashboards[0]!.panels[2]!.id, x: 8, y: 0, w: 4, h: 2 },
+      { i: workspace.dashboards[0]!.panels[3]!.id, x: 0, y: 2, w: 4, h: 2 },
+      { i: workspace.dashboards[0]!.panels[4]!.id, x: 4, y: 2, w: 4, h: 2 },
+      { i: workspace.dashboards[0]!.panels[5]!.id, x: 8, y: 2, w: 4, h: 2 },
+      { i: workspace.dashboards[0]!.panels[6]!.id, x: 0, y: 4, w: 4, h: 2 },
+    ]);
+    expect(workspace.dashboards[0]!.panels[0]!.series.fieldPath).toBe("effort[0]");
+  });
+});
+

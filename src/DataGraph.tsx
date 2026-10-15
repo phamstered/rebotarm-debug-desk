@@ -1,16 +1,30 @@
 import { useEffect, useRef } from "react";
 import type { DataSeries } from "./dataGraphLogic";
-import { DATA_GRAPH_WINDOW_MS, computePlotBounds } from "./dataGraphLogic";
+import {
+  DATA_GRAPH_PAD,
+  DATA_GRAPH_WINDOW_MS,
+  computePlotBounds,
+  nearestValueAtTime,
+  plotXFromTimestamp,
+  timestampFromPlotX,
+} from "./dataGraphLogic";
 
 function formatTick(value: number): string {
   if (Math.abs(value) >= 100 || Math.abs(value) < 0.01 && value !== 0) return value.toExponential(1);
   return value.toFixed(Math.abs(value) >= 10 ? 1 : 2);
 }
 
+function formatCrosshairAge(t: number, now: number): string {
+  const ageSec = (now - t) / 1000;
+  if (ageSec <= 0.05) return "now";
+  return `-${ageSec.toFixed(1)}s`;
+}
+
 function drawChart(
   canvas: HTMLCanvasElement,
   seriesList: DataSeries[],
   now: number,
+  crosshairT: number | null,
 ) {
   const parent = canvas.parentElement;
   const width = Math.max(parent?.clientWidth ?? canvas.clientWidth, 120);
@@ -26,7 +40,7 @@ function drawChart(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const pad = { left: 52, right: 14, top: 12, bottom: 28 };
+  const pad = DATA_GRAPH_PAD;
   const plotW = Math.max(width - pad.left - pad.right, 1);
   const plotH = Math.max(height - pad.top - pad.bottom, 1);
   const bounds = computePlotBounds(seriesList, now);
@@ -82,6 +96,35 @@ function drawChart(
     });
     ctx.stroke();
   }
+
+  if (crosshairT != null && crosshairT >= bounds.minT && crosshairT <= bounds.maxT) {
+    const x = plotXFromTimestamp(crosshairT, pad.left, plotW, bounds.minT, bounds.maxT);
+    ctx.strokeStyle = "rgba(226, 255, 248, 0.85)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const readoutParts: string[] = [formatCrosshairAge(crosshairT, now)];
+    for (const series of seriesList) {
+      const value = nearestValueAtTime(series.points, crosshairT);
+      if (value !== undefined) {
+        readoutParts.push(`${series.fieldPath}=${formatTick(value)}`);
+      }
+    }
+    const label = readoutParts.join(" · ");
+    ctx.font = "10px SFMono-Regular, monospace";
+    const labelWidth = Math.min(ctx.measureText(label).width + 10, plotW);
+    const labelX = Math.min(Math.max(x - labelWidth / 2, pad.left), pad.left + plotW - labelWidth);
+    ctx.fillStyle = "rgba(8, 20, 28, 0.88)";
+    ctx.fillRect(labelX, pad.top + 2, labelWidth, 16);
+    ctx.fillStyle = "#d6f6ef";
+    ctx.textAlign = "left";
+    ctx.fillText(label, labelX + 5, pad.top + 13, labelWidth - 8);
+  }
 }
 
 export function DataGraph({
@@ -92,6 +135,9 @@ export function DataGraph({
   emptyHint = "在右侧 Inspector 选择数值字段并「加入 Monitor」",
   compact = false,
   title,
+  crosshairT = null,
+  onCrosshairChange,
+  viewNow = null,
 }: {
   seriesList: DataSeries[];
   liveUpdates: boolean;
@@ -100,22 +146,38 @@ export function DataGraph({
   emptyHint?: string;
   compact?: boolean;
   title?: string;
+  /** Shared crosshair timestamp (ms, performance clock); null hides the cursor. */
+  crosshairT?: number | null;
+  onCrosshairChange?(t: number | null): void;
+  /** When follow is off, freeze the window end at this time; null = use performance.now(). */
+  viewNow?: number | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const seriesRef = useRef(seriesList);
+  const crosshairRef = useRef(crosshairT);
+  const liveRef = useRef(liveUpdates);
+  const viewNowRef = useRef(viewNow);
   seriesRef.current = seriesList;
+  crosshairRef.current = crosshairT;
+  liveRef.current = liveUpdates;
+  viewNowRef.current = viewNow;
+
+  const resolveNow = () => {
+    if (!liveRef.current && viewNowRef.current != null) return viewNowRef.current;
+    return performance.now();
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let frame = 0;
     const paint = () => {
-      drawChart(canvas, seriesRef.current, performance.now());
+      drawChart(canvas, seriesRef.current, resolveNow(), crosshairRef.current);
     };
     paint();
     const onResize = () => paint();
     window.addEventListener("resize", onResize);
-    // Keep the time axis sliding even when paused (frozen samples) or idle.
+    // When following live, slide the window; when paused, keep redrawing frozen view / crosshair.
     frame = window.setInterval(paint, 200);
     return () => {
       window.removeEventListener("resize", onResize);
@@ -125,22 +187,56 @@ export function DataGraph({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) drawChart(canvas, seriesList, performance.now());
-  }, [seriesList]);
+    if (canvas) drawChart(canvas, seriesList, resolveNow(), crosshairT);
+  }, [seriesList, crosshairT, liveUpdates, viewNow]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !onCrosshairChange) return;
+
+    const toLocalX = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return event.clientX - rect.left;
+    };
+
+    const onMove = (event: PointerEvent) => {
+      const width = Math.max(canvas.parentElement?.clientWidth ?? canvas.clientWidth, 120);
+      const pad = DATA_GRAPH_PAD;
+      const plotW = Math.max(width - pad.left - pad.right, 1);
+      const x = toLocalX(event);
+      if (x < pad.left || x > pad.left + plotW) {
+        onCrosshairChange(null);
+        return;
+      }
+      const now = resolveNow();
+      const bounds = computePlotBounds(seriesRef.current, now);
+      onCrosshairChange(timestampFromPlotX(x, pad.left, plotW, bounds.minT, bounds.maxT));
+    };
+
+    const onLeave = () => onCrosshairChange(null);
+
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerleave", onLeave);
+    return () => {
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerleave", onLeave);
+    };
+  }, [onCrosshairChange]);
 
   const topic = seriesList[0]?.topic;
 
   const heading = title ?? (seriesList[0]?.fieldPath || "DataGraph");
+  const followLabel = liveUpdates ? "" : " · 已暂停";
 
   return (
     <div className={`data-graph-view${compact ? " compact" : ""}`}>
       <div className="graph-toolbar data-graph-toolbar">
         <span>
           {compact
-            ? `${heading}${liveUpdates ? "" : " · 已暂停"}`
+            ? `${heading}${followLabel}`
             : seriesList.length === 0
               ? "从 Inspector 添加数值字段 · 默认窗口 30s"
-              : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${liveUpdates ? "" : " · 已暂停"}`}
+              : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${followLabel}`}
         </span>
         {compact ? (
           seriesList[0] ? (
