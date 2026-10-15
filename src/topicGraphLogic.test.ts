@@ -18,7 +18,7 @@ describe("force-directed topic graph layout", () => {
   it("keeps directed ROS relations and uses circular nodes sized by degree", () => {
     const layout = layoutRosGraph(graph);
     expect(layout.edges).toEqual(graph.edges);
-    expect(layout.nodes.find((node) => node.id === "topic:/joint_states")!.radius).toBeGreaterThan(16);
+    expect(layout.nodes.find((node) => node.id === "topic:/joint_states")!.radius).toBeGreaterThan(22);
     expect(layout.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true);
   });
 
