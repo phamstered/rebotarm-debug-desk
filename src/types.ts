@@ -150,6 +150,7 @@ export type BridgeEnvelope = {
   trajectory_points?: TrajectoryPoint[];
   joints?: number;
   points?: number;
+  /** Present on Bridge `hello` replies. */
   bridge_version?: string;
   bridge_build_id?: string;
   ros_distro?: string;

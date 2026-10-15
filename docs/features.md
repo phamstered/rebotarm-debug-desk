@@ -5,14 +5,15 @@
 ## 目录
 
 1. [连接与会话](#_1-连接与会话)
-2. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
-3. [Monitor](#monitor)
-4. [Robot View（URDF）](#_3-robot-view-urdf)
-5. [MIT 电机控制](#_4-mit-电机控制)
-6. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
-7. [Joint4 标定](#_6-joint4-标定)
-8. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
-9. [重力辨识（设计草案）](#_8-重力辨识设计草案)
+2. [Status（只读总览）](#status只读总览)
+3. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
+4. [Monitor](#monitor)
+5. [Robot View（URDF）](#_3-robot-view-urdf)
+6. [MIT 电机控制](#_4-mit-电机控制)
+7. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
+8. [Joint4 标定](#_6-joint4-标定)
+9. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
+10. [重力辨识（设计草案）](#_8-重力辨识设计草案)
 
 ---
 
@@ -56,6 +57,23 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ---
 
+
+## Status（只读总览）
+
+### 做什么
+
+左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain，以及暂不可探测项（systemd Bridge journal、USB CDC）的「未知」占位。全部只读，复用现有连接与轮询数据。
+
+### 怎么用
+
+连接成功后打开 Status。查看各卡片色标与字段；需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
+
+### 边界
+
+- 不自动 flash STM32；不把 Bridge 部署与 ros2-stack 同步绑成一键操作。
+- `bridge_build_id` / 最近部署结果 / XRCE 端口 / USB CDC：当前无稳定 API 时显示「未知」。
+
+---
 ## 2. Topics / Graph / Inspector
 
 ### 做什么

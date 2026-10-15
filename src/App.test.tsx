@@ -786,6 +786,60 @@ describe("App workflow", () => {
     getContext.mockRestore();
   });
 
+
+  it("shows connect step progress, status lights, readable errors and copy button", async () => {
+    doubles.invoke.mockImplementation((command: string) => {
+      if (command === "check_ssh") return Promise.reject(new Error("Permission denied (publickey)"));
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    expect(await screen.findByText(/SSH 认证失败/)).toBeVisible();
+    expect(screen.getByText(/Permission denied/)).toBeVisible();
+    expect(screen.getByLabelText("连接步骤")).toBeVisible();
+    expect(screen.getByLabelText("连接状态灯")).toBeVisible();
+    expect(screen.getByText("SSH 失败")).toBeVisible();
+    expect(screen.getByRole("button", { name: "复制错误" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "复制错误" }));
+    expect(await screen.findByRole("button", { name: "已复制" })).toBeVisible();
+  });
+
+  it("quick-picks a recent host after a successful SSH and warns on domain mismatch", async () => {
+    localStorage.setItem("easy-debug-profile", JSON.stringify({ host: "alpha", username: "bot", sshPort: 22, rosDomainId: 42 }));
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.getByLabelText("SSH 主机")).toHaveValue("alpha");
+    await user.click(screen.getByText("高级"));
+    expect(screen.getByLabelText("连接状态灯")).toHaveTextContent("ROS_DOMAIN_ID=42");
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
+    expect(screen.getByLabelText("连接状态灯")).toBeVisible();
+    expect(screen.getByText("等待 JointState")).toBeVisible();
+    act(() => {
+      doubles.listener?.({
+        op: "topic_message",
+        topic: "/stm32/joint_states",
+        data: { name: ["j1"], position: [0.1] },
+      });
+      doubles.listener?.({
+        op: "topic_message",
+        topic: "/stm32/status",
+        data: { fault_code: 0 },
+      });
+    });
+    expect(await screen.findByText("ROS 就绪")).toBeVisible();
+    expect(screen.getByText("HardwareStatus OK")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "断开" }));
+    expect(await screen.findByRole("button", { name: "连接 Jetson" })).toBeVisible();
+    expect(screen.getByLabelText("最近主机")).toBeVisible();
+    await user.clear(screen.getByLabelText("SSH 主机"));
+    await user.type(screen.getByLabelText("SSH 主机"), "other");
+    await user.click(screen.getByRole("button", { name: /alpha/ }));
+    expect(screen.getByLabelText("SSH 主机")).toHaveValue("alpha");
+    expect(screen.getByLabelText("SSH 用户名")).toHaveValue("bot");
+  });
+
   it("opens Monitor from navigation with torque template and bag playback controls", async () => {
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       setTransform: vi.fn(),
