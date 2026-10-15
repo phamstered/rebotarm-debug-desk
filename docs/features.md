@@ -24,20 +24,20 @@
 
 ### 怎么用
 
-1. 打开连接配置（首次启动或工具栏「连接配置」），填写 Profile：SSH 主机 / 用户 / 端口 / 私钥、ROS Domain、ROS 环境脚本（`install/setup.bash`）、URDF / JointState 等 Topic。
+1. 打开连接配置（首次启动首页或工具栏「连接配置」），填写 SSH：主机 / 用户 / 端口 / 私钥。需要时展开「高级」编辑 `ROS_DOMAIN_ID` 与 ROS 环境脚本（`install/setup.bash`）。URDF / JointState 等 Topic 使用内置默认，无需（也无法）在表单中改。
 2. 点击连接。界面按阶段推进并展示失败原因：
 3. 连接成功后，工具栏右侧显示连接名、实际隧道端口、Agent 状态；可随时断开。
 4. 连接中可再次打开配置并保存——**保存不会中断当前会话**，新值在下次重连时生效。
 
-默认 Profile 示例（可按机器修改）：
+默认 Profile 示例（SSH / 高级可改；Topic 为内置约定）：
 
 ```text
 SSH host: jetson
-ROS setup: leader_follower/install/setup.bash   # 相对远端 $HOME，或绝对路径
+ROS setup: leader_follower/install/setup.bash   # 「高级」；相对远端 $HOME，或绝对路径
 Remote port: 8765
 Local port: 18765
-URDF topic: /robot_description
-JointState topic: /stm32/joint_states
+URDF topic: /robot_description                  # 内置默认
+JointState topic: /stm32/joint_states           # 内置默认
 ```
 
 <ConnectionSessionFlow />
@@ -136,7 +136,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ### 怎么用
 
-1. 在连接配置中确认 URDF Topic（默认 `/robot_description`）与 JointState Topic。
+1. 确认内置 URDF Topic（默认 `/robot_description`）与 JointState Topic 与当前固件 / ros2-stack 一致（界面不再编辑这些字段）。
 2. 连接后切到中心面板「Robot View」；Bridge 拉取 URDF 与 `package://` 网格 / 纹理。
 3. 模型随 JointState 的 name/position 更新；缺少的位置按 0 处理。
 4. 视图内 heads-up 会显示 URDF 错误或轨迹控制器状态（与窄面板布局兼容，互不遮挡）。

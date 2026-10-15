@@ -38,7 +38,31 @@ button { cursor: pointer; }
   display: block; width: 46px; height: 46px; border-radius: 12px; object-fit: cover;
   box-shadow: 0 7px 18px rgba(0, 0, 0, .28);
 }
+.profile-form { display: grid; gap: 14px; }
 .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; }
+.profile-advanced {
+  border: 1px solid #1a3142;
+  border-radius: 10px;
+  background: rgba(8, 20, 30, .55);
+  padding: 0 12px;
+}
+.profile-advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  color: #91a8b9;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .25px;
+  padding: 12px 0;
+  user-select: none;
+}
+.profile-advanced > summary::-webkit-details-marker { display: none; }
+.profile-advanced > summary::before {
+  content: "▸ ";
+  color: #79c9ca;
+}
+.profile-advanced[open] > summary::before { content: "▾ "; }
+.profile-advanced-grid { padding-bottom: 14px; }
 label { display: grid; gap: 7px; color: #91a8b9; font-size: 12px; font-weight: 650; letter-spacing: .25px; }
 input {
   width: 100%; border: 1px solid #20394b; border-radius: 8px; padding: 10px 12px;
