@@ -1,4 +1,7 @@
+import type { ReactElement } from "react";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
+import { isRosGatedPage, rosGatedNavReason } from "./appLogic";
+import type { RosGatedPage } from "./appLogic";
 
 export type AppPage = "status" | "dashboard" | "monitor" | "motor" | "calibration";
 
@@ -22,9 +25,19 @@ function MotorIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>;
 }
 
-export function AppNav({ page, expanded, onSelect, onToggle }: {
+const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () => ReactElement }> = [
+  { page: "status", label: "Status", title: "Status", icon: StatusIcon },
+  { page: "dashboard", label: "Topics", title: "Topics", icon: DashboardIcon },
+  { page: "monitor", label: "Monitor", title: "Monitor", icon: MonitorIcon },
+  { page: "motor", label: "Motor", title: "Motor", icon: MotorIcon },
+  { page: "calibration", label: "Calibration", title: "Joint4 Calibration", icon: CalibrationIcon },
+];
+
+export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: {
   page: AppPage;
   expanded: boolean;
+  /** When false, Monitor / Motor stay disabled until JointState smoke is green. */
+  rosReady?: boolean;
   onSelect(page: AppPage): void;
   onToggle(): void;
 }) {
@@ -32,11 +45,30 @@ export function AppNav({ page, expanded, onSelect, onToggle }: {
     <nav className={`app-nav ${expanded ? "expanded" : "collapsed"}`} aria-label="主工具栏">
       <div className="app-nav-brand"><img src={robotConsoleIcon} alt="" /><span>Navigation</span></div>
       <div className="app-nav-items">
-        <button className={page === "status" ? "active" : ""} aria-current={page === "status" ? "page" : undefined} onClick={() => onSelect("status")} title="Status"><StatusIcon /><span>Status</span></button>
-        <button className={page === "dashboard" ? "active" : ""} aria-current={page === "dashboard" ? "page" : undefined} onClick={() => onSelect("dashboard")} title="Topics"><DashboardIcon /><span>Topics</span></button>
-        <button className={page === "monitor" ? "active" : ""} aria-current={page === "monitor" ? "page" : undefined} onClick={() => onSelect("monitor")} title="Monitor"><MonitorIcon /><span>Monitor</span></button>
-        <button className={page === "motor" ? "active" : ""} aria-current={page === "motor" ? "page" : undefined} onClick={() => onSelect("motor")} title="Motor"><MotorIcon /><span>Motor</span></button>
-        <button className={page === "calibration" ? "active" : ""} aria-label="Joint4 Calibration" aria-current={page === "calibration" ? "page" : undefined} onClick={() => onSelect("calibration")} title="Joint4 Calibration"><CalibrationIcon /><span>Calibration</span></button>
+        {NAV_ITEMS.map((item) => {
+          const gated = isRosGatedPage(item.page);
+          const reason = gated ? rosGatedNavReason(item.page as RosGatedPage, rosReady) : "";
+          const disabled = Boolean(reason);
+          const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.label;
+          return (
+            <button
+              key={item.page}
+              className={page === item.page ? "active" : ""}
+              aria-current={page === item.page ? "page" : undefined}
+              aria-label={ariaLabel}
+              aria-disabled={disabled || undefined}
+              disabled={disabled}
+              title={disabled ? reason : item.title}
+              onClick={() => {
+                if (disabled) return;
+                onSelect(item.page);
+              }}
+            >
+              <item.icon />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </div>
       {expanded && (
         <button className="app-nav-toggle" onClick={onToggle} aria-label="完全收起主工具栏" title="收起">

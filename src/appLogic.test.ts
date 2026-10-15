@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyRecentHostToProfile,
+  bridgeVersionBadgeLabel,
+  bridgeVersionBadgeTone,
   checkBridgeVersion,
   connectStepStatus,
   defaultPanelState,
@@ -9,17 +11,24 @@ import {
   domainMismatchHint,
   formatBridgeVersionLabel,
   formatConnectError,
+  formatConnectHistoryLine,
   isAgentOnline,
+  isRosGatedPage,
   isRosReady,
+  loadConnectHistory,
   loadLastKnownDomainId,
+  loadNavigateStatusOnConnect,
   loadPanelState,
   loadProfile,
   loadRecentHosts,
   loadSidebarState,
   migrateProfile,
   nextTopicSample,
+  rememberConnectHistory,
   rememberLastKnownDomainId,
   rememberSuccessfulHost,
+  rosGatedNavReason,
+  saveNavigateStatusOnConnect,
 } from "./appLogic";
 import { defaultProfile } from "./types";
 
@@ -163,5 +172,67 @@ describe("bridge version check", () => {
   it("warns without forcing upgrade when build id is missing", () => {
     const result = checkBridgeVersion({ bridge_version: "0.1.0", ros_distro: "humble" }, expected);
     expect(result).toMatchObject({ status: "unknown", reason: "missing_build_id", message: "无法确认版本" });
+  });
+});
+
+describe("home connect polish helpers", () => {
+  it("defaults navigate-to-status preference to on and persists toggles", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+    expect(loadNavigateStatusOnConnect(storage)).toBe(true);
+    saveNavigateStatusOnConnect(false, storage);
+    expect(loadNavigateStatusOnConnect(storage)).toBe(false);
+    saveNavigateStatusOnConnect(true, storage);
+    expect(loadNavigateStatusOnConnect(storage)).toBe(true);
+  });
+
+  it("formats connect history one-liners for success and failure", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+    expect(formatConnectHistoryLine(null)).toBe("");
+    const ok = rememberConnectHistory({
+      outcome: "success",
+      host: "jetson",
+      finishedAt: 1000,
+      durationMs: 1500,
+    }, storage);
+    expect(formatConnectHistoryLine(ok)).toContain("成功");
+    expect(formatConnectHistoryLine(ok)).toContain("1.5 s");
+    expect(loadConnectHistory(storage)?.host).toBe("jetson");
+
+    const fail = rememberConnectHistory({
+      outcome: "failure",
+      host: "jetson",
+      finishedAt: 2000,
+      durationMs: 800,
+      failedStep: "ssh",
+      reason: "检查 SSH 失败：SSH 认证失败。\nPermission denied",
+    }, storage);
+    expect(formatConnectHistoryLine(fail)).toContain("失败");
+    expect(formatConnectHistoryLine(fail)).toContain("检查 SSH");
+  });
+
+  it("labels bridge version badges and gates Monitor/Motor until ROS ready", () => {
+    expect(bridgeVersionBadgeLabel(null)).toBe("");
+    expect(bridgeVersionBadgeTone({
+      status: "match",
+      local: { version: "0.1.0", buildId: "abc" },
+      remote: { version: "0.1.0", buildId: "abc" },
+    })).toBe("ok");
+    expect(bridgeVersionBadgeLabel({
+      status: "mismatch",
+      local: { version: "0.1.0", buildId: "local1" },
+      remote: { version: "0.1.0", buildId: "remote2" },
+    })).toContain("不匹配");
+    expect(rosGatedNavReason("monitor", false)).toContain("JointState");
+    expect(rosGatedNavReason("motor", true)).toBe("");
+    expect(isRosGatedPage("monitor")).toBe(true);
+    expect(isRosGatedPage("status")).toBe(false);
   });
 });

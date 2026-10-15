@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { AgentServiceStatus, ConnectionProfile, HardwareStatus, RosControlStatus } from "./types";
 import type { TopicSample } from "./appLogic";
 import {
@@ -12,9 +13,21 @@ function ToneBadge({ tone }: { tone: StatusTone }) {
   return <span className={`status-card-tone ${tone}`}>{toneLabel(tone)}</span>;
 }
 
-function StatusCard({ card }: { card: StatusCardModel }) {
+function StatusCard({ card, highlighted }: { card: StatusCardModel; highlighted: boolean }) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!highlighted || !ref.current) return;
+    ref.current.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [highlighted]);
+
   return (
-    <article className={`status-card tone-${card.tone}`} aria-label={card.title}>
+    <article
+      ref={ref}
+      id={`status-card-${card.id}`}
+      className={`status-card tone-${card.tone}${highlighted ? " highlighted" : ""}`}
+      aria-label={card.title}
+      data-highlighted={highlighted ? "true" : undefined}
+    >
       <header className="status-card-header">
         <div>
           <h2>{card.title}</h2>
@@ -50,6 +63,7 @@ export function StatusPage({
   jointStateSample,
   rosControl,
   lastKnownDomainId,
+  highlightCardId = null,
 }: {
   stage: string;
   sshOk: boolean;
@@ -65,6 +79,7 @@ export function StatusPage({
   jointStateSample: TopicSample | undefined;
   rosControl: RosControlStatus | null;
   lastKnownDomainId: number | null;
+  highlightCardId?: string | null;
 }) {
   const cards = buildStatusCards({
     stage,
@@ -102,7 +117,7 @@ export function StatusPage({
       </p>
       <div className="status-card-grid" aria-label="状态卡片">
         {cards.map((card) => (
-          <StatusCard key={card.id} card={card} />
+          <StatusCard key={card.id} card={card} highlighted={highlightCardId === card.id} />
         ))}
       </div>
     </main>

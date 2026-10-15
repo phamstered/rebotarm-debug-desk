@@ -9,7 +9,7 @@ describe("AppNav", () => {
     const onSelect = vi.fn();
     const onToggle = vi.fn();
     const { rerender } = render(
-      <AppNav page="dashboard" expanded onSelect={onSelect} onToggle={onToggle} />,
+      <AppNav page="dashboard" expanded rosReady onSelect={onSelect} onToggle={onToggle} />,
     );
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toBeVisible();
     const nav = screen.getByRole("navigation", { name: "主工具栏" });
@@ -21,7 +21,7 @@ describe("AppNav", () => {
     await user.click(screen.getByRole("button", { name: "Status" }));
     expect(onSelect).toHaveBeenCalledWith("status");
 
-    rerender(<AppNav page="status" expanded onSelect={onSelect} onToggle={onToggle} />);
+    rerender(<AppNav page="status" expanded rosReady onSelect={onSelect} onToggle={onToggle} />);
     expect(screen.getByRole("button", { name: "Status" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Topics" })).not.toHaveAttribute("aria-current");
 
@@ -33,8 +33,20 @@ describe("AppNav", () => {
   });
 
   it("hides the collapse control when the nav is already collapsed", () => {
-    render(<AppNav page="motor" expanded={false} onSelect={() => undefined} onToggle={() => undefined} />);
+    render(<AppNav page="motor" expanded={false} rosReady onSelect={() => undefined} onToggle={() => undefined} />);
     expect(screen.queryByRole("button", { name: "完全收起主工具栏" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Motor" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("disables Monitor and Motor until ROS ready and explains why", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<AppNav page="status" expanded rosReady={false} onSelect={onSelect} onToggle={() => undefined} />);
+    expect(screen.getByRole("button", { name: "Monitor" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Motor" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Monitor" }).getAttribute("title")).toContain("JointState");
+    await user.click(screen.getByRole("button", { name: "Monitor" }));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Topics" })).not.toBeDisabled();
   });
 });

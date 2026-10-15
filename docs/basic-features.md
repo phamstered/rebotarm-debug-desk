@@ -23,10 +23,11 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 连接后可从全局工具栏重新打开连接配置；保存不会中断当前 SSH/Bridge 会话，新值在下次重连时生效。
 - 默认 Profile：SSH 主机 `jetson`，ROS 环境脚本 `leader_follower/install/setup.bash`（相对远端 `$HOME`）。ROS 环境脚本路径同样拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。
 - 自动迁移旧配置：旧 ROS setup 路径和 `/joint_states` 会迁移到当前默认值 `/stm32/joint_states`。
-- 依次执行 SSH 检查、SSH 本地端口转发（会话）、WebSocket Bridge 连接，再确认 micro-ROS Agent；首页用步骤高亮与四段状态灯（SSH / Bridge / Agent / HardwareStatus）标出卡点。
-- 连接失败展示可读中文原因与「复制错误」；成功 SSH 主机记入最近主机快捷回填。
-- `ROS_DOMAIN_ID` 偏离默认或上次成功值时，状态条提示域名不匹配风险。
-- Bridge 订阅默认 JointState Topic 后，收到首帧即视为 ROS 就绪（冒烟）；HardwareStatus 首帧点亮对应状态灯。
+- 依次执行 SSH 检查、SSH 本地端口转发（会话）、WebSocket Bridge 连接，再确认 micro-ROS Agent；首页用步骤高亮与四段状态灯（SSH / Bridge / Agent / HardwareStatus）标出卡点。Enter 可连接，Esc /「关闭」可收起错误；失败支持「重试」（全量重连）与「复制错误」。
+- 首页展示上次连接一行摘要（耗时或失败步骤/原因）。成功 SSH 的主机记入最近主机一键回填。
+- `ROS_DOMAIN_ID` 与默认或上次成功值不一致时，状态条给出轻量提示。
+- **默认**连接成功进入 Status；顶部工具条提供「切换主机」、Bridge 版本徽章（不匹配点开既有升级提示）、Fault 芯片（跳转 Status Hardware 高亮）。设置可关闭「连接成功后打开 Status」。
+- Bridge 订阅默认 JointState Topic 后，收到首帧即视为 ROS 就绪（冒烟）；此前 Monitor / Motor 导航禁用。HardwareStatus 首帧点亮对应状态灯。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。
 - 断开连接时关闭 WebSocket、SSH 隧道；电机命令流运行时先请求 DISABLE。断开按钮保持明显；无自动重连。
 - 断开和重新连接时清空上一会话的 Topic 列表与采样、选中项、URDF、JointState、硬件/Agent/Controller 状态、错误及操作反馈；保留连接配置、最近主机、面板布局等用户偏好。
@@ -49,7 +50,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
 - 页面导航只保留在左侧 Navigation，**Status** 为第一项（只读状态总览卡片网格），其后为 Topics、Monitor、Motor 和 Calibration；Robot View / Topic Graph 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
 - **Status** 页复用现有连接态：SSH/隧道端口、Bridge WS + hello 的 `bridge_version`/`bridge_build_id`（若有）、micro-ROS Agent（`check_micro_ros_agent`）、HardwareStatus（fault_code/mode）、JointState 冒烟与 Hz、`check_ros_controllers` 的 active 列表、ROS_DOMAIN_ID 提示；systemd Bridge 单元 journal 与 USB CDC 在无 API 时显示「未知」。只读，无一键升级全部或自动刷写 STM32。
-- 顶部工具栏提供连接配置、全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照、重置布局和应用设置；右侧保留压缩连接状态灯（含 ROS 就绪 / Domain 提示）、连接名、隧道端口、micro-ROS Agent 状态和醒目断开按钮。
+- 已连接顶部工具条提供「切换主机」、连接配置、设置、压缩状态灯（含 ROS 就绪 / Bridge 版本徽章 / Fault 芯片 / Domain 提示）、连接名、隧道端口、Agent 与断开；Topics 页工具栏保留全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照与重置布局。
 - Topics 页的 Topics、ROS Control、Inspector 三个区域可独立展开/收起；左右侧栏也可整列最小化并恢复，状态保存在本机。Topics 与 ROS Control 会自动使用另一面板释放出的高度。
 - Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。Topic 名称与类型悬停显示全称。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 30 秒只读刷新。

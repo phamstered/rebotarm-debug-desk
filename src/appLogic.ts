@@ -351,3 +351,114 @@ export function applyRecentHostToProfile(profile: ConnectionProfile, host: Recen
     identityFile: host.identityFile,
   };
 }
+
+export const CONNECT_HISTORY_KEY = "easy-debug-connect-history";
+export const NAVIGATE_STATUS_ON_CONNECT_KEY = "easy-debug-navigate-status-on-connect";
+
+export type ConnectHistory = {
+  outcome: "success" | "failure";
+  host: string;
+  finishedAt: number;
+  durationMs: number;
+  failedStep?: ConnectStepId | null;
+  reason?: string;
+};
+
+export function loadNavigateStatusOnConnect(storage: Pick<Storage, "getItem"> = localStorage): boolean {
+  try {
+    const raw = storage.getItem(NAVIGATE_STATUS_ON_CONNECT_KEY);
+    if (raw == null) return true;
+    return raw !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function saveNavigateStatusOnConnect(
+  enabled: boolean,
+  storage: Pick<Storage, "setItem"> = localStorage,
+): void {
+  storage.setItem(NAVIGATE_STATUS_ON_CONNECT_KEY, String(enabled));
+}
+
+export function loadConnectHistory(storage: Pick<Storage, "getItem"> = localStorage): ConnectHistory | null {
+  try {
+    const raw = storage.getItem(CONNECT_HISTORY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ConnectHistory>;
+    if (!parsed || (parsed.outcome !== "success" && parsed.outcome !== "failure")) return null;
+    if (typeof parsed.host !== "string" || typeof parsed.finishedAt !== "number" || typeof parsed.durationMs !== "number") {
+      return null;
+    }
+    return {
+      outcome: parsed.outcome,
+      host: parsed.host,
+      finishedAt: parsed.finishedAt,
+      durationMs: parsed.durationMs,
+      failedStep: parsed.failedStep ?? null,
+      reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function rememberConnectHistory(
+  entry: ConnectHistory,
+  storage: Pick<Storage, "setItem"> = localStorage,
+): ConnectHistory {
+  storage.setItem(CONNECT_HISTORY_KEY, JSON.stringify(entry));
+  return entry;
+}
+
+export function formatDurationMs(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "—";
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = Math.round(seconds % 60);
+  return `${minutes}m ${rem}s`;
+}
+
+export function formatConnectHistoryLine(history: ConnectHistory | null | undefined): string {
+  if (!history) return "";
+  const host = history.host.trim() || "未知主机";
+  const duration = formatDurationMs(history.durationMs);
+  if (history.outcome === "success") {
+    return `上次连接 ${host} 成功 · 耗时 ${duration}`;
+  }
+  const stepLabel = CONNECT_STEPS.find((step) => step.id === history.failedStep)?.label;
+  const reason = (history.reason ?? "").trim().split("\n")[0] || "未知原因";
+  const step = stepLabel ? `${stepLabel} · ` : "";
+  return `上次连接 ${host} 失败 · ${step}${reason} · 耗时 ${duration}`;
+}
+
+export function bridgeVersionBadgeLabel(check: BridgeVersionCheck | null | undefined): string {
+  if (!check) return "";
+  const remote = check.remote.buildId.trim() || check.remote.version.trim() || "未知";
+  const local = check.local.buildId.trim() || check.local.version.trim() || "未知";
+  if (check.status === "match") return `Bridge ${remote}`;
+  if (check.status === "unknown") return `Bridge 无法确认 · 远端 ${remote || "无 build id"}`;
+  return `Bridge 不匹配 · 远端 ${remote} / 本地 ${local}`;
+}
+
+export function bridgeVersionBadgeTone(check: BridgeVersionCheck | null | undefined): LightState {
+  if (!check) return "idle";
+  if (check.status === "match") return "ok";
+  if (check.status === "unknown") return "warn";
+  return "fail";
+}
+
+/** Pages that require JointState smoke (ROS ready) before navigation. */
+export type RosGatedPage = "monitor" | "motor";
+
+export function isRosGatedPage(page: string): page is RosGatedPage {
+  return page === "monitor" || page === "motor";
+}
+
+export function rosGatedNavReason(page: RosGatedPage, rosReady: boolean): string {
+  if (rosReady) return "";
+  if (page === "monitor") return "需先收到 JointState（ROS 就绪）后才能打开 Monitor";
+  return "需先收到 JointState（ROS 就绪）后才能打开电机控制";
+}

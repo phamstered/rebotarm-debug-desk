@@ -10,12 +10,14 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 
 首页连接卡与工具栏「连接配置」主表单只编辑 **SSH** 字段：主机、用户名、端口、私钥路径。`ROS_DOMAIN_ID` 与 ROS 环境脚本收在默认折叠的「高级」里。URDF / JointState / Command / Status Topic 与 TCP Link 使用内置默认值（与 ros2-stack / 固件约定一致），界面不再编辑；旧 localStorage 里若仍有这些字段会继续读入，新保存仍会写出默认键以便后端 invoke 不变。
 
-- 首页展示连接步骤（检查 SSH → 建立会话 → 连接 Bridge → 确认 Agent）与四段状态灯（SSH / Bridge / Agent / HardwareStatus）；失败时给出可读中文说明并支持「复制错误」。
-- 成功 SSH 的主机写入 `localStorage` 最近主机列表，可一键回填 SSH 字段；不改动 Profile 迁移逻辑。
+- 首页展示连接步骤（检查 SSH → 建立会话 → 连接 Bridge → 确认 Agent）与四段状态灯（SSH / Bridge / Agent / HardwareStatus）；失败时给出可读中文说明并支持「复制错误」/ Esc 关闭；Enter 可在 SSH 表单上触发连接。失败可「重试」（自检查 SSH 起全量重连，非整步断点续传）。
+- 首页一行「上次连接」摘要（耗时或失败步骤/原因，`localStorage`）。成功 SSH 的主机写入最近主机列表，可一键回填；不改动 Profile 迁移逻辑。
 - `ROS_DOMAIN_ID` 与默认值或上次成功值不一致时，状态条给出轻量域名不匹配提示（多机同网常见坑）。
-- 连接进入工作区后，工具栏保留压缩状态灯；默认 JointState Topic（`/stm32/joint_states`）收到数据后标记「ROS 就绪」。不新增固件 Topic。
-- 工作区左侧导航第一项为只读 **Status** 页，汇总隧道/Bridge/Agent/Hardware/ROS 就绪/ros2_control/Domain 等卡片（详见 [功能概览 · Status](./features#status只读总览)）。
-- 连接后可从全局工具栏重新打开连接配置；**保存不会中断当前会话**，新值在下次重连时生效。
+- **默认**连接成功后进入只读 **Status** 页（设置中可关「连接成功后打开 Status」）。SSH 大表单不再占据已连接界面，改为顶部工具条紧凑「切换主机」（断开回首页）与「连接配置」。
+- 已连接工具条保留压缩状态灯、Bridge 版本徽章（本地 vs 远端 build id；不匹配点击走既有升级提示，不自动全屏部署）、以及 `fault_code !== 0` 时可点击 Fault 芯片跳转 Status · Hardware 卡片并高亮。
+- 默认 JointState Topic（`/stm32/joint_states`）收到数据后标记「ROS 就绪」；在此之前 **Monitor / Motor** 导航禁用并提示原因。不新增固件 Topic。
+- Status 页汇总隧道/Bridge/Agent/Hardware/ROS 就绪/ros2_control/Domain 等卡片（详见 [功能概览 · Status](./features#status只读总览)）。
+- 连接后可从顶部工具条重新打开连接配置；**保存不会中断当前会话**，新值在下次重连时生效。
 - 旧配置会自动迁移（例如旧 ROS setup 路径、旧 `/joint_states` → 当前默认 `/stm32/joint_states`）。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。
 - 断开时关闭 WebSocket 与 SSH 隧道；若电机命令流在运行，先请求 DISABLE。断开按钮保持醒目；本 PR 不含自动重连 / Demo 模式。
