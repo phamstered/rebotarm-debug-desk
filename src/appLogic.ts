@@ -1,3 +1,5 @@
+import type { BridgeHello } from "./bridge";
+import { EXPECTED_BRIDGE_BUILD_ID, EXPECTED_BRIDGE_VERSION } from "./bridgeVersion";
 import type { ConnectionProfile } from "./types";
 import { defaultProfile } from "./types";
 
@@ -62,4 +64,66 @@ export function nextTopicSample(previous: TopicSample | undefined, data: unknown
   const firstAt = previous?.firstAt ?? now;
   const elapsed = Math.max((now - firstAt) / 1000, 0.001);
   return { data, count, firstAt, lastAt: now, hz: count > 1 ? (count - 1) / elapsed : 0 };
+}
+
+
+export type BridgeVersionSnapshot = {
+  version: string;
+  buildId: string;
+};
+
+export type BridgeVersionCheck =
+  | { status: "match"; local: BridgeVersionSnapshot; remote: BridgeVersionSnapshot }
+  | {
+      status: "mismatch";
+      local: BridgeVersionSnapshot;
+      remote: BridgeVersionSnapshot;
+    }
+  | {
+      status: "unknown";
+      reason: "missing_build_id";
+      local: BridgeVersionSnapshot;
+      remote: BridgeVersionSnapshot;
+      message: string;
+    };
+
+export function expectedBridgeVersion(): BridgeVersionSnapshot {
+  return { version: EXPECTED_BRIDGE_VERSION, buildId: EXPECTED_BRIDGE_BUILD_ID };
+}
+
+export function formatBridgeVersionLabel(snapshot: BridgeVersionSnapshot): string {
+  const version = snapshot.version.trim() || "未知";
+  const buildId = snapshot.buildId.trim();
+  return buildId ? `${version} (${buildId})` : `${version}（无 build id）`;
+}
+
+/** Compare remote hello against the desk-shipped expected Bridge identity. */
+export function checkBridgeVersion(
+  hello: BridgeHello | null | undefined,
+  expected: BridgeVersionSnapshot = expectedBridgeVersion(),
+): BridgeVersionCheck {
+  const remote: BridgeVersionSnapshot = {
+    version: (hello?.bridge_version ?? "").trim(),
+    buildId: (hello?.bridge_build_id ?? "").trim(),
+  };
+  const local: BridgeVersionSnapshot = {
+    version: expected.version.trim(),
+    buildId: expected.buildId.trim(),
+  };
+
+  if (!remote.buildId) {
+    return {
+      status: "unknown",
+      reason: "missing_build_id",
+      local,
+      remote,
+      message: "无法确认版本",
+    };
+  }
+
+  if (remote.buildId === local.buildId && remote.version === local.version) {
+    return { status: "match", local, remote };
+  }
+
+  return { status: "mismatch", local, remote };
 }

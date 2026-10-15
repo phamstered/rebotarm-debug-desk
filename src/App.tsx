@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
@@ -32,14 +33,23 @@ import type { MonitorWorkspace } from "./monitorLogic";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
-import { defaultPanelState, defaultSidebarState, loadPanelState, loadProfile, loadSidebarState, nextTopicSample } from "./appLogic";
-import type { CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
+import {
+  checkBridgeVersion,
+  defaultPanelState,
+  defaultSidebarState,
+  formatBridgeVersionLabel,
+  loadPanelState,
+  loadProfile,
+  loadSidebarState,
+  nextTopicSample,
+} from "./appLogic";
+import type { BridgeVersionCheck, CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
 import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
 import type { LayoutSizes } from "./layoutLogic";
 import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
 import type { ToolbarSettings } from "./toolbarLogic";
 
-type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "connected" | "failed";
+type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "upgrading" | "connected" | "failed";
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
 type CenterTab = "robot" | "graph";
 
@@ -48,6 +58,7 @@ const stageNames: Record<Stage, string> = {
   ssh: "检查 SSH",
   tunnel: "建立隧道",
   bridge: "连接 Bridge",
+  upgrading: "升级 Bridge",
   connected: "已连接",
   failed: "连接失败",
 };
@@ -226,6 +237,9 @@ export default function App() {
   const [settings, setSettings] = useState<ToolbarSettings>(loadToolbarSettings);
   const [settingsDraft, setSettingsDraft] = useState<ToolbarSettings>(settings);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [bridgeVersionCheck, setBridgeVersionCheck] = useState<BridgeVersionCheck | null>(null);
+  const [versionDialogOpen, setVersionDialogOpen] = useState(false);
+  const [deployProgress, setDeployProgress] = useState("");
   const topicSidebarRef = useRef<HTMLElement>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const connectionGenerationRef = useRef(0);
@@ -547,7 +561,11 @@ export default function App() {
     setToolbarNotice("");
     // Keep Monitor panel config; clear live points by reloading persisted configs without points.
     setMonitorWorkspace(loadMonitorWorkspace(profile.jointStateTopic));
+    setBridgeVersionCheck(null);
+    setVersionDialogOpen(false);
+    setDeployProgress("");
   }
+
 
   async function connect() {
     clearConnectionData();
@@ -567,7 +585,16 @@ export default function App() {
       const localPort = await invoke<number>("start_session", { profile });
       setEffectiveLocalPort(localPort);
       setStage("bridge");
-      await bridge.connect({ ...profile, localPort });
+      const hello = await bridge.connect({ ...profile, localPort });
+      const versionCheck = checkBridgeVersion(hello);
+      setBridgeVersionCheck(versionCheck);
+      if (versionCheck.status === "mismatch") {
+        setVersionDialogOpen(true);
+      } else if (versionCheck.status === "unknown") {
+        setToolbarNotice(
+          `${versionCheck.message}：远端 ${formatBridgeVersionLabel(versionCheck.remote)}，本地期望 ${formatBridgeVersionLabel(versionCheck.local)}`,
+        );
+      }
       const discovered = await bridge.listTopics();
       setTopics(discovered);
       setTopicRefreshError("");
@@ -585,6 +612,44 @@ export default function App() {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStage("failed");
       await invoke("stop_session").catch(() => undefined);
+    }
+  }
+
+  async function upgradeBridge() {
+    setVersionDialogOpen(false);
+    setDeployProgress("准备升级 Bridge…");
+    setStage("upgrading");
+    setError("");
+    bridge.close();
+    await invoke("stop_session").catch(() => undefined);
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await listen<string>("bridge-deploy-progress", (event) => {
+        setDeployProgress(event.payload);
+      });
+    } catch {
+      // Browser / test environments without the event plugin still show stage text.
+    }
+    try {
+      const result = await invoke<{ ok: boolean; message: string; log: string }>("deploy_bridge", { profile });
+      setDeployProgress(result.message || "Bridge 升级完成");
+      setToolbarNotice(result.message || "Bridge 已升级");
+      await connect();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setStage("failed");
+      setDeployProgress("");
+    } finally {
+      unlisten?.();
+    }
+  }
+
+  function skipBridgeUpgrade() {
+    setVersionDialogOpen(false);
+    if (bridgeVersionCheck?.status === "mismatch") {
+      setToolbarNotice(
+        `已跳过 Bridge 升级：远端 ${formatBridgeVersionLabel(bridgeVersionCheck.remote)}，本地期望 ${formatBridgeVersionLabel(bridgeVersionCheck.local)}`,
+      );
     }
   }
 
@@ -756,8 +821,9 @@ export default function App() {
           <ProfileForm profile={profile} onChange={setProfile} />
           <div className="connect-actions">
             <span className={`status ${stage}`}>{stageNames[stage]}</span>
-            <button onClick={connect} disabled={["ssh", "tunnel", "bridge"].includes(stage)}>连接 Jetson</button>
+            <button onClick={connect} disabled={["ssh", "tunnel", "bridge", "upgrading"].includes(stage)}>连接 Jetson</button>
           </div>
+          {stage === "upgrading" && deployProgress && <pre className="deploy-progress" aria-live="polite">{deployProgress}</pre>}
           {error && <pre className="error-box">{error}</pre>}
         </section>
       </main>
@@ -1025,6 +1091,25 @@ export default function App() {
       </main>
       )}
       </div>
+
+      {versionDialogOpen && bridgeVersionCheck?.status === "mismatch" && (
+        <ModalShell
+          title="Bridge 版本不匹配"
+          onClose={skipBridgeUpgrade}
+          actions={(
+            <>
+              <button type="button" onClick={skipBridgeUpgrade}>跳过</button>
+              <button type="button" className="primary" onClick={() => void upgradeBridge()}>升级</button>
+            </>
+          )}
+        >
+          <p className="modal-hint">远端 Bridge 与本机期望版本不一致。升级将执行 deploy:bridge（rsync + colcon + 重启），不会烧录 STM32，也不会同步 ros2-stack。</p>
+          <div className="version-compare">
+            <p><strong>本地期望：</strong>{formatBridgeVersionLabel(bridgeVersionCheck.local)}</p>
+            <p><strong>远端当前：</strong>{formatBridgeVersionLabel(bridgeVersionCheck.remote)}</p>
+          </div>
+        </ModalShell>
+      )}
       {connectionDialogOpen && (
         <ModalShell
           title="连接配置"

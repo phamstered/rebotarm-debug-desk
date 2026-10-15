@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultPanelState, defaultSidebarState, loadPanelState, loadProfile, loadSidebarState, migrateProfile, nextTopicSample } from "./appLogic";
+import { checkBridgeVersion, defaultPanelState, defaultSidebarState, formatBridgeVersionLabel, loadPanelState, loadProfile, loadSidebarState, migrateProfile, nextTopicSample } from "./appLogic";
 import { defaultProfile } from "./types";
 
 const storage = (value: string | null) => ({ getItem: () => value });
@@ -41,5 +41,36 @@ describe("panel and topic state", () => {
     const second = nextTopicSample(first, { value: 2 }, 1500);
     expect(first).toMatchObject({ count: 1, hz: 0, firstAt: 1000, lastAt: 1000 });
     expect(second).toMatchObject({ data: { value: 2 }, count: 2, hz: 2, firstAt: 1000, lastAt: 1500 });
+  });
+});
+
+
+describe("bridge version check", () => {
+  const expected = { version: "0.1.0", buildId: "abc1234def56" };
+
+  it("matches identical version and build id", () => {
+    expect(
+      checkBridgeVersion(
+        { bridge_version: "0.1.0", bridge_build_id: "abc1234def56", ros_distro: "humble" },
+        expected,
+      ),
+    ).toMatchObject({ status: "match" });
+  });
+
+  it("reports mismatch when build id differs", () => {
+    const result = checkBridgeVersion(
+      { bridge_version: "0.1.0", bridge_build_id: "ffffffffffffffff", ros_distro: "humble" },
+      expected,
+    );
+    expect(result.status).toBe("mismatch");
+    if (result.status === "mismatch") {
+      expect(formatBridgeVersionLabel(result.remote)).toContain("ffffffffffffffff");
+      expect(formatBridgeVersionLabel(result.local)).toContain("abc1234def56");
+    }
+  });
+
+  it("warns without forcing upgrade when build id is missing", () => {
+    const result = checkBridgeVersion({ bridge_version: "0.1.0", ros_distro: "humble" }, expected);
+    expect(result).toMatchObject({ status: "unknown", reason: "missing_build_id", message: "无法确认版本" });
   });
 });

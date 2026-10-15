@@ -11,6 +11,8 @@ import {
   buildRemoteRestartScript,
   buildRemoteVerifyScript,
   buildRsyncArgs,
+  buildSshCommandArgs,
+  buildRsyncShell,
   isSafeRemotePath,
   parseArgs,
   parseVerifyOutput,
@@ -273,4 +275,30 @@ test("defaults are generic and home-relative", () => {
   assert.equal(DEFAULTS.remoteRoot, "easy_debug_bridge");
   assert.equal(DEFAULTS.rosSetup, "leader_follower/install/setup.bash");
   assert.equal(DEFAULTS.remotePort, 8765);
+});
+
+test("buildSshCommandArgs and rsync -e honor ssh port and identity file", () => {
+  const args = buildSshCommandArgs({ host: "jetson", sshPort: 2222, identityFile: "/tmp/id" });
+  assert.deepEqual(args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
+  assert.ok(args.includes("-p") && args.includes("2222"));
+  assert.ok(args.includes("-i") && args.includes("/tmp/id"));
+  const rsync = buildRsyncArgs({
+    localPackage: "/repo/bridge/easy_debug_bridge",
+    remotePackage: "easy_debug_bridge/src/easy_debug_bridge",
+    host: "user@jetson",
+    sshPort: 2222,
+    identityFile: "/tmp/id",
+  });
+  const shell = rsync[rsync.indexOf("-e") + 1];
+  assert.match(shell, /-p/);
+  assert.match(shell, /2222/);
+  assert.match(shell, /-i/);
+  assert.equal(buildRsyncShell({ host: "jetson" }).startsWith("'ssh'"), true);
+});
+
+test("parseArgs accepts --ssh-port and --identity-file", () => {
+  const config = parseArgs(["--host", "u@h", "--ssh-port", "2201", "--identity-file", "/tmp/key"]);
+  assert.equal(config.host, "u@h");
+  assert.equal(config.sshPort, 2201);
+  assert.equal(config.identityFile, "/tmp/key");
 });

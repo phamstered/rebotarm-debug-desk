@@ -23,6 +23,7 @@
 #include <std_msgs/msg/u_int32.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
+#include "easy_debug_bridge/bridge_build_id.hpp"
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/topic_json.hpp"
 
@@ -357,7 +358,9 @@ class BridgeNode : public rclcpp::Node {
     const std::string request_id = request.get<std::string>("request_id", "");
     try {
       if (op == "hello") {
-        session->send("{\"op\":\"hello\",\"bridge_version\":\"0.1.0\",\"ros_distro\":\"humble\"}");
+        session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
+                     EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
+                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\"}");
       } else if (op == "topics") {
         send_topics(session, request_id);
       } else if (op == "graph") {

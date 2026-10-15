@@ -29,6 +29,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 断开和重新连接时清空上一会话的 Topic 列表与采样、选中项、URDF、JointState、硬件/Agent/Controller 状态、错误及操作反馈；保留连接配置、面板布局等用户偏好。
 - Bridge 关闭时拒绝上一会话尚未完成的请求，并忽略旧 WebSocket 延迟到达的数据帧，避免污染新会话。
 - Jetson Bridge 仅监听 `127.0.0.1`，通过 SSH 隧道访问。
+- 连接后根据 Bridge `hello` 的 `bridge_version` / `bridge_build_id` 与本机期望值比对：不一致时提示升级（`deploy_bridge` → `deploy:bridge` 路径），可跳过；缺少 build id 时仅提示「无法确认版本」。升级不烧录 STM32、不同步 ros2-stack。
 
 ## 2. micro-ROS Agent 状态
 
@@ -109,7 +110,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 ## 7. WebSocket 协议
 
 - 使用 UTF-8 JSON 文本帧。
-- 支持 hello、topics、graph、topic_info、node_info、subscribe、resource、joint_command、trajectory_command 操作。
+- 支持 hello（含 `bridge_version` / `bridge_build_id` / `ros_distro`）、topics、graph、topic_info、node_info、subscribe、resource、joint_command、trajectory_command 操作。
 - request 使用 UUID 与 response/error 关联，超时或 Bridge error 会拒绝 Promise。
 - Bridge 断开会通知界面进入连接失败状态。
 - 完整字段参见 [protocol.md](protocol.md)。
@@ -156,7 +157,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | 面板 | 默认/持久化状态、三个内容面板与左右侧栏收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
 | 工具栏 | 导航职责分离、中心局部 Tab（Robot View / Topic Graph）、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
-| 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
+| 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理、版本检查与升级提示 | `src/App.test.tsx`、`src/bridge.test.ts`、`src/appLogic.test.ts` |
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |

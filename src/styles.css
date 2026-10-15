@@ -711,3 +711,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   .calibration-grid, .calibration-data-grid { grid-template-columns: 1fr; }
   .fit-results { grid-template-columns: repeat(3, 1fr); }
 }
+
+.deploy-progress { margin: 12px 0 0; padding: 10px 12px; border: 1px solid #2a4556; border-radius: 8px; background: #07141c; color: #9ec9d8; font-size: 11px; white-space: pre-wrap; max-height: 160px; overflow: auto; }
+.version-compare { display: grid; gap: 8px; color: #dcecf5; font-size: 13px; }
+.version-compare p { margin: 0; }

@@ -41,6 +41,16 @@ JointState topic: /stm32/joint_states
 
 若机器人使用其他 overlay（例如 URDF package 在另一工作空间），请在「高级」里把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
 
+## Bridge 版本检查与升级
+
+连接成功并收到 `hello` 后，桌面端会比较远端 `bridge_version` + `bridge_build_id` 与本机随应用发布的期望值（`src/bridgeVersion.ts`，与 Bridge 包同源生成）。
+
+- **一致**：无提示，继续进工作区。
+- **不一致**：弹出对话框展示本地期望 vs 远端当前，可选 **升级** / **跳过**。升级调用 Tauri `deploy_bridge`，内部执行仓库已有的 `scripts/deploy-bridge.mjs`（rsync + colcon + `--restart`），使用当前 SSH Profile（host / 端口 / 私钥 / ROS setup / domain / Bridge 端口）。进度显示在连接页状态区。**不会**烧录 STM32，也**不会**同步 ros2-stack 工作区。
+- **缺少 build id**：工具栏提示「无法确认版本」，不强制升级。
+
+期望 build id 变更时在仓库根执行 `npm run generate:bridge-build-id` 并提交生成文件。
+
 ## 会话建立后的验证
 
 隧道建立后可对本机转发端口做冒烟检查：

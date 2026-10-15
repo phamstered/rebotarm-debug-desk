@@ -65,6 +65,8 @@ export function parseArgs(argv, env = process.env) {
     skipVerify: false,
     restart: false,
     help: false,
+    sshPort: 0,
+    identityFile: "",
   };
 
   while (args.length > 0) {
@@ -116,6 +118,12 @@ export function parseArgs(argv, env = process.env) {
         break;
       case "--local-package":
         flags.localPackage = requireValue(token, args.shift());
+        break;
+      case "--ssh-port":
+        flags.sshPort = Number(requireValue(token, args.shift()));
+        break;
+      case "--identity-file":
+        flags.identityFile = requireValue(token, args.shift());
         break;
       default:
         throw new DeployStageError("config", `Unknown argument: ${token}`);
@@ -169,6 +177,17 @@ export function resolveConfig(flags, env = process.env) {
     throw new DeployStageError("config", `Unsafe SSH host: ${host}`);
   }
 
+  const sshPort = Number(flags.sshPort ?? env.BRIDGE_DEPLOY_SSH_PORT ?? 0);
+  const identityFile = String(flags.identityFile ?? env.BRIDGE_DEPLOY_IDENTITY_FILE ?? "").trim();
+  if (sshPort !== 0 && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) {
+    throw new DeployStageError("config", `Invalid SSH port: ${sshPort}`);
+  }
+  if (identityFile) {
+    if (identityFile.startsWith("-") || /[\s;|&$\`'"\\<>()]/.test(identityFile)) {
+      throw new DeployStageError("config", `Unsafe identity file path: ${identityFile}`);
+    }
+  }
+
   return {
     host,
     remoteRoot: remoteRoot.replace(/\/$/, ""),
@@ -176,6 +195,8 @@ export function resolveConfig(flags, env = process.env) {
     rosSetup,
     remotePort,
     rosDomainId,
+    sshPort,
+    identityFile,
     packageName: DEFAULTS.packageName,
     localPackage,
     jointStateTopic: DEFAULTS.jointStateTopic,
@@ -215,6 +236,30 @@ export function isSafeRemotePath(path) {
  * relative paths are anchored at the remote "$HOME".
  * @param {string} path
  */
+
+/**
+ * SSH argv fragments shared by direct ssh and rsync -e.
+ * @param {{ host: string, sshPort?: number, identityFile?: string }} config
+ */
+export function buildSshCommandArgs(config) {
+  /** @type {string[]} */
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"];
+  const sshPort = Number(config.sshPort ?? 0);
+  if (Number.isInteger(sshPort) && sshPort > 0) {
+    args.push("-p", String(sshPort));
+  }
+  const identityFile = String(config.identityFile ?? "").trim();
+  if (identityFile) {
+    args.push("-i", identityFile);
+  }
+  return args;
+}
+
+/** @param {{ host: string, sshPort?: number, identityFile?: string }} config */
+export function buildRsyncShell(config) {
+  return ["ssh", ...buildSshCommandArgs(config)].map(shellQuote).join(" ");
+}
+
 export function remotePathWord(path) {
   return path.startsWith("/") ? shellQuote(path) : `"$HOME"/${shellQuote(path)}`;
 }
@@ -235,6 +280,8 @@ export function buildRsyncArgs({
   dryRun = false,
   delete: deleteExtra = false,
   excludes = RSYNC_EXCLUDES,
+  sshPort = 0,
+  identityFile = "",
 }) {
   const source = localPackage.endsWith("/") ? localPackage : `${localPackage}/`;
   const dest = `${host}:${remotePackage}/`;
@@ -245,7 +292,10 @@ export function buildRsyncArgs({
   for (const pattern of excludes) {
     args.push("--exclude", pattern);
   }
-  args.push("-e", "ssh -o BatchMode=yes -o ConnectTimeout=10");
+  args.push(
+    "-e",
+    buildRsyncShell({ host, sshPort, identityFile }),
+  );
   args.push(source, dest);
   return args;
 }
@@ -413,6 +463,8 @@ Options:
   --port <n>              Bridge listen port (default: ${DEFAULTS.remotePort})
   --ros-domain-id <n>     ROS_DOMAIN_ID for --restart (default: ${DEFAULTS.rosDomainId})
   --local-package <path>  Local package path (default: bridge/${DEFAULTS.packageName})
+  --ssh-port <n>          SSH port (default: ssh config / 22; BRIDGE_DEPLOY_SSH_PORT)
+  --identity-file <path>  SSH identity file (BRIDGE_DEPLOY_IDENTITY_FILE)
   --dry-run               Compare only (rsync --dry-run); no sync/build/restart
   --compare-only          Same as --dry-run
   --backup                Tar remote package under <remote>/backup/ before sync
@@ -488,10 +540,7 @@ export function runCommand(command, args, options = {}) {
 /** @param {ReturnType<typeof resolveConfig>} config @param {string} remoteScript */
 export async function runSsh(config, remoteScript) {
   const result = await runCommand("ssh", [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=10",
+    ...buildSshCommandArgs(config),
     config.host,
     "bash",
     "-lc",
@@ -550,6 +599,8 @@ export async function deployBridge(config, deps = {}) {
 
   log(`[config] host=${config.host} remote=${config.remoteRoot} package=${config.localPackage}`);
   log(`[config] ros_setup=${config.rosSetup} port=${config.remotePort} restart=${config.restart}`);
+  if (config.sshPort) log(`[config] ssh_port=${config.sshPort}`);
+  if (config.identityFile) log(`[config] identity_file=${config.identityFile}`);
 
   await assertLocalPackage(config.localPackage);
 
@@ -566,6 +617,8 @@ export async function deployBridge(config, deps = {}) {
         host: config.host,
         dryRun: true,
         delete: config.delete,
+        sshPort: config.sshPort,
+        identityFile: config.identityFile,
       });
       // Prefer checksum for compare; fall back without if remote rsync is old.
       const compareArgs = ["--checksum", ...dryArgs];
@@ -633,6 +686,8 @@ export async function deployBridge(config, deps = {}) {
         host: config.host,
         dryRun: false,
         delete: config.delete,
+        sshPort: config.sshPort,
+        identityFile: config.identityFile,
       });
       const sync = await runCommandFn("rsync", syncArgs);
       if (sync.code !== 0) {
@@ -724,10 +779,7 @@ export async function deployBridge(config, deps = {}) {
  */
 async function runSshWith(config, remoteScript, runCommandFn) {
   const result = await runCommandFn("ssh", [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=10",
+    ...buildSshCommandArgs(config),
     config.host,
     "bash",
     "-lc",

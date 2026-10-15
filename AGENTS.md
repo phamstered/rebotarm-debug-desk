@@ -56,9 +56,12 @@ npm run test:deploy
 
 仓库中的 `bridge/easy_debug_bridge` 与 Jetson colcon 工作区（默认 `$HOME/easy_debug_bridge`，可由 `$BRIDGE_DEPLOY_REMOTE` 指定）可能不一致。**不要**用 ad-hoc SSH/`scp`/`rsync` 整目录覆盖远端 package，也不要把 “colcon 成功” 当成 “当前进程已更新”。
 
+Bridge `hello` 中的 `bridge_build_id` 与桌面期望值由 `npm run generate:bridge-build-id` 生成（`package.xml` 版本 + 包源码内容短哈希）。修改 `bridge/easy_debug_bridge` 后先生成再提交，桌面端连上后才会与远端对齐。
+
 统一使用：
 
 ```bash
+npm run generate:bridge-build-id
 npm run deploy:bridge -- --dry-run
 npm run deploy:bridge -- --backup
 npm run deploy:bridge -- --skip-sync --skip-build --restart

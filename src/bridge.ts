@@ -1,5 +1,11 @@
 import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo } from "./types";
 
+export type BridgeHello = {
+  bridge_version?: string;
+  bridge_build_id?: string;
+  ros_distro?: string;
+};
+
 type Listener = (message: BridgeEnvelope) => void;
 
 const IMAGE_MAGIC = [0x52, 0x43, 0x49, 0x31]; // RCI1
@@ -32,21 +38,26 @@ export class BridgeClient {
     this.pending.clear();
   }
 
-  private connectOnce(profile: ConnectionProfile): Promise<void> {
+  private connectOnce(profile: ConnectionProfile): Promise<BridgeHello> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(`ws://127.0.0.1:${profile.localPort}`);
       socket.binaryType = "arraybuffer";
       let opened = false;
+      let helloResolved = false;
       const timer = window.setTimeout(() => {
         socket.close();
-        reject(new Error("Bridge WebSocket 连接超时"));
+        reject(new Error(opened ? "Bridge hello 超时" : "Bridge WebSocket 连接超时"));
       }, 8000);
+      const finishHello = (hello: BridgeHello) => {
+        if (helloResolved) return;
+        helloResolved = true;
+        window.clearTimeout(timer);
+        resolve(hello);
+      };
       socket.onopen = () => {
         opened = true;
-        window.clearTimeout(timer);
         this.socket = socket;
         this.send({ op: "hello" });
-        resolve();
       };
       socket.onerror = () => {
         window.clearTimeout(timer);
@@ -62,22 +73,32 @@ export class BridgeClient {
           this.pending.delete(message.request_id);
         }
         this.listeners.forEach((listener) => listener(message));
+        if (!helloResolved && message.op === "hello") {
+          finishHello({
+            bridge_version: message.bridge_version,
+            bridge_build_id: message.bridge_build_id,
+            ros_distro: message.ros_distro,
+          });
+        }
       };
       socket.onclose = () => {
         if (this.socket !== socket) return;
         this.socket = null;
         this.rejectPending(new Error("Bridge 连接已断开"));
         if (opened) this.listeners.forEach((listener) => listener({ op: "disconnected" }));
+        if (!helloResolved) {
+          window.clearTimeout(timer);
+          reject(new Error("Bridge 连接在 hello 完成前断开"));
+        }
       };
     });
   }
 
-  async connect(profile: ConnectionProfile): Promise<void> {
+  async connect(profile: ConnectionProfile): Promise<BridgeHello> {
     let lastError: unknown = new Error("Bridge 尚未就绪");
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
-        await this.connectOnce(profile);
-        return;
+        return await this.connectOnce(profile);
       } catch (error) {
         lastError = error;
         await new Promise((resolve) => window.setTimeout(resolve, 500));
