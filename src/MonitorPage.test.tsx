@@ -36,7 +36,10 @@ describe("MonitorPage", () => {
     );
     expect(screen.getByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: /Motor Torque/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/7 条曲线/)).toBeVisible();
+    expect(screen.getByLabelText("effort 独立曲线网格")).toBeVisible();
+    expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
+    expect(screen.getByLabelText("effort[6] 曲线")).toBeVisible();
+    expect(screen.getByText(/7 路 effort 独立图/)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "新建空面板" }));
     expect(onAddPanel).toHaveBeenCalled();
@@ -171,7 +174,7 @@ describe("MonitorPage", () => {
       />,
     );
 
-    expect(screen.getByText(/已暂停/)).toBeVisible();
+    expect(screen.getAllByText(/已暂停/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "移除 effort[0]" }));
     expect(onUpdate).toHaveBeenCalledWith(workspace.selectedPanelId, expect.any(Array));
     expect(onUpdate.mock.calls[0]![1]).toHaveLength(6);

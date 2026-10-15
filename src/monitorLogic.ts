@@ -210,6 +210,25 @@ export function panelHasSeries(panel: MonitorPanel, topic: string, fieldPath: st
   return panel.series.some((series) => series.id === id);
 }
 
+
+/** True when the panel is the JointState effort template: same topic, effort[0..n-1] only. */
+export function isTorqueEffortGridPanel(panel: MonitorPanel): boolean {
+  if (panel.series.length < 2) return false;
+  const topic = panel.series[0]?.topic;
+  if (!topic || panel.series.some((series) => series.topic !== topic)) return false;
+  const indexes = panel.series.map((series) => {
+    const match = /^effort\[(\d+)\]$/.exec(series.fieldPath);
+    return match ? Number(match[1]) : -1;
+  });
+  if (indexes.some((index) => index < 0)) return false;
+  const unique = new Set(indexes);
+  if (unique.size !== indexes.length) return false;
+  for (let expected = 0; expected < indexes.length; expected += 1) {
+    if (!unique.has(expected)) return false;
+  }
+  return true;
+}
+
 /** Validate Jetson bag path for SSH play (same charset rules as ROS setup script). */
 export function isSafeBagPath(path: string): boolean {
   if (!path || path.length > 4096) return false;

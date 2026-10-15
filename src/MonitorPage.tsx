@@ -7,6 +7,7 @@ import {
   createEmptyPanel,
   createTorquePanel,
   isSafeBagPath,
+  isTorqueEffortGridPanel,
   selectedMonitorPanel,
 } from "./monitorLogic";
 import type { RosbagPlayStatus } from "./types";
@@ -165,7 +166,7 @@ export function MonitorPage({
           删除面板
         </button>
         <span className="monitor-panel-hint">
-          从 Topics → Inspector 右键选择目标面板添加曲线；默认面板为 JointState effort 转矩模板。
+          从 Topics → Inspector 右键选择目标面板添加曲线；Motor Torque 模板以 7 张独立图显示 effort[0..6]（共享 30s 时间窗）。
         </span>
       </div>
 
@@ -209,15 +210,46 @@ export function MonitorPage({
         </section>
       )}
 
-      <div className="monitor-chart">
-        <DataGraph
-          seriesList={panel.series}
-          liveUpdates={liveUpdates && (mode === "live" || playing)}
-          emptyHint="从 Topics 的 Inspector 加入数值字段，或使用「+转矩」模板"
-          onRemoveSeries={(id) => onUpdatePanelSeries(panel.id, removeSeries(panel.series, id))}
-          onClearSeries={() => onUpdatePanelSeries(panel.id, [])}
-        />
-      </div>
+      {isTorqueEffortGridPanel(panel) ? (
+        <div className="monitor-chart-grid-wrap">
+          <div className="monitor-chart-grid-toolbar">
+            <span>
+              {panel.series[0]?.topic} · {panel.series.length} 路 effort 独立图 · 窗口 30s
+              {liveUpdates && (mode === "live" || playing) ? "" : " · 已暂停"}
+            </span>
+            <button type="button" onClick={() => onUpdatePanelSeries(panel.id, [])} disabled={panel.series.length === 0}>
+              清空曲线
+            </button>
+          </div>
+          <div className="monitor-chart-grid" aria-label="effort 独立曲线网格">
+            {[...panel.series]
+              .sort((a, b) => Number(/^effort\[(\d+)\]$/.exec(a.fieldPath)?.[1] ?? 0) - Number(/^effort\[(\d+)\]$/.exec(b.fieldPath)?.[1] ?? 0))
+              .map((series) => (
+                <div key={series.id} className="monitor-chart-cell">
+                  <DataGraph
+                    seriesList={[series]}
+                    liveUpdates={liveUpdates && (mode === "live" || playing)}
+                    compact
+                    title={series.fieldPath}
+                    emptyHint="等待 effort 数据"
+                    onRemoveSeries={(id) => onUpdatePanelSeries(panel.id, removeSeries(panel.series, id))}
+                    onClearSeries={() => onUpdatePanelSeries(panel.id, removeSeries(panel.series, series.id))}
+                  />
+                </div>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <div className="monitor-chart">
+          <DataGraph
+            seriesList={panel.series}
+            liveUpdates={liveUpdates && (mode === "live" || playing)}
+            emptyHint="从 Topics 的 Inspector 加入数值字段，或使用「+转矩」模板"
+            onRemoveSeries={(id) => onUpdatePanelSeries(panel.id, removeSeries(panel.series, id))}
+            onClearSeries={() => onUpdatePanelSeries(panel.id, [])}
+          />
+        </div>
+      )}
     </main>
   );
 }

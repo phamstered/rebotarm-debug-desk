@@ -685,10 +685,10 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("menuitem", { name: "New Panel" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(localStorage.getItem("robot-console-page")).toBe("monitor");
-    expect(await screen.findByLabelText("DataGraph 实时曲线")).toBeVisible();
+    expect(await screen.findByLabelText("effort 独立曲线网格")).toBeVisible();
     expect(screen.getByRole("tab", { name: /New Panel/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/7 条曲线/)).toBeVisible();
-    expect(screen.getByLabelText("DataGraph 曲线列表")).toBeVisible();
+    expect(screen.getByText(/7 路 effort 独立图/)).toBeVisible();
+    expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
     getContext.mockRestore();
   });
 
@@ -710,7 +710,8 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: /Motor Torque/ })).toBeVisible();
-    expect(screen.getByText(/7 条曲线/)).toBeVisible();
+    expect(screen.getByLabelText("effort 独立曲线网格")).toBeVisible();
+    expect(screen.getByText(/7 路 effort 独立图/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Bag 回放" }));
     await user.clear(screen.getByLabelText("Jetson bag 路径"));
     await user.type(screen.getByLabelText("Jetson bag 路径"), "robot-console-bags/demo");

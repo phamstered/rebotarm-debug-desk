@@ -90,12 +90,16 @@ export function DataGraph({
   onRemoveSeries,
   onClearSeries,
   emptyHint = "在右侧 Inspector 选择数值字段并「加入 Monitor」",
+  compact = false,
+  title,
 }: {
   seriesList: DataSeries[];
   liveUpdates: boolean;
   onRemoveSeries(id: string): void;
   onClearSeries(): void;
   emptyHint?: string;
+  compact?: boolean;
+  title?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const seriesRef = useRef(seriesList);
@@ -126,24 +130,41 @@ export function DataGraph({
 
   const topic = seriesList[0]?.topic;
 
+  const heading = title ?? (seriesList[0]?.fieldPath || "DataGraph");
+
   return (
-    <div className="data-graph-view">
+    <div className={`data-graph-view${compact ? " compact" : ""}`}>
       <div className="graph-toolbar data-graph-toolbar">
         <span>
-          {seriesList.length === 0
-            ? "从 Inspector 添加数值字段 · 默认窗口 30s"
-            : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${liveUpdates ? "" : " · 已暂停"}`}
+          {compact
+            ? `${heading}${liveUpdates ? "" : " · 已暂停"}`
+            : seriesList.length === 0
+              ? "从 Inspector 添加数值字段 · 默认窗口 30s"
+              : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${liveUpdates ? "" : " · 已暂停"}`}
         </span>
-        <button type="button" onClick={onClearSeries} disabled={seriesList.length === 0}>清空曲线</button>
+        {compact ? (
+          seriesList[0] ? (
+            <button
+              type="button"
+              className="data-graph-remove"
+              onClick={() => onRemoveSeries(seriesList[0]!.id)}
+              aria-label={`移除 ${seriesList[0]!.fieldPath}`}
+            >
+              ×
+            </button>
+          ) : null
+        ) : (
+          <button type="button" onClick={onClearSeries} disabled={seriesList.length === 0}>清空曲线</button>
+        )}
       </div>
       <div className="data-graph-body">
         <div className="data-graph-canvas-wrap">
           {seriesList.length === 0 && (
             <div className="graph-empty">{emptyHint}</div>
           )}
-          <canvas ref={canvasRef} className="data-graph-canvas" aria-label="DataGraph 实时曲线" />
+          <canvas ref={canvasRef} className="data-graph-canvas" aria-label={compact ? `${heading} 曲线` : "DataGraph 实时曲线"} />
         </div>
-        {seriesList.length > 0 && (
+        {!compact && seriesList.length > 0 && (
           <ul className="data-graph-legend" aria-label="DataGraph 曲线列表">
             {seriesList.map((series) => (
               <li key={series.id}>
