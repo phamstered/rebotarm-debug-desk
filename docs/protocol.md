@@ -1,6 +1,6 @@
 # Bridge protocol v0.1
 
-WebSocket protocol between the **Robot Debug Desk** desktop (repo [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)) and the Jetson `easy_debug_bridge`.
+WebSocket protocol between the **Rebotarm Debug Desk** desktop (repo [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)) and the Jetson `easy_debug_bridge`.
 
 Messages are UTF-8 JSON WebSocket text frames.
 

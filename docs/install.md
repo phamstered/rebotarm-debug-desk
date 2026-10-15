@@ -22,7 +22,7 @@ npm run tauri build
 
 ## 显示名说明
 
-用户面向产品名为 **Robot Debug Desk**；当前代码侧 Tauri `productName`、窗口标题与 `/Applications` 包名仍为 **Robot Console**（`Robot Console.app`）。文档不会静默改代码侧显示名。
+用户面向产品名为 **Rebotarm Debug Desk**；当前代码侧 Tauri `productName`、窗口标题与 `/Applications` 包名仍为 **Robot Console**（`Robot Console.app`）。文档不会静默改代码侧显示名。
 
 ## 开发与调试包
 

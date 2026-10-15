@@ -1,6 +1,6 @@
 # 功能概览
 
-本文按模块说明 **Robot Debug Desk** 已实现能力：每块写清做什么、怎么用、以及安全/边界注意。行为细节与单元测试矩阵见 [基本功能与测试覆盖](./basic-features)；连接链路补充见 [连接与 Bridge](./connect)；协议字段见 [Bridge 协议](./protocol)。
+本文按模块说明 **Rebotarm Debug Desk** 已实现能力：每块写清做什么、怎么用、以及安全/边界注意。行为细节与单元测试矩阵见 [基本功能与测试覆盖](./basic-features)；连接链路补充见 [连接与 Bridge](./connect)；协议字段见 [Bridge 协议](./protocol)。
 
 ## 目录
 
@@ -239,7 +239,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 - Capture 仅在 Controller active、状态新鲜、姿态稳定且确认手部支撑已撤掉后开放。
 - `safety_fault` 会锁定采样与拟合；托住后可 Release 清除新版 Controller 的故障锁存。旧版兼容：姿态已释放且速度 ≤ 0.05 rad/s 时允许重新 Begin。
-- Robot Debug Desk **不负责**自动激活控制器；请在 Topics 的 ROS Control 面板显式操作。
+- Rebotarm Debug Desk **不负责**自动激活控制器；请在 Topics 的 ROS Control 面板显式操作。
 
 完整步骤与故障恢复：[Joint4 标定操作指南](./joint4-calibration)。
 

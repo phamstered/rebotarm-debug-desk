@@ -2,7 +2,7 @@
   <figure class="rdd-diagram" role="img" aria-labelledby="rdd-arch-title" aria-describedby="rdd-arch-desc">
     <p id="rdd-arch-title" class="rdd-diagram__title">系统架构 · System architecture</p>
     <p id="rdd-arch-desc" class="rdd-diagram__sr">
-      macOS 上的 Robot Debug Desk（Tauri / React / Three.js）经 SSH 隧道连接 Jetson 上仅监听
+      macOS 上的 Rebotarm Debug Desk（Tauri / React / Three.js）经 SSH 隧道连接 Jetson 上仅监听
       127.0.0.1:8765 的 C++ WebSocket Bridge；Bridge 通过 ROS 2 Humble / DDS 对接 micro-ROS Agent、
       STM32 与电机。桌面端不直接加入 DDS。
     </p>
@@ -11,7 +11,7 @@
     <div class="rdd-arch" aria-hidden="true">
       <div class="rdd-arch__layer rdd-arch__layer--mac">
         <span class="rdd-arch__badge">macOS</span>
-        <p class="rdd-arch__name">Robot Debug Desk</p>
+        <p class="rdd-arch__name">Rebotarm Debug Desk</p>
         <p class="rdd-arch__meta">Tauri · React · Three.js · Rust SSH session</p>
         <div class="rdd-arch__chips">
           <span class="rdd-arch__chip">WebView UI</span>

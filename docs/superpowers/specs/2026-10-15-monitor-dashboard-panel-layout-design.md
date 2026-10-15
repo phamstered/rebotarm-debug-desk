@@ -1,9 +1,9 @@
 # Monitor Dashboard / Panel Layout Design
 
 Date: 2026-10-15  
-Repo: `phamstered/robot-debug-desk`  
+Repo: `phamstered/rebotarm-debug-desk`  
 Status: approved for implementation (approve-spec-and-build)  
-Owner: robot-debug-desk (上位机)
+Owner: rebotarm-debug-desk (上位机)
 
 ## 1. Goal
 

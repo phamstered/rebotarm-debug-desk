@@ -1,13 +1,13 @@
 # Topic Graph Browser UX Design
 
 Date: 2026-10-15  
-Repo: `phamstered/robot-debug-desk`  
+Repo: `phamstered/rebotarm-debug-desk`  
 Status: draft — awaiting review  
-Owner: robot-debug-desk (上位机)
+Owner: rebotarm-debug-desk (上位机)
 
 ## 1. Goal
 
-Give Robot Debug Desk a **Neo4j Browser–like exploration feel** for the ROS Topic Graph, without copying Neo4j’s product model (no Cypher, no graph DB, no Neo4j server).
+Give Rebotarm Debug Desk a **Neo4j Browser–like exploration feel** for the ROS Topic Graph, without copying Neo4j’s product model (no Cypher, no graph DB, no Neo4j server).
 
 Users should be able to **pan/zoom a dark canvas, drag and pin nodes, search and focus, expand neighborhoods, and read edge activity**, while keeping today’s ROS-specific behaviors: Node vs Topic shapes, publish/subscribe direction, Controller focus, Bridge filter, and Inspector / subscribe integration.
 
@@ -171,7 +171,7 @@ Selection model:
 
 ## 8. Visual language
 
-Stay on Robot Debug Desk dark theme (already Neo4j-adjacent: dark canvas, cyan/teal nodes).
+Stay on Rebotarm Debug Desk dark theme (already Neo4j-adjacent: dark canvas, cyan/teal nodes).
 
 Align further without a full redesign:
 

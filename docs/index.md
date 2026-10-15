@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: Robot Debug Desk
+  name: Rebotarm Debug Desk
   text: ROS 2 调试与受控操作控制台
   tagline: macOS Tauri 桌面端 · Jetson WebSocket Bridge · 仅经 SSH 隧道通信
   actions:
@@ -17,7 +17,7 @@ hero:
       link: /features
     - theme: alt
       text: GitHub
-      link: https://github.com/phamstered/robot-debug-desk
+      link: https://github.com/phamstered/rebotarm-debug-desk
 
 features:
   - title: Mac 不装 ROS
@@ -30,12 +30,12 @@ features:
 
 ## 这是什么
 
-**Robot Debug Desk**（仓库 [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)）是运行在 macOS 上的 ROS 2 Humble 调试与受控操作控制台，技术栈为 Tauri + Rust + React + Three.js。ROS Bridge 运行在 Jetson / Ubuntu 22.04；两端仅通过 SSH 隧道通信。
+**Rebotarm Debug Desk**（仓库 [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)）是运行在 macOS 上的 ROS 2 Humble 调试与受控操作控制台，技术栈为 Tauri + Rust + React + Three.js。ROS Bridge 运行在 Jetson / Ubuntu 22.04；两端仅通过 SSH 隧道通信。
 
 | | |
 |---|---|
-| **产品名** | Robot Debug Desk |
-| **npm 包名** | `easy-debug`（历史名，尚未改代码） |
+| **产品名** | Rebotarm Debug Desk |
+| **npm 包名** | `rebotarm-debug-desk` |
 | **应用显示名** | Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`） |
 
 ## 快速入口

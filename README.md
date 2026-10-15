@@ -1,22 +1,22 @@
-# Robot Debug Desk
+# Rebotarm Debug Desk
 
 macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three.js）。桌面端通过 **SSH 隧道** 连接 Jetson 上的 WebSocket Bridge；**Mac 不安装、不加入本地 ROS / DDS**。
 
 | | |
 |---|---|
-| **产品名** | Robot Debug Desk |
-| **仓库** | [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk) |
-| **npm 包名** | `easy-debug`（历史名，尚未改代码） |
+| **产品名** | Rebotarm Debug Desk |
+| **仓库** | [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk) |
+| **npm 包名** | `rebotarm-debug-desk` |
 | **应用显示名** | Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`） |
-| **用户文档** | [https://phamstered.github.io/robot-debug-desk/](https://phamstered.github.io/robot-debug-desk/)（GitHub Pages） |
+| **用户文档** | [https://phamstered.github.io/rebotarm-debug-desk/](https://phamstered.github.io/rebotarm-debug-desk/)（GitHub Pages） |
 
-> 本文档以 **Robot Debug Desk** 作为用户面向产品名；包名与 `.app` 显示名以当前代码为准，不会在文档 PR 中静默改名。
+> 本文档以 **Rebotarm Debug Desk** 作为用户面向产品名；npm 包名为 `rebotarm-debug-desk`；`.app` 显示名仍以代码侧 **Robot Console** 为准（文档不静默改 Tauri `productName`）。
 
 ## 相关仓库 / 职责
 
 | 仓库 | 职责 | 文档 |
 |---|---|---|
-| [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk) | 上位机（本仓） | [Pages](https://phamstered.github.io/robot-debug-desk/) |
+| [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk) | 上位机（本仓） | [Pages](https://phamstered.github.io/rebotarm-debug-desk/) |
 | [`phamstered/rebotarm-ros2-stack`](https://github.com/phamstered/rebotarm-ros2-stack) | ROS 2 controller | [Pages](https://phamstered.github.io/rebotarm-ros2-stack/)（预期） |
 | [`phamstered/rebotarm-executor`](https://github.com/phamstered/rebotarm-executor) | FreeRTOS + micro-ROS 固件 | [Pages](https://phamstered.github.io/rebotarm-executor/)（预期） |
 
@@ -26,7 +26,7 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 
 | 层 | 组件 |
 |---|---|
-| **macOS** | Robot Debug Desk（Tauri / React / Three.js）· Rust SSH 会话 |
+| **macOS** | Rebotarm Debug Desk（Tauri / React / Three.js）· Rust SSH 会话 |
 | **隧道** | `ssh -N -L` 本地端口 → Jetson `127.0.0.1:8765`（认证 / 主机密钥 / 加密） |
 | **Jetson** | `easy_debug_bridge`（C++ WebSocket · rclcpp）· **仅 loopback** |
 | **ROS 2** | Humble graph · Topics / Controllers / `package://` · URDF |
@@ -34,7 +34,7 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 
 数据流概要：Topics / HardwareStatus / JointState **入站** → App；`joint_command` / `trajectory_command` **出站** → ROS（含 ACK）；断开时若电机命令流在运行，先请求 **DISABLE**。
 
-交互式分层图与标注数据流见用户文档 **[架构](https://phamstered.github.io/robot-debug-desk/architecture)**（HTML 图，非 Mermaid）。源文件：[docs/architecture.md](docs/architecture.md)。
+交互式分层图与标注数据流见用户文档 **[架构](https://phamstered.github.io/rebotarm-debug-desk/architecture)**（HTML 图，非 Mermaid）。源文件：[docs/architecture.md](docs/architecture.md)。
 
 Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。本机连接 Profile 中的「ROS 环境脚本」必须指向机器人工作空间的 `install/setup.bash`；Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 能解析 URDF 中的资源包。
 
@@ -42,19 +42,19 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 
 已实现能力的模块说明（做什么 / 怎么用 / 注意与边界）与 HTML 流程图见用户文档：
 
-**[功能概览（完整）](docs/features.md)** · [Pages](https://phamstered.github.io/robot-debug-desk/features)
+**[功能概览（完整）](docs/features.md)** · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features)
 
 | 模块 | 文档锚点 |
 |---|---|
-| 连接与会话 | [§1](docs/features.md#1-连接与会话) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_1-连接与会话) |
-| Topics / Graph / Inspector | [§2](docs/features.md#2-topics--graph--inspector) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_2-topics-graph-inspector) |
-| Monitor（多面板曲线 / bag 回放） | [Monitor](docs/features.md#monitor) · [Pages](https://phamstered.github.io/robot-debug-desk/features#monitor) |
-| Robot View（URDF） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_3-robot-view-urdf) |
-| MIT 电机控制 | [§4](docs/features.md#4-mit-电机控制) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_4-mit-电机控制) |
-| TCP 拖拽轨迹 | [§5](docs/features.md#5-tcp-拖拽轨迹) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_5-tcp-拖拽轨迹) |
-| Joint4 标定 | [§6](docs/features.md#6-joint4-标定) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_6-joint4-标定) |
-| 重力辨识（设计） | [§8](docs/features.md#8-重力辨识设计草案) · [设计页](docs/gravity-identification.md) · [Pages](https://phamstered.github.io/robot-debug-desk/gravity-identification) |
-| 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/robot-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
+| 连接与会话 | [§1](docs/features.md#1-连接与会话) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_1-连接与会话) |
+| Topics / Graph / Inspector | [§2](docs/features.md#2-topics--graph--inspector) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_2-topics-graph-inspector) |
+| Monitor（多面板曲线 / bag 回放） | [Monitor](docs/features.md#monitor) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#monitor) |
+| Robot View（URDF） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_3-robot-view-urdf) |
+| MIT 电机控制 | [§4](docs/features.md#4-mit-电机控制) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_4-mit-电机控制) |
+| TCP 拖拽轨迹 | [§5](docs/features.md#5-tcp-拖拽轨迹) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_5-tcp-拖拽轨迹) |
+| Joint4 标定 | [§6](docs/features.md#6-joint4-标定) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_6-joint4-标定) |
+| 重力辨识（设计） | [§8](docs/features.md#8-重力辨识设计草案) · [设计页](docs/gravity-identification.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/gravity-identification) |
+| 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
 
 行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 
@@ -141,7 +141,7 @@ Bridge 建立隧道后可运行：
 node scripts/smoke-bridge.mjs 18765
 ```
 
-- 用户文档站点：[https://phamstered.github.io/robot-debug-desk/](https://phamstered.github.io/robot-debug-desk/)
+- 用户文档站点：[https://phamstered.github.io/rebotarm-debug-desk/](https://phamstered.github.io/rebotarm-debug-desk/)
 - 基本功能与测试覆盖：[docs/basic-features.md](docs/basic-features.md)
 - 协议说明：[docs/protocol.md](docs/protocol.md)
 - 架构说明：[docs/architecture.md](docs/architecture.md)

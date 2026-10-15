@@ -1,6 +1,6 @@
 # 重力辨识 UI（设计草案）
 
-适用于 **Robot Debug Desk**（仓库 [`phamstered/robot-debug-desk`](https://github.com/phamstered/robot-debug-desk)）。
+适用于 **Rebotarm Debug Desk**（仓库 [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)）。
 
 > **状态：设计草案（未实现）。** 本文描述上位机如何呈现并调用 ROS action `/StartGravityID`（类型 `GravityIdentification`）。接口对齐 [rebotarm-ros2-stack#12](https://github.com/phamstered/rebotarm-ros2-stack/pull/12)。实现落地前不得写入 `docs/basic-features.md` 的「已实现」矩阵；Bridge `op` 名标注为 **proposed**。
 
@@ -160,7 +160,7 @@
 
 | 仓库 | 做什么 | 不做什么 |
 |---|---|---|
-| **robot-debug-desk** | 本设计 UI；日后 Bridge op + 页面 | 辨识算法、YAML 权威写入、固件超时策略 |
+| **rebotarm-debug-desk** | 本设计 UI；日后 Bridge op + 页面 | 辨识算法、YAML 权威写入、固件超时策略 |
 | **rebotarm-ros2-stack** | `/StartGravityID` 状态机、激励、拟合、热加载 | 固件字节协议、Desk 布局 |
 | **rebotarm-executor** | meas、HOLD/TRACK（静置前馈用 TRACK@v≈0）、command-loss → HOLD、十进制 fault_code | 姿态规划、最小二乘、写 YAML；不采用草案 hex 位标志 |
 
