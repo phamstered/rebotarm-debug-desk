@@ -25,6 +25,7 @@ function drawChart(
   seriesList: DataSeries[],
   now: number,
   crosshairT: number | null,
+  renderStyle: "line" | "points" | "bars",
 ) {
   const parent = canvas.parentElement;
   const width = Math.max(parent?.clientWidth ?? canvas.clientWidth, 120);
@@ -85,16 +86,27 @@ function drawChart(
   for (const series of seriesList) {
     const visible = series.points.filter((point) => point.t >= bounds.minT && point.t <= bounds.maxT);
     if (visible.length === 0) continue;
-    ctx.beginPath();
     ctx.strokeStyle = series.color;
-    ctx.lineWidth = 1.5;
-    visible.forEach((point, index) => {
-      const x = xOf(point.t);
-      const y = yOf(point.value);
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    ctx.fillStyle = series.color;
+    if (renderStyle === "line") {
+      ctx.beginPath();
+      ctx.lineWidth = 1.5;
+      visible.forEach((point, index) => {
+        if (index === 0) ctx.moveTo(xOf(point.t), yOf(point.value));
+        else ctx.lineTo(xOf(point.t), yOf(point.value));
+      });
+      ctx.stroke();
+    } else if (renderStyle === "points") {
+      visible.forEach((point) => {
+        ctx.beginPath();
+        ctx.arc(xOf(point.t), yOf(point.value), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    } else {
+      const zeroY = yOf(Math.max(bounds.minY, Math.min(bounds.maxY, 0)));
+      const barWidth = Math.max(1, Math.min(8, plotW / Math.max(visible.length, 1) * 0.7));
+      visible.forEach((point) => ctx.fillRect(xOf(point.t) - barWidth / 2, Math.min(zeroY, yOf(point.value)), barWidth, Math.max(1, Math.abs(zeroY - yOf(point.value)))));
+    }
   }
 
   if (crosshairT != null && crosshairT >= bounds.minT && crosshairT <= bounds.maxT) {
@@ -138,6 +150,7 @@ export function DataGraph({
   crosshairT = null,
   onCrosshairChange,
   viewNow = null,
+  renderStyle = "line",
 }: {
   seriesList: DataSeries[];
   liveUpdates: boolean;
@@ -154,16 +167,19 @@ export function DataGraph({
    * When null, charts slide with performance.now() (live wall clock).
    */
   viewNow?: number | null;
+  renderStyle?: "line" | "points" | "bars";
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const seriesRef = useRef(seriesList);
   const crosshairRef = useRef(crosshairT);
   const liveRef = useRef(liveUpdates);
   const viewNowRef = useRef(viewNow);
+  const renderStyleRef = useRef(renderStyle);
   seriesRef.current = seriesList;
   crosshairRef.current = crosshairT;
   liveRef.current = liveUpdates;
   viewNowRef.current = viewNow;
+  renderStyleRef.current = renderStyle;
 
   const resolveNow = () => {
     if (viewNowRef.current != null) return viewNowRef.current;
@@ -175,7 +191,7 @@ export function DataGraph({
     if (!canvas) return;
     let frame = 0;
     const paint = () => {
-      drawChart(canvas, seriesRef.current, resolveNow(), crosshairRef.current);
+      drawChart(canvas, seriesRef.current, resolveNow(), crosshairRef.current, renderStyleRef.current);
     };
     paint();
     const onResize = () => paint();
@@ -190,8 +206,8 @@ export function DataGraph({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) drawChart(canvas, seriesList, resolveNow(), crosshairT);
-  }, [seriesList, crosshairT, liveUpdates, viewNow]);
+    if (canvas) drawChart(canvas, seriesList, resolveNow(), crosshairT, renderStyle);
+  }, [seriesList, crosshairT, liveUpdates, viewNow, renderStyle]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

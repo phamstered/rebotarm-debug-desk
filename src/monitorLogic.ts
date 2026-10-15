@@ -19,6 +19,33 @@ export const MONITOR_PANEL_DEFAULT_H = 2;
 export const MONITOR_PANEL_MIN_W = 3;
 export const MONITOR_PANEL_MIN_H = 2;
 
+export type MonitorChartType = "time-series" | "bar" | "pie" | "gauge";
+export type MonitorChartConfig = {
+  type: MonitorChartType;
+  timeStyle: "line" | "points" | "bars";
+  barOrientation: "vertical" | "horizontal";
+  gaugeMin: number;
+  gaugeMax: number;
+  gaugeThreshold: number;
+};
+export const DEFAULT_CHART_CONFIG: MonitorChartConfig = {
+  type: "time-series", timeStyle: "line", barOrientation: "vertical",
+  gaugeMin: 0, gaugeMax: 100, gaugeThreshold: 80,
+};
+
+export function normalizeChartConfig(value: unknown): MonitorChartConfig {
+  const raw = value && typeof value === "object" ? value as Partial<MonitorChartConfig> : {};
+  const gaugeMin = Number.isFinite(raw.gaugeMin) ? raw.gaugeMin! : 0;
+  const gaugeMax = Number.isFinite(raw.gaugeMax) && raw.gaugeMax! > gaugeMin ? raw.gaugeMax! : Math.max(100, gaugeMin + 1);
+  return {
+    type: raw.type === "bar" || raw.type === "pie" || raw.type === "gauge" ? raw.type : "time-series",
+    timeStyle: raw.timeStyle === "points" || raw.timeStyle === "bars" ? raw.timeStyle : "line",
+    barOrientation: raw.barOrientation === "horizontal" ? "horizontal" : "vertical",
+    gaugeMin, gaugeMax,
+    gaugeThreshold: Number.isFinite(raw.gaugeThreshold) ? raw.gaugeThreshold! : 80,
+  };
+}
+
 export type GridLayoutItem = {
   i: string;
   x: number;
@@ -32,6 +59,8 @@ export type MonitorPanelPersisted = {
   title: string;
   layout: GridLayoutItem;
   series: { topic: string; fieldPath: string; color: string };
+  additionalSeries?: Array<{ topic: string; fieldPath: string; color: string }>;
+  chart?: Partial<MonitorChartConfig>;
 };
 
 export type MonitorDashboardPersisted = {
@@ -69,7 +98,13 @@ export type MonitorPanel = {
   title: string;
   layout: GridLayoutItem;
   series: DataSeries;
+  additionalSeries: DataSeries[];
+  chart: MonitorChartConfig;
 };
+
+export function panelSeries(panel: MonitorPanel): DataSeries[] {
+  return [panel.series, ...panel.additionalSeries];
+}
 
 export type MonitorDashboard = {
   id: string;
@@ -145,6 +180,8 @@ export function createPanelFromSeries(
     title: series.fieldPath,
     layout: { ...layout, i: id },
     series,
+    additionalSeries: [],
+    chart: { ...DEFAULT_CHART_CONFIG },
   };
 }
 
@@ -209,6 +246,8 @@ function persistPanel(panel: MonitorPanel): MonitorPanelPersisted {
       fieldPath: panel.series.fieldPath,
       color: panel.series.color,
     },
+    additionalSeries: panel.additionalSeries.map(({ topic, fieldPath, color }) => ({ topic, fieldPath, color })),
+    chart: panel.chart,
   };
 }
 
@@ -251,6 +290,11 @@ function hydratePanel(
       color: entry.series?.color || created.color,
       points: [],
     },
+    additionalSeries: (entry.additionalSeries ?? []).filter((series) => series && typeof series.topic === "string" && typeof series.fieldPath === "string").map((series, index) => {
+      const createdExtra = createSeries(series.topic, series.fieldPath, colorFallbackIndex + index + 1);
+      return { ...createdExtra, color: series.color || createdExtra.color };
+    }),
+    chart: normalizeChartConfig(entry.chart),
   };
 }
 
@@ -293,6 +337,8 @@ export function migrateV1PanelToDashboard(
           color: entry.color || created.color,
           points: [],
         },
+        additionalSeries: [],
+        chart: { ...DEFAULT_CHART_CONFIG },
       };
     }),
   };
@@ -525,7 +571,7 @@ export function addPanelsToDashboard(
     dashboards: workspace.dashboards.map((dashboard) => {
       if (dashboard.id !== dashboardId) return dashboard;
       const startY = nextLayoutY(dashboard.panels);
-      const existingFieldIds = new Set(dashboard.panels.map((panel) => panel.series.id));
+      const existingFieldIds = new Set(dashboard.panels.flatMap((panel) => panelSeries(panel).map((series) => series.id)));
       const toAdd = seriesList.filter((series) => !existingFieldIds.has(series.id));
       if (toAdd.length === 0) return dashboard;
       const ids = toAdd.map(() => newPanelId());
@@ -539,6 +585,60 @@ export function addPanelsToDashboard(
         );
       });
       return { ...dashboard, panels: [...dashboard.panels, ...newPanels] };
+    }),
+  };
+}
+
+/** Add fields to an existing Panel, or create one Panel containing all selected fields. */
+export function addSeriesToDashboardPanel(
+  workspace: MonitorWorkspace,
+  dashboardId: string,
+  panelId: string | null,
+  seriesList: DataSeries[],
+): MonitorWorkspace {
+  if (seriesList.length === 0 || !workspace.dashboards.some((dashboard) => dashboard.id === dashboardId)) return workspace;
+  return {
+    ...workspace,
+    selectedDashboardId: dashboardId,
+    dashboards: workspace.dashboards.map((dashboard) => {
+      if (dashboard.id !== dashboardId) return dashboard;
+      if (panelId === null) {
+        const id = newPanelId();
+        const layout = { i: id, x: 0, y: nextLayoutY(dashboard.panels), w: MONITOR_PANEL_DEFAULT_W, h: MONITOR_PANEL_DEFAULT_H };
+        const panel = createPanelFromSeries(seriesList[0]!, layout, id);
+        return { ...dashboard, panels: [...dashboard.panels, { ...panel, additionalSeries: seriesList.slice(1) }] };
+      }
+      return {
+        ...dashboard,
+        panels: dashboard.panels.map((panel) => {
+          if (panel.id !== panelId) return panel;
+          const existing = new Set(panelSeries(panel).map((series) => series.id));
+          const toAdd = seriesList.filter((series) => {
+            if (existing.has(series.id)) return false;
+            existing.add(series.id);
+            return true;
+          });
+          return toAdd.length ? { ...panel, additionalSeries: [...panel.additionalSeries, ...toAdd] } : panel;
+        }),
+      };
+    }),
+  };
+}
+
+export function updatePanelChart(
+  workspace: MonitorWorkspace,
+  dashboardId: string,
+  panelId: string,
+  chart: Partial<MonitorChartConfig>,
+): MonitorWorkspace {
+  return {
+    ...workspace,
+    dashboards: workspace.dashboards.map((dashboard) => dashboard.id !== dashboardId ? dashboard : {
+      ...dashboard,
+      panels: dashboard.panels.map((panel) => panel.id !== panelId ? panel : {
+        ...panel,
+        chart: normalizeChartConfig({ ...panel.chart, ...chart }),
+      }),
     }),
   };
 }
@@ -615,11 +715,10 @@ export function updateMonitorFromMessage(
     if (dashboard.panels.length === 0) return dashboard;
     let dashboardChanged = false;
     const panels = dashboard.panels.map((panel) => {
-      const nextList = updateSeriesFromMessage([panel.series], topic, data, now);
-      const nextSeries = nextList[0]!;
-      if (nextSeries === panel.series) return panel;
+      const nextList = updateSeriesFromMessage(panelSeries(panel), topic, data, now);
+      if (nextList[0] === panel.series && nextList.slice(1).every((series, index) => series === panel.additionalSeries[index])) return panel;
       dashboardChanged = true;
-      return { ...panel, series: nextSeries };
+      return { ...panel, series: nextList[0]!, additionalSeries: nextList.slice(1) };
     });
     if (!dashboardChanged) return dashboard;
     changed = true;
@@ -634,7 +733,7 @@ export function dashboardHasSeries(
   fieldPath: string,
 ): boolean {
   const id = seriesId(topic, fieldPath);
-  return dashboard.panels.some((panel) => panel.series.id === id);
+  return dashboard.panels.some((panel) => panelSeries(panel).some((series) => series.id === id));
 }
 
 /** @deprecated Use dashboardHasSeries */
@@ -709,6 +808,8 @@ export type MonitorLayoutPresetPanel = {
   title: string;
   layout: GridLayoutItem;
   series: { topic: string; fieldPath: string; color: string };
+  additionalSeries?: Array<{ topic: string; fieldPath: string; color: string }>;
+  chart?: Partial<MonitorChartConfig>;
 };
 
 export type MonitorLayoutPreset = {
@@ -756,6 +857,8 @@ export function createLayoutPresetFromDashboard(
         fieldPath: panel.series.fieldPath,
         color: panel.series.color,
       },
+      additionalSeries: panel.additionalSeries.map(({ topic, fieldPath, color }) => ({ topic, fieldPath, color })),
+      chart: panel.chart,
     })),
   };
 }
@@ -790,6 +893,11 @@ function hydratePresetPanel(
       color: entry.series?.color || created.color,
       points: [],
     },
+    additionalSeries: (entry.additionalSeries ?? []).map((series, index) => {
+      const extra = createSeries(series.topic, series.fieldPath, panelIndex + index + 1);
+      return { ...extra, color: series.color || extra.color };
+    }),
+    chart: normalizeChartConfig(entry.chart),
   };
 }
 
@@ -843,6 +951,10 @@ export function normalizeLayoutPreset(raw: unknown): MonitorLayoutPreset | null 
         fieldPath: series.fieldPath,
         color: typeof series.color === "string" ? series.color : "#42d6c7",
       },
+      additionalSeries: Array.isArray((panel as MonitorLayoutPresetPanel).additionalSeries)
+        ? (panel as MonitorLayoutPresetPanel).additionalSeries!.filter((entry) => entry && typeof entry.topic === "string" && typeof entry.fieldPath === "string").map((entry) => ({ topic: entry.topic, fieldPath: entry.fieldPath, color: typeof entry.color === "string" ? entry.color : "#42d6c7" }))
+        : [],
+      chart: normalizeChartConfig((panel as MonitorLayoutPresetPanel).chart),
     });
   }
   return {

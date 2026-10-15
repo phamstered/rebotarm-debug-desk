@@ -794,12 +794,14 @@ describe("App workflow", () => {
     const json = await screen.findByLabelText("Topic JSON");
     await user.pointer({ keys: "[MouseRight]", target: json.querySelector('[data-monitor-path="effort"]') as Element });
     expect(screen.getAllByRole("menuitem")).toHaveLength(2);
-    await user.click(screen.getByRole("menuitem", { name: "New Dashboard" }));
+    await user.click(screen.getByRole("menuitem", { name: "New Dashboard›" }));
+    await user.click(screen.getByRole("menuitem", { name: "＋ 新建 Panel" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(localStorage.getItem("robot-console-page")).toBe("monitor");
     expect(screen.getByRole("tab", { name: /New Dashboard/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/7 个 Panel · 窗口/)).toBeVisible();
+    expect(screen.getByText(/1 个 Panel · 窗口/)).toBeVisible();
     expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
+    expect(screen.getByLabelText("Panel 数据序列").children).toHaveLength(7);
     getContext.mockRestore();
   });
 

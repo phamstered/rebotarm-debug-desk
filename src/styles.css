@@ -366,6 +366,8 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .inspector-context-current { flex: none; color: #78d5c8; font-size: 9px; }
 .inspector-context-empty { padding: 8px 7px; color: #83aab5; }
 .inspector-context-menu button:hover { background: #1d504a; }
+.inspector-context-menu button:focus-visible { outline: 2px solid #72d8ca; outline-offset: -2px; }
+.inspector-context-new { margin-top: 4px; border-top: 1px solid #24424c !important; color: #8de3d5 !important; }
 .topic-inspector-status > span { color: #647f90; font: 9px/1 "SFMono-Regular", monospace; }
 .inspector-tabs { flex: 0 0 auto; display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); background: #0a1721; }
 .inspector-tabs button { padding: 8px 12px 7px; color: #7796a6; border: 0; border-bottom: 2px solid transparent; background: transparent; font: 700 10px/1 "SFMono-Regular", monospace; }
@@ -795,6 +797,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .monitor-panel-tile {
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
   border: 1px solid #1b3141;
   border-radius: 10px;
   overflow: hidden;
@@ -819,6 +822,47 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.monitor-chart-controls { display: flex; gap: 3px; min-width: 0; margin-left: auto; }
+.monitor-chart-controls select { max-width: 72px; height: 18px; padding: 0 1px; color: #b9ded9; border: 1px solid #294c55; border-radius: 4px; background: #102630; font: 9px "SFMono-Regular", monospace; }
+.monitor-panel-restore { margin-left: 0; }
+.monitor-panel-remove { margin-left: 0; }
+.monitor-chart-content { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.monitor-chart-content .data-graph-view { flex: 1 1 auto; height: auto; }
+.monitor-chart-series-key { position: absolute; left: 58px; right: 12px; bottom: 25px; display: flex; flex-wrap: wrap; gap: 3px 8px; max-height: 28px; overflow: auto; pointer-events: none; font: 9px "SFMono-Regular", monospace; }
+.monitor-chart-series-key span { display: inline-flex; align-items: center; gap: 3px; max-width: 100px; overflow: hidden; color: #b7c9ce; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-chart-series-key i, .monitor-value-list i { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 2px; }
+.monitor-snapshot-chart { padding: 8px 10px; overflow: auto; }
+.monitor-chart-no-data { flex: 1; display: grid; place-items: center; color: #6e8996; font-size: 11px; }
+.monitor-pie-layout { display: flex; gap: 12px; align-items: center; justify-content: center; min-height: 100%; }
+.monitor-pie-ring { width: min(120px, 45%); aspect-ratio: 1; flex: none; border-radius: 50%; position: relative; }
+.monitor-pie-ring::after { content: ""; position: absolute; inset: 27%; border-radius: 50%; background: #07131c; }
+.monitor-value-list { flex: 1; min-width: 0; max-height: 100%; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.monitor-value-list li { display: flex; align-items: center; gap: 5px; color: #9eb8c5; font: 10px "SFMono-Regular", monospace; }
+.monitor-value-list li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-value-list strong { color: #e5f5f3; font-weight: 500; }
+.monitor-bars.horizontal { display: flex; flex-direction: column; gap: 5px; }
+.monitor-bars.horizontal .monitor-bar-entry { display: grid; grid-template-columns: minmax(55px, 25%) minmax(0, 1fr) auto; align-items: center; gap: 5px; min-height: 16px; }
+.monitor-bar-label { overflow: hidden; color: #9eb8c5; font: 10px "SFMono-Regular", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-bar-entry strong { color: #d6e6ef; font: 10px "SFMono-Regular", monospace; }
+.monitor-bars.horizontal .monitor-bar-track { display: block; height: 12px; background: #102630; }
+.monitor-bars.horizontal .monitor-bar-track i { display: block; height: 100%; }
+.monitor-bars.vertical { display: flex; align-items: stretch; gap: 8px; }
+.monitor-bars.vertical .monitor-bar-entry { display: flex; flex: 1; min-width: 28px; flex-direction: column; align-items: center; justify-content: flex-end; }
+.monitor-bars.vertical .monitor-bar-track { display: flex; align-items: flex-end; width: min(38px, 100%); flex: 1; min-height: 10px; background: #102630; }
+.monitor-bars.vertical .monitor-bar-track i { display: block; width: 100%; }
+.monitor-gauge-settings { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; color: #8da9b5; font: 9px "SFMono-Regular", monospace; }
+.monitor-gauge-settings label { display: flex; align-items: center; gap: 3px; }
+.monitor-gauge-settings input { width: 47px; height: 19px; padding: 0 2px; color: #dbf1ef; border: 1px solid #294c55; border-radius: 3px; background: #102630; font: inherit; }
+.monitor-gauge-list { display: flex; flex: 1; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; overflow: auto; }
+.monitor-gauge { display: grid; justify-items: center; gap: 3px; min-width: 62px; color: #a9c5cd; font: 9px "SFMono-Regular", monospace; }
+.monitor-gauge-ring { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; }
+.monitor-gauge-ring strong { width: 49px; height: 49px; display: grid; place-items: center; border-radius: 50%; background: #07131c; color: #e9f7f3; font-size: 12px; }
+@container (max-width: 230px) {
+  .monitor-pie-layout { flex-direction: column; gap: 5px; }
+  .monitor-pie-ring { width: 58px; }
+  .monitor-value-list { width: 100%; flex: none; }
+  .monitor-value-list li { font-size: 9px; }
 }
 .monitor-panel-tile .data-graph-view { flex: 1 1 auto; min-height: 0; height: auto; }
 .monitor-panel-meta .monitor-clear-panels {

@@ -22,6 +22,7 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     onDeleteDashboard: () => undefined,
     onLayoutChange: () => undefined,
     onRemovePanel: () => undefined,
+    onUpdatePanelChart: () => undefined,
     onClearPanels: () => undefined,
     onResetLayout: () => undefined,
     onApplyWorkspace: () => undefined,
@@ -275,6 +276,20 @@ describe("MonitorPage", () => {
     fireEvent.doubleClick(screen.getAllByTitle(/双击最大化/)[0]!);
     fireEvent.click(screen.getByRole("button", { name: "移除 effort[0]" }));
     expect(onRemovePanel).toHaveBeenCalledWith(workspace.selectedDashboardId, panel.id);
+  });
+
+  it("allows changing each Panel chart type and its rendering option", async () => {
+    const user = userEvent.setup();
+    const onUpdatePanelChart = vi.fn();
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const panel = workspace.dashboards[0]!.panels[0]!;
+    const { rerender } = render(<MonitorPage workspace={workspace} {...baseProps({ jointStateTopic: "/js", onUpdatePanelChart })} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "effort[0] 图表类型" }), "bar");
+    expect(onUpdatePanelChart).toHaveBeenCalledWith(workspace.selectedDashboardId, panel.id, { type: "bar" });
+    const changed = { ...workspace, dashboards: [{ ...workspace.dashboards[0]!, panels: [{ ...panel, chart: { ...panel.chart, type: "bar" as const } }, ...workspace.dashboards[0]!.panels.slice(1)] }] };
+    rerender(<MonitorPage workspace={changed} {...baseProps({ jointStateTopic: "/js", onUpdatePanelChart })} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "effort[0] 条形方向" }), "horizontal");
+    expect(onUpdatePanelChart).toHaveBeenCalledWith(workspace.selectedDashboardId, panel.id, { barOrientation: "horizontal" });
   });
 
   it("does not call onLayoutChange while layout is locked", () => {
