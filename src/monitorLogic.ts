@@ -40,10 +40,16 @@ export type MonitorDashboardPersisted = {
   panels: MonitorPanelPersisted[];
 };
 
+export type MonitorCompactType = "vertical" | "horizontal" | null;
+
 export type MonitorWorkspacePersistedV2 = {
   version: 2;
   dashboards: MonitorDashboardPersisted[];
   selectedDashboardId: string;
+  /** When true, drag/resize is disabled. */
+  layoutLocked?: boolean;
+  /** react-grid-layout compactType; default vertical. */
+  compactType?: MonitorCompactType;
 };
 
 /** Legacy tab shape (pre-Dashboard rename). */
@@ -74,7 +80,11 @@ export type MonitorDashboard = {
 export type MonitorWorkspace = {
   dashboards: MonitorDashboard[];
   selectedDashboardId: string;
+  layoutLocked: boolean;
+  compactType: MonitorCompactType;
 };
+
+export const DEFAULT_MONITOR_COMPACT_TYPE: MonitorCompactType = "vertical";
 
 export function newDashboardId(): string {
   return `dashboard-${crypto.randomUUID()}`;
@@ -175,7 +185,12 @@ export function createEmptyPanel(name = "New Dashboard", id = newDashboardId()):
 
 export function createDefaultMonitorWorkspace(jointStateTopic: string): MonitorWorkspace {
   const dashboard = createTorqueDashboard(jointStateTopic);
-  return { dashboards: [dashboard], selectedDashboardId: dashboard.id };
+  return {
+    dashboards: [dashboard],
+    selectedDashboardId: dashboard.id,
+    layoutLocked: false,
+    compactType: DEFAULT_MONITOR_COMPACT_TYPE,
+  };
 }
 
 function persistPanel(panel: MonitorPanel): MonitorPanelPersisted {
@@ -201,6 +216,8 @@ export function persistMonitorWorkspace(workspace: MonitorWorkspace): MonitorWor
   return {
     version: MONITOR_STORAGE_VERSION,
     selectedDashboardId: workspace.selectedDashboardId,
+    layoutLocked: workspace.layoutLocked,
+    compactType: workspace.compactType,
     dashboards: workspace.dashboards.map((dashboard) => ({
       id: dashboard.id,
       name: dashboard.name,
@@ -312,7 +329,12 @@ export function hydrateMonitorWorkspace(
     const selectedDashboardId = dashboards.some((d) => d.id === saved.selectedDashboardId)
       ? saved.selectedDashboardId
       : dashboards[0]!.id;
-    return { dashboards, selectedDashboardId };
+    return {
+      dashboards,
+      selectedDashboardId,
+      layoutLocked: Boolean(saved.layoutLocked),
+      compactType: normalizeCompactType(saved.compactType),
+    };
   }
 
   if (isV1Persisted(saved)) {
@@ -321,7 +343,12 @@ export function hydrateMonitorWorkspace(
     const selectedDashboardId = dashboards.some((d) => d.id === saved.selectedPanelId)
       ? saved.selectedPanelId
       : dashboards[0]!.id;
-    return { dashboards, selectedDashboardId };
+    return {
+      dashboards,
+      selectedDashboardId,
+      layoutLocked: false,
+      compactType: DEFAULT_MONITOR_COMPACT_TYPE,
+    };
   }
 
   return createDefaultMonitorWorkspace(jointStateTopic);
@@ -368,6 +395,7 @@ export function addMonitorDashboard(
   dashboard: MonitorDashboard,
 ): MonitorWorkspace {
   return {
+    ...workspace,
     dashboards: [...workspace.dashboards, dashboard],
     selectedDashboardId: dashboard.id,
   };
@@ -419,7 +447,12 @@ export function deleteMonitorDashboard(
     workspace.selectedDashboardId === dashboardId
       ? remaining[0]!.id
       : workspace.selectedDashboardId;
-  return { dashboards: remaining, selectedDashboardId };
+  return {
+    dashboards: remaining,
+    selectedDashboardId,
+    layoutLocked: workspace.layoutLocked,
+    compactType: workspace.compactType,
+  };
 }
 
 /** @deprecated Use deleteMonitorDashboard */
@@ -611,6 +644,49 @@ export function panelHasSeries(
   fieldPath: string,
 ): boolean {
   return dashboardHasSeries(dashboard, topic, fieldPath);
+}
+
+export function normalizeCompactType(value: unknown): MonitorCompactType {
+  if (value === "vertical" || value === "horizontal" || value === null) return value;
+  return DEFAULT_MONITOR_COMPACT_TYPE;
+}
+
+export function setMonitorLayoutLocked(
+  workspace: MonitorWorkspace,
+  layoutLocked: boolean,
+): MonitorWorkspace {
+  if (workspace.layoutLocked === layoutLocked) return workspace;
+  return { ...workspace, layoutLocked };
+}
+
+export function setMonitorCompactType(
+  workspace: MonitorWorkspace,
+  compactType: MonitorCompactType,
+): MonitorWorkspace {
+  if (workspace.compactType === compactType) return workspace;
+  return { ...workspace, compactType };
+}
+
+/** Re-pack current panels into the default 12-col Motor Torque-style grid (keeps series). */
+export function resetDashboardPanelLayouts(
+  workspace: MonitorWorkspace,
+  dashboardId: string,
+): MonitorWorkspace {
+  return {
+    ...workspace,
+    dashboards: workspace.dashboards.map((dashboard) => {
+      if (dashboard.id !== dashboardId) return dashboard;
+      if (dashboard.panels.length === 0) return dashboard;
+      const layouts = packPanelLayouts(dashboard.panels.length, (index) => dashboard.panels[index]!.id);
+      return {
+        ...dashboard,
+        panels: dashboard.panels.map((panel, index) => ({
+          ...panel,
+          layout: layouts[index]!,
+        })),
+      };
+    }),
+  };
 }
 
 /** Validate Jetson bag path for SSH play (same charset rules as ROS setup script). */

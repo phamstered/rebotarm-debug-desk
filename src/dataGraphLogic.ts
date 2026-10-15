@@ -260,3 +260,42 @@ export function computePlotBounds(seriesList: DataSeries[], now: number, windowM
   const pad = (maxY - minY) * 0.08;
   return { minT, maxT, minY: minY - pad, maxY: maxY + pad };
 }
+
+/** Map a canvas x (CSS px within canvas) to a timestamp in [minT, maxT]. */
+export function timestampFromPlotX(
+  x: number,
+  plotLeft: number,
+  plotWidth: number,
+  minT: number,
+  maxT: number,
+): number {
+  if (plotWidth <= 0) return minT;
+  const ratio = Math.max(0, Math.min(1, (x - plotLeft) / plotWidth));
+  return minT + ratio * (maxT - minT);
+}
+
+/** Map a timestamp to canvas x within the plot. */
+export function plotXFromTimestamp(
+  t: number,
+  plotLeft: number,
+  plotWidth: number,
+  minT: number,
+  maxT: number,
+): number {
+  const span = Math.max(maxT - minT, 1);
+  return plotLeft + ((t - minT) / span) * plotWidth;
+}
+
+/** Nearest sample value at or before t (for crosshair readout). */
+export function nearestValueAtTime(points: DataPoint[], t: number): number | undefined {
+  if (points.length === 0) return undefined;
+  let best: DataPoint | undefined;
+  for (const point of points) {
+    if (point.t > t) break;
+    best = point;
+  }
+  return best?.value;
+}
+
+/** Chart padding used by DataGraph canvas drawing (keep in sync with DataGraph). */
+export const DATA_GRAPH_PAD = { left: 52, right: 14, top: 12, bottom: 28 } as const;
