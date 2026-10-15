@@ -109,7 +109,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ### 做什么
 
-在独立导航页用多面板查看数值时间序列：默认「Motor Torque」面板预置 JointState `effort[0..6]`；可从 Topics Inspector 加入字段。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。
+在独立导航页用多面板查看数值时间序列：默认「Motor Torque」面板以 7 张独立图显示 JointState `effort[0..6]`（共享时间窗）；可从 Topics Inspector 加入字段。同一套曲线支持**实时** Bridge 订阅，或在 Jetson 上 **rosbag play** 回放（经 Bridge 进入图表）。
 
 ### 怎么用
 

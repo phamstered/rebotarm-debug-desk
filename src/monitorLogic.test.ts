@@ -20,6 +20,7 @@ import {
   selectedMonitorPanel,
   updateMonitorFromMessage,
   updatePanelSeries,
+  isTorqueEffortGridPanel,
 } from "./monitorLogic";
 
 describe("monitorLogic torque template", () => {
@@ -172,5 +173,17 @@ describe("monitorLogic persistence and helpers", () => {
     expect(isSafeBagPath("bags/-bad")).toBe(false);
     expect(isSafeBagPath("/")).toBe(false);
     expect(isSafeBagPath("bags/./nested")).toBe(false);
+  });
+});
+
+describe("torque effort grid detection", () => {
+  it("detects the effort grid template", () => {
+    const panel = createTorquePanel("/stm32/joint_states", 7);
+    expect(isTorqueEffortGridPanel(panel)).toBe(true);
+    expect(isTorqueEffortGridPanel(createEmptyPanel())).toBe(false);
+    expect(isTorqueEffortGridPanel({
+      ...panel,
+      series: [...panel.series, createTorqueSeries("/other", 1)[0]!],
+    })).toBe(false);
   });
 });
