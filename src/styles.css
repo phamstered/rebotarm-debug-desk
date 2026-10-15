@@ -793,6 +793,9 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   .fit-results { grid-template-columns: repeat(3, 1fr); }
 }
 
+.deploy-progress { margin: 12px 0 0; padding: 10px 12px; border: 1px solid #2a4556; border-radius: 8px; background: #07141c; color: #9ec9d8; font-size: 11px; white-space: pre-wrap; max-height: 160px; overflow: auto; }
+.version-compare { display: grid; gap: 8px; color: #dcecf5; font-size: 13px; }
+.version-compare p { margin: 0; }
 .status-page { height: 100vh; min-width: 0; overflow: auto; color: #bdd0da; background: radial-gradient(circle at 72% 0%, rgba(36, 110, 118, .14), transparent 32%), #071019; }
 .status-page-header { position: sticky; z-index: 8; top: 0; height: 54px; display: flex; align-items: center; gap: 16px; padding: 0 22px; border-bottom: 1px solid var(--line); background: rgba(10, 23, 33, .96); backdrop-filter: blur(14px); }
 .status-page-header > div:first-child { display: flex; align-items: baseline; gap: 10px; }

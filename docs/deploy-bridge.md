@@ -15,10 +15,13 @@ npm run deploy:bridge -- --skip-sync --skip-build --restart
 ## 参数
 
 | 项 | 示例值 | 覆盖方式 |
-|---| SSH host | `jetson`（通用别名） | `--host` / `$BRIDGE_DEPLOY_HOST` |
+|---|---|---|
+| SSH host | `jetson`（通用别名） | `--host` / `$BRIDGE_DEPLOY_HOST` |
 | 远端工作区 | `easy_debug_bridge`（相对远端 `$HOME`；同步到 `src/easy_debug_bridge/`；可改为绝对路径） | `--remote` / `$BRIDGE_DEPLOY_REMOTE` |
 | ROS overlay | `leader_follower/install/setup.bash`（相对远端 `$HOME`） | `--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP` |
 | 端口 | `8765` | `--port` / `$BRIDGE_DEPLOY_PORT` |
+| SSH 端口 | ssh config / 22 | `--ssh-port` / `$BRIDGE_DEPLOY_SSH_PORT` |
+| 私钥 | （可选） | `--identity-file` / `$BRIDGE_DEPLOY_IDENTITY_FILE` |
 
 脚本内置默认值是通用值（见 `--help`），请按你的机器覆盖。本地 package 相对仓库根目录解析；远端相对路径以远端用户 `$HOME` 为基准。远端路径只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段；SSH host 拒绝空白、shell 元字符和以 `-` 开头的值。
 
@@ -57,3 +60,5 @@ colcon build --symlink-install --packages-select easy_debug_bridge
 `npm run test:deploy` 覆盖参数解析、rsync 参数、远端脚本与校验输出解析，**不要求**真实 Jetson。现场可达时再跑完整 deploy + `--restart`。
 
 桌面端日常拉起 Bridge 仍由连接流程中的 `start_session` 负责；本脚本负责让远端 **install 树**保持最新。
+
+版本不匹配时，桌面端「升级」按钮通过 Tauri `deploy_bridge` 调用本脚本（带 `--restart` 与当前 SSH Profile），不会烧录 STM32、不会同步 ros2-stack。Bridge 身份常量由 `npm run generate:bridge-build-id` 写入 `bridge_build_id.hpp` 与 `src/bridgeVersion.ts`；修改 Bridge 源码后请重新生成并提交。

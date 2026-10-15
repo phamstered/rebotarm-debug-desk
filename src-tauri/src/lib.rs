@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Duration};
 
@@ -858,6 +858,197 @@ async fn stop_tunnel(state: &State<'_, SessionState>) {
     }
 }
 
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeployBridgeResult {
+    ok: bool,
+    log: String,
+    message: String,
+}
+
+fn find_project_root() -> Result<PathBuf, String> {
+    if let Ok(root) = std::env::var("REBOTARM_DEBUG_DESK_ROOT") {
+        let path = PathBuf::from(root);
+        if looks_like_project_root(&path) {
+            return Ok(path);
+        }
+        return Err(format!(
+            "REBOTARM_DEBUG_DESK_ROOT 不是有效仓库根目录：{}",
+            path.display()
+        ));
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.to_path_buf());
+        }
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
+
+    for start in candidates {
+        let mut current = start;
+        for _ in 0..10 {
+            if looks_like_project_root(&current) {
+                return Ok(current
+                    .canonicalize()
+                    .unwrap_or(current));
+            }
+            if !current.pop() {
+                break;
+            }
+        }
+    }
+    Err(
+        "找不到仓库根目录（需含 scripts/deploy-bridge.mjs 与 bridge/easy_debug_bridge）。请在仓库内运行，或设置 REBOTARM_DEBUG_DESK_ROOT。"
+            .into(),
+    )
+}
+
+fn looks_like_project_root(path: &Path) -> bool {
+    path.join("scripts/deploy-bridge.mjs").is_file()
+        && path
+            .join("bridge/easy_debug_bridge/package.xml")
+            .is_file()
+}
+
+fn node_binary() -> String {
+    std::env::var("NODE_BINARY").unwrap_or_else(|_| "node".into())
+}
+
+fn deploy_bridge_args(profile: &ConnectionProfile) -> Result<Vec<String>, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    let host = ssh_target(profile);
+    if host.trim().is_empty() || host.starts_with('-') {
+        return Err("SSH 主机无效".into());
+    }
+    let mut args = vec![
+        "scripts/deploy-bridge.mjs".into(),
+        "--host".into(),
+        host,
+        "--port".into(),
+        profile.remote_port.to_string(),
+        "--ros-domain-id".into(),
+        profile.ros_domain_id.to_string(),
+        "--ros-setup".into(),
+        profile.ros_setup_script.clone(),
+        "--restart".into(),
+    ];
+    if profile.ssh_port != 0 {
+        args.push("--ssh-port".into());
+        args.push(profile.ssh_port.to_string());
+    }
+    if !profile.identity_file.trim().is_empty() {
+        let identity = profile.identity_file.trim();
+        if identity.starts_with('-')
+            || identity.chars().any(|c| " \t\n;|&$`'\\\"<>()".contains(c))
+        {
+            return Err("私钥路径包含不允许的字符".into());
+        }
+        args.push("--identity-file".into());
+        args.push(identity.to_string());
+    }
+    Ok(args)
+}
+
+#[tauri::command]
+async fn deploy_bridge(
+    app: AppHandle,
+    profile: ConnectionProfile,
+) -> Result<DeployBridgeResult, String> {
+    let root = find_project_root()?;
+    let args = deploy_bridge_args(&profile)?;
+    let script = root.join(&args[0]);
+    if !script.is_file() {
+        return Err(format!("找不到部署脚本：{}", script.display()));
+    }
+
+    let _ = app.emit(
+        "bridge-deploy-progress",
+        format!("开始升级 Bridge（host={}）…", ssh_target(&profile)),
+    );
+
+    let mut child = Command::new(node_binary())
+        .args(&args)
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "无法启动 node 部署脚本（确认 PATH 中有 node，或设置 NODE_BINARY）：{error}"
+            )
+        })?;
+
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let app_out = app.clone();
+    let out_task = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        if let Some(stdout) = stdout {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = app_out.emit("bridge-deploy-progress", line.clone());
+                lines.push(line);
+            }
+        }
+        lines
+    });
+    let app_err = app.clone();
+    let err_task = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        if let Some(stderr) = stderr {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = app_err.emit("bridge-deploy-progress", line.clone());
+                lines.push(line);
+            }
+        }
+        lines
+    });
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|error| format!("等待部署进程失败：{error}"))?;
+    let out_lines = out_task.await.unwrap_or_default();
+    let err_lines = err_task.await.unwrap_or_default();
+    let mut log = String::new();
+    if !out_lines.is_empty() {
+        log.push_str(&out_lines.join("\n"));
+    }
+    if !err_lines.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str(&err_lines.join("\n"));
+    }
+
+    if !status.success() {
+        let detail = if log.trim().is_empty() {
+            format!("exit {status}")
+        } else {
+            log.trim().to_string()
+        };
+        return Err(format!("Bridge 升级失败：{detail}"));
+    }
+
+    let _ = app.emit("bridge-deploy-progress", "Bridge 升级完成".to_string());
+    Ok(DeployBridgeResult {
+        ok: true,
+        log,
+        message: "Bridge 已同步、编译并重启".into(),
+    })
+}
+
 #[tauri::command]
 async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
     stop_tunnel(&state).await;
@@ -884,7 +1075,8 @@ pub fn run() {
             start_rosbag_playback,
             stop_rosbag_playback,
             start_session,
-            stop_session
+            stop_session,
+            deploy_bridge
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Robot Console");
@@ -1151,5 +1343,31 @@ mod tests {
         .unwrap();
         assert_eq!(probes, vec![18765, 0]);
         assert_eq!(fallback, 23456);
+    }
+
+    #[test]
+    fn builds_deploy_bridge_args_from_connection_profile() {
+        let mut p = profile("robot");
+        p.ssh_port = 2222;
+        p.identity_file = "/tmp/id_ed25519".into();
+        p.remote_port = 8765;
+        p.ros_domain_id = 3;
+        let args = deploy_bridge_args(&p).unwrap();
+        assert!(args.windows(2).any(|w| w == ["--host", "robot@jetson"]));
+        assert!(args.windows(2).any(|w| w == ["--ssh-port", "2222"]));
+        assert!(args.windows(2).any(|w| w == ["--identity-file", "/tmp/id_ed25519"]));
+        assert!(args.windows(2).any(|w| w == ["--ros-domain-id", "3"]));
+        assert!(args.iter().any(|a| a == "--restart"));
+        assert!(deploy_bridge_args(&profile("")).is_ok());
+        let mut bad = profile("");
+        bad.identity_file = "bad;rm".into();
+        assert!(deploy_bridge_args(&bad).is_err());
+    }
+
+    #[test]
+    fn finds_repo_project_root_from_cargo_manifest() {
+        let root = find_project_root().expect("project root");
+        assert!(root.join("scripts/deploy-bridge.mjs").is_file());
+        assert!(root.join("bridge/easy_debug_bridge/package.xml").is_file());
     }
 }

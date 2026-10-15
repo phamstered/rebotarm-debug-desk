@@ -27,15 +27,25 @@ describe("BridgeClient", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
 
-  it("connects to the forwarded port and sends hello", async () => {
+  it("connects to the forwarded port, sends hello, and returns remote identity", async () => {
     const bridge = new BridgeClient();
     const connected = bridge.connect({ ...defaultProfile, localPort: 19001 });
     const socket = FakeWebSocket.instances[0];
     expect(socket.url).toBe("ws://127.0.0.1:19001");
     socket.open();
-    await connected;
-    expect(socket.binaryType).toBe("arraybuffer");
     expect(JSON.parse(socket.sent[0])).toEqual({ op: "hello" });
+    socket.message({
+      op: "hello",
+      bridge_version: "0.1.0",
+      bridge_build_id: "abc1234def56",
+      ros_distro: "humble",
+    });
+    await expect(connected).resolves.toEqual({
+      bridge_version: "0.1.0",
+      bridge_build_id: "abc1234def56",
+      ros_distro: "humble",
+    });
+    expect(socket.binaryType).toBe("arraybuffer");
   });
 
   it("decodes a binary image envelope without Base64 copying", async () => {
@@ -61,6 +71,7 @@ describe("BridgeClient", () => {
     const connected = bridge.connect(defaultProfile);
     const socket = FakeWebSocket.instances[0];
     socket.open();
+    socket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
     await connected;
     const listed = bridge.listTopics();
     const request = JSON.parse(socket.sent.at(-1)!);
@@ -75,6 +86,7 @@ describe("BridgeClient", () => {
     const connected = bridge.connect(defaultProfile);
     const socket = FakeWebSocket.instances[0];
     socket.open();
+    socket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
     await connected;
     const graph = bridge.getGraph();
     const request = JSON.parse(socket.sent.at(-1)!);
@@ -96,6 +108,7 @@ describe("BridgeClient", () => {
     const connected = bridge.connect(defaultProfile);
     const socket = FakeWebSocket.instances[0];
     socket.open();
+    socket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
     await connected;
     const topicDetails = bridge.getTopicInfo("/stm32/joint_commands");
     const topicRequest = JSON.parse(socket.sent.at(-1)!);
@@ -115,6 +128,7 @@ describe("BridgeClient", () => {
     const connected = bridge.connect(defaultProfile);
     const socket = FakeWebSocket.instances[0];
     socket.open();
+    socket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
     await connected;
     const listener = vi.fn();
     bridge.onMessage(listener);
@@ -135,6 +149,7 @@ describe("BridgeClient", () => {
       const connected = bridge.connect(defaultProfile);
       const socket = FakeWebSocket.instances[0];
       socket.open();
+      socket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
       await connected;
       const pending = bridge.request({ op: "resource", uri: "package://robot/large.stl" }, 30_000);
       const request = JSON.parse(socket.sent.at(-1)!);
@@ -151,6 +166,7 @@ describe("BridgeClient", () => {
     const firstConnection = bridge.connect(defaultProfile);
     const firstSocket = FakeWebSocket.instances[0];
     firstSocket.open();
+    firstSocket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
     await firstConnection;
     const listener = vi.fn();
     bridge.onMessage(listener);
@@ -162,6 +178,7 @@ describe("BridgeClient", () => {
     const secondConnection = bridge.connect(defaultProfile);
     const secondSocket = FakeWebSocket.instances[1];
     secondSocket.open();
+    secondSocket.message({ op: "hello", bridge_version: "0.1.0", bridge_build_id: "testbuild0001", ros_distro: "humble" });
     await secondConnection;
     firstSocket.message({ op: "topic_message", topic: "/old", data: 1 });
     secondSocket.message({ op: "topic_message", topic: "/new", data: 2 });

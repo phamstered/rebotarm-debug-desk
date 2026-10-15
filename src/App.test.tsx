@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
   save: vi.fn(),
-  connect: vi.fn().mockResolvedValue(undefined),
+  connect: vi.fn().mockResolvedValue({
+    bridge_version: "0.1.0",
+    bridge_build_id: "8a023e7a0bad",
+    ros_distro: "humble",
+  }),
   listTopics: vi.fn().mockResolvedValue([
     { name: "/robot_description", types: ["std_msgs/msg/String"] },
     { name: "/stm32/status", types: ["microros_stm32h723_bridge/msg/HardwareStatus"] },
@@ -27,6 +31,7 @@ const doubles = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: doubles.save }));
 vi.mock("./bridge", () => ({
   BridgeClient: class {
@@ -136,6 +141,77 @@ describe("App workflow", () => {
     expect(doubles.send).toHaveBeenCalledWith({ op: "subscribe", topic: "/stm32/joint_states", type: "sensor_msgs/msg/JointState" });
   });
 
+
+  it("prompts to upgrade when Bridge build id mismatches", async () => {
+    doubles.connect.mockResolvedValueOnce({
+      bridge_version: "0.1.0",
+      bridge_build_id: "deadbeef0001",
+      ros_distro: "humble",
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const dialog = await screen.findByRole("dialog", { name: "Bridge 版本不匹配" });
+    expect(dialog).toHaveTextContent("deadbeef0001");
+    expect(within(dialog).getByRole("button", { name: "升级" })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "跳过" })).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "跳过" }));
+    expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
+    expect(screen.getByText(/已跳过 Bridge 升级/)).toBeVisible();
+  });
+
+  it("runs deploy_bridge when upgrade is confirmed", async () => {
+    doubles.connect
+      .mockResolvedValueOnce({
+        bridge_version: "0.1.0",
+        bridge_build_id: "oldbuild00001",
+        ros_distro: "humble",
+      })
+      .mockResolvedValueOnce({
+        bridge_version: "0.1.0",
+        bridge_build_id: "8a023e7a0bad",
+        ros_distro: "humble",
+      });
+    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
+      if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "check_micro_ros_agent") return Promise.resolve({
+        loadState: "loaded", activeState: "active", subState: "running", result: "success",
+        mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
+      });
+      if (command === "check_ros_controllers") return Promise.resolve({
+        manager: "/controller_manager", available: true, controllers: [], message: "",
+      });
+      if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
+      if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
+      if (command === "start_session") return Promise.resolve(19001);
+      if (command === "deploy_bridge") return Promise.resolve({ ok: true, message: "Bridge 已同步、编译并重启", log: "[done]" });
+      if (command === "stop_session") return Promise.resolve(undefined);
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const dialog = await screen.findByRole("dialog", { name: "Bridge 版本不匹配" });
+    await user.click(within(dialog).getByRole("button", { name: "升级" }));
+    await waitFor(() => {
+      expect(doubles.invoke).toHaveBeenCalledWith("deploy_bridge", expect.objectContaining({ profile: expect.any(Object) }));
+    });
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
+    expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
+  });
+
+  it("warns without forcing upgrade when hello lacks build id", async () => {
+    doubles.connect.mockResolvedValueOnce({
+      bridge_version: "0.1.0",
+      ros_distro: "humble",
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("toolbar", { name: "应用工具栏" });
+    expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
+    expect(screen.getByText(/无法确认版本/)).toBeVisible();
+  });
   it("clears all previous connection data before reconnecting", async () => {
     const user = userEvent.setup();
     render(<App />);

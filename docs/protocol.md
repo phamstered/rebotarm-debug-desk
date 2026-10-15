@@ -10,6 +10,14 @@ Messages are UTF-8 JSON WebSocket text frames.
 {"op":"hello"}
 ```
 
+Hello response (sent immediately after the request):
+
+```json
+{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"8a023e7a0bad","ros_distro":"humble"}
+```
+
+`bridge_version` comes from `bridge/easy_debug_bridge/package.xml`. `bridge_build_id` is a short content hash of the Bridge package sources (generated into `bridge_build_id.hpp` / `src/bridgeVersion.ts` by `npm run generate:bridge-build-id`). Older Bridges may omit `bridge_build_id`.
+
 ```json
 {"op":"topics","request_id":"uuid"}
 ```

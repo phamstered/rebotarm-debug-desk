@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   applyRecentHostToProfile,
+  checkBridgeVersion,
   connectStepStatus,
   defaultPanelState,
   defaultSidebarState,
   deriveConnectStatusLights,
   domainMismatchHint,
+  formatBridgeVersionLabel,
   formatConnectError,
   isAgentOnline,
   isRosReady,
@@ -131,5 +133,35 @@ describe("connect status helpers", () => {
     rememberLastKnownDomainId(7, storage);
     expect(loadLastKnownDomainId(storage)).toBe(7);
     expect(domainMismatchHint(0, 7)).toContain("上次成功为 7");
+  });
+});
+
+describe("bridge version check", () => {
+  const expected = { version: "0.1.0", buildId: "abc1234def56" };
+
+  it("matches identical version and build id", () => {
+    expect(
+      checkBridgeVersion(
+        { bridge_version: "0.1.0", bridge_build_id: "abc1234def56", ros_distro: "humble" },
+        expected,
+      ),
+    ).toMatchObject({ status: "match" });
+  });
+
+  it("reports mismatch when build id differs", () => {
+    const result = checkBridgeVersion(
+      { bridge_version: "0.1.0", bridge_build_id: "ffffffffffffffff", ros_distro: "humble" },
+      expected,
+    );
+    expect(result.status).toBe("mismatch");
+    if (result.status === "mismatch") {
+      expect(formatBridgeVersionLabel(result.remote)).toContain("ffffffffffffffff");
+      expect(formatBridgeVersionLabel(result.local)).toContain("abc1234def56");
+    }
+  });
+
+  it("warns without forcing upgrade when build id is missing", () => {
+    const result = checkBridgeVersion({ bridge_version: "0.1.0", ros_distro: "humble" }, expected);
+    expect(result).toMatchObject({ status: "unknown", reason: "missing_build_id", message: "无法确认版本" });
   });
 });
