@@ -233,29 +233,14 @@ export function DataGraph({
 
   return (
     <div className={`data-graph-view${compact ? " compact" : ""}`}>
-      <div className="graph-toolbar data-graph-toolbar">
+      {!compact && <div className="graph-toolbar data-graph-toolbar">
         <span>
-          {compact
-            ? `${heading}${followLabel}`
-            : seriesList.length === 0
-              ? "从 Inspector 添加数值字段 · 默认窗口 30s"
-              : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${followLabel}`}
+          {seriesList.length === 0
+            ? "从 Inspector 添加数值字段 · 默认窗口 30s"
+            : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${followLabel}`}
         </span>
-        {compact ? (
-          seriesList[0] ? (
-            <button
-              type="button"
-              className="data-graph-remove"
-              onClick={() => onRemoveSeries(seriesList[0]!.id)}
-              aria-label={`移除 ${seriesList[0]!.fieldPath}`}
-            >
-              ×
-            </button>
-          ) : null
-        ) : (
-          <button type="button" onClick={onClearSeries} disabled={seriesList.length === 0}>清空曲线</button>
-        )}
-      </div>
+        <button type="button" onClick={onClearSeries} disabled={seriesList.length === 0}>清空曲线</button>
+      </div>}
       <div className="data-graph-body">
         <div className="data-graph-canvas-wrap">
           {seriesList.length === 0 && (

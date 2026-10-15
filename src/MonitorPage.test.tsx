@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MonitorPage } from "./MonitorPage";
@@ -149,7 +149,7 @@ describe("MonitorPage", () => {
     expect(onSelectDashboard).toHaveBeenCalledWith(torqueId);
   });
 
-  it("removes panels through DataGraph and stops bag playback", async () => {
+  it("removes panels from their header and stops bag playback", async () => {
     const user = userEvent.setup();
     const onRemovePanel = vi.fn();
     const onClearPanels = vi.fn();
@@ -173,6 +173,8 @@ describe("MonitorPage", () => {
     );
 
     expect(screen.getAllByText(/已暂停/).length).toBeGreaterThan(0);
+    const firstPanel = document.querySelector<HTMLElement>(`[data-panel-id="${workspace.dashboards[0]!.panels[0]!.id}"]`)!;
+    expect(within(firstPanel).getAllByText("effort[0]")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "移除 effort[0]" }));
     expect(onRemovePanel).toHaveBeenCalledWith(
       workspace.selectedDashboardId,
@@ -262,6 +264,17 @@ describe("MonitorPage", () => {
     await user.click(screen.getByRole("button", { name: "恢复网格" }));
     expect(screen.getByLabelText("effort[6] 曲线")).toBeVisible();
     expect(screen.queryByText(/最大化 ·/)).not.toBeInTheDocument();
+  });
+
+  it("keeps remove available in a maximized Panel", async () => {
+    const onRemovePanel = vi.fn();
+    const workspace = createDefaultMonitorWorkspace("/js");
+    const panel = workspace.dashboards[0]!.panels[0]!;
+    render(<MonitorPage workspace={workspace} {...baseProps({ jointStateTopic: "/js", onRemovePanel })} />);
+
+    fireEvent.doubleClick(screen.getAllByTitle(/双击最大化/)[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "移除 effort[0]" }));
+    expect(onRemovePanel).toHaveBeenCalledWith(workspace.selectedDashboardId, panel.id);
   });
 
   it("does not call onLayoutChange while layout is locked", () => {
