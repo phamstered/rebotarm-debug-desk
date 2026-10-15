@@ -112,6 +112,31 @@ describe("TopicGraph", () => {
     expect(container.querySelectorAll(".graph-flow-particle")).not.toHaveLength(0);
   });
 
+  it("keeps the selected node and the user's canvas pan without snapping back", async () => {
+    const { container } = render(<TopicGraph bridge={bridgeDouble()} onSelectTopic={vi.fn()} />);
+    const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
+    fireEvent.click(topic);
+    expect(topic).toHaveClass("selected");
+    const svg = container.querySelector("svg.graph-canvas")!;
+    const cameraGroup = svg.querySelector(":scope > g")!;
+    const before = cameraGroup.getAttribute("transform");
+
+    fireEvent.pointerDown(svg, { button: 0, clientX: 200, clientY: 180, pointerId: 3 });
+    fireEvent.pointerMove(svg, { button: 0, clientX: 290, clientY: 220, pointerId: 3 });
+    const panned = cameraGroup.getAttribute("transform");
+    expect(panned).not.toBe(before);
+    fireEvent.pointerUp(svg, { button: 0, clientX: 290, clientY: 220, pointerId: 3 });
+    expect(cameraGroup.getAttribute("transform")).toBe(panned);
+    expect(topic).toHaveClass("selected");
+  });
+
+  it("renders the original Topic path in the node label", async () => {
+    const { container } = render(<TopicGraph bridge={bridgeDouble()} onSelectTopic={vi.fn()} />);
+    const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
+    expect(Array.from(topic.querySelectorAll("tspan"), (line) => line.textContent).join("")).toBe("/joint_states");
+    expect(container.querySelector(".graph-node.topic title")?.textContent).toBe("Topic: /joint_states");
+  });
+
   it("exposes zoom controls and fits the camera", async () => {
     const bridge = bridgeDouble();
     const user = userEvent.setup();
