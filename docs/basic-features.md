@@ -23,10 +23,13 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 连接后可从全局工具栏重新打开连接配置；保存不会中断当前 SSH/Bridge 会话，新值在下次重连时生效。
 - 默认 Profile：SSH 主机 `jetson`，ROS 环境脚本 `leader_follower/install/setup.bash`（相对远端 `$HOME`）。ROS 环境脚本路径同样拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。
 - 自动迁移旧配置：旧 ROS setup 路径和 `/joint_states` 会迁移到当前默认值 `/stm32/joint_states`。
-- 依次执行 SSH 检查、micro-ROS Agent 状态检查、Jetson Bridge 启动、SSH 本地端口转发和 WebSocket 连接。
+- 依次执行 SSH 检查、SSH 本地端口转发（会话）、WebSocket Bridge 连接，再确认 micro-ROS Agent；首页用步骤高亮与四段状态灯（SSH / Bridge / Agent / HardwareStatus）标出卡点。
+- 连接失败展示可读中文原因与「复制错误」；成功 SSH 主机记入最近主机快捷回填。
+- `ROS_DOMAIN_ID` 偏离默认或上次成功值时，状态条提示域名不匹配风险。
+- Bridge 订阅默认 JointState Topic 后，收到首帧即视为 ROS 就绪（冒烟）；HardwareStatus 首帧点亮对应状态灯。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。
-- 断开连接时关闭 WebSocket、SSH 隧道；电机命令流运行时先请求 DISABLE。
-- 断开和重新连接时清空上一会话的 Topic 列表与采样、选中项、URDF、JointState、硬件/Agent/Controller 状态、错误及操作反馈；保留连接配置、面板布局等用户偏好。
+- 断开连接时关闭 WebSocket、SSH 隧道；电机命令流运行时先请求 DISABLE。断开按钮保持明显；无自动重连。
+- 断开和重新连接时清空上一会话的 Topic 列表与采样、选中项、URDF、JointState、硬件/Agent/Controller 状态、错误及操作反馈；保留连接配置、最近主机、面板布局等用户偏好。
 - Bridge 关闭时拒绝上一会话尚未完成的请求，并忽略旧 WebSocket 延迟到达的数据帧，避免污染新会话。
 - Jetson Bridge 仅监听 `127.0.0.1`，通过 SSH 隧道访问。
 
@@ -44,7 +47,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
 - 页面导航只保留在左侧 Navigation，包含 Topics、Monitor、Motor 和 Calibration；Robot View / Topic Graph 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
-- 顶部工具栏提供连接配置、全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照、重置布局和应用设置；右侧保留连接名、隧道端口、micro-ROS Agent 状态和断开按钮。
+- 顶部工具栏提供连接配置、全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照、重置布局和应用设置；右侧保留压缩连接状态灯（含 ROS 就绪 / Domain 提示）、连接名、隧道端口、micro-ROS Agent 状态和醒目断开按钮。
 - Topics 页的 Topics、ROS Control、Inspector 三个区域可独立展开/收起；左右侧栏也可整列最小化并恢复，状态保存在本机。Topics 与 ROS Control 会自动使用另一面板释放出的高度。
 - Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。Topic 名称与类型悬停显示全称。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态，每 30 秒只读刷新。
@@ -156,7 +159,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | 面板 | 默认/持久化状态、三个内容面板与左右侧栏收起、宽高分隔条和尺寸边界 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx` |
 | 工具栏 | 导航职责分离、中心局部 Tab（Robot View / Topic Graph）、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
-| 连接流程 | SSH→Agent→隧道→Bridge、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/bridge.test.ts` |
+| 连接流程 | SSH→会话→Bridge→Agent、状态灯/步骤/可读错误/最近主机、JointState 冒烟、实际端口、基础订阅、重连会话数据清理 | `src/App.test.tsx`、`src/appLogic.test.ts`、`src/bridge.test.ts` |
 | Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |

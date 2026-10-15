@@ -32,8 +32,27 @@ import type { MonitorWorkspace } from "./monitorLogic";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
-import { defaultPanelState, defaultSidebarState, loadPanelState, loadProfile, loadSidebarState, nextTopicSample } from "./appLogic";
-import type { CollapsiblePanel, PanelState, TopicSample } from "./appLogic";
+import {
+  applyRecentHostToProfile,
+  CONNECT_STEPS,
+  connectStepStatus,
+  defaultPanelState,
+  defaultSidebarState,
+  deriveConnectStatusLights,
+  domainMismatchHint,
+  formatConnectError,
+  isAgentOnline,
+  isRosReady,
+  loadLastKnownDomainId,
+  loadPanelState,
+  loadProfile,
+  loadRecentHosts,
+  loadSidebarState,
+  nextTopicSample,
+  rememberLastKnownDomainId,
+  rememberSuccessfulHost,
+} from "./appLogic";
+import type { CollapsiblePanel, ConnectStepId, PanelState, RecentHost, TopicSample } from "./appLogic";
 import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
 import type { LayoutSizes } from "./layoutLogic";
 import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
@@ -46,11 +65,72 @@ type CenterTab = "robot" | "graph";
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
   ssh: "检查 SSH",
-  tunnel: "建立隧道",
+  tunnel: "建立会话",
   bridge: "连接 Bridge",
   connected: "已连接",
   failed: "连接失败",
 };
+
+const STATUS_LIGHT_LABELS = {
+  ssh: "SSH",
+  bridge: "Bridge",
+  agent: "Agent",
+  hardware: "HardwareStatus",
+} as const;
+
+function ConnectStatusStrip({
+  lights,
+  domainHint,
+  rosReady,
+  compact = false,
+}: {
+  lights: ReturnType<typeof deriveConnectStatusLights>;
+  domainHint: string;
+  rosReady?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`connect-status-strip ${compact ? "compact" : ""}`} role="group" aria-label="连接状态灯">
+      {(Object.keys(STATUS_LIGHT_LABELS) as Array<keyof typeof STATUS_LIGHT_LABELS>).map((key) => (
+        <span key={key} className={`status-light ${lights[key]}`} title={`${STATUS_LIGHT_LABELS[key]}：${lights[key]}`}>
+          <i aria-hidden="true" />
+          <span>{STATUS_LIGHT_LABELS[key]}{lights[key] === "ok" ? " OK" : lights[key] === "fail" ? " 失败" : lights[key] === "warn" ? " 异常" : lights[key] === "pending" ? "…" : ""}</span>
+        </span>
+      ))}
+      {typeof rosReady === "boolean" && (
+        <span className={`status-light ${rosReady ? "ok" : "pending"}`} title={rosReady ? "JointState 已收到，ROS 就绪" : "等待 JointState"}>
+          <i aria-hidden="true" />
+          <span>{rosReady ? "ROS 就绪" : "等待 JointState"}</span>
+        </span>
+      )}
+      {domainHint && <span className="domain-hint" title={domainHint}>⚠ {domainHint}</span>}
+    </div>
+  );
+}
+
+function ConnectStepProgress({
+  stage,
+  failedStep,
+  agentChecked,
+}: {
+  stage: Stage;
+  failedStep: ConnectStepId | null;
+  agentChecked: boolean;
+}) {
+  return (
+    <ol className="connect-step-progress" aria-label="连接步骤">
+      {CONNECT_STEPS.map((step, index) => {
+        const status = connectStepStatus(step.id, stage, failedStep, agentChecked);
+        return (
+          <li key={step.id} className={`connect-step ${status}`} aria-current={status === "current" ? "step" : undefined}>
+            <span className="connect-step-index">{index + 1}</span>
+            <span className="connect-step-label">{step.label}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 function PanelTitle({
   title,
@@ -184,7 +264,14 @@ export default function App() {
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
   const [stage, setStage] = useState<Stage>("idle");
+  const [failedStep, setFailedStep] = useState<ConnectStepId | null>(null);
+  const [sshOk, setSshOk] = useState(false);
+  const [bridgeUp, setBridgeUp] = useState(false);
+  const [agentChecked, setAgentChecked] = useState(false);
   const [error, setError] = useState("");
+  const [errorCopied, setErrorCopied] = useState(false);
+  const [recentHosts, setRecentHosts] = useState<RecentHost[]>(() => loadRecentHosts());
+  const [lastKnownDomainId, setLastKnownDomainId] = useState<number | null>(() => loadLastKnownDomainId());
   const [topics, setTopics] = useState<TopicInfo[]>([]);
   const [topicFilter, setTopicFilter] = useState("");
   const [selected, setSelected] = useState<string>("");
@@ -471,7 +558,12 @@ export default function App() {
           setHardwareStatus(message.data as HardwareStatus);
         }
       }
-      if (message.op === "disconnected") setStage("failed");
+      if (message.op === "disconnected") {
+        setFailedStep("bridge");
+        setBridgeUp(false);
+        setError(formatConnectError("Bridge WebSocket 已断开", "bridge"));
+        setStage("failed");
+      }
     });
   }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic]);
 
@@ -484,11 +576,13 @@ export default function App() {
         if (!disposed) {
           setAgentStatus(status);
           setAgentError("");
+          setAgentChecked(true);
         }
       } catch (reason) {
         if (!disposed) {
           setAgentStatus(null);
           setAgentError(reason instanceof Error ? reason.message : String(reason));
+          setAgentChecked(true);
         }
       }
     };
@@ -517,6 +611,11 @@ export default function App() {
     connectionGenerationRef.current += 1;
     topicRefreshInFlightRef.current = false;
     rosControlRefreshInFlightRef.current = false;
+    setSshOk(false);
+    setBridgeUp(false);
+    setAgentChecked(false);
+    setFailedStep(null);
+    setErrorCopied(false);
     setTopics([]);
     setTopicFilter("");
     setSelected("");
@@ -553,28 +652,44 @@ export default function App() {
     clearConnectionData();
     setError("");
     localStorage.setItem("easy-debug-profile", JSON.stringify(profile));
+    let activeStep: ConnectStepId = "ssh";
     try {
       setStage("ssh");
+      activeStep = "ssh";
       await invoke("check_ssh", { profile });
-      try {
-        setAgentStatus(await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile }));
-        setAgentError("");
-      } catch (reason) {
-        setAgentStatus(null);
-        setAgentError(reason instanceof Error ? reason.message : String(reason));
-      }
+      setSshOk(true);
+      setRecentHosts(rememberSuccessfulHost(profile));
+
       setStage("tunnel");
+      activeStep = "session";
       const localPort = await invoke<number>("start_session", { profile });
       setEffectiveLocalPort(localPort);
+
       setStage("bridge");
+      activeStep = "bridge";
       await bridge.connect({ ...profile, localPort });
+      setBridgeUp(true);
       const discovered = await bridge.listTopics();
       setTopics(discovered);
       setTopicRefreshError("");
       bridge.send({ op: "subscribe", topic: profile.urdfTopic, type: "std_msgs/msg/String" });
       bridge.send({ op: "subscribe", topic: profile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
       bridge.send({ op: "subscribe", topic: profile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
+
       setStage("connected");
+      activeStep = "agent";
+      try {
+        setAgentStatus(await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile }));
+        setAgentError("");
+      } catch (reason) {
+        setAgentStatus(null);
+        setAgentError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        setAgentChecked(true);
+      }
+      rememberLastKnownDomainId(profile.rosDomainId);
+      setLastKnownDomainId(profile.rosDomainId);
+
       void invoke<RosbagStatus>("get_rosbag_status", { profile })
         .then(setRosbagStatus)
         .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`));
@@ -582,9 +697,26 @@ export default function App() {
         .then(setRosbagPlayStatus)
         .catch(() => undefined);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      const raw = reason instanceof Error ? reason.message : String(reason);
+      setFailedStep(activeStep);
+      setError(formatConnectError(raw, activeStep));
       setStage("failed");
       await invoke("stop_session").catch(() => undefined);
+    }
+  }
+
+  function pickRecentHost(host: RecentHost) {
+    setProfile((current) => applyRecentHostToProfile(current, host));
+  }
+
+  async function copyConnectError() {
+    if (!error) return;
+    try {
+      await navigator.clipboard.writeText(error);
+      setErrorCopied(true);
+      window.setTimeout(() => setErrorCopied(false), 1600);
+    } catch {
+      setErrorCopied(false);
     }
   }
 
@@ -748,17 +880,59 @@ export default function App() {
     }
   }
 
+  const statusLights = deriveConnectStatusLights({
+    stage,
+    failedStep,
+    sshOk,
+    bridgeUp: bridgeUp || stage === "connected",
+    agentOnline: isAgentOnline(agentStatus),
+    agentChecked,
+    agentError,
+    hardwareReceived: Boolean(hardwareStatus),
+  });
+  const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId);
+  const rosReady = isRosReady(jointState);
+
   if (stage !== "connected") {
     return (
       <main className="connect-shell">
         <section className="connect-card">
           <div className="brand"><img className="brand-mark" src={robotConsoleIcon} alt="" /><div><h1>Robot Console</h1><p>ROS 2 机器人调试工作台</p></div></div>
+          {recentHosts.length > 0 && (
+            <div className="recent-hosts" aria-label="最近主机">
+              <span className="recent-hosts-label">最近主机</span>
+              <div className="recent-hosts-list">
+                {recentHosts.map((host) => (
+                  <button
+                    key={`${host.host}:${host.sshPort}:${host.username}`}
+                    type="button"
+                    className="recent-host-chip"
+                    title={`${host.host}${host.username ? ` · ${host.username}` : ""} · 端口 ${host.sshPort}`}
+                    onClick={() => pickRecentHost(host)}
+                  >
+                    {host.host}{host.username ? `@${host.username}` : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <ProfileForm profile={profile} onChange={setProfile} />
+          {(stage !== "idle" || error) && (
+            <ConnectStepProgress stage={stage} failedStep={failedStep} agentChecked={agentChecked} />
+          )}
+          <ConnectStatusStrip lights={statusLights} domainHint={domainHint} />
           <div className="connect-actions">
             <span className={`status ${stage}`}>{stageNames[stage]}</span>
             <button onClick={connect} disabled={["ssh", "tunnel", "bridge"].includes(stage)}>连接 Jetson</button>
           </div>
-          {error && <pre className="error-box">{error}</pre>}
+          {error && (
+            <div className="error-panel">
+              <pre className="error-box">{error}</pre>
+              <button type="button" className="copy-error" onClick={() => void copyConnectError()}>
+                {errorCopied ? "已复制" : "复制错误"}
+              </button>
+            </div>
+          )}
         </section>
       </main>
     );
@@ -855,15 +1029,21 @@ export default function App() {
         </div>
         {toolbarNotice && <output className="toolbar-notice" title={toolbarNotice}>{toolbarNotice}</output>}
         <span className="toolbar-spacer" />
+        <ConnectStatusStrip
+          lights={statusLights}
+          domainHint={domainHint}
+          rosReady={rosReady}
+          compact
+        />
         <span className="connected-dot" />{profile.name}
         <span className="tunnel-port" title="SSH 本地转发端口">localhost:{effectiveLocalPort ?? profile.localPort}</span>
         <span
-          className={`agent-badge ${agentStatus?.activeState === "active" && agentStatus?.subState === "running" ? "running" : agentError ? "unknown" : "stopped"}`}
+          className={`agent-badge ${isAgentOnline(agentStatus) ? "running" : agentError ? "unknown" : "stopped"}`}
           title={agentError || (agentStatus ? `${agentStatus.description}\n${agentStatus.activeState}/${agentStatus.subState}\nPID ${agentStatus.mainPid}\n开机状态：${agentStatus.unitFileState}` : "正在检查 systemd 状态")}
         >
-          <span /> micro-ROS Agent：{agentStatus?.activeState === "active" && agentStatus?.subState === "running" ? "运行中" : agentError ? "检查失败" : agentStatus ? "未运行" : "检查中"}
+          <span /> micro-ROS Agent：{isAgentOnline(agentStatus) ? "运行中" : agentError ? "检查失败" : agentStatus ? "未运行" : "检查中"}
         </span>
-        <button className="ghost" onClick={disconnect}>断开</button>
+        <button className="ghost disconnect-btn" onClick={disconnect} title="断开 SSH 隧道与 Bridge">断开</button>
       </header>
       <aside
         ref={topicSidebarRef}
