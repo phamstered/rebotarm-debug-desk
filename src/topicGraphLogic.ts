@@ -60,8 +60,8 @@ export function controllerGraphFocus(graph: RosGraph, controllerName: string): {
 
 export function layoutRosGraph(graph: RosGraph, viewport: { width: number; height: number } = { width: 1200, height: 560 }): GraphLayout {
   const nodeCount = graph.nodes.length;
-  const width = Math.max(680, Math.round(viewport.width), Math.ceil(Math.sqrt(nodeCount) * 142));
-  const height = Math.max(560, Math.round(viewport.height), Math.ceil(Math.sqrt(nodeCount) * 108));
+  const width = Math.max(680, Math.round(viewport.width), Math.ceil(Math.sqrt(nodeCount) * 158));
+  const height = Math.max(560, Math.round(viewport.height), Math.ceil(Math.sqrt(nodeCount) * 120));
   const neighbors = new Map(graph.nodes.map((node) => [node.id, new Set<string>()]));
   graph.edges.forEach(({ source, target }) => {
     neighbors.get(source)?.add(target);
@@ -71,9 +71,9 @@ export function layoutRosGraph(graph: RosGraph, viewport: { width: number; heigh
     (neighbors.get(b.id)?.size ?? 0) - (neighbors.get(a.id)?.size ?? 0) || a.id.localeCompare(b.id));
   const positioned: PositionedGraphNode[] = sorted.map((node, index) => {
     const degree = neighbors.get(node.id)?.size ?? 0;
-    const radius = Math.min(42, (node.kind === "node" ? 20 : 16) + Math.sqrt(degree) * 4.5);
+    const radius = Math.min(58, (node.kind === "node" ? 28 : 22) + Math.sqrt(degree) * 5.5);
     const angle = index * 2.399963229728653;
-    const distance = Math.sqrt(index) * 48;
+    const distance = Math.sqrt(index) * 56;
     return {
       ...node,
       x: width / 2 + Math.cos(angle) * distance,
