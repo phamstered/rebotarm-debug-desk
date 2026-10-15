@@ -9,6 +9,7 @@ import {
   fitCameraToNodes,
   flowParticlesForEdge,
   graphEdgeKey,
+  graphLabelLines,
   GRAPH_BRIDGE_VISIBILITY_KEY,
   layoutRosGraph,
   loadBridgeVisibility,
@@ -27,14 +28,6 @@ const EMPTY_GRAPH: RosGraph = { nodes: [], edges: [] };
 const GRAPH_REFRESH_INTERVAL_MS = 30_000;
 const DRAG_CLICK_SLOP_PX = 4;
 const DEFAULT_CAMERA: GraphCamera = { scale: 1, tx: 0, ty: 0 };
-
-function graphLabelLines(value: string, radius: number): string[] {
-  const segments = value.split("/").filter(Boolean);
-  const limit = Math.max(5, Math.floor(radius / 2.7));
-  const shorten = (name: string) => (name.length > limit ? `${name.slice(0, limit - 1)}…` : name);
-  if (segments.length < 2) return [shorten(segments[0] ?? value)];
-  return [shorten(segments.at(-2)!), shorten(segments.at(-1)!)];
-}
 
 function clientToSvgPoint(svg: SVGSVGElement, clientX: number, clientY: number): { x: number; y: number } {
   try {
@@ -88,6 +81,7 @@ export function TopicGraph({
   const panRef = useRef<{ originX: number; originY: number; camera: GraphCamera } | null>(null);
   const suppressClickRef = useRef(false);
   const didFitRef = useRef(false);
+  const centeredFocusRef = useRef("");
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
   const visibleGraph = useMemo(() => filterBridgeGraph(graph, showBridge), [graph, showBridge]);
@@ -133,8 +127,14 @@ export function TopicGraph({
   }, [displayNodes, viewport]);
 
   useEffect(() => {
+    if (!focusedId) {
+      centeredFocusRef.current = "";
+      return;
+    }
+    if (centeredFocusRef.current === focusedId) return;
     const selected = positions.get(focusedId);
     if (!selected || draggingId || panning) return;
+    centeredFocusRef.current = focusedId;
     setCamera((current) => centerCameraOn(current, selected, viewport));
   }, [focusedId, positions, draggingId, panning, viewport]);
 
@@ -186,6 +186,7 @@ export function TopicGraph({
 
   const activateNode = (node: PositionedGraphNode) => {
     onClearControllerFocus?.();
+    centeredFocusRef.current = node.id;
     setFocusedId(node.id);
     if (node.kind === "topic") onSelectTopic({ name: node.label, types: node.types });
     else onSelectNode?.(node.label);
@@ -206,6 +207,7 @@ export function TopicGraph({
       /* jsdom */
     }
     dragRef.current = { id: node.id, moved: false, originX: event.clientX, originY: event.clientY };
+    centeredFocusRef.current = node.id;
     setDraggingId(node.id);
     setFocusedId(node.id);
   };
@@ -408,7 +410,7 @@ export function TopicGraph({
                   <ellipse rx={node.radius} ry={node.radius * 0.65} />
                 )}
                 <text textAnchor="middle" style={{ fontSize: node.radius >= 30 ? 10 : 9 }}>
-                  {graphLabelLines(node.label, node.radius).map((line, index, lines) => (
+                  {graphLabelLines(node.label).map((line, index, lines) => (
                     <tspan key={index} x="0" y={lines.length === 1 ? 3 : index === 0 ? -3 : 8}>
                       {line}
                     </tspan>

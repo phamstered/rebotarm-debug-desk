@@ -14,6 +14,18 @@ export type GraphLayout = {
 };
 
 export const GRAPH_BRIDGE_VISIBILITY_KEY = "robot-console-graph-show-bridge";
+const GRAPH_LABEL_MAX_CHARS = 20;
+const GRAPH_LABEL_LINE_CHARS = 10;
+
+export function graphLabelLines(value: string): string[] {
+  const characters = Array.from(value);
+  const visible = characters.slice(0, GRAPH_LABEL_MAX_CHARS);
+  if (visible.length <= GRAPH_LABEL_LINE_CHARS) return [visible.join("")];
+  return [
+    visible.slice(0, GRAPH_LABEL_LINE_CHARS).join(""),
+    `${visible.slice(GRAPH_LABEL_LINE_CHARS).join("")}${characters.length > GRAPH_LABEL_MAX_CHARS ? "…" : ""}`,
+  ];
+}
 
 export function loadBridgeVisibility(storage: Pick<Storage, "getItem"> = localStorage): boolean {
   return storage.getItem(GRAPH_BRIDGE_VISIBILITY_KEY) === "true";
@@ -71,7 +83,9 @@ export function layoutRosGraph(graph: RosGraph, viewport: { width: number; heigh
     (neighbors.get(b.id)?.size ?? 0) - (neighbors.get(a.id)?.size ?? 0) || a.id.localeCompare(b.id));
   const positioned: PositionedGraphNode[] = sorted.map((node, index) => {
     const degree = neighbors.get(node.id)?.size ?? 0;
-    const radius = Math.min(58, (node.kind === "node" ? 28 : 22) + Math.sqrt(degree) * 5.5);
+    const longestLine = Math.max(...graphLabelLines(node.label).map((line) => Array.from(line).length));
+    const labelRadius = Math.ceil(longestLine * 3.1 + 10);
+    const radius = Math.max(labelRadius, Math.min(58, (node.kind === "node" ? 28 : 22) + Math.sqrt(degree) * 5.5));
     const angle = index * 2.399963229728653;
     const distance = Math.sqrt(index) * 56;
     return {

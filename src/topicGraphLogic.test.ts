@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyManualPositions, centerCameraOn, clampCameraScale, controllerGraphFocus, edgeAnchorSegment, fakeEdgeFlowHz, filterBridgeGraph, fitCameraToNodes, flowParticlesForEdge, graphEdgeKey, layoutRosGraph, loadBridgeVisibility, panCamera, pointAlongSegment, pruneManualPositions, resetCamera, screenToWorld, zoomCameraAt } from "./topicGraphLogic";
+import { applyManualPositions, centerCameraOn, clampCameraScale, controllerGraphFocus, edgeAnchorSegment, fakeEdgeFlowHz, filterBridgeGraph, fitCameraToNodes, flowParticlesForEdge, graphEdgeKey, graphLabelLines, layoutRosGraph, loadBridgeVisibility, panCamera, pointAlongSegment, pruneManualPositions, resetCamera, screenToWorld, zoomCameraAt } from "./topicGraphLogic";
 import type { RosGraph } from "./types";
 
 const graph: RosGraph = {
@@ -15,6 +15,18 @@ const graph: RosGraph = {
 };
 
 describe("force-directed topic graph layout", () => {
+  it("shows up to 20 original label characters including Topic slashes", () => {
+    expect(graphLabelLines("/joint_states")).toEqual(["/joint_sta", "tes"]);
+    expect(graphLabelLines("/123456789/123456789")).toEqual(["/123456789", "/123456789"]);
+    expect(graphLabelLines("/123456789/123456789/extra")).toEqual(["/123456789", "/123456789…"]);
+  });
+
+  it("gives a 20-character label enough room inside its node shape", () => {
+    const longLabel = "/123456789/123456789";
+    const layout = layoutRosGraph({ nodes: [{ id: `topic:${longLabel}`, label: longLabel, kind: "topic", types: [] }], edges: [] });
+    expect(layout.nodes[0]!.radius).toBeGreaterThanOrEqual(40);
+  });
+
   it("keeps directed ROS relations and uses circular nodes sized by degree", () => {
     const layout = layoutRosGraph(graph);
     expect(layout.edges).toEqual(graph.edges);
