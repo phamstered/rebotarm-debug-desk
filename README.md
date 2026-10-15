@@ -111,18 +111,18 @@ Bridge 部署并构建在 Jetson 工作区（示例）：
 ~/easy_debug_bridge   # 默认 easy_debug_bridge，相对远端 $HOME
 ```
 
-连接配置示例（应用内 Profile 可修改）：
+连接配置示例（主表单填 SSH；「高级」可改 Domain / setup；Topic 为内置默认）：
 
 ```text
 SSH host: jetson                                  # 默认通用别名，按需修改
-ROS setup: leader_follower/install/setup.bash    # 默认，相对远端 $HOME；也可填绝对路径
+ROS setup: leader_follower/install/setup.bash    # 「高级」；相对远端 $HOME；也可填绝对路径
 Remote port: 8765
 Local port: 18765
-URDF topic: /robot_description
-JointState topic: /stm32/joint_states
+URDF topic: /robot_description                    # 内置默认，界面不编辑
+JointState topic: /stm32/joint_states             # 内置默认，界面不编辑
 ```
 
-如果机器人使用其他 overlay（例如 URDF package 位于另一个工作空间），请把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
+如果机器人使用其他 overlay（例如 URDF package 位于另一个工作空间），请在「高级」里把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
 
 ## 验证
 

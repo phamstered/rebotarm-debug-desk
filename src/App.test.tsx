@@ -115,7 +115,18 @@ describe("App workflow", () => {
     localStorage.setItem("easy-debug-profile", JSON.stringify({ jointStateTopic: "/joint_states", host: "robot-host" }));
     const user = userEvent.setup();
     render(<App />);
-    expect(screen.getByLabelText("JointState Topic")).toHaveValue("/stm32/joint_states");
+    expect(screen.getByLabelText("SSH 主机")).toHaveValue("robot-host");
+    expect(screen.queryByLabelText("JointState Topic")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("URDF Topic")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("配置名称")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("TCP Link")).not.toBeInTheDocument();
+    const advanced = screen.getByText("高级").closest("details");
+    expect(advanced).toBeTruthy();
+    expect(advanced).not.toHaveAttribute("open");
+    await user.click(screen.getByText("高级"));
+    expect(advanced).toHaveAttribute("open");
+    expect(screen.getByLabelText("ROS_DOMAIN_ID")).toBeVisible();
+    expect(screen.getByLabelText("ROS 环境脚本")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     expect(await screen.findByText("micro-ROS Agent：运行中")).toBeVisible();
     expect(screen.getByText("localhost:19001")).toBeVisible();
@@ -624,10 +635,18 @@ describe("App workflow", () => {
 
     await user.click(screen.getByRole("button", { name: /连接配置/ }));
     const connectionDialog = screen.getByRole("dialog", { name: "连接配置" });
-    await user.clear(within(connectionDialog).getByLabelText("配置名称"));
-    await user.type(within(connectionDialog).getByLabelText("配置名称"), "next-jetson");
+    expect(within(connectionDialog).queryByLabelText("配置名称")).not.toBeInTheDocument();
+    expect(within(connectionDialog).queryByLabelText("JointState Topic")).not.toBeInTheDocument();
+    await user.clear(within(connectionDialog).getByLabelText("SSH 主机"));
+    await user.type(within(connectionDialog).getByLabelText("SSH 主机"), "next-jetson");
+    await user.click(within(connectionDialog).getByText("高级"));
+    expect(within(connectionDialog).getByLabelText("ROS_DOMAIN_ID")).toBeVisible();
     await user.click(within(connectionDialog).getByRole("button", { name: "保存配置" }));
-    expect(JSON.parse(localStorage.getItem("easy-debug-profile")!).name).toBe("next-jetson");
+    expect(JSON.parse(localStorage.getItem("easy-debug-profile")!)).toMatchObject({
+      host: "next-jetson",
+      jointStateTopic: "/stm32/joint_states",
+      urdfTopic: "/robot_description",
+    });
 
     await user.click(screen.getByRole("button", { name: /设置/ }));
     const settingsDialog = screen.getByRole("dialog", { name: "应用设置" });

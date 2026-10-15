@@ -8,7 +8,7 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 
 ## 连接配置（Profile）
 
-可持久化的字段包括：SSH 主机 / 用户 / 端口 / 私钥、ROS Domain、ROS 环境脚本（`install/setup.bash`）、以及各 ROS Topic（如 URDF、JointState）。
+首页连接卡与工具栏「连接配置」主表单只编辑 **SSH** 字段：主机、用户名、端口、私钥路径。`ROS_DOMAIN_ID` 与 ROS 环境脚本收在默认折叠的「高级」里。URDF / JointState / Command / Status Topic 与 TCP Link 使用内置默认值（与 ros2-stack / 固件约定一致），界面不再编辑；旧 localStorage 里若仍有这些字段会继续读入，新保存仍会写出默认键以便后端 invoke 不变。
 
 - 连接后可从全局工具栏重新打开连接配置；**保存不会中断当前会话**，新值在下次重连时生效。
 - 旧配置会自动迁移（例如旧 ROS setup 路径、旧 `/joint_states` → 当前默认 `/stm32/joint_states`）。
@@ -19,7 +19,7 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 ## Bridge 监听边界
 
 - Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
-- 「ROS 环境脚本」必须指向机器人工作空间的 `install/setup.bash`，可为绝对路径或相对远端用户 `$HOME` 的路径（SSH 命令在 `$HOME` 下执行）；只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 解析 URDF 中的 `package://` 资源。
+- 「ROS 环境脚本」（高级）必须指向机器人工作空间的 `install/setup.bash`，可为绝对路径或相对远端用户 `$HOME` 的路径（SSH 命令在 `$HOME` 下执行）；只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 解析 URDF 中的 `package://` 资源。
 
 ## micro-ROS Agent
 
@@ -28,15 +28,18 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 ## Profile 示例
 
 ```text
-SSH host: jetson                                  # 默认通用别名，按需修改
-ROS setup: leader_follower/install/setup.bash    # 默认，相对远端 $HOME；也可填绝对路径
+SSH host: jetson                                  # 主表单；默认通用别名
+SSH user / port / identity                        # 主表单
+ROS_DOMAIN_ID: 0                                  # 「高级」
+ROS setup: leader_follower/install/setup.bash    # 「高级」；相对远端 $HOME 或绝对路径
+# 以下为内置默认，界面不编辑：
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description
 JointState topic: /stm32/joint_states
 ```
 
-若机器人使用其他 overlay（例如 URDF package 在另一工作空间），请把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
+若机器人使用其他 overlay（例如 URDF package 在另一工作空间），请在「高级」里把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
 
 ## 会话建立后的验证
 

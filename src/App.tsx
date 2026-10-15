@@ -158,19 +158,20 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
   const field = <K extends keyof ConnectionProfile>(key: K, value: ConnectionProfile[K]) =>
     onChange({ ...profile, [key]: value });
   return (
-    <div className="profile-grid">
-      <label>配置名称<input value={profile.name} onChange={(e) => field("name", e.target.value)} /></label>
-      <label>SSH 主机<input value={profile.host} onChange={(e) => field("host", e.target.value)} placeholder="jetson 或 user@192.168.x.x" /></label>
-      <label>SSH 用户名<input value={profile.username} onChange={(e) => field("username", e.target.value)} placeholder="使用 ~/.ssh/config" /></label>
-      <label>SSH 端口<input type="number" value={profile.sshPort} onChange={(e) => field("sshPort", Number(e.target.value))} /></label>
-      <label>私钥路径<input value={profile.identityFile} onChange={(e) => field("identityFile", e.target.value)} placeholder="使用 SSH Agent / config" /></label>
-      <label>ROS_DOMAIN_ID<input type="number" value={profile.rosDomainId} onChange={(e) => field("rosDomainId", Number(e.target.value))} /></label>
-      <label>ROS 环境脚本<input value={profile.rosSetupScript} onChange={(e) => field("rosSetupScript", e.target.value)} placeholder="/path/to/install/setup.bash" /></label>
-      <label>URDF Topic<input value={profile.urdfTopic} onChange={(e) => field("urdfTopic", e.target.value)} /></label>
-      <label>JointState Topic<input value={profile.jointStateTopic} onChange={(e) => field("jointStateTopic", e.target.value)} /></label>
-      <label>Command Topic<input value={profile.commandTopic} onChange={(e) => field("commandTopic", e.target.value)} /></label>
-      <label>Status Topic<input value={profile.statusTopic} onChange={(e) => field("statusTopic", e.target.value)} /></label>
-      <label>TCP Link<input value={profile.tcpLink} onChange={(e) => field("tcpLink", e.target.value)} placeholder="留空自动识别" /></label>
+    <div className="profile-form">
+      <div className="profile-grid">
+        <label>SSH 主机<input value={profile.host} onChange={(e) => field("host", e.target.value)} placeholder="jetson 或 user@192.168.x.x" /></label>
+        <label>SSH 用户名<input value={profile.username} onChange={(e) => field("username", e.target.value)} placeholder="使用 ~/.ssh/config" /></label>
+        <label>SSH 端口<input type="number" value={profile.sshPort} onChange={(e) => field("sshPort", Number(e.target.value))} /></label>
+        <label>私钥路径<input value={profile.identityFile} onChange={(e) => field("identityFile", e.target.value)} placeholder="使用 SSH Agent / config" /></label>
+      </div>
+      <details className="profile-advanced">
+        <summary>高级</summary>
+        <div className="profile-grid profile-advanced-grid">
+          <label>ROS_DOMAIN_ID<input type="number" value={profile.rosDomainId} onChange={(e) => field("rosDomainId", Number(e.target.value))} /></label>
+          <label>ROS 环境脚本<input value={profile.rosSetupScript} onChange={(e) => field("rosSetupScript", e.target.value)} placeholder="/path/to/install/setup.bash" /></label>
+        </div>
+      </details>
     </div>
   );
 }

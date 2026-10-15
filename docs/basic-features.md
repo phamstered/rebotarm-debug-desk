@@ -19,7 +19,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 ## 1. 连接与会话
 
-- 保存并恢复连接配置：SSH 主机、用户名、端口、私钥、ROS Domain、ROS 环境脚本及各 ROS Topic。
+- 首页 / 连接配置主表单只编辑 SSH 主机、用户名、端口、私钥；「高级」（默认折叠）编辑 ROS Domain 与 ROS 环境脚本。URDF / JointState / Command / Status Topic 与 TCP Link 用内置默认，界面不编辑；持久化仍写出这些键，旧 localStorage 字段会继续读入。
 - 连接后可从全局工具栏重新打开连接配置；保存不会中断当前 SSH/Bridge 会话，新值在下次重连时生效。
 - 默认 Profile：SSH 主机 `jetson`，ROS 环境脚本 `leader_follower/install/setup.bash`（相对远端 `$HOME`）。ROS 环境脚本路径同样拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。
 - 自动迁移旧配置：旧 ROS setup 路径和 `/joint_states` 会迁移到当前默认值 `/stm32/joint_states`。
