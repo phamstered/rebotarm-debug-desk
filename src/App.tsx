@@ -9,6 +9,8 @@ import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
+import { StatusPage } from "./StatusPage";
+import type { BridgeHelloInfo } from "./statusLogic";
 import { TopicInspector } from "./TopicInspector";
 import { addFieldsToSeries } from "./dataGraphLogic";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
@@ -259,7 +261,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 export default function App() {
   const [appPage, setAppPage] = useState<AppPage>(() => {
     const saved = localStorage.getItem("robot-console-page");
-    return saved === "motor" || saved === "calibration" || saved === "monitor" ? saved : "dashboard";
+    return saved === "status" || saved === "motor" || saved === "calibration" || saved === "monitor" ? saved : "dashboard";
   });
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
@@ -281,6 +283,7 @@ export default function App() {
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
+  const [bridgeHello, setBridgeHello] = useState<BridgeHelloInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentServiceStatus | null>(null);
   const [agentError, setAgentError] = useState("");
   const [rosControl, setRosControl] = useState<RosControlStatus | null>(null);
@@ -558,6 +561,13 @@ export default function App() {
           setHardwareStatus(message.data as HardwareStatus);
         }
       }
+      if (message.op === "hello") {
+        setBridgeHello({
+          bridgeVersion: message.bridge_version,
+          bridgeBuildId: message.bridge_build_id,
+          rosDistro: message.ros_distro,
+        });
+      }
       if (message.op === "disconnected") {
         setFailedStep("bridge");
         setBridgeUp(false);
@@ -625,6 +635,7 @@ export default function App() {
     setUrdf("");
     setJointState(null);
     setHardwareStatus(null);
+    setBridgeHello(null);
     setAgentStatus(null);
     setAgentError("");
     setRosControl(null);
@@ -946,7 +957,24 @@ export default function App() {
       <AppNav page={appPage} expanded={navExpanded} onSelect={setAppPage} onToggle={() => setNavExpanded((current) => !current)} />
       {!navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
       <div className="app-page-content">
-      {appPage === "calibration" ? (
+      {appPage === "status" ? (
+        <StatusPage
+          stage={stage}
+          sshOk={sshOk}
+          bridgeUp={bridgeUp || stage === "connected"}
+          localPort={effectiveLocalPort}
+          profile={profile}
+          hello={bridgeHello}
+          agentStatus={agentStatus}
+          agentError={agentError}
+          agentChecked={agentChecked}
+          hardwareStatus={hardwareStatus}
+          jointState={jointState}
+          jointStateSample={messages[profile.jointStateTopic]}
+          rosControl={rosControl}
+          lastKnownDomainId={lastKnownDomainId}
+        />
+      ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}
           bridge={bridge}

@@ -1,6 +1,10 @@
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 
-export type AppPage = "dashboard" | "monitor" | "motor" | "calibration";
+export type AppPage = "status" | "dashboard" | "monitor" | "motor" | "calibration";
+
+function StatusIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 9h3M7 12h6M7 15h4"/><circle cx="17" cy="15" r="2.2"/></svg>;
+}
 
 function DashboardIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>;
@@ -28,6 +32,7 @@ export function AppNav({ page, expanded, onSelect, onToggle }: {
     <nav className={`app-nav ${expanded ? "expanded" : "collapsed"}`} aria-label="主工具栏">
       <div className="app-nav-brand"><img src={robotConsoleIcon} alt="" /><span>Navigation</span></div>
       <div className="app-nav-items">
+        <button className={page === "status" ? "active" : ""} aria-current={page === "status" ? "page" : undefined} onClick={() => onSelect("status")} title="Status"><StatusIcon /><span>Status</span></button>
         <button className={page === "dashboard" ? "active" : ""} aria-current={page === "dashboard" ? "page" : undefined} onClick={() => onSelect("dashboard")} title="Topics"><DashboardIcon /><span>Topics</span></button>
         <button className={page === "monitor" ? "active" : ""} aria-current={page === "monitor" ? "page" : undefined} onClick={() => onSelect("monitor")} title="Monitor"><MonitorIcon /><span>Monitor</span></button>
         <button className={page === "motor" ? "active" : ""} aria-current={page === "motor" ? "page" : undefined} onClick={() => onSelect("motor")} title="Motor"><MotorIcon /><span>Motor</span></button>

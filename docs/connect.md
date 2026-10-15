@@ -14,6 +14,7 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 - 成功 SSH 的主机写入 `localStorage` 最近主机列表，可一键回填 SSH 字段；不改动 Profile 迁移逻辑。
 - `ROS_DOMAIN_ID` 与默认值或上次成功值不一致时，状态条给出轻量域名不匹配提示（多机同网常见坑）。
 - 连接进入工作区后，工具栏保留压缩状态灯；默认 JointState Topic（`/stm32/joint_states`）收到数据后标记「ROS 就绪」。不新增固件 Topic。
+- 工作区左侧导航第一项为只读 **Status** 页，汇总隧道/Bridge/Agent/Hardware/ROS 就绪/ros2_control/Domain 等卡片（详见 [功能概览 · Status](./features#status只读总览)）。
 - 连接后可从全局工具栏重新打开连接配置；**保存不会中断当前会话**，新值在下次重连时生效。
 - 旧配置会自动迁移（例如旧 ROS setup 路径、旧 `/joint_states` → 当前默认 `/stm32/joint_states`）。
 - 首选本地端口被占用时自动选择空闲端口，并在界面显示实际转发端口。

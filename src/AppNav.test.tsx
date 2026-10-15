@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AppNav } from "./AppNav";
 
 describe("AppNav", () => {
-  it("highlights the active page and switches to Monitor", async () => {
+  it("places Status first and highlights the active page", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     const onToggle = vi.fn();
@@ -12,15 +12,21 @@ describe("AppNav", () => {
       <AppNav page="dashboard" expanded onSelect={onSelect} onToggle={onToggle} />,
     );
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toBeVisible();
+    const nav = screen.getByRole("navigation", { name: "主工具栏" });
+    const navButtons = Array.from(nav.querySelectorAll(".app-nav-items > button"));
+    expect(navButtons[0]).toHaveTextContent("Status");
     expect(screen.getByRole("button", { name: "Topics" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Monitor" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Status" })).not.toHaveAttribute("aria-current");
+
+    await user.click(screen.getByRole("button", { name: "Status" }));
+    expect(onSelect).toHaveBeenCalledWith("status");
+
+    rerender(<AppNav page="status" expanded onSelect={onSelect} onToggle={onToggle} />);
+    expect(screen.getByRole("button", { name: "Status" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Topics" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(onSelect).toHaveBeenCalledWith("monitor");
-
-    rerender(<AppNav page="monitor" expanded onSelect={onSelect} onToggle={onToggle} />);
-    expect(screen.getByRole("button", { name: "Monitor" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Topics" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
     expect(onToggle).toHaveBeenCalledOnce();
