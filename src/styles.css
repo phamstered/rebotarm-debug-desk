@@ -183,8 +183,12 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .graph-bridge-toggle { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; margin-right: 9px; color: #91a9b8; white-space: nowrap; }
 .graph-bridge-toggle input { width: 13px; height: 13px; accent-color: #42d6c7; }
 .graph-error { padding: 7px 10px; color: #eba09a; border-bottom: 1px solid #542d2c; background: #251515; font-size: 10px; }
-.graph-canvas-scroll { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; background-color: #07131c; background-image: radial-gradient(#1b3443 0.8px, transparent 0.8px); background-size: 18px 18px; }
-.graph-canvas { display: block; min-width: 100%; min-height: 100%; }
+.graph-canvas-scroll { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; background-color: #07131c; background-image: radial-gradient(#1b3443 0.8px, transparent 0.8px); background-size: 18px 18px; cursor: grab; }
+.graph-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.graph-canvas.panning { cursor: grabbing; }
+.graph-camera-tools { display: inline-flex; align-items: center; gap: 6px; }
+.graph-camera-tools button { min-width: 28px; }
+.graph-zoom-label { min-width: 3.2em; text-align: center; font-variant-numeric: tabular-nums; opacity: .85; }
 .graph-empty { position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; color: #5b7789; font-size: 12px; }
 .graph-edge { fill: none; stroke: #71adc0; stroke-width: 1; opacity: .34; transition: opacity .14s ease, stroke-width .14s ease; }
 .graph-edge.subscribe { stroke: #8acda6; }
