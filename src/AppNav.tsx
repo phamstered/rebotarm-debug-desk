@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { isRosGatedPage, rosGatedNavReason } from "./appLogic";
 import type { RosGatedPage } from "./appLogic";
@@ -24,7 +25,7 @@ function MotorIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>;
 }
 
-const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () => JSX.Element }> = [
+const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () => ReactElement }> = [
   { page: "status", label: "Status", title: "Status", icon: StatusIcon },
   { page: "dashboard", label: "Topics", title: "Topics", icon: DashboardIcon },
   { page: "monitor", label: "Monitor", title: "Monitor", icon: MonitorIcon },
