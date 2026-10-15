@@ -80,6 +80,87 @@ input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(66, 214, 199
 .status.failed { color: #ff817c; }
 .error-box { white-space: pre-wrap; color: #ffaaa6; background: #241316; border: 1px solid #54272d; border-radius: 8px; padding: 12px; font-size: 12px; }
 
+.recent-hosts { display: grid; gap: 8px; margin-bottom: 16px; }
+.recent-hosts-label { color: #91a8b9; font-size: 12px; font-weight: 650; letter-spacing: .25px; }
+.recent-hosts-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.recent-host-chip {
+  color: #cfe7f3; border: 1px solid #2a4a5d; border-radius: 999px; padding: 6px 12px;
+  background: #0a1822; font-size: 12px; font-weight: 650;
+}
+.recent-host-chip:hover { border-color: #3d7d88; color: #e7fbff; background: #102633; }
+
+.connect-step-progress {
+  list-style: none; margin: 18px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+}
+.connect-step {
+  display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px;
+  min-height: 40px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid #1a3142; background: rgba(8, 20, 30, .55); color: #7f96a8; font-size: 12px;
+}
+.connect-step-index {
+  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+  background: #132433; color: #8aa0b1; font-size: 11px; font-weight: 700;
+}
+.connect-step.current { border-color: #35716c; background: rgba(21, 59, 58, .45); color: #d8fffb; box-shadow: 0 0 0 1px rgba(66, 214, 199, .18); }
+.connect-step.current .connect-step-index { background: var(--cyan); color: #041316; }
+.connect-step.done { border-color: #2a554f; color: #9fdad3; }
+.connect-step.done .connect-step-index { background: #1d4d47; color: #b7fff6; }
+.connect-step.failed { border-color: #8c413d; background: rgba(64, 29, 28, .45); color: #ffd0cc; }
+.connect-step.failed .connect-step-index { background: #8c413d; color: #fff; }
+
+.connect-status-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid #1a3142; background: rgba(8, 20, 30, .55);
+}
+.connect-status-strip.compact {
+  margin: 0; padding: 0; border: 0; background: transparent; gap: 6px; flex: 0 1 auto; min-width: 0;
+}
+.status-light {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: #8096a7; font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.status-light > i {
+  width: 8px; height: 8px; border-radius: 50%; background: #3a5161;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.status-light.ok { color: #9fe7de; }
+.status-light.ok > i { background: #2ad4c1; box-shadow: 0 0 8px rgba(42, 212, 193, .55); }
+.status-light.pending { color: #d7c27a; }
+.status-light.pending > i { background: #d7b44a; animation: status-pulse 1.1s ease-in-out infinite; }
+.status-light.fail { color: #ffb0ab; }
+.status-light.fail > i { background: #ff7169; }
+.status-light.warn { color: #ffd39a; }
+.status-light.warn > i { background: #f0a24b; }
+.domain-hint {
+  color: #ffd39a; font-size: 11px; font-weight: 650; line-height: 1.35;
+  max-width: 100%;
+}
+.connect-status-strip.compact .domain-hint {
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@keyframes status-pulse {
+  0%, 100% { opacity: .45; }
+  50% { opacity: 1; }
+}
+
+.error-panel { display: grid; gap: 8px; margin-top: 14px; }
+.copy-error {
+  justify-self: start; color: #dffcff; border: 1px solid #3b7d88; border-radius: 8px;
+  padding: 7px 12px; background: #102633; font-size: 12px; font-weight: 700;
+}
+.copy-error:hover { border-color: #4ea0a8; background: #14303c; }
+header button.disconnect-btn,
+button.ghost.disconnect-btn {
+  color: #ffd7d4; border: 1px solid #8c413d; background: #401d1c; font-weight: 750;
+}
+header button.disconnect-btn:hover,
+button.ghost.disconnect-btn:hover {
+  color: #fff; border-color: #b4544e; background: #5a2824;
+}
+
+
 .workspace {
   position: relative;
   height: 100vh;
