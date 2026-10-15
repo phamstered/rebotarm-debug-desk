@@ -1,0 +1,36 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+describe("connected page layout styles", () => {
+  afterEach(() => {
+    document.head.querySelector("style[data-layout-test]")?.remove();
+    document.body.innerHTML = "";
+  });
+
+  it("keeps the connected toolbar in its own grid row while preserving the Topics toolbar area", async () => {
+    const { readFileSync } = await vi.importActual<{ readFileSync: (path: string, encoding: string) => string }>("node:fs");
+    const styles = readFileSync("src/styles.css", "utf8");
+    expect(styles).toContain(".workspace > .app-toolbar");
+    const style = document.createElement("style");
+    style.dataset.layoutTest = "";
+    style.textContent = styles;
+    document.head.appendChild(style);
+    document.body.innerHTML = `
+      <div class="app-main-column">
+        <header class="connected-topbar"></header>
+        <div class="app-page-content">
+          <main class="status-page"><header class="status-page-header"></header></main>
+        </div>
+      </div>
+      <main class="workspace"><header class="app-toolbar"></header></main>
+    `;
+
+    const connectedToolbar = document.querySelector(".connected-topbar")!;
+    const statusHeader = document.querySelector(".status-page-header")!;
+    const topicsToolbar = document.querySelector(".app-toolbar")!;
+
+    expect(getComputedStyle(connectedToolbar).gridArea).toBe("");
+    expect(getComputedStyle(statusHeader).gridArea).toBe("");
+    expect(getComputedStyle(topicsToolbar).gridArea).toBe("header");
+    expect(getComputedStyle(connectedToolbar).flexWrap).toBe("wrap");
+  });
+});
