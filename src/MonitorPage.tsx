@@ -611,9 +611,18 @@ export function MonitorPage({
                 className="monitor-panel-restore"
                 aria-label="退出最大化"
                 onClick={() => setMaximizedPanelId(null)}
+                onDoubleClick={(event) => event.stopPropagation()}
               >
                 恢复
               </button>
+              <button
+                type="button"
+                className="monitor-panel-remove"
+                aria-label={`移除 ${maximizedPanel.series.fieldPath}`}
+                title="移除 Panel"
+                onClick={() => onRemovePanel(dashboard.id, maximizedPanel.id)}
+                onDoubleClick={(event) => event.stopPropagation()}
+              >×</button>
             </div>
             {renderPanelChart(maximizedPanel)}
           </div>
@@ -643,6 +652,14 @@ export function MonitorPage({
                   onDoubleClick={() => toggleMaximize(panel.id)}
                 >
                   <span className="monitor-panel-drag-label">{panel.title}</span>
+                  <button
+                    type="button"
+                    className="monitor-panel-remove"
+                    aria-label={`移除 ${panel.series.fieldPath}`}
+                    title="移除 Panel"
+                    onClick={() => onRemovePanel(dashboard.id, panel.id)}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                  >×</button>
                 </div>
                 {renderPanelChart(panel)}
               </div>

@@ -33,4 +33,22 @@ describe("connected page layout styles", () => {
     expect(getComputedStyle(topicsToolbar).gridArea).toBe("header");
     expect(getComputedStyle(connectedToolbar).flexWrap).toBe("wrap");
   });
+
+  it("uses the whole chart width for compact Panels without changing the full DataGraph legend", async () => {
+    const { readFileSync } = await vi.importActual<{ readFileSync: (path: string, encoding: string) => string }>("node:fs");
+    const style = document.createElement("style");
+    style.dataset.layoutTest = "";
+    style.textContent = readFileSync("src/styles.css", "utf8");
+    document.head.appendChild(style);
+    document.body.innerHTML = `
+      <div class="data-graph-view compact"><div class="data-graph-body"></div></div>
+      <div class="data-graph-view"><div class="data-graph-body"></div></div>
+    `;
+
+    const compactBody = document.querySelector(".data-graph-view.compact .data-graph-body")!;
+    const fullBody = document.querySelector(".data-graph-view:not(.compact) .data-graph-body")!;
+    expect(getComputedStyle(compactBody).gridTemplateColumns).toBe("minmax(0, 1fr)");
+    expect(getComputedStyle(compactBody).height).toBe("auto");
+    expect(getComputedStyle(fullBody).gridTemplateColumns).toBe("minmax(0, 1fr) 168px");
+  });
 });

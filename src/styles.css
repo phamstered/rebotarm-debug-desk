@@ -757,6 +757,22 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   font-size: 10px;
   cursor: pointer;
 }
+.monitor-panel-remove {
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  flex: 0 0 auto;
+  color: #8cc8c4;
+  border: 1px solid #2a5555;
+  border-radius: 5px;
+  background: #102d2d;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.monitor-panel-remove:hover { color: #ffd7d4; border-color: #8c413d; background: #401d1c; }
+.monitor-panel-maximized .monitor-panel-remove { margin-left: 0; }
 .monitor-panel-tile.layout-locked .monitor-panel-drag {
   cursor: default;
 }
@@ -811,12 +827,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   background: #08131c;
 }
 .monitor-panel-meta .monitor-clear-panels:disabled { opacity: 0.45; }
-.data-graph-view.compact .data-graph-toolbar {
-  padding: 4px 8px;
-  font-size: 11px;
-}
-.data-graph-view.compact .data-graph-body { min-height: 0; height: calc(100% - 28px); }
-.data-graph-view.compact .data-graph-canvas-wrap { min-height: 0; height: 100%; }
+.data-graph-view.compact .data-graph-body { grid-template-columns: minmax(0, 1fr); }
 .react-grid-item.react-grid-placeholder {
   background: rgba(44, 140, 132, 0.28) !important;
   border-radius: 10px;

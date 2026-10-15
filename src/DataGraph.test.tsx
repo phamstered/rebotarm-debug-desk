@@ -59,6 +59,25 @@ describe("DataGraph", () => {
     expect(screen.getByText(/窗口 30s/)).toBeVisible();
   });
 
+  it("leaves compact Panel controls to the outer header and gives the plot the full body", () => {
+    render(
+      <DataGraph
+        seriesList={series}
+        liveUpdates
+        compact
+        title="effort[0]"
+        onRemoveSeries={() => undefined}
+        onClearSeries={() => undefined}
+      />,
+    );
+    const canvas = screen.getByLabelText("effort[0] 曲线");
+    expect(canvas).toBeVisible();
+    expect(canvas.closest(".data-graph-view")).toHaveClass("compact");
+    expect(screen.queryByText("effort[0]")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "移除 effort[0]" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("DataGraph 曲线列表")).not.toBeInTheDocument();
+  });
+
   it("reports crosshair timestamps from pointer moves over the plot", () => {
     const onCrosshairChange = vi.fn();
     render(
