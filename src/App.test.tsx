@@ -82,8 +82,20 @@ vi.mock("./MotorControl", () => ({ MotorControl: () => <div data-testid="motor">
 import App from "./App";
 
 describe("App workflow", () => {
+  function emitRosReady() {
+    act(() => {
+      doubles.listener?.({
+        op: "topic_message",
+        topic: "/stm32/joint_states",
+        data: { name: ["j1"], position: [0.1] },
+      });
+    });
+  }
+
   beforeEach(() => {
     localStorage.clear();
+    // Keep legacy workflow tests on Topics after connect; dedicated cases cover Status default.
+    localStorage.setItem("easy-debug-navigate-status-on-connect", "false");
     vi.clearAllMocks();
     doubles.save.mockResolvedValue("/tmp/robot-console-diagnostics.json");
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
@@ -157,7 +169,7 @@ describe("App workflow", () => {
     expect(within(dialog).getByRole("button", { name: "跳过" })).toBeVisible();
     await user.click(within(dialog).getByRole("button", { name: "跳过" }));
     expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
-    expect(screen.getByText(/已跳过 Bridge 升级/)).toBeVisible();
+    expect(screen.getAllByText(/已跳过 Bridge 升级/).length).toBeGreaterThan(0);
   });
 
   it("runs deploy_bridge when upgrade is confirmed", async () => {
@@ -210,7 +222,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("toolbar", { name: "应用工具栏" });
     expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
-    expect(screen.getByText(/无法确认版本/)).toBeVisible();
+    expect(screen.getAllByText(/无法确认版本/).length).toBeGreaterThan(0);
   });
   it("clears all previous connection data before reconnecting", async () => {
     const user = userEvent.setup();
@@ -555,6 +567,9 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("banner", { name: "已连接工具条" });
+    emitRosReady();
+    expect(await screen.findByText("ROS 就绪")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Motor" }));
 
     expect(await screen.findByRole("heading", { name: "Motor Control" })).toBeVisible();
@@ -684,7 +699,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: /开始录制/ }));
     expect(doubles.invoke).toHaveBeenCalledWith("start_rosbag_recording", { profile: expect.any(Object) });
     expect(await screen.findByRole("button", { name: /停止录制/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText(/rosbag 录制已开始/)).toBeVisible();
+    expect(screen.getAllByText(/rosbag 录制已开始/).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: /停止录制/ }));
     expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording", { profile: expect.any(Object) });
@@ -762,6 +777,8 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("button", { name: /\/stm32\/joint_states/ });
+    emitRosReady();
+    expect(await screen.findByText("ROS 就绪")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     await user.click(screen.getByRole("button", { name: "新建空仪表盘" }));
     await user.click(screen.getByRole("tab", { name: /Motor Torque/ }));
@@ -795,8 +812,8 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    expect(await screen.findByText(/SSH 认证失败/)).toBeVisible();
-    expect(screen.getByText(/Permission denied/)).toBeVisible();
+    expect((await screen.findAllByText(/SSH 认证失败/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Permission denied/).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("连接步骤")).toBeVisible();
     expect(screen.getByLabelText("连接状态灯")).toBeVisible();
     expect(screen.getByText("SSH 失败")).toBeVisible();
@@ -855,6 +872,9 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("banner", { name: "已连接工具条" });
+    emitRosReady();
+    expect(await screen.findByText("ROS 就绪")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: /Motor Torque/ })).toBeVisible();
@@ -871,5 +891,115 @@ describe("App workflow", () => {
     expect(await screen.findByRole("button", { name: /停止回放/ })).toBeVisible();
     getContext.mockRestore();
   });
+
+
+  it("navigates to Status by default after connect and collapses host switching into the topbar", async () => {
+    localStorage.removeItem("easy-debug-navigate-status-on-connect");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    expect(await screen.findByRole("heading", { name: "Status" })).toBeVisible();
+    expect(screen.getByRole("banner", { name: "已连接工具条" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /切换主机/ })).toBeVisible();
+    expect(localStorage.getItem("robot-console-page")).toBe("status");
+    await user.click(screen.getByRole("button", { name: /切换主机/ }));
+    expect(await screen.findByRole("button", { name: "连接 Jetson" })).toBeVisible();
+  });
+
+  it("gates Monitor and Motor until JointState smoke is green", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("banner", { name: "已连接工具条" });
+    const monitor = screen.getByRole("button", { name: "Monitor" });
+    const motor = screen.getByRole("button", { name: "Motor" });
+    expect(monitor).toBeDisabled();
+    expect(motor).toBeDisabled();
+    expect(monitor.getAttribute("title")).toContain("JointState");
+    emitRosReady();
+    expect(await screen.findByText("ROS 就绪")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Monitor" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Motor" })).not.toBeDisabled();
+  });
+
+  it("shows Bridge version badge and opens upgrade prompt on mismatch click", async () => {
+    doubles.connect.mockResolvedValueOnce({
+      bridge_version: "0.1.0",
+      bridge_build_id: "ffffffffffffffff",
+      ros_distro: "humble",
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const badge = await screen.findByRole("button", { name: /Bridge 不匹配/ });
+    expect(badge).toBeVisible();
+    await user.click(badge);
+    expect(await screen.findByRole("dialog", { name: "Bridge 版本不匹配" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "跳过" }));
+  });
+
+  it("jumps from fault chip to Status Hardware card", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("banner", { name: "已连接工具条" });
+    act(() => {
+      doubles.listener?.({
+        op: "topic_message",
+        topic: "/stm32/status",
+        data: { fault_code: 4, mode: 1, mode_name: "POSITION" },
+      });
+    });
+    const fault = await screen.findByRole("button", { name: /Fault 4/ });
+    await user.click(fault);
+    expect(await screen.findByRole("heading", { name: "Status" })).toBeVisible();
+    const hardware = await screen.findByRole("article", { name: "Hardware" });
+    expect(hardware).toHaveAttribute("data-highlighted", "true");
+    expect(hardware).toHaveTextContent(/fault_code/);
+  });
+
+  it("shows last connect history and retries a failed step from the start", async () => {
+    doubles.invoke.mockImplementation((command: string) => {
+      if (command === "check_ssh") return Promise.reject(new Error("Permission denied (publickey)"));
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    expect((await screen.findAllByText(/SSH 认证失败/)).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "重试" })).toBeVisible();
+    expect(screen.getByLabelText("上次连接记录")).toHaveTextContent(/失败/);
+    doubles.invoke.mockImplementation((command: string) => {
+      if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "start_session") return Promise.resolve(19001);
+      if (command === "check_micro_ros_agent") return Promise.resolve({
+        loadState: "loaded", activeState: "active", subState: "running", result: "success",
+        mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
+      });
+      if (command === "check_ros_controllers") return Promise.resolve({
+        manager: "/controller_manager", available: true, controllers: [], message: "",
+      });
+      if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "" });
+      if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "" });
+      return Promise.resolve(undefined);
+    });
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("banner", { name: "已连接工具条" })).toBeVisible();
+  });
+
+  it("connects with Enter and dismisses the error banner with Escape", async () => {
+    doubles.invoke.mockImplementation((command: string) => {
+      if (command === "check_ssh") return Promise.reject(new Error("Connection refused"));
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    screen.getByLabelText("SSH 主机").focus();
+    await user.keyboard("{Enter}");
+    expect((await screen.findAllByText(/无法到达主机/)).length).toBeGreaterThan(0);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
 
 });

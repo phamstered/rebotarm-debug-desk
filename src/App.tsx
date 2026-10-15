@@ -12,6 +12,7 @@ import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { StatusPage } from "./StatusPage";
 import type { BridgeHelloInfo } from "./statusLogic";
+import { formatHardwareMode } from "./statusLogic";
 import { TopicInspector } from "./TopicInspector";
 import { addFieldsToSeries } from "./dataGraphLogic";
 import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
@@ -37,6 +38,8 @@ import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
 import {
   applyRecentHostToProfile,
+  bridgeVersionBadgeLabel,
+  bridgeVersionBadgeTone,
   checkBridgeVersion,
   CONNECT_STEPS,
   connectStepStatus,
@@ -46,18 +49,23 @@ import {
   domainMismatchHint,
   formatBridgeVersionLabel,
   formatConnectError,
+  formatConnectHistoryLine,
   isAgentOnline,
   isRosReady,
+  loadConnectHistory,
   loadLastKnownDomainId,
+  loadNavigateStatusOnConnect,
   loadPanelState,
   loadProfile,
   loadRecentHosts,
   loadSidebarState,
   nextTopicSample,
+  rememberConnectHistory,
   rememberLastKnownDomainId,
   rememberSuccessfulHost,
+  saveNavigateStatusOnConnect,
 } from "./appLogic";
-import type { BridgeVersionCheck, CollapsiblePanel, ConnectStepId, PanelState, RecentHost, TopicSample } from "./appLogic";
+import type { BridgeVersionCheck, CollapsiblePanel, ConnectHistory, ConnectStepId, PanelState, RecentHost, TopicSample } from "./appLogic";
 import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
 import type { LayoutSizes } from "./layoutLogic";
 import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
@@ -89,12 +97,28 @@ function ConnectStatusStrip({
   domainHint,
   rosReady,
   compact = false,
+  versionCheck = null,
+  onVersionClick,
+  faultCode,
+  faultMode,
+  onFaultClick,
 }: {
   lights: ReturnType<typeof deriveConnectStatusLights>;
   domainHint: string;
   rosReady?: boolean;
   compact?: boolean;
+  versionCheck?: BridgeVersionCheck | null;
+  onVersionClick?(): void;
+  faultCode?: number | null;
+  faultMode?: string | number | null;
+  onFaultClick?(): void;
 }) {
+  const versionLabel = bridgeVersionBadgeLabel(versionCheck);
+  const versionTone = bridgeVersionBadgeTone(versionCheck);
+  const showFault = typeof faultCode === "number" && Number.isFinite(faultCode) && faultCode !== 0;
+  const faultTitle = showFault
+    ? `fault_code=${faultCode}${faultMode != null && faultMode !== "" ? ` · mode=${faultMode}` : ""} · 点击查看 Status Hardware`
+    : "";
   return (
     <div className={`connect-status-strip ${compact ? "compact" : ""}`} role="group" aria-label="连接状态灯">
       {(Object.keys(STATUS_LIGHT_LABELS) as Array<keyof typeof STATUS_LIGHT_LABELS>).map((key) => (
@@ -108,6 +132,42 @@ function ConnectStatusStrip({
           <i aria-hidden="true" />
           <span>{rosReady ? "ROS 就绪" : "等待 JointState"}</span>
         </span>
+      )}
+      {versionLabel && (
+        onVersionClick && versionCheck && versionCheck.status !== "match" ? (
+          <button
+            type="button"
+            className={`status-light bridge-version-badge ${versionTone} clickable`}
+            title={`${versionLabel} · 点击查看升级提示`}
+            onClick={onVersionClick}
+          >
+            <i aria-hidden="true" />
+            <span>{versionLabel}</span>
+          </button>
+        ) : (
+          <span className={`status-light bridge-version-badge ${versionTone}`} title={versionLabel}>
+            <i aria-hidden="true" />
+            <span>{versionLabel}</span>
+          </span>
+        )
+      )}
+      {showFault && (
+        onFaultClick ? (
+          <button
+            type="button"
+            className="status-light fault-chip fail clickable"
+            title={faultTitle}
+            onClick={onFaultClick}
+          >
+            <i aria-hidden="true" />
+            <span>Fault {faultCode}{faultMode != null && faultMode !== "" ? ` · mode ${faultMode}` : ""}</span>
+          </button>
+        ) : (
+          <span className="status-light fault-chip fail" title={faultTitle}>
+            <i aria-hidden="true" />
+            <span>Fault {faultCode}</span>
+          </span>
+        )
       )}
       {domainHint && <span className="domain-hint" title={domainHint}>⚠ {domainHint}</span>}
     </div>
@@ -281,6 +341,9 @@ export default function App() {
   const [versionDialogOpen, setVersionDialogOpen] = useState(false);
   const [deployProgress, setDeployProgress] = useState("");
   const [lastKnownDomainId, setLastKnownDomainId] = useState<number | null>(() => loadLastKnownDomainId());
+  const [navigateStatusOnConnect, setNavigateStatusOnConnect] = useState(() => loadNavigateStatusOnConnect());
+  const [connectHistory, setConnectHistory] = useState<ConnectHistory | null>(() => loadConnectHistory());
+  const [statusHighlightCardId, setStatusHighlightCardId] = useState<string | null>(null);
   const [topics, setTopics] = useState<TopicInfo[]>([]);
   const [topicFilter, setTopicFilter] = useState("");
   const [selected, setSelected] = useState<string>("");
@@ -393,6 +456,16 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
   }, [navExpanded]);
+
+  useEffect(() => {
+    saveNavigateStatusOnConnect(navigateStatusOnConnect);
+  }, [navigateStatusOnConnect]);
+
+  useEffect(() => {
+    if (!statusHighlightCardId) return;
+    const timer = window.setTimeout(() => setStatusHighlightCardId(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [statusHighlightCardId]);
 
   useEffect(() => {
     liveUpdatesRef.current = liveUpdates;
@@ -672,7 +745,10 @@ export default function App() {
   async function connect() {
     clearConnectionData();
     setError("");
+    setErrorCopied(false);
+    setStatusHighlightCardId(null);
     localStorage.setItem("easy-debug-profile", JSON.stringify(profile));
+    const startedAt = Date.now();
     let activeStep: ConnectStepId = "ssh";
     try {
       setStage("ssh");
@@ -719,6 +795,16 @@ export default function App() {
       }
       rememberLastKnownDomainId(profile.rosDomainId);
       setLastKnownDomainId(profile.rosDomainId);
+      const successHistory = rememberConnectHistory({
+        outcome: "success",
+        host: profile.host,
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+      setConnectHistory(successHistory);
+      if (navigateStatusOnConnect) {
+        setAppPage("status");
+      }
 
       void invoke<RosbagStatus>("get_rosbag_status", { profile })
         .then(setRosbagStatus)
@@ -728,9 +814,19 @@ export default function App() {
         .catch(() => undefined);
     } catch (reason) {
       const raw = reason instanceof Error ? reason.message : String(reason);
+      const formatted = formatConnectError(raw, activeStep);
       setFailedStep(activeStep);
-      setError(formatConnectError(raw, activeStep));
+      setError(formatted);
       setStage("failed");
+      const failureHistory = rememberConnectHistory({
+        outcome: "failure",
+        host: profile.host,
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+        failedStep: activeStep,
+        reason: formatted,
+      });
+      setConnectHistory(failureHistory);
       await invoke("stop_session").catch(() => undefined);
     }
   }
@@ -960,12 +1056,50 @@ export default function App() {
   });
   const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId);
   const rosReady = isRosReady(jointState);
+  const connectBusy = ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
+  const historyLine = formatConnectHistoryLine(connectHistory);
+  const faultCode = hardwareStatus?.fault_code;
+  const faultModeLabel = hardwareStatus ? formatHardwareMode(hardwareStatus) : "";
+  const faultMode = faultModeLabel && faultModeLabel !== "—" ? faultModeLabel : null;
+
+  function openFaultOnStatus() {
+    setAppPage("status");
+    setStatusHighlightCardId("hardware");
+  }
+
+  function openVersionPrompt() {
+    if (bridgeVersionCheck?.status === "mismatch") {
+      setVersionDialogOpen(true);
+    } else if (bridgeVersionCheck?.status === "unknown") {
+      setToolbarNotice(
+        `${bridgeVersionCheck.message}：远端 ${formatBridgeVersionLabel(bridgeVersionCheck.remote)}，本地期望 ${formatBridgeVersionLabel(bridgeVersionCheck.local)}`,
+      );
+    }
+  }
+
+  function handleConnectShellKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape" && error) {
+      event.preventDefault();
+      setError("");
+      setErrorCopied(false);
+      return;
+    }
+    if (event.key !== "Enter" || connectBusy || stage === "connected") return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "BUTTON" || target.isContentEditable)) return;
+    if (target?.closest("details.profile-advanced") && !(target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    void connect();
+  }
 
   if (stage !== "connected") {
     return (
-      <main className="connect-shell">
+      <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
         <section className="connect-card">
           <div className="brand"><img className="brand-mark" src={robotConsoleIcon} alt="" /><div><h1>Robot Console</h1><p>ROS 2 机器人调试工作台</p></div></div>
+          {historyLine && (
+            <p className="connect-history" aria-label="上次连接记录" title={historyLine}>{historyLine}</p>
+          )}
           {recentHosts.length > 0 && (
             <div className="recent-hosts" aria-label="最近主机">
               <span className="recent-hosts-label">最近主机</span>
@@ -988,18 +1122,30 @@ export default function App() {
           {(stage !== "idle" || error) && (
             <ConnectStepProgress stage={stage} failedStep={failedStep} agentChecked={agentChecked} />
           )}
-          <ConnectStatusStrip lights={statusLights} domainHint={domainHint} />
+          <ConnectStatusStrip lights={statusLights} domainHint={domainHint} versionCheck={bridgeVersionCheck} />
           <div className="connect-actions">
             <span className={`status ${stage}`}>{stageNames[stage]}</span>
-            <button onClick={connect} disabled={["ssh", "tunnel", "bridge", "upgrading"].includes(stage)}>连接 Jetson</button>
+            <div className="connect-action-buttons">
+              {stage === "failed" && (
+                <button type="button" className="ghost retry-connect" onClick={() => void connect()} disabled={connectBusy} title="从检查 SSH 起重新连接（非整步断点续传）">
+                  重试
+                </button>
+              )}
+              <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
+            </div>
           </div>
           {stage === "upgrading" && deployProgress && <pre className="deploy-progress" aria-live="polite">{deployProgress}</pre>}
           {error && (
-            <div className="error-panel">
+            <div className="error-panel" role="alert">
               <pre className="error-box">{error}</pre>
-              <button type="button" className="copy-error" onClick={() => void copyConnectError()}>
-                {errorCopied ? "已复制" : "复制错误"}
-              </button>
+              <div className="error-panel-actions">
+                <button type="button" className="copy-error" onClick={() => void copyConnectError()}>
+                  {errorCopied ? "已复制" : "复制错误"}
+                </button>
+                <button type="button" className="dismiss-error" onClick={() => { setError(""); setErrorCopied(false); }} title="Esc 也可关闭">
+                  关闭
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -1012,8 +1158,58 @@ export default function App() {
 
   return (
     <div className={`app-shell ${navExpanded ? "" : "nav-collapsed"}`}>
-      <AppNav page={appPage} expanded={navExpanded} onSelect={setAppPage} onToggle={() => setNavExpanded((current) => !current)} />
+      <AppNav
+        page={appPage}
+        expanded={navExpanded}
+        rosReady={rosReady}
+        onSelect={(next) => {
+          setAppPage(next);
+          if (next !== "status") setStatusHighlightCardId(null);
+        }}
+        onToggle={() => setNavExpanded((current) => !current)}
+      />
       {!navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
+      <div className="app-main-column">
+      <header className="connected-topbar" role="banner" aria-label="已连接工具条">
+        <button
+          type="button"
+          className="toolbar-action switch-host"
+          aria-label="切换主机"
+          onClick={() => void disconnect()}
+          title="断开并返回连接页以更换主机（SSH 表单已收起到此）"
+        >
+          <span aria-hidden="true">⇄</span>切换主机
+        </button>
+        <button type="button" className="toolbar-action" aria-label="连接配置" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效">
+          <span aria-hidden="true">⌁</span>连接配置
+        </button>
+        <button type="button" className="toolbar-action" aria-label="设置" onClick={openToolbarSettings} title="配置自动刷新、诊断快照与连接后导航">
+          <span aria-hidden="true">⚙</span>设置
+        </button>
+        {toolbarNotice && <output className="toolbar-notice" title={toolbarNotice}>{toolbarNotice}</output>}
+        <ConnectStatusStrip
+          lights={statusLights}
+          domainHint={domainHint}
+          rosReady={rosReady}
+          compact
+          versionCheck={bridgeVersionCheck}
+          onVersionClick={openVersionPrompt}
+          faultCode={typeof faultCode === "number" ? faultCode : null}
+          faultMode={faultMode}
+          onFaultClick={openFaultOnStatus}
+        />
+        <span className="toolbar-spacer" />
+        <span className="connected-dot" />
+        <span className="connected-host-name">{profile.name || profile.host}</span>
+        <span className="tunnel-port" title="SSH 本地转发端口">localhost:{effectiveLocalPort ?? profile.localPort}</span>
+        <span
+          className={`agent-badge ${isAgentOnline(agentStatus) ? "running" : agentError ? "unknown" : "stopped"}`}
+          title={agentError || (agentStatus ? `${agentStatus.description}\n${agentStatus.activeState}/${agentStatus.subState}\nPID ${agentStatus.mainPid}\n开机状态：${agentStatus.unitFileState}` : "正在检查 systemd 状态")}
+        >
+          <span /> micro-ROS Agent：{isAgentOnline(agentStatus) ? "运行中" : agentError ? "检查失败" : agentStatus ? "未运行" : "检查中"}
+        </span>
+        <button className="ghost disconnect-btn" onClick={() => void disconnect()} title="断开 SSH 隧道与 Bridge">断开</button>
+      </header>
       <div className="app-page-content">
       {appPage === "status" ? (
         <StatusPage
@@ -1031,6 +1227,7 @@ export default function App() {
           jointStateSample={messages[profile.jointStateTopic]}
           rosControl={rosControl}
           lastKnownDomainId={lastKnownDomainId}
+          highlightCardId={statusHighlightCardId}
         />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
@@ -1077,7 +1274,6 @@ export default function App() {
       <main className={`workspace ${sidebars.right ? "" : "right-sidebar-collapsed"}`} style={layoutStyle}>
       <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
         <div className="toolbar-actions" role="group" aria-label="全局操作">
-          <button type="button" className="toolbar-action" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效"><span>⌁</span>连接配置</button>
         <button
           type="button"
           className="toolbar-action"
@@ -1111,25 +1307,7 @@ export default function App() {
           ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
           <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
           <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title="恢复面板尺寸并展开全部面板"><span>⊞</span>重置布局</button>
-          <button type="button" className="toolbar-action" onClick={openToolbarSettings} title="配置自动刷新与诊断快照"><span>⚙</span>设置</button>
         </div>
-        {toolbarNotice && <output className="toolbar-notice" title={toolbarNotice}>{toolbarNotice}</output>}
-        <span className="toolbar-spacer" />
-        <ConnectStatusStrip
-          lights={statusLights}
-          domainHint={domainHint}
-          rosReady={rosReady}
-          compact
-        />
-        <span className="connected-dot" />{profile.name}
-        <span className="tunnel-port" title="SSH 本地转发端口">localhost:{effectiveLocalPort ?? profile.localPort}</span>
-        <span
-          className={`agent-badge ${isAgentOnline(agentStatus) ? "running" : agentError ? "unknown" : "stopped"}`}
-          title={agentError || (agentStatus ? `${agentStatus.description}\n${agentStatus.activeState}/${agentStatus.subState}\nPID ${agentStatus.mainPid}\n开机状态：${agentStatus.unitFileState}` : "正在检查 systemd 状态")}
-        >
-          <span /> micro-ROS Agent：{isAgentOnline(agentStatus) ? "运行中" : agentError ? "检查失败" : agentStatus ? "未运行" : "检查中"}
-        </span>
-        <button className="ghost disconnect-btn" onClick={disconnect} title="断开 SSH 隧道与 Bridge">断开</button>
       </header>
       <aside
         ref={topicSidebarRef}
@@ -1291,6 +1469,7 @@ export default function App() {
       </main>
       )}
       </div>
+      </div>
       {versionDialogOpen && bridgeVersionCheck?.status === "mismatch" && (
         <ModalShell
           title="Bridge 版本不匹配"
@@ -1328,6 +1507,7 @@ export default function App() {
           <div className="settings-form">
             <label>Topics / Controller 自动刷新间隔（秒）<input type="number" min="5" max="300" value={settingsDraft.refreshIntervalSeconds} onChange={(event) => setSettingsDraft((current) => ({ ...current, refreshIntervalSeconds: Number(event.target.value) }))} /></label>
             <label className="settings-check"><input type="checkbox" checked={settingsDraft.includeMessagePreviews} onChange={(event) => setSettingsDraft((current) => ({ ...current, includeMessagePreviews: event.target.checked }))} />诊断快照包含最新消息摘要（单条最多 4 KiB）</label>
+            <label className="settings-check"><input type="checkbox" checked={navigateStatusOnConnect} onChange={(event) => setNavigateStatusOnConnect(event.target.checked)} />连接成功后打开 Status（默认开启）</label>
           </div>
         </ModalShell>
       )}
