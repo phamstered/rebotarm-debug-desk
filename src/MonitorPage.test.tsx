@@ -2,74 +2,84 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MonitorPage } from "./MonitorPage";
-import { createDefaultMonitorWorkspace, createEmptyPanel, addMonitorPanel } from "./monitorLogic";
+import {
+  addMonitorDashboard,
+  createDefaultMonitorWorkspace,
+  createEmptyDashboard,
+} from "./monitorLogic";
+
+function baseProps(overrides: Record<string, unknown> = {}) {
+  return {
+    jointStateTopic: "/stm32/joint_states",
+    liveUpdates: true,
+    bagStatus: null as null,
+    bagBusy: false,
+    bagNotice: "",
+    onSelectDashboard: () => undefined,
+    onAddDashboard: () => undefined,
+    onRenameDashboard: () => undefined,
+    onDeleteDashboard: () => undefined,
+    onLayoutChange: () => undefined,
+    onRemovePanel: () => undefined,
+    onClearPanels: () => undefined,
+    onRefreshBagStatus: () => undefined,
+    onStartBagPlay: () => undefined,
+    onStopBagPlay: () => undefined,
+    ...overrides,
+  };
+}
 
 describe("MonitorPage", () => {
-  it("renders default torque panel and supports create/rename/delete", async () => {
+  it("renders default torque dashboard panels and supports create/rename/delete", async () => {
     const user = userEvent.setup();
     let workspace = createDefaultMonitorWorkspace("/stm32/joint_states");
-    const onSelectPanel = vi.fn((id: string) => {
-      workspace = { ...workspace, selectedPanelId: id };
+    const onSelectDashboard = vi.fn((id: string) => {
+      workspace = { ...workspace, selectedDashboardId: id };
     });
-    const onAddPanel = vi.fn((panel) => {
-      workspace = addMonitorPanel(workspace, panel);
+    const onAddDashboard = vi.fn((dashboard) => {
+      workspace = addMonitorDashboard(workspace, dashboard);
     });
-    const onRenamePanel = vi.fn();
-    const onDeletePanel = vi.fn();
+    const onRenameDashboard = vi.fn();
+    const onDeleteDashboard = vi.fn();
     const { rerender } = render(
       <MonitorPage
         workspace={workspace}
-        jointStateTopic="/stm32/joint_states"
-        liveUpdates
-        bagStatus={null}
-        bagBusy={false}
-        bagNotice=""
-        onSelectPanel={onSelectPanel}
-        onAddPanel={onAddPanel}
-        onRenamePanel={onRenamePanel}
-        onDeletePanel={onDeletePanel}
-        onUpdatePanelSeries={() => undefined}
-        onRefreshBagStatus={() => undefined}
-        onStartBagPlay={() => undefined}
-        onStopBagPlay={() => undefined}
+        {...baseProps({
+          onSelectDashboard,
+          onAddDashboard,
+          onRenameDashboard,
+          onDeleteDashboard,
+        })}
       />,
     );
     expect(screen.getByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: /Motor Torque/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByLabelText("effort 独立曲线网格")).toBeVisible();
     expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
     expect(screen.getByLabelText("effort[6] 曲线")).toBeVisible();
-    expect(screen.getByText(/7 路 effort 独立图/)).toBeVisible();
+    expect(screen.getByText(/7 个 Panel · 窗口/)).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "新建空面板" }));
-    expect(onAddPanel).toHaveBeenCalled();
-    workspace = addMonitorPanel(workspace, createEmptyPanel("Custom"));
+    await user.click(screen.getByRole("button", { name: "新建空仪表盘" }));
+    expect(onAddDashboard).toHaveBeenCalled();
+    workspace = addMonitorDashboard(workspace, createEmptyDashboard("Custom"));
     rerender(
       <MonitorPage
         workspace={workspace}
-        jointStateTopic="/stm32/joint_states"
-        liveUpdates
-        bagStatus={null}
-        bagBusy={false}
-        bagNotice=""
-        onSelectPanel={onSelectPanel}
-        onAddPanel={onAddPanel}
-        onRenamePanel={onRenamePanel}
-        onDeletePanel={onDeletePanel}
-        onUpdatePanelSeries={() => undefined}
-        onRefreshBagStatus={() => undefined}
-        onStartBagPlay={() => undefined}
-        onStopBagPlay={() => undefined}
+        {...baseProps({
+          onSelectDashboard,
+          onAddDashboard,
+          onRenameDashboard,
+          onDeleteDashboard,
+        })}
       />,
     );
-    const name = screen.getByLabelText("面板名称");
+    const name = screen.getByLabelText("仪表盘名称");
     await user.clear(name);
     await user.type(name, "My Panel");
     await user.tab();
-    expect(onRenamePanel).toHaveBeenCalledWith(workspace.selectedPanelId, "My Panel");
+    expect(onRenameDashboard).toHaveBeenCalledWith(workspace.selectedDashboardId, "My Panel");
 
-    await user.click(screen.getByRole("button", { name: /删除面板/ }));
-    expect(onDeletePanel).toHaveBeenCalledWith(workspace.selectedPanelId);
+    await user.click(screen.getByRole("button", { name: /删除仪表盘/ }));
+    expect(onDeleteDashboard).toHaveBeenCalledWith(workspace.selectedDashboardId);
   });
 
   it("validates bag path before starting playback", async () => {
@@ -79,19 +89,10 @@ describe("MonitorPage", () => {
     render(
       <MonitorPage
         workspace={workspace}
-        jointStateTopic="/js"
-        liveUpdates
-        bagStatus={null}
-        bagBusy={false}
-        bagNotice=""
-        onSelectPanel={() => undefined}
-        onAddPanel={() => undefined}
-        onRenamePanel={() => undefined}
-        onDeletePanel={() => undefined}
-        onUpdatePanelSeries={() => undefined}
-        onRefreshBagStatus={() => undefined}
-        onStartBagPlay={onStart}
-        onStopBagPlay={() => undefined}
+        {...baseProps({
+          jointStateTopic: "/js",
+          onStartBagPlay: onStart,
+        })}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Bag 回放" }));
@@ -107,80 +108,69 @@ describe("MonitorPage", () => {
     await user.click(screen.getByRole("button", { name: "开始回放" }));
     expect(onStart).toHaveBeenCalledWith("robot-console-bags/demo");
   });
-});
 
-  it("adds a torque template panel and switches tabs", async () => {
+  it("adds a torque template dashboard and switches tabs", async () => {
     const user = userEvent.setup();
     let workspace = createDefaultMonitorWorkspace("/stm32/joint_states");
-    const torqueId = workspace.selectedPanelId;
-    const onSelectPanel = vi.fn();
-    const onAddPanel = vi.fn();
-    const props = {
-      jointStateTopic: "/stm32/joint_states",
-      liveUpdates: true,
-      bagStatus: null as null,
-      bagBusy: false,
-      bagNotice: "",
-      onSelectPanel,
-      onAddPanel,
-      onRenamePanel: () => undefined,
-      onDeletePanel: () => undefined,
-      onUpdatePanelSeries: () => undefined,
-      onRefreshBagStatus: () => undefined,
-      onStartBagPlay: () => undefined,
-      onStopBagPlay: () => undefined,
-    };
+    const torqueId = workspace.selectedDashboardId;
+    const onSelectDashboard = vi.fn();
+    const onAddDashboard = vi.fn();
+    const props = baseProps({ onSelectDashboard, onAddDashboard });
     const { rerender } = render(<MonitorPage workspace={workspace} {...props} />);
 
-    await user.click(screen.getByRole("button", { name: "添加力矩模板面板" }));
-    expect(onAddPanel).toHaveBeenCalledWith(expect.objectContaining({
+    await user.click(screen.getByRole("button", { name: "添加力矩模板仪表盘" }));
+    expect(onAddDashboard).toHaveBeenCalledWith(expect.objectContaining({
       name: "Motor Torque",
-      series: expect.arrayContaining([
-        expect.objectContaining({ fieldPath: "effort[0]", topic: "/stm32/joint_states" }),
-        expect.objectContaining({ fieldPath: "effort[6]" }),
+      panels: expect.arrayContaining([
+        expect.objectContaining({
+          series: expect.objectContaining({ fieldPath: "effort[0]", topic: "/stm32/joint_states" }),
+        }),
+        expect.objectContaining({
+          series: expect.objectContaining({ fieldPath: "effort[6]" }),
+        }),
       ]),
     }));
-    expect(onAddPanel.mock.calls[0]![0].series).toHaveLength(7);
+    expect(onAddDashboard.mock.calls[0]![0].panels).toHaveLength(7);
 
-    workspace = addMonitorPanel(workspace, createEmptyPanel("Second", "panel-second"));
+    workspace = addMonitorDashboard(workspace, createEmptyDashboard("Second", "dashboard-second"));
     rerender(<MonitorPage workspace={workspace} {...props} />);
     expect(screen.getByRole("tab", { name: /Second/ })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: /Motor Torque/ }));
-    expect(onSelectPanel).toHaveBeenCalledWith(torqueId);
+    expect(onSelectDashboard).toHaveBeenCalledWith(torqueId);
   });
 
-  it("clears and removes series through DataGraph and stops bag playback", async () => {
+  it("removes panels through DataGraph and stops bag playback", async () => {
     const user = userEvent.setup();
-    const onUpdate = vi.fn();
+    const onRemovePanel = vi.fn();
+    const onClearPanels = vi.fn();
     const onStop = vi.fn();
     const onRefresh = vi.fn();
     const workspace = createDefaultMonitorWorkspace("/js");
     render(
       <MonitorPage
         workspace={workspace}
-        jointStateTopic="/js"
-        liveUpdates={false}
-        bagStatus={{ playing: true, pid: 123, bagPath: "robot-console-bags/demo", message: "playing" }}
-        bagBusy={false}
-        bagNotice="note"
-        onSelectPanel={() => undefined}
-        onAddPanel={() => undefined}
-        onRenamePanel={() => undefined}
-        onDeletePanel={() => undefined}
-        onUpdatePanelSeries={onUpdate}
-        onRefreshBagStatus={onRefresh}
-        onStartBagPlay={() => undefined}
-        onStopBagPlay={onStop}
+        {...baseProps({
+          jointStateTopic: "/js",
+          liveUpdates: false,
+          bagStatus: { playing: true, pid: 123, bagPath: "robot-console-bags/demo", message: "playing" },
+          bagNotice: "note",
+          onRemovePanel,
+          onClearPanels,
+          onRefreshBagStatus: onRefresh,
+          onStopBagPlay: onStop,
+        })}
       />,
     );
 
     expect(screen.getAllByText(/已暂停/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "移除 effort[0]" }));
-    expect(onUpdate).toHaveBeenCalledWith(workspace.selectedPanelId, expect.any(Array));
-    expect(onUpdate.mock.calls[0]![1]).toHaveLength(6);
+    expect(onRemovePanel).toHaveBeenCalledWith(
+      workspace.selectedDashboardId,
+      workspace.dashboards[0]!.panels[0]!.id,
+    );
 
-    await user.click(screen.getByRole("button", { name: "清空曲线" }));
-    expect(onUpdate).toHaveBeenLastCalledWith(workspace.selectedPanelId, []);
+    await user.click(screen.getByRole("button", { name: "清空面板" }));
+    expect(onClearPanels).toHaveBeenCalledWith(workspace.selectedDashboardId);
 
     await user.click(screen.getByRole("button", { name: "Bag 回放" }));
     expect(screen.getByText("note")).toBeVisible();
@@ -189,3 +179,4 @@ describe("MonitorPage", () => {
     await user.click(screen.getByRole("button", { name: "停止回放" }));
     expect(onStop).toHaveBeenCalledOnce();
   });
+});

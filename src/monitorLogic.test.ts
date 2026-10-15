@@ -1,29 +1,36 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_MONITOR_DASHBOARD_NAME,
   DEFAULT_MONITOR_PANEL_NAME,
   DEFAULT_TORQUE_JOINT_COUNT,
   MONITOR_STORAGE_KEY,
-  addMonitorPanel,
+  MONITOR_STORAGE_VERSION,
+  addMonitorDashboard,
+  addPanelsToDashboard,
+  clearDashboardPanels,
   createDefaultMonitorWorkspace,
-  createEmptyPanel,
-  createTorquePanel,
+  createEmptyDashboard,
+  createTorqueDashboard,
   createTorqueSeries,
-  deleteMonitorPanel,
+  deleteMonitorDashboard,
   hydrateMonitorWorkspace,
   isSafeBagPath,
   loadMonitorWorkspace,
+  migrateV1PanelToDashboard,
+  packPanelLayouts,
   panelHasSeries,
   persistMonitorWorkspace,
-  renameMonitorPanel,
+  removePanelFromDashboard,
+  renameMonitorDashboard,
   saveMonitorWorkspace,
-  selectMonitorPanel,
-  selectedMonitorPanel,
+  selectMonitorDashboard,
+  selectedMonitorDashboard,
+  updateDashboardLayout,
   updateMonitorFromMessage,
   updatePanelSeries,
-  isTorqueEffortGridPanel,
 } from "./monitorLogic";
 
-describe("monitorLogic torque template", () => {
+describe("monitorLogic torque dashboard", () => {
   it("builds effort[0..n) series on the joint-state topic", () => {
     const series = createTorqueSeries("/stm32/joint_states", 7);
     expect(series).toHaveLength(DEFAULT_TORQUE_JOINT_COUNT);
@@ -34,41 +41,62 @@ describe("monitorLogic torque template", () => {
     expect(series.every((entry) => entry.points.length === 0)).toBe(true);
   });
 
-  it("creates a default workspace with Motor Torque selected", () => {
+  it("creates a default workspace with Motor Torque dashboard of 7 panels", () => {
     const workspace = createDefaultMonitorWorkspace("/stm32/joint_states");
-    expect(workspace.panels).toHaveLength(1);
-    expect(workspace.panels[0]!.name).toBe(DEFAULT_MONITOR_PANEL_NAME);
-    expect(workspace.selectedPanelId).toBe(workspace.panels[0]!.id);
-    expect(workspace.panels[0]!.series).toHaveLength(7);
+    expect(workspace.dashboards).toHaveLength(1);
+    const dashboard = workspace.dashboards[0]!;
+    expect(dashboard.name).toBe(DEFAULT_MONITOR_DASHBOARD_NAME);
+    expect(dashboard.name).toBe(DEFAULT_MONITOR_PANEL_NAME);
+    expect(workspace.selectedDashboardId).toBe(dashboard.id);
+    expect(dashboard.panels).toHaveLength(7);
+    expect(dashboard.panels.map((panel) => panel.series.fieldPath)).toEqual([
+      "effort[0]", "effort[1]", "effort[2]", "effort[3]", "effort[4]", "effort[5]", "effort[6]",
+    ]);
+    expect(dashboard.panels[0]!.layout).toMatchObject({ x: 0, y: 0, w: 4, h: 2 });
+    expect(dashboard.panels[1]!.layout).toMatchObject({ x: 4, y: 0, w: 4, h: 2 });
+    expect(dashboard.panels[2]!.layout).toMatchObject({ x: 8, y: 0, w: 4, h: 2 });
+    expect(dashboard.panels[3]!.layout).toMatchObject({ x: 0, y: 2, w: 4, h: 2 });
+    expect(dashboard.panels[6]!.layout).toMatchObject({ x: 0, y: 4, w: 4, h: 2 });
+    expect(dashboard.panels.every((panel) => panel.layout.i === panel.id)).toBe(true);
+  });
+
+  it("packs layouts in a 12-col grid", () => {
+    const layouts = packPanelLayouts(4, (index) => `p${index}`);
+    expect(layouts).toEqual([
+      { i: "p0", x: 0, y: 0, w: 4, h: 2 },
+      { i: "p1", x: 4, y: 0, w: 4, h: 2 },
+      { i: "p2", x: 8, y: 0, w: 4, h: 2 },
+      { i: "p3", x: 0, y: 2, w: 4, h: 2 },
+    ]);
   });
 });
 
-describe("monitorLogic panel CRUD", () => {
-  it("selects, renames, adds and deletes panels; last delete restores torque default", () => {
+describe("monitorLogic dashboard CRUD", () => {
+  it("selects, renames, adds and deletes dashboards; last delete restores torque default", () => {
     let workspace = createDefaultMonitorWorkspace("/js");
-    const torqueId = workspace.selectedPanelId;
-    const extra = createEmptyPanel("Custom");
-    workspace = addMonitorPanel(workspace, extra);
-    expect(workspace.selectedPanelId).toBe(extra.id);
-    expect(workspace.panels).toHaveLength(2);
+    const torqueId = workspace.selectedDashboardId;
+    const extra = createEmptyDashboard("Custom");
+    workspace = addMonitorDashboard(workspace, extra);
+    expect(workspace.selectedDashboardId).toBe(extra.id);
+    expect(workspace.dashboards).toHaveLength(2);
 
-    workspace = selectMonitorPanel(workspace, torqueId);
-    expect(workspace.selectedPanelId).toBe(torqueId);
-    workspace = renameMonitorPanel(workspace, torqueId, "  Torques  ");
-    expect(selectedMonitorPanel(workspace)?.name).toBe("Torques");
-    expect(renameMonitorPanel(workspace, torqueId, "   ")).toBe(workspace);
+    workspace = selectMonitorDashboard(workspace, torqueId);
+    expect(workspace.selectedDashboardId).toBe(torqueId);
+    workspace = renameMonitorDashboard(workspace, torqueId, "  Torques  ");
+    expect(selectedMonitorDashboard(workspace)?.name).toBe("Torques");
+    expect(renameMonitorDashboard(workspace, torqueId, "   ")).toBe(workspace);
 
-    workspace = deleteMonitorPanel(workspace, torqueId, "/js");
-    expect(workspace.panels).toHaveLength(1);
-    expect(workspace.panels[0]!.id).toBe(extra.id);
+    workspace = deleteMonitorDashboard(workspace, torqueId, "/js");
+    expect(workspace.dashboards).toHaveLength(1);
+    expect(workspace.dashboards[0]!.id).toBe(extra.id);
 
-    workspace = deleteMonitorPanel(workspace, extra.id, "/js");
-    expect(workspace.panels).toHaveLength(1);
-    expect(workspace.panels[0]!.name).toBe(DEFAULT_MONITOR_PANEL_NAME);
-    expect(createTorquePanel("/js").series).toHaveLength(7);
+    workspace = deleteMonitorDashboard(workspace, extra.id, "/js");
+    expect(workspace.dashboards).toHaveLength(1);
+    expect(workspace.dashboards[0]!.name).toBe(DEFAULT_MONITOR_DASHBOARD_NAME);
+    expect(createTorqueDashboard("/js").panels).toHaveLength(7);
   });
 
-  it("round-trips persistence without points", () => {
+  it("round-trips persistence without points and writes version 2", () => {
     let workspace = createDefaultMonitorWorkspace("/js");
     workspace = updateMonitorFromMessage(
       workspace,
@@ -76,12 +104,17 @@ describe("monitorLogic panel CRUD", () => {
       { effort: [1, 2, 3, 4, 5, 6, 7] },
       50,
     );
-    expect(workspace.panels[0]!.series[0]!.points.length).toBe(1);
+    expect(workspace.dashboards[0]!.panels[0]!.series.points.length).toBe(1);
     const persisted = persistMonitorWorkspace(workspace);
-    expect(persisted.panels[0]!.series[0]).toMatchObject({ topic: "/js", fieldPath: "effort[0]" });
+    expect(persisted.version).toBe(MONITOR_STORAGE_VERSION);
+    expect(persisted.dashboards[0]!.panels[0]!.series).toMatchObject({
+      topic: "/js",
+      fieldPath: "effort[0]",
+    });
+    expect(persisted.dashboards[0]!.panels[0]!.layout.w).toBe(4);
     const hydrated = hydrateMonitorWorkspace(persisted, "/js");
-    expect(hydrated.panels[0]!.series.every((series) => series.points.length === 0)).toBe(true);
-    expect(hydrated.selectedPanelId).toBe(persisted.selectedPanelId);
+    expect(hydrated.dashboards[0]!.panels.every((panel) => panel.series.points.length === 0)).toBe(true);
+    expect(hydrated.selectedDashboardId).toBe(persisted.selectedDashboardId);
   });
 });
 
@@ -90,7 +123,8 @@ describe("monitorLogic live updates and bag path", () => {
     const workspace = createDefaultMonitorWorkspace("/js");
     const next = updateMonitorFromMessage(workspace, "/js", { effort: [10, 20, 30, 40, 50, 60, 70] }, 1_000);
     expect(next).not.toBe(workspace);
-    expect(next.panels[0]!.series[0]!.points).toEqual([{ t: 1_000, value: 10 }]);
+    expect(next.dashboards[0]!.panels[0]!.series.points).toEqual([{ t: 1_000, value: 10 }]);
+    expect(next.dashboards[0]!.panels[6]!.series.points).toEqual([{ t: 1_000, value: 70 }]);
     expect(updateMonitorFromMessage(next, "/other", { effort: [1] }, 1_100)).toBe(next);
   });
 
@@ -104,7 +138,7 @@ describe("monitorLogic live updates and bag path", () => {
   });
 });
 
-describe("monitorLogic persistence and helpers", () => {
+describe("monitorLogic persistence migration and helpers", () => {
   it("loads and saves workspace through Storage without points", () => {
     const store = new Map<string, string>();
     const storage = {
@@ -112,60 +146,138 @@ describe("monitorLogic persistence and helpers", () => {
       setItem: (key: string, value: string) => { store.set(key, value); },
     };
     let workspace = createDefaultMonitorWorkspace("/js");
-    workspace = addMonitorPanel(workspace, createEmptyPanel("Custom", "panel-custom"));
+    workspace = addMonitorDashboard(workspace, createEmptyDashboard("Custom", "dashboard-custom"));
     saveMonitorWorkspace(workspace, storage);
     expect(store.get(MONITOR_STORAGE_KEY)).toContain("Custom");
+    expect(store.get(MONITOR_STORAGE_KEY)).toContain('"version":2');
 
     const loaded = loadMonitorWorkspace("/js", storage);
-    expect(loaded.panels).toHaveLength(2);
-    expect(loaded.panels.map((panel) => panel.name)).toEqual(["Motor Torque", "Custom"]);
-    expect(loaded.panels.every((panel) => panel.series.every((series) => series.points.length === 0))).toBe(true);
-    expect(loaded.selectedPanelId).toBe("panel-custom");
+    expect(loaded.dashboards).toHaveLength(2);
+    expect(loaded.dashboards.map((dashboard) => dashboard.name)).toEqual(["Motor Torque", "Custom"]);
+    expect(loaded.dashboards.every((dashboard) =>
+      dashboard.panels.every((panel) => panel.series.points.length === 0))).toBe(true);
+    expect(loaded.selectedDashboardId).toBe("dashboard-custom");
   });
 
   it("falls back to torque default on missing, empty, or corrupt storage", () => {
-    expect(loadMonitorWorkspace("/js", { getItem: () => null }).panels[0]!.name).toBe(DEFAULT_MONITOR_PANEL_NAME);
-    expect(loadMonitorWorkspace("/js", { getItem: () => "not-json{" }).panels[0]!.series).toHaveLength(7);
-    expect(hydrateMonitorWorkspace(null, "/js").panels).toHaveLength(1);
-    expect(hydrateMonitorWorkspace({ panels: [], selectedPanelId: "x" }, "/js").panels[0]!.name)
-      .toBe(DEFAULT_MONITOR_PANEL_NAME);
+    expect(loadMonitorWorkspace("/js", { getItem: () => null }).dashboards[0]!.name)
+      .toBe(DEFAULT_MONITOR_DASHBOARD_NAME);
+    expect(loadMonitorWorkspace("/js", { getItem: () => "not-json{" }).dashboards[0]!.panels)
+      .toHaveLength(7);
+    expect(hydrateMonitorWorkspace(null, "/js").dashboards).toHaveLength(1);
+    expect(hydrateMonitorWorkspace({
+      version: 2,
+      dashboards: [],
+      selectedDashboardId: "x",
+    }, "/js").dashboards[0]!.name).toBe(DEFAULT_MONITOR_DASHBOARD_NAME);
   });
 
-  it("repairs missing panel ids and unknown selectedPanelId on hydrate", () => {
+  it("migrates v1 panels[].series[] tabs into dashboards with one panel per series", () => {
     const hydrated = hydrateMonitorWorkspace({
-      selectedPanelId: "missing",
+      selectedPanelId: "tab-torque",
       panels: [
-        { id: "", name: "  ", series: [{ topic: "/a", fieldPath: "x", color: "#abc" }] },
-        { id: "keep", name: "Keep", series: [] },
+        {
+          id: "tab-torque",
+          name: "Motor Torque",
+          series: [
+            { topic: "/js", fieldPath: "effort[0]", color: "#a" },
+            { topic: "/js", fieldPath: "effort[1]", color: "#b" },
+          ],
+        },
+        { id: "tab-empty", name: "Empty", series: [] },
       ],
     }, "/js");
-    expect(hydrated.panels[0]!.id).toBe("panel-0");
-    expect(hydrated.panels[0]!.name).toBe("Panel 1");
-    expect(hydrated.panels[0]!.series[0]).toMatchObject({ topic: "/a", fieldPath: "x", color: "#abc", points: [] });
-    expect(hydrated.selectedPanelId).toBe("panel-0");
+    expect(hydrated.dashboards).toHaveLength(2);
+    expect(hydrated.selectedDashboardId).toBe("tab-torque");
+    expect(hydrated.dashboards[0]!.panels).toHaveLength(2);
+    expect(hydrated.dashboards[0]!.panels[0]!.series).toMatchObject({
+      topic: "/js",
+      fieldPath: "effort[0]",
+      color: "#a",
+      points: [],
+    });
+    expect(hydrated.dashboards[0]!.panels[0]!.layout).toMatchObject({ x: 0, y: 0, w: 4, h: 2 });
+    expect(hydrated.dashboards[0]!.panels[1]!.layout).toMatchObject({ x: 4, y: 0, w: 4, h: 2 });
+    expect(hydrated.dashboards[1]!.panels).toHaveLength(0);
+    expect(migrateV1PanelToDashboard({
+      id: "x",
+      name: "X",
+      series: [{ topic: "/t", fieldPath: "a", color: "#1" }],
+    }, 0).panels).toHaveLength(1);
   });
 
-  it("updates panel series, detects duplicates, and ignores unknown select", () => {
-    let workspace = createDefaultMonitorWorkspace("/js");
-    const panelId = workspace.selectedPanelId;
-    expect(panelHasSeries(workspace.panels[0]!, "/js", "effort[0]")).toBe(true);
-    expect(panelHasSeries(workspace.panels[0]!, "/js", "position[0]")).toBe(false);
-
-    const emptied = updatePanelSeries(workspace, panelId, []);
-    expect(emptied.panels[0]!.series).toEqual([]);
-    expect(updatePanelSeries(workspace, "nope", []).panels[0]!.series).toHaveLength(7);
-
-    expect(selectMonitorPanel(workspace, "nope")).toBe(workspace);
-    expect(selectedMonitorPanel({ panels: [], selectedPanelId: "x" })).toBeUndefined();
+  it("repairs missing dashboard ids and unknown selectedDashboardId on hydrate", () => {
+    const hydrated = hydrateMonitorWorkspace({
+      version: 2,
+      selectedDashboardId: "missing",
+      dashboards: [
+        {
+          id: "",
+          name: "  ",
+          panels: [{
+            id: "",
+            title: "",
+            layout: { i: "", x: 1, y: 2, w: 6, h: 3 },
+            series: { topic: "/a", fieldPath: "x", color: "#abc" },
+          }],
+        },
+        { id: "keep", name: "Keep", panels: [] },
+      ],
+    }, "/js");
+    expect(hydrated.dashboards[0]!.id).toBe("dashboard-0");
+    expect(hydrated.dashboards[0]!.name).toBe("Dashboard 1");
+    expect(hydrated.dashboards[0]!.panels[0]!.id).toBe("panel-0");
+    expect(hydrated.dashboards[0]!.panels[0]!.series).toMatchObject({
+      topic: "/a",
+      fieldPath: "x",
+      color: "#abc",
+      points: [],
+    });
+    expect(hydrated.selectedDashboardId).toBe("dashboard-0");
   });
 
-  it("skips empty panels during live updates", () => {
+  it("updates layout, adds/removes panels, and ignores unknown select", () => {
     let workspace = createDefaultMonitorWorkspace("/js");
-    workspace = addMonitorPanel(workspace, createEmptyPanel("Empty"));
+    const dashboardId = workspace.selectedDashboardId;
+    expect(panelHasSeries(workspace.dashboards[0]!, "/js", "effort[0]")).toBe(true);
+    expect(panelHasSeries(workspace.dashboards[0]!, "/js", "position[0]")).toBe(false);
+
+    const panelId = workspace.dashboards[0]!.panels[0]!.id;
+    workspace = updateDashboardLayout(workspace, dashboardId, [
+      { i: panelId, x: 2, y: 4, w: 6, h: 3 },
+    ]);
+    expect(workspace.dashboards[0]!.panels[0]!.layout).toMatchObject({ x: 2, y: 4, w: 6, h: 3 });
+
+    const emptied = clearDashboardPanels(workspace, dashboardId);
+    expect(emptied.dashboards[0]!.panels).toEqual([]);
+
+    const withExtra = addPanelsToDashboard(workspace, dashboardId, [
+      createTorqueSeries("/js", 1)[0]!,
+    ]);
+    // effort[0] already exists — no duplicate
+    expect(withExtra.dashboards[0]!.panels).toHaveLength(7);
+
+    const custom = createTorqueSeries("/other", 1)[0]!;
+    const added = addPanelsToDashboard(workspace, dashboardId, [custom]);
+    expect(added.dashboards[0]!.panels).toHaveLength(8);
+    expect(added.dashboards[0]!.panels[7]!.series.topic).toBe("/other");
+    expect(added.dashboards[0]!.panels[7]!.layout.y).toBeGreaterThanOrEqual(6);
+
+    const removed = removePanelFromDashboard(added, dashboardId, added.dashboards[0]!.panels[7]!.id);
+    expect(removed.dashboards[0]!.panels).toHaveLength(7);
+
+    expect(updatePanelSeries(workspace, "nope", []).dashboards[0]!.panels).toHaveLength(7);
+    expect(selectMonitorDashboard(workspace, "nope")).toBe(workspace);
+    expect(selectedMonitorDashboard({ dashboards: [], selectedDashboardId: "x" })).toBeUndefined();
+  });
+
+  it("skips empty dashboards during live updates", () => {
+    let workspace = createDefaultMonitorWorkspace("/js");
+    workspace = addMonitorDashboard(workspace, createEmptyDashboard("Empty"));
     const next = updateMonitorFromMessage(workspace, "/js", { effort: [1, 2, 3, 4, 5, 6, 7] }, 10);
-    expect(next.panels.find((panel) => panel.name === "Empty")!.series).toEqual([]);
-    expect(next.panels.find((panel) => panel.name === DEFAULT_MONITOR_PANEL_NAME)!.series[0]!.points)
-      .toEqual([{ t: 10, value: 1 }]);
+    expect(next.dashboards.find((dashboard) => dashboard.name === "Empty")!.panels).toEqual([]);
+    expect(next.dashboards.find((dashboard) => dashboard.name === DEFAULT_MONITOR_DASHBOARD_NAME)!
+      .panels[0]!.series.points).toEqual([{ t: 10, value: 1 }]);
   });
 
   it("rejects overlong and dashed-segment bag paths", () => {
@@ -173,17 +285,5 @@ describe("monitorLogic persistence and helpers", () => {
     expect(isSafeBagPath("bags/-bad")).toBe(false);
     expect(isSafeBagPath("/")).toBe(false);
     expect(isSafeBagPath("bags/./nested")).toBe(false);
-  });
-});
-
-describe("torque effort grid detection", () => {
-  it("detects the effort grid template", () => {
-    const panel = createTorquePanel("/stm32/joint_states", 7);
-    expect(isTorqueEffortGridPanel(panel)).toBe(true);
-    expect(isTorqueEffortGridPanel(createEmptyPanel())).toBe(false);
-    expect(isTorqueEffortGridPanel({
-      ...panel,
-      series: [...panel.series, createTorqueSeries("/other", 1)[0]!],
-    })).toBe(false);
   });
 });

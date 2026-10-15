@@ -668,7 +668,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("button", { name: /\/stm32\/joint_states/ });
     await user.click(screen.getByRole("button", { name: "Monitor" }));
-    await user.click(screen.getByRole("button", { name: "新建空面板" }));
+    await user.click(screen.getByRole("button", { name: "新建空仪表盘" }));
     await user.click(screen.getByRole("tab", { name: /Motor Torque/ }));
     await user.click(screen.getByRole("button", { name: "Topics" }));
     await user.click(screen.getByRole("button", { name: /\/stm32\/joint_states/ }));
@@ -682,12 +682,11 @@ describe("App workflow", () => {
     const json = await screen.findByLabelText("Topic JSON");
     await user.pointer({ keys: "[MouseRight]", target: json.querySelector('[data-monitor-path="effort"]') as Element });
     expect(screen.getAllByRole("menuitem")).toHaveLength(2);
-    await user.click(screen.getByRole("menuitem", { name: "New Panel" }));
+    await user.click(screen.getByRole("menuitem", { name: "New Dashboard" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(localStorage.getItem("robot-console-page")).toBe("monitor");
-    expect(await screen.findByLabelText("effort 独立曲线网格")).toBeVisible();
-    expect(screen.getByRole("tab", { name: /New Panel/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/7 路 effort 独立图/)).toBeVisible();
+    expect(screen.getByRole("tab", { name: /New Dashboard/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText(/7 个 Panel · 窗口/)).toBeVisible();
     expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
     getContext.mockRestore();
   });
@@ -710,8 +709,8 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: /Motor Torque/ })).toBeVisible();
-    expect(screen.getByLabelText("effort 独立曲线网格")).toBeVisible();
-    expect(screen.getByText(/7 路 effort 独立图/)).toBeVisible();
+    expect(screen.getByText(/7 个 Panel · 窗口/)).toBeVisible();
+    expect(screen.getByLabelText("effort[0] 曲线")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Bag 回放" }));
     await user.clear(screen.getByLabelText("Jetson bag 路径"));
     await user.type(screen.getByLabelText("Jetson bag 路径"), "robot-console-bags/demo");

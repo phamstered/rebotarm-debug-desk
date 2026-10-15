@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
+import "react-grid-layout/css/styles.css";
+import "react-resizable/css/styles.css";
 import { DataGraph } from "./DataGraph";
-import type { DataSeries } from "./dataGraphLogic";
-import { removeSeries } from "./dataGraphLogic";
-import type { MonitorPanel, MonitorWorkspace } from "./monitorLogic";
+import type { MonitorDashboard, MonitorWorkspace } from "./monitorLogic";
 import {
-  createEmptyPanel,
-  createTorquePanel,
+  MONITOR_GRID_COLS,
+  MONITOR_PANEL_MIN_H,
+  MONITOR_PANEL_MIN_W,
+  createEmptyDashboard,
+  createTorqueDashboard,
   isSafeBagPath,
-  isTorqueEffortGridPanel,
-  selectedMonitorPanel,
+  selectedMonitorDashboard,
 } from "./monitorLogic";
 import type { RosbagPlayStatus } from "./types";
+
+const ReactGridLayout = WidthProvider(GridLayout);
 
 export type MonitorSourceMode = "live" | "bag";
 
@@ -21,11 +26,13 @@ export function MonitorPage({
   bagStatus,
   bagBusy,
   bagNotice,
-  onSelectPanel,
-  onAddPanel,
-  onRenamePanel,
-  onDeletePanel,
-  onUpdatePanelSeries,
+  onSelectDashboard,
+  onAddDashboard,
+  onRenameDashboard,
+  onDeleteDashboard,
+  onLayoutChange,
+  onRemovePanel,
+  onClearPanels,
   onRefreshBagStatus,
   onStartBagPlay,
   onStopBagPlay,
@@ -36,38 +43,55 @@ export function MonitorPage({
   bagStatus: RosbagPlayStatus | null;
   bagBusy: boolean;
   bagNotice: string;
-  onSelectPanel(panelId: string): void;
-  onAddPanel(panel: MonitorPanel): void;
-  onRenamePanel(panelId: string, name: string): void;
-  onDeletePanel(panelId: string): void;
-  onUpdatePanelSeries(panelId: string, series: DataSeries[]): void;
+  onSelectDashboard(dashboardId: string): void;
+  onAddDashboard(dashboard: MonitorDashboard): void;
+  onRenameDashboard(dashboardId: string, name: string): void;
+  onDeleteDashboard(dashboardId: string): void;
+  onLayoutChange(dashboardId: string, layout: Layout[]): void;
+  onRemovePanel(dashboardId: string, panelId: string): void;
+  onClearPanels(dashboardId: string): void;
   onRefreshBagStatus(): void;
   onStartBagPlay(bagPath: string): void;
   onStopBagPlay(): void;
 }) {
-  const panel = selectedMonitorPanel(workspace);
+  const dashboard = selectedMonitorDashboard(workspace);
   const [mode, setMode] = useState<MonitorSourceMode>("live");
   const [bagPath, setBagPath] = useState(bagStatus?.bagPath || "robot-console-bags/");
-  const [renameValue, setRenameValue] = useState(panel?.name ?? "");
+  const [renameValue, setRenameValue] = useState(dashboard?.name ?? "");
   const [pathError, setPathError] = useState("");
 
   useEffect(() => {
-    setRenameValue(panel?.name ?? "");
-  }, [panel?.id, panel?.name]);
+    setRenameValue(dashboard?.name ?? "");
+  }, [dashboard?.id, dashboard?.name]);
 
   useEffect(() => {
     if (bagStatus?.bagPath) setBagPath(bagStatus.bagPath);
   }, [bagStatus?.bagPath]);
 
-  if (!panel) return null;
+  const layout = useMemo(
+    () =>
+      (dashboard?.panels ?? []).map((panel) => ({
+        i: panel.id,
+        x: panel.layout.x,
+        y: panel.layout.y,
+        w: panel.layout.w,
+        h: panel.layout.h,
+        minW: MONITOR_PANEL_MIN_W,
+        minH: MONITOR_PANEL_MIN_H,
+      })),
+    [dashboard?.panels],
+  );
+
+  if (!dashboard) return null;
 
   const playing = Boolean(bagStatus?.playing);
+  const chartsLive = liveUpdates && (mode === "live" || playing);
 
   const commitRename = () => {
-    if (renameValue.trim() && renameValue.trim() !== panel.name) {
-      onRenamePanel(panel.id, renameValue);
+    if (renameValue.trim() && renameValue.trim() !== dashboard.name) {
+      onRenameDashboard(dashboard.id, renameValue);
     } else {
-      setRenameValue(panel.name);
+      setRenameValue(dashboard.name);
     }
   };
 
@@ -86,7 +110,7 @@ export function MonitorPage({
       <header className="monitor-page-header">
         <div>
           <h1>Monitor</h1>
-          <span>多面板数值曲线 · 实时或 rosbag 回放</span>
+          <span>Dashboard / Panel / Chart · 拖拽缩放 · 实时或 rosbag 回放</span>
         </div>
         <div className="monitor-mode" role="group" aria-label="数据源">
           <button
@@ -108,35 +132,35 @@ export function MonitorPage({
         </div>
       </header>
 
-      <div className="monitor-panels-bar" role="tablist" aria-label="Monitor 面板">
-        {workspace.panels.map((entry) => (
+      <div className="monitor-panels-bar" role="tablist" aria-label="Monitor 仪表盘">
+        {workspace.dashboards.map((entry) => (
           <button
             key={entry.id}
             type="button"
             role="tab"
-            className={entry.id === panel.id ? "active" : ""}
-            aria-selected={entry.id === panel.id}
-            onClick={() => onSelectPanel(entry.id)}
+            className={entry.id === dashboard.id ? "active" : ""}
+            aria-selected={entry.id === dashboard.id}
+            onClick={() => onSelectDashboard(entry.id)}
           >
             {entry.name}
-            <small>{entry.series.length}</small>
+            <small>{entry.panels.length}</small>
           </button>
         ))}
         <button
           type="button"
           className="monitor-panel-add"
-          aria-label="新建空面板"
-          title="新建空面板"
-          onClick={() => onAddPanel(createEmptyPanel())}
+          aria-label="新建空仪表盘"
+          title="新建空仪表盘"
+          onClick={() => onAddDashboard(createEmptyDashboard())}
         >
           +
         </button>
         <button
           type="button"
           className="monitor-panel-add"
-          aria-label="添加力矩模板面板"
-          title="添加力矩模板面板"
-          onClick={() => onAddPanel(createTorquePanel(jointStateTopic))}
+          aria-label="添加力矩模板仪表盘"
+          title="添加力矩模板仪表盘"
+          onClick={() => onAddDashboard(createTorqueDashboard(jointStateTopic))}
         >
           +转矩
         </button>
@@ -144,10 +168,10 @@ export function MonitorPage({
 
       <div className="monitor-panel-meta">
         <label>
-          面板名称
+          仪表盘名称
           <input
             value={renameValue}
-            aria-label="面板名称"
+            aria-label="仪表盘名称"
             onChange={(event) => setRenameValue(event.target.value)}
             onBlur={commitRename}
             onKeyDown={(event) => {
@@ -160,13 +184,21 @@ export function MonitorPage({
         <button
           type="button"
           className="ghost"
-          aria-label={`删除面板 ${panel.name}`}
-          onClick={() => onDeletePanel(panel.id)}
+          aria-label={`删除仪表盘 ${dashboard.name}`}
+          onClick={() => onDeleteDashboard(dashboard.id)}
         >
-          删除面板
+          删除仪表盘
+        </button>
+        <button
+          type="button"
+          className="ghost monitor-clear-panels"
+          disabled={dashboard.panels.length === 0}
+          onClick={() => onClearPanels(dashboard.id)}
+        >
+          清空面板
         </button>
         <span className="monitor-panel-hint">
-          从 Topics → Inspector 右键选择目标面板添加曲线；Motor Torque 模板以 7 张独立图显示 effort[0..6]（共享 30s 时间窗）。
+          从 Topics → Inspector 右键选择目标仪表盘添加 Panel；拖拽面板标题栏移动、拖角缩放。Motor Torque 默认含 effort[0..6]。
         </span>
       </div>
 
@@ -210,46 +242,51 @@ export function MonitorPage({
         </section>
       )}
 
-      {isTorqueEffortGridPanel(panel) ? (
-        <div className="monitor-chart-grid-wrap">
-          <div className="monitor-chart-grid-toolbar">
-            <span>
-              {panel.series[0]?.topic} · {panel.series.length} 路 effort 独立图 · 窗口 30s
-              {liveUpdates && (mode === "live" || playing) ? "" : " · 已暂停"}
-            </span>
-            <button type="button" onClick={() => onUpdatePanelSeries(panel.id, [])} disabled={panel.series.length === 0}>
-              清空曲线
-            </button>
+      <div className="monitor-grid-wrap">
+        <div className="monitor-grid-toolbar">
+          <span>
+            {dashboard.panels.length === 0
+              ? "空仪表盘"
+              : `${dashboard.panels.length} 个 Panel · 窗口 30s`}
+            {chartsLive ? "" : " · 已暂停"}
+          </span>
+        </div>
+        {dashboard.panels.length === 0 ? (
+          <div className="monitor-grid-empty" role="status">
+            从 Topics → Inspector 加入数值字段，或使用「+转矩」模板
           </div>
-          <div className="monitor-chart-grid" aria-label="effort 独立曲线网格">
-            {[...panel.series]
-              .sort((a, b) => Number(/^effort\[(\d+)\]$/.exec(a.fieldPath)?.[1] ?? 0) - Number(/^effort\[(\d+)\]$/.exec(b.fieldPath)?.[1] ?? 0))
-              .map((series) => (
-                <div key={series.id} className="monitor-chart-cell">
-                  <DataGraph
-                    seriesList={[series]}
-                    liveUpdates={liveUpdates && (mode === "live" || playing)}
-                    compact
-                    title={series.fieldPath}
-                    emptyHint="等待 effort 数据"
-                    onRemoveSeries={(id) => onUpdatePanelSeries(panel.id, removeSeries(panel.series, id))}
-                    onClearSeries={() => onUpdatePanelSeries(panel.id, removeSeries(panel.series, series.id))}
-                  />
+        ) : (
+          <ReactGridLayout
+            className="monitor-grid"
+            cols={MONITOR_GRID_COLS}
+            rowHeight={80}
+            margin={[10, 10]}
+            containerPadding={[0, 0]}
+            layout={layout}
+            draggableHandle=".monitor-panel-drag"
+            draggableCancel="button,input,textarea,a"
+            onLayoutChange={(next) => onLayoutChange(dashboard.id, next)}
+            compactType="vertical"
+          >
+            {dashboard.panels.map((panel) => (
+              <div key={panel.id} className="monitor-panel-tile" data-panel-id={panel.id}>
+                <div className="monitor-panel-drag" title="拖拽移动">
+                  <span className="monitor-panel-drag-label">{panel.title}</span>
                 </div>
-              ))}
-          </div>
-        </div>
-      ) : (
-        <div className="monitor-chart">
-          <DataGraph
-            seriesList={panel.series}
-            liveUpdates={liveUpdates && (mode === "live" || playing)}
-            emptyHint="从 Topics 的 Inspector 加入数值字段，或使用「+转矩」模板"
-            onRemoveSeries={(id) => onUpdatePanelSeries(panel.id, removeSeries(panel.series, id))}
-            onClearSeries={() => onUpdatePanelSeries(panel.id, [])}
-          />
-        </div>
-      )}
+                <DataGraph
+                  seriesList={[panel.series]}
+                  liveUpdates={chartsLive}
+                  compact
+                  title={panel.title}
+                  emptyHint="等待数据"
+                  onRemoveSeries={() => onRemovePanel(dashboard.id, panel.id)}
+                  onClearSeries={() => onRemovePanel(dashboard.id, panel.id)}
+                />
+              </div>
+            ))}
+          </ReactGridLayout>
+        )}
+      </div>
     </main>
   );
 }
