@@ -2,7 +2,7 @@
 
 Date: 2026-10-15  
 Repo: `phamstered/rebotarm-debug-desk`  
-Status: draft — awaiting review  
+Status: approved 2026-10-15 — P1a in progress  
 Owner: rebotarm-debug-desk (上位机)
 
 ## 1. Goal

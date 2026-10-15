@@ -242,3 +242,82 @@ export function flowParticlesForEdge(
   const count = relation === "publish" ? 4 : 3;
   return particleOffsets(count, progress).map((offset) => ({ ...pointAlongSegment(segment, offset), hz }));
 }
+
+export type GraphCamera = { scale: number; tx: number; ty: number };
+
+export const GRAPH_CAMERA_MIN_SCALE = 0.25;
+export const GRAPH_CAMERA_MAX_SCALE = 3;
+
+export function clampCameraScale(scale: number): number {
+  return Math.min(GRAPH_CAMERA_MAX_SCALE, Math.max(GRAPH_CAMERA_MIN_SCALE, scale));
+}
+
+export function screenToWorld(camera: GraphCamera, screen: { x: number; y: number }): { x: number; y: number } {
+  return {
+    x: (screen.x - camera.tx) / camera.scale,
+    y: (screen.y - camera.ty) / camera.scale,
+  };
+}
+
+export function zoomCameraAt(camera: GraphCamera, screen: { x: number; y: number }, nextScale: number): GraphCamera {
+  const scale = clampCameraScale(nextScale);
+  const world = screenToWorld(camera, screen);
+  return { scale, tx: screen.x - world.x * scale, ty: screen.y - world.y * scale };
+}
+
+export function panCamera(camera: GraphCamera, dx: number, dy: number): GraphCamera {
+  return { ...camera, tx: camera.tx + dx, ty: camera.ty + dy };
+}
+
+export function fitCameraToNodes(
+  nodes: Array<{ x: number; y: number; radius: number }>,
+  viewport: { width: number; height: number },
+  padding = 48,
+): GraphCamera {
+  if (nodes.length === 0) return { scale: 1, tx: 0, ty: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x - node.radius);
+    minY = Math.min(minY, node.y - node.radius);
+    maxX = Math.max(maxX, node.x + node.radius);
+    maxY = Math.max(maxY, node.y + node.radius);
+  }
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const scale = clampCameraScale(
+    Math.min((viewport.width - padding * 2) / width, (viewport.height - padding * 2) / height),
+  );
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  return {
+    scale,
+    tx: viewport.width / 2 - cx * scale,
+    ty: viewport.height / 2 - cy * scale,
+  };
+}
+
+export function resetCamera(
+  viewport: { width: number; height: number },
+  layout: { width: number; height: number },
+): GraphCamera {
+  return {
+    scale: 1,
+    tx: Math.max(0, (viewport.width - layout.width) / 2),
+    ty: Math.max(0, (viewport.height - layout.height) / 2),
+  };
+}
+
+export function centerCameraOn(
+  camera: GraphCamera,
+  point: { x: number; y: number },
+  viewport: { width: number; height: number },
+): GraphCamera {
+  return {
+    ...camera,
+    tx: viewport.width / 2 - point.x * camera.scale,
+    ty: viewport.height / 2 - point.y * camera.scale,
+  };
+}

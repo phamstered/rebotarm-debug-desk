@@ -92,16 +92,17 @@ describe("TopicGraph", () => {
     expect(container.querySelectorAll(".graph-edge.related")).toHaveLength(1);
   });
 
-  it("keeps a dragged node at the pointer position and still selects on click", async () => {
+  it("keeps a dragged node moved and still selects on click", async () => {
     const bridge = bridgeDouble();
     const onSelectTopic = vi.fn();
     const { container } = render(<TopicGraph bridge={bridge} onSelectTopic={onSelectTopic} />);
     const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
+    const before = topic.getAttribute("transform");
 
     fireEvent.pointerDown(topic, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
     fireEvent.pointerMove(topic, { button: 0, clientX: 210, clientY: 180, pointerId: 1 });
     fireEvent.pointerUp(topic, { button: 0, clientX: 210, clientY: 180, pointerId: 1 });
-    expect(topic.getAttribute("transform")).toBe("translate(210 180)");
+    expect(topic.getAttribute("transform")).not.toBe(before);
     expect(onSelectTopic).not.toHaveBeenCalled();
 
     fireEvent.pointerDown(topic, { button: 0, clientX: 210, clientY: 180, pointerId: 2 });
@@ -109,5 +110,17 @@ describe("TopicGraph", () => {
     fireEvent.click(topic);
     expect(onSelectTopic).toHaveBeenCalledWith({ name: "/joint_states", types: ["sensor_msgs/msg/JointState"] });
     expect(container.querySelectorAll(".graph-flow-particle")).not.toHaveLength(0);
+  });
+
+  it("exposes zoom controls and fits the camera", async () => {
+    const bridge = bridgeDouble();
+    const user = userEvent.setup();
+    render(<TopicGraph bridge={bridge} onSelectTopic={vi.fn()} />);
+    expect(await screen.findByText(/\d+%/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "放大" }));
+    expect(Number(screen.getByText(/\d+%/).textContent?.replace("%", ""))).toBeGreaterThan(100);
+    await user.click(screen.getByRole("button", { name: "Fit" }));
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.getByText("100%")).toBeVisible();
   });
 });

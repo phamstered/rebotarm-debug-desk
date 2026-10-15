@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyManualPositions, controllerGraphFocus, edgeAnchorSegment, fakeEdgeFlowHz, filterBridgeGraph, flowParticlesForEdge, graphEdgeKey, layoutRosGraph, loadBridgeVisibility, pointAlongSegment, pruneManualPositions } from "./topicGraphLogic";
+import { applyManualPositions, centerCameraOn, clampCameraScale, controllerGraphFocus, edgeAnchorSegment, fakeEdgeFlowHz, filterBridgeGraph, fitCameraToNodes, flowParticlesForEdge, graphEdgeKey, layoutRosGraph, loadBridgeVisibility, panCamera, pointAlongSegment, pruneManualPositions, resetCamera, screenToWorld, zoomCameraAt } from "./topicGraphLogic";
 import type { RosGraph } from "./types";
 
 const graph: RosGraph = {
@@ -114,5 +114,32 @@ describe("topic graph drag and particle flow helpers", () => {
     expect(publish).toHaveLength(4);
     expect(later[0]!.x).not.toBeCloseTo(publish[0]!.x, 5);
     expect(flowParticlesForEdge(source, target, "subscribe", 0)).toHaveLength(3);
+  });
+});
+
+describe("graph camera helpers", () => {
+  it("clamps zoom and zooms toward the cursor", () => {
+    expect(clampCameraScale(0.01)).toBe(0.25);
+    expect(clampCameraScale(9)).toBe(3);
+    const camera = { scale: 1, tx: 0, ty: 0 };
+    const zoomed = zoomCameraAt(camera, { x: 100, y: 50 }, 2);
+    expect(zoomed.scale).toBe(2);
+    expect(screenToWorld(zoomed, { x: 100, y: 50 })).toEqual({ x: 100, y: 50 });
+    expect(panCamera(camera, 10, -4)).toEqual({ scale: 1, tx: 10, ty: -4 });
+  });
+
+  it("fits and resets the camera around layout nodes", () => {
+    const nodes = [
+      { x: 0, y: 0, radius: 10 },
+      { x: 200, y: 100, radius: 10 },
+    ];
+    const viewport = { width: 400, height: 300 };
+    const fitted = fitCameraToNodes(nodes, viewport);
+    expect(fitted.scale).toBeGreaterThan(0.25);
+    expect(fitted.scale).toBeLessThanOrEqual(3);
+    const centered = centerCameraOn({ scale: 1, tx: 0, ty: 0 }, { x: 100, y: 50 }, viewport);
+    expect(centered.tx).toBe(100);
+    expect(centered.ty).toBe(100);
+    expect(resetCamera(viewport, { width: 200, height: 100 })).toEqual({ scale: 1, tx: 100, ty: 100 });
   });
 });
