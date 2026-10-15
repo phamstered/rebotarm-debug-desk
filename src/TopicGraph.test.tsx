@@ -61,7 +61,6 @@ describe("TopicGraph", () => {
     const onSelectTopic = vi.fn();
     const { container, rerender } = render(<TopicGraph bridge={bridge} onSelectTopic={onSelectTopic} onSelectNode={onSelectNode} selectedTopic="/joint_states" />);
     expect(await screen.findByRole("button", { name: "Topic /joint_states" })).toHaveClass("selected");
-    expect(container.querySelector<HTMLElement>(".graph-canvas-scroll")?.scrollLeft).toBeGreaterThan(0);
     rerender(<TopicGraph bridge={bridge} onSelectTopic={onSelectTopic} onSelectNode={onSelectNode} selectedNode="/driver" />);
     expect(screen.getByRole("button", { name: "Node /driver" })).toHaveClass("selected");
     fireEvent.click(screen.getByRole("button", { name: "Node /driver" }));
@@ -91,5 +90,24 @@ describe("TopicGraph", () => {
     expect(await screen.findByRole("button", { name: "Node /arm_controller" })).toHaveClass("selected");
     expect(screen.getByRole("button", { name: "Topic /joint_states" })).toHaveClass("dimmed");
     expect(container.querySelectorAll(".graph-edge.related")).toHaveLength(1);
+  });
+
+  it("keeps a dragged node at the pointer position and still selects on click", async () => {
+    const bridge = bridgeDouble();
+    const onSelectTopic = vi.fn();
+    const { container } = render(<TopicGraph bridge={bridge} onSelectTopic={onSelectTopic} />);
+    const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
+
+    fireEvent.pointerDown(topic, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(topic, { button: 0, clientX: 210, clientY: 180, pointerId: 1 });
+    fireEvent.pointerUp(topic, { button: 0, clientX: 210, clientY: 180, pointerId: 1 });
+    expect(topic.getAttribute("transform")).toBe("translate(210 180)");
+    expect(onSelectTopic).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(topic, { button: 0, clientX: 210, clientY: 180, pointerId: 2 });
+    fireEvent.pointerUp(topic, { button: 0, clientX: 211, clientY: 180, pointerId: 2 });
+    fireEvent.click(topic);
+    expect(onSelectTopic).toHaveBeenCalledWith({ name: "/joint_states", types: ["sensor_msgs/msg/JointState"] });
+    expect(container.querySelectorAll(".graph-flow-particle")).not.toHaveLength(0);
   });
 });

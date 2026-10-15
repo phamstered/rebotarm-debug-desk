@@ -159,3 +159,86 @@ export function layoutRosGraph(graph: RosGraph, viewport: { width: number; heigh
   }
   return { width, height, nodes: positioned, edges: graph.edges };
 }
+
+export type ManualGraphPositions = Record<string, { x: number; y: number }>;
+
+/** Placeholder Hz until Bridge / subscribed stats wire real rates: publish flows faster than subscribe. */
+export function fakeEdgeFlowHz(relation: RosGraphEdge["relation"]): number {
+  return relation === "publish" ? 36 : 16;
+}
+
+export function applyManualPositions(
+  nodes: PositionedGraphNode[],
+  manual: ManualGraphPositions,
+  canvas: { width: number; height: number },
+): PositionedGraphNode[] {
+  const padding = 26;
+  return nodes.map((node) => {
+    const override = manual[node.id];
+    if (!override) return node;
+    const x = Math.max(node.radius + padding, Math.min(canvas.width - node.radius - padding, override.x));
+    const y = Math.max(node.radius + padding, Math.min(canvas.height - node.radius - padding, override.y));
+    return { ...node, x, y };
+  });
+}
+
+export function pruneManualPositions(manual: ManualGraphPositions, nodeIds: Iterable<string>): ManualGraphPositions {
+  const keep = new Set(nodeIds);
+  const next: ManualGraphPositions = {};
+  for (const [id, point] of Object.entries(manual)) {
+    if (keep.has(id)) next[id] = point;
+  }
+  return next;
+}
+
+export function edgeAnchorSegment(
+  source: PositionedGraphNode,
+  target: PositionedGraphNode,
+): { x1: number; y1: number; x2: number; y2: number; length: number } {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const topicAnchor = (node: PositionedGraphNode) =>
+    1 / Math.sqrt((ux / node.radius) ** 2 + (uy / (node.radius * 0.65)) ** 2);
+  const nodeAnchor = (node: PositionedGraphNode) =>
+    Math.min(node.radius / Math.max(0.001, Math.abs(ux)), (node.radius * 0.68) / Math.max(0.001, Math.abs(uy)));
+  const from = source.kind === "topic" ? topicAnchor(source) : nodeAnchor(source);
+  const to = (target.kind === "topic" ? topicAnchor(target) : nodeAnchor(target)) + 5;
+  const x1 = source.x + ux * from;
+  const y1 = source.y + uy * from;
+  const x2 = target.x - ux * to;
+  const y2 = target.y - uy * to;
+  return { x1, y1, x2, y2, length: Math.max(1, Math.hypot(x2 - x1, y2 - y1)) };
+}
+
+export function particleOffsets(count: number, progress: number): number[] {
+  return Array.from({ length: count }, (_, index) => (progress + index / count) % 1);
+}
+
+export function pointAlongSegment(
+  segment: { x1: number; y1: number; x2: number; y2: number },
+  t: number,
+): { x: number; y: number } {
+  const clamped = ((t % 1) + 1) % 1;
+  return {
+    x: segment.x1 + (segment.x2 - segment.x1) * clamped,
+    y: segment.y1 + (segment.y2 - segment.y1) * clamped,
+  };
+}
+
+export function flowParticlesForEdge(
+  source: PositionedGraphNode,
+  target: PositionedGraphNode,
+  relation: RosGraphEdge["relation"],
+  nowMs: number,
+): { x: number; y: number; hz: number }[] {
+  const hz = fakeEdgeFlowHz(relation);
+  const segment = edgeAnchorSegment(source, target);
+  // Higher Hz → particles lap the edge faster (units: cycles per second along the segment).
+  const cyclesPerSecond = Math.max(0.15, hz / 48);
+  const progress = (nowMs / 1000) * cyclesPerSecond;
+  const count = relation === "publish" ? 4 : 3;
+  return particleOffsets(count, progress).map((offset) => ({ ...pointAlongSegment(segment, offset), hz }));
+}

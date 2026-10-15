@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { controllerGraphFocus, filterBridgeGraph, graphEdgeKey, layoutRosGraph, loadBridgeVisibility } from "./topicGraphLogic";
+import { applyManualPositions, controllerGraphFocus, edgeAnchorSegment, fakeEdgeFlowHz, filterBridgeGraph, flowParticlesForEdge, graphEdgeKey, layoutRosGraph, loadBridgeVisibility, pointAlongSegment, pruneManualPositions } from "./topicGraphLogic";
 import type { RosGraph } from "./types";
 
 const graph: RosGraph = {
@@ -84,4 +84,35 @@ describe("force-directed topic graph layout", () => {
     expect(focus.nodes.has("topic:/other/state")).toBe(false);
   });
 
+});
+
+describe("topic graph drag and particle flow helpers", () => {
+  it("applies and prunes manual node positions inside the canvas", () => {
+    const layout = layoutRosGraph(graph, { width: 900, height: 600 });
+    const driver = layout.nodes.find((node) => node.id === "node:/driver")!;
+    const moved = applyManualPositions(layout.nodes, { "node:/driver": { x: 120, y: 140 } }, layout);
+    expect(moved.find((node) => node.id === "node:/driver")).toMatchObject({ x: 120, y: 140 });
+    expect(moved.find((node) => node.id === "topic:/joint_states")!.x).toBe(layout.nodes.find((node) => node.id === "topic:/joint_states")!.x);
+    const clamped = applyManualPositions([driver], { "node:/driver": { x: -50, y: 9999 } }, { width: 400, height: 300 });
+    expect(clamped[0]!.x).toBeGreaterThanOrEqual(driver.radius + 26);
+    expect(clamped[0]!.y).toBeLessThanOrEqual(300 - driver.radius - 26);
+    expect(pruneManualPositions({ "node:/driver": { x: 1, y: 2 }, "gone": { x: 3, y: 4 } }, ["node:/driver"])).toEqual({ "node:/driver": { x: 1, y: 2 } });
+  });
+
+  it("moves placeholder particles along publish edges faster than subscribe", () => {
+    expect(fakeEdgeFlowHz("publish")).toBeGreaterThan(fakeEdgeFlowHz("subscribe"));
+    const layout = layoutRosGraph(graph);
+    const source = layout.nodes.find((node) => node.id === "node:/driver")!;
+    const target = layout.nodes.find((node) => node.id === "topic:/joint_states")!;
+    const segment = edgeAnchorSegment(source, target);
+    expect(pointAlongSegment(segment, 0)).toEqual({ x: segment.x1, y: segment.y1 });
+    expect(pointAlongSegment(segment, 0.999).x).toBeCloseTo(segment.x1 + (segment.x2 - segment.x1) * 0.999, 5);
+    const mid = pointAlongSegment(segment, 0.5);
+    expect(mid.x).toBeCloseTo((segment.x1 + segment.x2) / 2, 5);
+    const publish = flowParticlesForEdge(source, target, "publish", 0);
+    const later = flowParticlesForEdge(source, target, "publish", 1000);
+    expect(publish).toHaveLength(4);
+    expect(later[0]!.x).not.toBeCloseTo(publish[0]!.x, 5);
+    expect(flowParticlesForEdge(source, target, "subscribe", 0)).toHaveLength(3);
+  });
 });
