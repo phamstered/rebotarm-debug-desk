@@ -666,7 +666,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              stop_pg \"$traj_pid_file\" \"\"; \
              stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
-             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true \
                >\"$HOME/.cache/robot-console/arm-teleop.log\" 2>&1 </dev/null & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$teleop_pid_file\"; sleep 1; \
              if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-teleop.log\" >&2; exit 1; fi; \
@@ -1811,7 +1811,7 @@ __BYID_SEP__\n\
         assert!(teleop.contains("LEADER_FOLLOWER_WS"));
         assert!(teleop.contains("setup_script%/install/setup.bash"));
         assert!(teleop.contains("export LEADER_FOLLOWER_WS=\"$ws\""));
-        assert!(teleop.contains("--position-controller=teleop"));
+        assert!(teleop.contains("--position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true"));
         assert!(teleop.contains("kill -INT"));
         assert!(teleop.find("missing $ws/scripts/start_arm_teleop.sh").unwrap()
             < teleop.find("stop_pg \"$traj_pid_file\"").unwrap());
