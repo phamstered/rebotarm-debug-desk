@@ -49,6 +49,15 @@ describe("connection profile", () => {
     expect(profile.host).toBe("robot");
     expect(profile.rosSetupScript).toBe(defaultProfile.rosSetupScript);
     expect(profile.jointStateTopic).toBe("/stm32/joint_states");
+    for (const oldPath of [
+      "leader_follower/install/setup.bash",
+      "Project/leader_follower/install/setup.bash",
+      "/home/jialiang/Project/leader_follower/install/setup.bash",
+    ]) {
+      expect(migrateProfile({ rosSetupScript: oldPath }).rosSetupScript).toBe(defaultProfile.rosSetupScript);
+    }
+    expect(migrateProfile({ rosSetupScript: "/opt/robot/install/setup.bash" }).rosSetupScript)
+      .toBe("/opt/robot/install/setup.bash");
   });
 });
 

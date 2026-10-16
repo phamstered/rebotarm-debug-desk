@@ -11,7 +11,7 @@ export const DEFAULTS = Object.freeze({
   host: "jetson",
   // Relative remote paths are resolved against the remote user's $HOME.
   remoteRoot: "easy_debug_bridge",
-  rosSetup: "leader_follower/install/setup.bash",
+  rosSetup: "Project/rebotarm-ros2-stack/install/setup.bash",
   remotePort: 8765,
   packageName: "easy_debug_bridge",
   rosDomainId: 0,

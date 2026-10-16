@@ -18,7 +18,7 @@ npm run deploy:bridge -- --skip-sync --skip-build --restart
 |---|---|---|
 | SSH host | `jetson`（通用别名） | `--host` / `$BRIDGE_DEPLOY_HOST` |
 | 远端工作区 | `easy_debug_bridge`（相对远端 `$HOME`；同步到 `src/easy_debug_bridge/`；可改为绝对路径） | `--remote` / `$BRIDGE_DEPLOY_REMOTE` |
-| ROS overlay | `leader_follower/install/setup.bash`（相对远端 `$HOME`） | `--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP` |
+| ROS overlay | `Project/rebotarm-ros2-stack/install/setup.bash`（相对远端 `$HOME`） | `--ros-setup` / `$BRIDGE_DEPLOY_ROS_SETUP` |
 | 端口 | `8765` | `--port` / `$BRIDGE_DEPLOY_PORT` |
 | SSH 端口 | ssh config / 22 | `--ssh-port` / `$BRIDGE_DEPLOY_SSH_PORT` |
 | 私钥 | （可选） | `--identity-file` / `$BRIDGE_DEPLOY_IDENTITY_FILE` |

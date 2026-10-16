@@ -64,13 +64,13 @@ test("relative defaults resolve against remote $HOME and repo root", () => {
   assert.equal(config.host, "jetson");
   assert.equal(config.remoteRoot, "easy_debug_bridge");
   assert.equal(config.remotePackage, "easy_debug_bridge/src/easy_debug_bridge");
-  assert.equal(config.rosSetup, "leader_follower/install/setup.bash");
+  assert.equal(config.rosSetup, "Project/rebotarm-ros2-stack/install/setup.bash");
   assert.equal(config.localPackage, join(projectRoot, "bridge", "easy_debug_bridge"));
   assert.equal(remotePathWord("easy_debug_bridge"), `"$HOME"/'easy_debug_bridge'`);
   assert.equal(remotePathWord("/opt/ws"), "'/opt/ws'");
   const build = buildRemoteBuildScript(config);
   assert.match(build, /cd "\$HOME"\/'easy_debug_bridge'/);
-  assert.match(build, /source "\$HOME"\/'leader_follower\/install\/setup\.bash'/);
+  assert.match(build, /source "\$HOME"\/'Project\/rebotarm-ros2-stack\/install\/setup\.bash'/);
   const restart = buildRemoteRestartScript(config);
   assert.match(restart, /pkill -TERM -f "\^\$HOME\/easy_debug_bridge\/install/);
 });
@@ -114,7 +114,7 @@ test("remote build/verify/backup/restart scripts source overlay and mark stages"
   const config = resolveConfig({ host: "jetson" }, {});
   const build = buildRemoteBuildScript(config);
   assert.match(build, /source \/opt\/ros\/humble\/setup\.bash/);
-  assert.match(build, /leader_follower\/install\/setup\.bash/);
+  assert.match(build, /Project\/rebotarm-ros2-stack\/install\/setup\.bash/);
   assert.match(build, /colcon build --symlink-install --packages-select 'easy_debug_bridge'/);
   assert.match(build, /BUILD_OK/);
 
@@ -273,7 +273,7 @@ test("deployBridge maps non-SSH rsync errors to compare stage", async () => {
 test("defaults are generic and home-relative", () => {
   assert.equal(DEFAULTS.host, "jetson");
   assert.equal(DEFAULTS.remoteRoot, "easy_debug_bridge");
-  assert.equal(DEFAULTS.rosSetup, "leader_follower/install/setup.bash");
+  assert.equal(DEFAULTS.rosSetup, "Project/rebotarm-ros2-stack/install/setup.bash");
   assert.equal(DEFAULTS.remotePort, 8765);
 });
 
