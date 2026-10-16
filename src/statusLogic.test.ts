@@ -3,6 +3,9 @@ import { defaultProfile } from "./types";
 import {
   activeControllers,
   buildStatusCards,
+  buildStatusQuickActions,
+  buildUsbCard,
+  faultFailureReason,
   formatFaultCode,
   formatHardwareMode,
   formatHz,
@@ -15,6 +18,8 @@ describe("statusLogic", () => {
     expect(formatHz(12.34)).toBe("12.3 Hz");
     expect(formatFaultCode(0)).toBe("0 · NONE");
     expect(formatFaultCode(6)).toContain("FEEDBACK_TIMEOUT");
+    expect(faultFailureReason(6)).toContain("超时");
+    expect(faultFailureReason(0)).toBeUndefined();
     expect(formatHardwareMode(null)).toBe("—");
     expect(formatHardwareMode({ mode: 0 })).toBe("HOLD");
     expect(formatHardwareMode({ mode: 1, mode_name: "TRACK" })).toBe("TRACK");
@@ -33,7 +38,36 @@ describe("statusLogic", () => {
     })).toEqual(["a"]);
   });
 
-  it("builds the full read-only card set with unknown USB/deploy fields", () => {
+  it("builds USB card with refresh action and MCU detail", () => {
+    const missing = buildUsbCard({ sshOk: true, usbProbe: {
+      mcuPresent: false,
+      mcuVidPid: "",
+      realsensePresent: false,
+      realsenseLines: [],
+      rawLsusb: "",
+    }, usbChecked: true });
+    expect(missing.tone).toBe("fail");
+    expect(missing.failureReason).toContain("0483:5740");
+    expect(missing.actions?.[0]).toMatchObject({ id: "usb-refresh", kind: "refresh" });
+
+    const ok = buildUsbCard({
+      sshOk: true,
+      usbChecked: true,
+      usbProbe: {
+        mcuPresent: true,
+        mcuVidPid: "0483:5740",
+        serialPath: "/dev/ttyACM0",
+        realsensePresent: true,
+        realsenseLines: ["Bus 001 Device 004: ID 8086:0b3a"],
+        rawLsusb: "0483:5740",
+      },
+    });
+    expect(ok.tone).toBe("ok");
+    expect(ok.detail).toContain("0483:5740");
+    expect(ok.detail).toContain("/dev/ttyACM0");
+  });
+
+  it("builds the full card set including Teleop/Trajectory/RealSense actions", () => {
     const cards = buildStatusCards({
       stage: "connected",
       sshOk: true,
@@ -64,6 +98,25 @@ describe("statusLogic", () => {
         message: "",
       },
       lastKnownDomainId: 0,
+      usbProbe: {
+        mcuPresent: true,
+        mcuVidPid: "0483:5740",
+        serialPath: "/dev/serial/by-id/usb-STM",
+        realsensePresent: true,
+        realsenseLines: ["8086:0b3a"],
+        rawLsusb: "0483:5740",
+      },
+      usbChecked: true,
+      armMode: {
+        mode: "teleop",
+        teleopRunning: true,
+        trajectoryRunning: false,
+        realsenseRunning: false,
+        teleopPid: 99,
+        trajectoryPid: 0,
+        realsensePid: 0,
+        message: "ok",
+      },
     });
 
     expect(cards.map((card) => card.id)).toEqual([
@@ -76,14 +129,19 @@ describe("statusLogic", () => {
       "dds",
       "systemd",
       "usb",
+      "teleop",
+      "trajectory",
+      "realsense",
     ]);
-    expect(cards.find((card) => card.id === "bridge")?.rows.find((row) => row.label === "最近部署")?.value).toBe("未知");
-    expect(cards.find((card) => card.id === "usb")?.summary).toBe("未知");
+    expect(cards.find((card) => card.id === "hardware")?.detail).toContain("无故障");
+    expect(cards.find((card) => card.id === "agent")?.actions?.[0]?.id).toBe("agent-restart");
+    expect(cards.find((card) => card.id === "teleop")?.actions?.[0]?.kind).toBe("restart");
+    expect(cards.find((card) => card.id === "usb")?.summary).toContain("0483:5740");
     expect(cards.find((card) => card.id === "ros-ready")?.summary).toContain("冒烟");
     expect(cards.find((card) => card.id === "dds")?.tone).toBe("ok");
   });
 
-  it("warns on domain mismatch and missing joint state", () => {
+  it("gates Teleop/Trajectory restart until ROS-ready and exposes quick actions", () => {
     const cards = buildStatusCards({
       stage: "connected",
       sshOk: true,
@@ -95,15 +153,23 @@ describe("statusLogic", () => {
       agentStatus: null,
       agentError: "",
       agentChecked: false,
-      hardwareStatus: null,
+      hardwareStatus: { fault_code: 6, mode: 0, mode_name: "HOLD" },
       jointState: null,
       jointStateSample: undefined,
       jointStateTopic: "/stm32/joint_states",
       rosControl: null,
       lastKnownDomainId: 0,
+      usbChecked: true,
+      usbProbe: { mcuPresent: false, mcuVidPid: "", realsensePresent: false, realsenseLines: [], rawLsusb: "" },
     });
     expect(cards.find((card) => card.id === "dds")?.tone).toBe("warn");
     expect(cards.find((card) => card.id === "ros-ready")?.tone).toBe("warn");
-    expect(cards.find((card) => card.id === "bridge")?.rows.find((row) => row.label === "bridge_version")?.value).toBe("未知");
+    expect(cards.find((card) => card.id === "teleop")?.actions?.[0]?.disabled).toBe(true);
+    expect(cards.find((card) => card.id === "hardware")?.failureReason).toContain("超时");
+    expect(cards.find((card) => card.id === "agent")?.actions?.[0]?.disabled).toBe(false);
+
+    const quick = buildStatusQuickActions({ sshOk: true, rosReady: false });
+    expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(true);
+    expect(buildStatusQuickActions({ sshOk: true, rosReady: true }).find((item) => item.id === "teleop")?.disabled).toBe(false);
   });
 });

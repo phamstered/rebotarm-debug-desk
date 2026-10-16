@@ -1,10 +1,20 @@
 import { useEffect, useRef } from "react";
-import type { AgentServiceStatus, ConnectionProfile, HardwareStatus, RosControlStatus } from "./types";
+import type {
+  AgentServiceStatus,
+  ArmModeStatus,
+  ConnectionProfile,
+  HardwareStatus,
+  RosControlStatus,
+  UsbProbeStatus,
+} from "./types";
 import type { TopicSample } from "./appLogic";
+import { isRosReady } from "./appLogic";
 import {
   buildStatusCards,
+  buildStatusQuickActions,
   toneLabel,
   type BridgeHelloInfo,
+  type StatusCardAction,
   type StatusCardModel,
   type StatusTone,
 } from "./statusLogic";
@@ -13,7 +23,15 @@ function ToneBadge({ tone }: { tone: StatusTone }) {
   return <span className={`status-card-tone ${tone}`}>{toneLabel(tone)}</span>;
 }
 
-function StatusCard({ card, highlighted }: { card: StatusCardModel; highlighted: boolean }) {
+function StatusCard({
+  card,
+  highlighted,
+  onAction,
+}: {
+  card: StatusCardModel;
+  highlighted: boolean;
+  onAction?: (action: StatusCardAction, card: StatusCardModel) => void;
+}) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!highlighted || !ref.current) return;
@@ -35,6 +53,12 @@ function StatusCard({ card, highlighted }: { card: StatusCardModel; highlighted:
         </div>
         <ToneBadge tone={card.tone} />
       </header>
+      {card.detail && <p className="status-card-detail" data-testid={`status-detail-${card.id}`}>{card.detail}</p>}
+      {card.failureReason && (
+        <p className="status-card-failure" role="alert" data-testid={`status-failure-${card.id}`}>
+          {card.failureReason}
+        </p>
+      )}
       <dl className="status-card-rows">
         {card.rows.map((row) => (
           <div key={row.label} className="status-card-row">
@@ -44,6 +68,22 @@ function StatusCard({ card, highlighted }: { card: StatusCardModel; highlighted:
         ))}
       </dl>
       {card.note && <p className="status-card-note">{card.note}</p>}
+      {card.actions && card.actions.length > 0 && (
+        <div className="status-card-actions" aria-label={`${card.title} 操作`}>
+          {card.actions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              className={`status-card-action ${action.kind}`}
+              disabled={action.disabled}
+              title={action.disabledReason || action.label}
+              onClick={() => onAction?.(action, card)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
     </article>
   );
 }
@@ -64,6 +104,14 @@ export function StatusPage({
   rosControl,
   lastKnownDomainId,
   highlightCardId = null,
+  usbProbe = null,
+  usbChecked = false,
+  armMode = null,
+  realsenseTopicSample,
+  actionBusy = null,
+  actionNotice = "",
+  onCardAction,
+  onQuickAction,
 }: {
   stage: string;
   sshOk: boolean;
@@ -80,6 +128,14 @@ export function StatusPage({
   rosControl: RosControlStatus | null;
   lastKnownDomainId: number | null;
   highlightCardId?: string | null;
+  usbProbe?: UsbProbeStatus | null;
+  usbChecked?: boolean;
+  armMode?: ArmModeStatus | null;
+  realsenseTopicSample?: TopicSample | undefined;
+  actionBusy?: string | null;
+  actionNotice?: string;
+  onCardAction?: (action: StatusCardAction, card: StatusCardModel) => void;
+  onQuickAction?: (id: "teleop" | "trajectory" | "stop") => void;
 }) {
   const cards = buildStatusCards({
     stage,
@@ -98,6 +154,16 @@ export function StatusPage({
     jointStateTopic: profile.jointStateTopic,
     rosControl,
     lastKnownDomainId,
+    usbProbe,
+    usbChecked,
+    armMode,
+    realsenseTopicSample,
+    actionBusy,
+  });
+  const quickActions = buildStatusQuickActions({
+    sshOk,
+    rosReady: isRosReady(jointState),
+    actionBusy,
   });
 
   return (
@@ -105,19 +171,34 @@ export function StatusPage({
       <header className="status-page-header">
         <div>
           <h1>Status</h1>
-          <span>只读系统状态总览 · 不执行升级或刷写</span>
+          <span>系统状态总览 · 可刷新 USB / 重启 Agent · 一键 Teleop/Trajectory</span>
         </div>
-        <div className="status-page-meta" title="只读；Bridge 升级仍走既有 mismatch 提示">
-          <span>READ-ONLY</span>
+        <div className="status-page-meta" title="不刷写固件；Bridge 升级仍走既有 mismatch 提示">
+          <span>NO FLASH</span>
           <strong>{profile.name || profile.host}</strong>
         </div>
       </header>
       <p className="status-page-banner" role="note">
-        本页仅展示连接与运行态。不提供一键升级全部、自动刷写 STM32，也不把 Bridge 部署与 ros2-stack 同步绑成同一按钮。
+        重要组件展示成功详情或失败原因；可重启项提供「重新拉起」，纯 USB 仅「刷新检测」。一键 Teleop / Trajectory 经 SSH 启动，切换前 HOLD，互斥停旧进程。不提供一键升级全部、自动刷写 STM32。
       </p>
+      <section className="status-quick-actions" aria-label="一键启动">
+        {quickActions.map((action) => (
+          <button
+            key={action.id}
+            type="button"
+            className={`status-quick-action ${action.id}`}
+            disabled={action.disabled}
+            title={action.disabledReason || action.label}
+            onClick={() => onQuickAction?.(action.id)}
+          >
+            {action.label}
+          </button>
+        ))}
+        {actionNotice && <output className="status-action-notice">{actionNotice}</output>}
+      </section>
       <div className="status-card-grid" aria-label="状态卡片">
         {cards.map((card) => (
-          <StatusCard key={card.id} card={card} highlighted={highlightCardId === card.id} />
+          <StatusCard key={card.id} card={card} highlighted={highlightCardId === card.id} onAction={onCardAction} />
         ))}
       </div>
     </main>

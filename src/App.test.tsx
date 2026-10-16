@@ -105,6 +105,17 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+
+      if (command === "probe_jetson_usb") return Promise.resolve({
+        mcuPresent: true, mcuVidPid: "0483:5740", serialPath: "/dev/ttyACM0",
+        realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
+      });
+      if (command === "probe_arm_mode") return Promise.resolve({
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
+      });
+      if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
+      if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
       if (command === "check_ros_controllers") return Promise.resolve({
         manager: "/controller_manager",
         available: true,
@@ -190,6 +201,17 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+
+      if (command === "probe_jetson_usb") return Promise.resolve({
+        mcuPresent: true, mcuVidPid: "0483:5740", serialPath: "/dev/ttyACM0",
+        realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
+      });
+      if (command === "probe_arm_mode") return Promise.resolve({
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
+      });
+      if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
+      if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
       if (command === "check_ros_controllers") return Promise.resolve({
         manager: "/controller_manager", available: true, controllers: [], message: "",
       });
@@ -259,6 +281,17 @@ describe("App workflow", () => {
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
       if (command === "start_session") return Promise.resolve(19001);
+
+      if (command === "probe_jetson_usb") return Promise.resolve({
+        mcuPresent: true, mcuVidPid: "0483:5740", serialPath: "/dev/ttyACM0",
+        realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
+      });
+      if (command === "probe_arm_mode") return Promise.resolve({
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
+      });
+      if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
+      if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
       if (command === "check_ros_controllers") {
         controllerRequest += 1;
         if (controllerRequest === 1) {
@@ -423,6 +456,17 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+
+      if (command === "probe_jetson_usb") return Promise.resolve({
+        mcuPresent: true, mcuVidPid: "0483:5740", serialPath: "/dev/ttyACM0",
+        realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
+      });
+      if (command === "probe_arm_mode") return Promise.resolve({
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
+      });
+      if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
+      if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
       if (command === "check_ros_controllers") return Promise.resolve({
         manager: "/controller_manager", available: false, controllers: [],
         message: "controller_manager 服务不可用或查询超时",
@@ -602,6 +646,17 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+
+      if (command === "probe_jetson_usb") return Promise.resolve({
+        mcuPresent: true, mcuVidPid: "0483:5740", serialPath: "/dev/ttyACM0",
+        realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
+      });
+      if (command === "probe_arm_mode") return Promise.resolve({
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
+      });
+      if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
+      if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
       if (command === "check_ros_controllers") return Promise.resolve({
         manager: "/controller_manager",
         available: true,
@@ -794,7 +849,7 @@ describe("App workflow", () => {
     const json = await screen.findByLabelText("Topic JSON");
     await user.pointer({ keys: "[MouseRight]", target: json.querySelector('[data-monitor-path="effort"]') as Element });
     expect(screen.getAllByRole("menuitem")).toHaveLength(2);
-    await user.click(screen.getByRole("menuitem", { name: "New Dashboard›" }));
+    await user.click(screen.getByRole("menuitem", { name: /New Dashboard/ }));
     await user.click(screen.getByRole("menuitem", { name: "＋ 新建 Panel" }));
     expect(await screen.findByRole("heading", { name: "Monitor" })).toBeVisible();
     expect(localStorage.getItem("robot-console-page")).toBe("monitor");
@@ -978,6 +1033,17 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+
+      if (command === "probe_jetson_usb") return Promise.resolve({
+        mcuPresent: true, mcuVidPid: "0483:5740", serialPath: "/dev/ttyACM0",
+        realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
+      });
+      if (command === "probe_arm_mode") return Promise.resolve({
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
+      });
+      if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
+      if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
       if (command === "check_ros_controllers") return Promise.resolve({
         manager: "/controller_manager", available: true, controllers: [], message: "",
       });

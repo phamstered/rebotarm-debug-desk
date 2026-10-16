@@ -1026,6 +1026,30 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .status-card-row dd.tone-unknown { color: #7f96a5; }
 .status-card-note { margin: 0; color: #5f7c8d; font-size: 10px; line-height: 1.4; }
 
+.status-card-detail { margin: 0; color: #8cc8c4; font-size: 11px; line-height: 1.4; }
+.status-card-failure { margin: 0; padding: 7px 9px; border: 1px solid #693834; border-radius: 7px; background: #2b1716; color: #ffb0ab; font-size: 11px; line-height: 1.4; }
+.status-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.status-card-action {
+  border: 1px solid #2f5360; border-radius: 8px; padding: 6px 10px;
+  background: #102633; color: #d7eef5; font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.status-card-action:hover:not(:disabled) { border-color: #4ea0a8; background: #14303c; }
+.status-card-action:disabled { opacity: .45; cursor: not-allowed; }
+.status-card-action.restart { border-color: #35716c; background: #153b3a; color: #dffefa; }
+.status-card-action.refresh { border-color: #3b5d88; background: #102033; }
+.status-quick-actions {
+  width: min(1280px, calc(100% - 44px)); margin: 12px auto 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+}
+.status-quick-action {
+  border: 1px solid #35716c; border-radius: 9px; padding: 9px 14px;
+  background: linear-gradient(180deg, #1a4a48, #143938); color: #e7fffb; font-size: 12px; font-weight: 750; cursor: pointer;
+}
+.status-quick-action:hover:not(:disabled) { border-color: #42d6c7; }
+.status-quick-action:disabled { opacity: .45; cursor: not-allowed; }
+.status-quick-action.stop { border-color: #6a5530; background: #241c11; color: #f0c27a; }
+.status-action-notice { color: #8aa3b2; font-size: 11px; }
+
+
 @media (max-width: 1100px) {
   .status-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

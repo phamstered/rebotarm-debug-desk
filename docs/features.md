@@ -5,7 +5,7 @@
 ## 目录
 
 1. [连接与会话](#_1-连接与会话)
-2. [Status（只读总览）](#status只读总览)
+2. [Status（状态总览）](#status状态总览)
 3. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
 4. [Monitor](#monitor)
 5. [Robot View（URDF）](#_3-robot-view-urdf)
@@ -59,20 +59,21 @@ JointState topic: /stm32/joint_states           # 内置默认
 ---
 
 
-## Status（只读总览）
+## Status（状态总览）
 
 ### 做什么
 
-左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain，以及暂不可探测项（systemd Bridge journal、USB CDC）的「未知」占位。全部只读，复用现有连接与轮询数据。
+左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、RealSense。成功卡片展示详情，失败卡片展示原因；可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory（及停止）。
 
 ### 怎么用
 
-连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标与字段；工具条 Fault 芯片可滚到 Hardware 并高亮。需要升级 Bridge 时仍走既有版本不匹配提示（版本徽章可点开），本页不提供升级全部或刷写 STM32。
+连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片可滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory（切换前 HOLD，互斥停旧进程）。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
 
 ### 边界
 
 - 不自动 flash STM32；不把 Bridge 部署与 ros2-stack 同步绑成一键操作。
-- `bridge_build_id` / 最近部署结果 / XRCE 端口 / USB CDC：当前无稳定 API 时显示「未知」。
+- Agent 重启仅为 `systemctl restart`；RealSense 用 `rs_launch.py`，不写入 ros2-stack。
+- `bridge_build_id` / 最近部署结果 / XRCE 端口 / Bridge systemd 单元：仍可能显示「未知」。
 
 ---
 ## 2. Topics / Graph / Inspector

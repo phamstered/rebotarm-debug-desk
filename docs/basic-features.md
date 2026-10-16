@@ -1,6 +1,6 @@
 # Rebotarm Debug Desk 基本功能与测试覆盖
 
-更新日期：2026-10-15
+更新日期：2026-10-16
 
 产品名：**Rebotarm Debug Desk** · 仓库：[`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)。npm 包名为 `rebotarm-debug-desk`；Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`），文档不在此处静默改代码侧显示名。
 
@@ -40,6 +40,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 读取 `micro-ros-agent-stm32h723.service` 的 systemd 状态。
 - 显示 loaded/active/substate、PID、开机启用状态和服务描述。
 - 连接后每 5 秒刷新，区分运行中、未运行和检查失败。
+- Status 卡片在 SSH 可用时可「重新拉起」（`systemctl restart` only，不刷写固件）；失败时带回 status/journal 尾部。
 
 ## 3. ROS Topic 浏览器
 
@@ -49,7 +50,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
 - 页面导航只保留在左侧 Navigation，**Status** 为第一项（只读状态总览卡片网格），其后为 Topics、Monitor、Motor 和 Calibration；Robot View / Topic Graph 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
-- **Status** 页复用现有连接态：SSH/隧道端口、Bridge WS + hello 的 `bridge_version`/`bridge_build_id`（若有）、micro-ROS Agent（`check_micro_ros_agent`）、HardwareStatus（fault_code/mode）、JointState 冒烟与 Hz、`check_ros_controllers` 的 active 列表、ROS_DOMAIN_ID 提示；systemd Bridge 单元 journal 与 USB CDC 在无 API 时显示「未知」。只读，无一键升级全部或自动刷写 STM32。
+- **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；Teleop / Trajectory / RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，工作区 `$HOME/Project/rebotarm-ros2-stack` 或 `LEADER_FOLLOWER_WS`，切换前 HOLD、互斥停旧进程组）。无一键升级全部或自动刷写 STM32。
 - 已连接工具条固定在主区域顶部；窄窗口时状态灯换到下一行，Status 的说明和卡片在工具条下方独立滚动，不与连接控件重叠。
 - 已连接顶部工具条提供「切换主机」、连接配置、设置、压缩状态灯（含 ROS 就绪 / Bridge 版本徽章 / Fault 芯片 / Domain 提示）、连接名、隧道端口、Agent 与断开；Topics 页工具栏保留全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照与重置布局。
 - Topics 页的 Topics、ROS Control、Inspector 三个区域可独立展开/收起；左右侧栏也可整列最小化并恢复，状态保存在本机。Topics 与 ROS Control 会自动使用另一面板释放出的高度。
@@ -164,7 +165,8 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | 工具栏 | 导航职责分离、中心局部 Tab（Robot View / Topic Graph）、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→会话→Bridge→Agent、状态灯/步骤/可读错误/最近主机、JointState 冒烟、实际端口、基础订阅、重连会话数据清理、版本检查与升级提示 | `src/App.test.tsx`、`src/appLogic.test.ts`、`src/bridge.test.ts` |
-| Agent | systemd 属性解析、异常 PID | `src-tauri/src/lib.rs` |
+| Agent | systemd 属性解析、异常 PID、restart 命令 | `src-tauri/src/lib.rs` |
+| Status USB/Arm | lsusb/MCU·RealSense 解析、arm mode 命令构建、卡片 detail/action/quick | `src-tauri/src/lib.rs`、`src/statusLogic.test.ts`、`src/StatusPage.test.tsx` |
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |
 | Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
