@@ -604,10 +604,19 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
     }
     let setup = format!(
         "source /opt/ros/humble/setup.bash 2>/dev/null || true; \
-         ws=\"${{LEADER_FOLLOWER_WS:-$HOME/Project/rebotarm-ros2-stack}}\"; \
+         setup_script=\"{setup_script}\"; \
+         case \"$setup_script\" in /*) ;; *) setup_script=\"$HOME/$setup_script\";; esac; \
+         ws=\"${{LEADER_FOLLOWER_WS:-}}\"; \
+         if [ -z \"$ws\" ]; then \
+           case \"$setup_script\" in */install/setup.bash) candidate=\"${{setup_script%/install/setup.bash}}\";; *) candidate=\"\";; esac; \
+           if [ -n \"$candidate\" ] && [ -f \"$candidate/scripts/start_arm_teleop.sh\" ]; then ws=\"$candidate\"; \
+           elif [ -f \"$HOME/Project/rebotarm-ros2-stack/scripts/start_arm_teleop.sh\" ]; then ws=\"$HOME/Project/rebotarm-ros2-stack\"; \
+           elif [ -f \"$HOME/Project/leader_follower/scripts/start_arm_teleop.sh\" ]; then ws=\"$HOME/Project/leader_follower\"; \
+           else ws=\"${{candidate:-$HOME/Project/rebotarm-ros2-stack}}\"; fi; \
+         fi; \
          if [ -f \"$ws/install/setup.bash\" ]; then source \"$ws/install/setup.bash\"; \
-         elif [ -f \"{setup_script}\" ]; then source \"{setup_script}\"; fi; \
-         ROS_DOMAIN_ID={domain}; ",
+         elif [ -f \"$setup_script\" ]; then source \"$setup_script\"; fi; \
+         export LEADER_FOLLOWER_WS=\"$ws\" ROS_DOMAIN_ID={domain}; ",
         setup_script = profile.ros_setup_script,
         domain = profile.ros_domain_id,
     );
@@ -654,10 +663,10 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
         ),
         "teleop" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
+             if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              stop_pg \"$traj_pid_file\" \"\"; \
              stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
-             if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
-             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true \
                >\"$HOME/.cache/robot-console/arm-teleop.log\" 2>&1 </dev/null & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$teleop_pid_file\"; sleep 1; \
              if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-teleop.log\" >&2; exit 1; fi; \
@@ -1800,8 +1809,18 @@ __BYID_SEP__\n\
         assert!(teleop.contains("start_arm_teleop.sh"));
         assert!(teleop.contains("rebotarm-ros2-stack"));
         assert!(teleop.contains("LEADER_FOLLOWER_WS"));
-        assert!(teleop.contains("--position-controller=teleop"));
+        assert!(teleop.contains("setup_script%/install/setup.bash"));
+        assert!(teleop.contains("export LEADER_FOLLOWER_WS=\"$ws\""));
+        assert!(teleop.contains("--position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true"));
         assert!(teleop.contains("kill -INT"));
+        assert!(teleop.find("missing $ws/scripts/start_arm_teleop.sh").unwrap()
+            < teleop.find("stop_pg \"$traj_pid_file\"").unwrap());
+        let custom = ConnectionProfile {
+            ros_setup_script: "/home/jialiang/Project/custom_stack/install/setup.bash".into(),
+            ..profile("")
+        };
+        let custom_teleop = arm_mode_remote_command(&custom, "teleop").unwrap();
+        assert!(custom_teleop.contains("/home/jialiang/Project/custom_stack/install/setup.bash"));
         let traj = arm_mode_remote_command(&profile(""), "trajectory").unwrap();
         assert!(traj.contains("trajectory") || traj.contains("move_group"));
         let stop = arm_mode_remote_command(&profile(""), "stop").unwrap();
@@ -1815,6 +1834,67 @@ __BYID_SEP__\n\
         let agent = restart_agent_remote_command();
         assert!(agent.contains("systemctl restart micro-ros-agent-stm32h723.service"));
         assert!(!agent.to_ascii_lowercase().contains("flash"));
+    }
+
+    #[test]
+    fn resolves_arm_workspace_from_setup_and_legacy_fallback_without_starting_arm() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "easy-debug-arm-workspace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let run_status = |setup_path: &str| {
+            let selected = ConnectionProfile {
+                ros_setup_script: setup_path.into(),
+                ..profile("")
+            };
+            let command = arm_mode_remote_command(&selected, "status").unwrap();
+            let body = command
+                .strip_prefix("bash -lc '")
+                .unwrap()
+                .strip_suffix('\'')
+                .unwrap();
+            let output = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(body)
+                .env("HOME", &root)
+                .env_remove("LEADER_FOLLOWER_WS")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let make_workspace = |name: &str| {
+            let workspace = root.join("Project").join(name);
+            fs::create_dir_all(workspace.join("scripts")).unwrap();
+            fs::create_dir_all(workspace.join("install")).unwrap();
+            fs::write(workspace.join("scripts/start_arm_teleop.sh"), "#!/bin/bash\n").unwrap();
+            fs::write(
+                workspace.join("install/setup.bash"),
+                "printf 'WORKSPACE=%s\\n' \"$ws\"\n",
+            )
+            .unwrap();
+            workspace
+        };
+
+        let custom = make_workspace("custom_stack");
+        let output = run_status("Project/custom_stack/install/setup.bash");
+        assert!(output.contains(&format!("WORKSPACE={}", custom.display())));
+
+        let current = make_workspace("rebotarm-ros2-stack");
+        let output = run_status("Project/missing/install/setup.bash");
+        assert!(output.contains(&format!("WORKSPACE={}", current.display())));
+
+        fs::remove_dir_all(&current).unwrap();
+        let legacy = make_workspace("leader_follower");
+        let output = run_status("Project/missing/install/setup.bash");
+        assert!(output.contains(&format!("WORKSPACE={}", legacy.display())));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -22,10 +22,14 @@ export function loadSidebarState(storage: Pick<Storage, "getItem"> = localStorag
 
 export function migrateProfile(saved: Partial<ConnectionProfile>): ConnectionProfile {
   const profile = { ...defaultProfile, ...saved } as ConnectionProfile;
-  // Legacy migration: exact-match a setup path that early builds saved to
-  // localStorage, so old configs move to the current default. This literal only
-  // matches stored data; it is never used as a default.
-  if (profile.rosSetupScript === "/home/jialiang/Project/install/setup.bash") {
+  // Migrate only previously shipped or site-specific legacy paths; preserve
+  // arbitrary custom overlays from saved profiles.
+  if ([
+    "/home/jialiang/Project/install/setup.bash",
+    "leader_follower/install/setup.bash",
+    "Project/leader_follower/install/setup.bash",
+    "/home/jialiang/Project/leader_follower/install/setup.bash",
+  ].includes(profile.rosSetupScript)) {
     profile.rosSetupScript = defaultProfile.rosSetupScript;
   }
   if (profile.jointStateTopic === "/joint_states") {

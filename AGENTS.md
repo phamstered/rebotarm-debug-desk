@@ -67,7 +67,7 @@ npm run deploy:bridge -- --backup
 npm run deploy:bridge -- --skip-sync --skip-build --restart
 ```
 
-脚本：`scripts/deploy-bridge.mjs`。默认 SSH host `jetson`，远端根目录 `easy_debug_bridge`（相对远端 `$HOME`，同步到 `src/easy_debug_bridge/`），ROS overlay `leader_follower/install/setup.bash`（相对远端 `$HOME`），端口 `8765`（通用默认值，请按你的机器用 flags 或 `BRIDGE_DEPLOY_*` 覆盖）。可用 `--host` / `--remote` / `--ros-setup` / `--port` 或 `BRIDGE_DEPLOY_*` 覆盖。默认不加 rsync `--delete`，保留远端自定义消息/扩展。
+脚本：`scripts/deploy-bridge.mjs`。默认 SSH host `jetson`，远端根目录 `easy_debug_bridge`（相对远端 `$HOME`，同步到 `src/easy_debug_bridge/`），ROS overlay `Project/rebotarm-ros2-stack/install/setup.bash`（相对远端 `$HOME`），端口 `8765`（通用默认值，请按你的机器用 flags 或 `BRIDGE_DEPLOY_*` 覆盖）。可用 `--host` / `--remote` / `--ros-setup` / `--port` 或 `BRIDGE_DEPLOY_*` 覆盖。默认不加 rsync `--delete`，保留远端自定义消息/扩展。
 
 部署后校验清单（脚本默认打印）：
 

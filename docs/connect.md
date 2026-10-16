@@ -38,7 +38,7 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 SSH host: jetson                                  # 主表单；默认通用别名
 SSH user / port / identity                        # 主表单
 ROS_DOMAIN_ID: 0                                  # 「高级」
-ROS setup: leader_follower/install/setup.bash    # 「高级」；相对远端 $HOME 或绝对路径
+ROS setup: Project/rebotarm-ros2-stack/install/setup.bash    # 「高级」；相对远端 $HOME 或绝对路径
 # 以下为内置默认，界面不编辑：
 Remote port: 8765
 Local port: 18765
@@ -47,6 +47,7 @@ JointState topic: /stm32/joint_states
 ```
 
 若机器人使用其他 overlay（例如 URDF package 在另一工作空间），请在「高级」里把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
+旧 `leader_follower` 路径会迁移到当前默认值；自定义 overlay 路径保持原值。一键 Teleop/Trajectory 从当前 ROS setup 路径推导工作区，找不到时再检查 `Project/rebotarm-ros2-stack` 和兼容目录。
 
 ## Bridge 版本检查与升级
 

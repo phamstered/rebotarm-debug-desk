@@ -175,7 +175,7 @@ export const defaultProfile: ConnectionProfile = {
   localPort: 18765,
   remotePort: 8765,
   rosDomainId: 0,
-  rosSetupScript: "leader_follower/install/setup.bash",
+  rosSetupScript: "Project/rebotarm-ros2-stack/install/setup.bash",
   urdfTopic: "/robot_description",
   jointStateTopic: "/stm32/joint_states",
   commandTopic: "/stm32/joint_commands",
