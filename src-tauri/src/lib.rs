@@ -604,7 +604,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
     }
     let setup = format!(
         "source /opt/ros/humble/setup.bash 2>/dev/null || true; \
-         ws=\"${{LEADER_FOLLOWER_WS:-$HOME/Project/leader_follower}}\"; \
+         ws=\"${{LEADER_FOLLOWER_WS:-$HOME/Project/rebotarm-ros2-stack}}\"; \
          if [ -f \"$ws/install/setup.bash\" ]; then source \"$ws/install/setup.bash\"; \
          elif [ -f \"{setup_script}\" ]; then source \"{setup_script}\"; fi; \
          ROS_DOMAIN_ID={domain}; ",
@@ -1798,6 +1798,8 @@ __BYID_SEP__\n\
     fn builds_arm_mode_and_agent_restart_commands() {
         let teleop = arm_mode_remote_command(&profile(""), "teleop").unwrap();
         assert!(teleop.contains("start_arm_teleop.sh"));
+        assert!(teleop.contains("rebotarm-ros2-stack"));
+        assert!(teleop.contains("LEADER_FOLLOWER_WS"));
         assert!(teleop.contains("--position-controller=teleop"));
         assert!(teleop.contains("kill -INT"));
         let traj = arm_mode_remote_command(&profile(""), "trajectory").unwrap();
