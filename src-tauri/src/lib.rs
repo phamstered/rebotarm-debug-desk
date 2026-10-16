@@ -75,6 +75,42 @@ struct RosbagPlayStatus {
     message: String,
 }
 
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsbProbeStatus {
+    mcu_present: bool,
+    mcu_vid_pid: String,
+    serial_path: Option<String>,
+    realsense_present: bool,
+    realsense_lines: Vec<String>,
+    raw_lsusb: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArmModeStatus {
+    mode: String,
+    teleop_running: bool,
+    trajectory_running: bool,
+    realsense_running: bool,
+    teleop_pid: u32,
+    trajectory_pid: u32,
+    realsense_pid: u32,
+    message: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteActionResult {
+    ok: bool,
+    exit_code: i32,
+    message: String,
+    detail: String,
+}
+
+
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TriggerServiceResponse {
@@ -489,6 +525,242 @@ where
         Err(_) => probe(0),
     }
 }
+
+
+const MCU_VID_PID: &str = "0483:5740";
+const AGENT_SERVICE: &str = "micro-ros-agent-stm32h723.service";
+
+fn usb_probe_remote_command() -> String {
+    "bash -lc 'lsusb 2>&1; echo __USB_SEP__; \
+     ls -1 /dev/serial/by-id/ 2>/dev/null || true; echo __BYID_SEP__; \
+     ls -1 /dev/ttyACM* 2>/dev/null || true'".into()
+}
+
+fn parse_usb_probe(output: &str) -> UsbProbeStatus {
+    let mut parts = output.split("__USB_SEP__");
+    let lsusb = parts.next().unwrap_or("").trim().to_string();
+    let rest = parts.next().unwrap_or("");
+    let mut byid_parts = rest.split("__BYID_SEP__");
+    let byid = byid_parts.next().unwrap_or("").trim().to_string();
+    let ttyacm = byid_parts.next().unwrap_or("").trim().to_string();
+
+    let mcu_present = lsusb.to_ascii_lowercase().contains("0483:5740");
+    let mut realsense_lines = Vec::new();
+    for line in lsusb.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("8086:") {
+            realsense_lines.push(line.trim().to_string());
+        }
+    }
+    let realsense_present = !realsense_lines.is_empty();
+
+    let mut serial_path = None;
+    for line in byid.lines() {
+        let name = line.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("stm") || lower.contains("cdc") || lower.contains("0483") {
+            serial_path = Some(format!("/dev/serial/by-id/{name}"));
+            break;
+        }
+    }
+    if serial_path.is_none() {
+        if let Some(name) = byid.lines().map(str::trim).find(|line| !line.is_empty()) {
+            serial_path = Some(format!("/dev/serial/by-id/{name}"));
+        }
+    }
+    if serial_path.is_none() {
+        if let Some(path) = ttyacm
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("/dev/ttyACM"))
+        {
+            serial_path = Some(path.to_string());
+        }
+    }
+
+    let raw_snippet = lsusb.lines().take(8).collect::<Vec<_>>().join("\n");
+
+    UsbProbeStatus {
+        mcu_present,
+        mcu_vid_pid: if mcu_present {
+            MCU_VID_PID.into()
+        } else {
+            String::new()
+        },
+        serial_path: if mcu_present { serial_path } else { None },
+        realsense_present,
+        realsense_lines,
+        raw_lsusb: raw_snippet,
+        error: None,
+    }
+}
+
+fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    let setup = format!(
+        "source /opt/ros/humble/setup.bash 2>/dev/null || true; \
+         ws=\"${{LEADER_FOLLOWER_WS:-$HOME/Project/leader_follower}}\"; \
+         if [ -f \"$ws/install/setup.bash\" ]; then source \"$ws/install/setup.bash\"; \
+         elif [ -f \"{setup_script}\" ]; then source \"{setup_script}\"; fi; \
+         ROS_DOMAIN_ID={domain}; ",
+        setup_script = profile.ros_setup_script,
+        domain = profile.ros_domain_id,
+    );
+    let paths = "mkdir -p \"$HOME/.cache/robot-console\"; \
+                 teleop_pid_file=\"$HOME/.cache/robot-console/arm-teleop.pid\"; \
+                 traj_pid_file=\"$HOME/.cache/robot-console/arm-trajectory.pid\"; \
+                 rs_pid_file=\"$HOME/.cache/robot-console/arm-realsense.pid\"; ";
+    let alive_fn = "alive_pid() { p=\"$1\"; marker=\"$2\"; case \"$p\" in *[!0-9]*|\"\") echo 0; return; esac; \
+                    if kill -0 \"$p\" 2>/dev/null; then \
+                      if [ -z \"$marker\" ] || ps -p \"$p\" -o args= | grep -Fq \"$marker\"; then echo 1; return; fi; \
+                    fi; echo 0; }; ";
+    let stop_fn = "stop_pg() { file=\"$1\"; marker=\"$2\"; pid=$(cat \"$file\" 2>/dev/null || true); \
+                   if [ \"$(alive_pid \"$pid\" \"$marker\")\" = 1 ]; then \
+                     kill -INT -\"$pid\" 2>/dev/null || kill -INT \"$pid\" 2>/dev/null || true; \
+                     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+                       if [ \"$(alive_pid \"$pid\" \"$marker\")\" != 1 ]; then break; fi; sleep 0.25; \
+                     done; \
+                     if [ \"$(alive_pid \"$pid\" \"$marker\")\" = 1 ]; then kill -TERM -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; fi; \
+                   fi; rm -f \"$file\"; }; ";
+    let status_body = format!(
+        "{paths}{alive_fn}\
+         tpid=$(cat \"$teleop_pid_file\" 2>/dev/null || true); \
+         jpid=$(cat \"$traj_pid_file\" 2>/dev/null || true); \
+         rpid=$(cat \"$rs_pid_file\" 2>/dev/null || true); \
+         talive=$(alive_pid \"$tpid\" \"start_arm_teleop\"); \
+         jalive=$(alive_pid \"$jpid\" \"\"); \
+         ralive=$(alive_pid \"$rpid\" \"realsense\"); \
+         nodes=$(timeout 5 ros2 node list 2>/dev/null || true); \
+         echo \"$nodes\" | grep -Eqi \"teleop|leader_follower\" && talive=1; \
+         echo \"$nodes\" | grep -Eqi \"move_group\" && jalive=1; \
+         echo \"$nodes\" | grep -Eqi \"realsense|camera/camera\" && ralive=1; \
+         mode=idle; \
+         if [ \"$talive\" = 1 ]; then mode=teleop; elif [ \"$jalive\" = 1 ]; then mode=trajectory; elif [ \"$ralive\" = 1 ]; then mode=realsense; fi; \
+         printf \"ARM|%s|%s|%s|%s|%s|%s|%s\\n\" \"$mode\" \"$talive\" \"$jalive\" \"$ralive\" \
+           \"${{tpid:-0}}\" \"${{jpid:-0}}\" \"${{rpid:-0}}\""
+    );
+    let body = match mode {
+        "status" => format!("{setup}{status_body}"),
+        "stop" => format!(
+            "{paths}{alive_fn}{stop_fn}\
+             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
+             stop_pg \"$traj_pid_file\" \"\"; \
+             printf \"OK|0|stopped\\n\""
+        ),
+        "teleop" => format!(
+            "{setup}{paths}{alive_fn}{stop_fn}\
+             stop_pg \"$traj_pid_file\" \"\"; \
+             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
+             if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop \
+               >\"$HOME/.cache/robot-console/arm-teleop.log\" 2>&1 </dev/null & pid=$!; \
+             printf \"%s\\n\" \"$pid\" >\"$teleop_pid_file\"; sleep 1; \
+             if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-teleop.log\" >&2; exit 1; fi; \
+             printf \"OK|%s|teleop\\n\" \"$pid\""
+        ),
+        "trajectory" => format!(
+            "{setup}{paths}{alive_fn}{stop_fn}\
+             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
+             stop_pg \"$traj_pid_file\" \"\"; \
+             if [ -f \"$ws/scripts/start_arm_teleop.sh\" ]; then \
+               setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory \
+                 >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null & pid=$!; \
+             else \
+               setsid nohup ros2 launch rebotarm_moveit_config move_group.launch.py \
+                 >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null & pid=$!; \
+             fi; \
+             printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; sleep 1; \
+             if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-trajectory.log\" >&2; exit 1; fi; \
+             printf \"OK|%s|trajectory\\n\" \"$pid\""
+        ),
+        "realsense" => format!(
+            "{setup}{paths}{alive_fn}{stop_fn}\
+             stop_pg \"$rs_pid_file\" \"realsense\"; \
+             setsid nohup ros2 launch realsense2_camera rs_launch.py \
+               >\"$HOME/.cache/robot-console/arm-realsense.log\" 2>&1 </dev/null & pid=$!; \
+             printf \"%s\\n\" \"$pid\" >\"$rs_pid_file\"; sleep 1; \
+             if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-realsense.log\" >&2; exit 1; fi; \
+             printf \"OK|%s|realsense\\n\" \"$pid\""
+        ),
+        _ => return Err("不支持的 arm mode 操作".into()),
+    };
+    Ok(format!("bash -lc '{body}'"))
+}
+
+fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
+    let line = output
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("ARM|"))
+        .ok_or("无法解析 arm mode 状态")?;
+    let fields: Vec<_> = line.trim_start_matches("ARM|").split('|').collect();
+    if fields.len() < 7 {
+        return Err("arm mode 状态字段不足".into());
+    }
+    let mode = fields[0].to_string();
+    let teleop_running = fields[1] == "1";
+    let trajectory_running = fields[2] == "1";
+    let realsense_running = fields[3] == "1";
+    let teleop_pid = fields[4].parse().unwrap_or_default();
+    let trajectory_pid = fields[5].parse().unwrap_or_default();
+    let realsense_pid = fields[6].parse().unwrap_or_default();
+    Ok(ArmModeStatus {
+        mode,
+        teleop_running,
+        trajectory_running,
+        realsense_running,
+        teleop_pid: if teleop_running { teleop_pid } else { 0 },
+        trajectory_pid: if trajectory_running {
+            trajectory_pid
+        } else {
+            0
+        },
+        realsense_pid: if realsense_running { realsense_pid } else { 0 },
+        message: "arm mode 状态已刷新".into(),
+    })
+}
+
+fn parse_remote_action_ok(output: &str) -> Option<(u32, String)> {
+    let line = output.lines().rev().find(|line| line.starts_with("OK|"))?;
+    let mut fields = line.trim_start_matches("OK|").splitn(2, '|');
+    let pid = fields.next()?.parse().unwrap_or_default();
+    let label = fields.next().unwrap_or("").to_string();
+    Some((pid, label))
+}
+
+fn restart_agent_remote_command() -> String {
+    format!(
+        "bash -lc 'systemctl restart {AGENT_SERVICE}; code=$?; \
+         if [ $code -ne 0 ]; then \
+           systemctl status {AGENT_SERVICE} --no-pager -l 2>&1 | tail -n 30; \
+           journalctl -u {AGENT_SERVICE} -n 20 --no-pager 2>&1 | tail -n 20; \
+           exit $code; \
+         fi; \
+         systemctl show {AGENT_SERVICE} --no-page --property=ActiveState,SubState,MainPID; \
+         printf \"OK|0|restarted\\n\"'"
+    )
+}
+
+fn stderr_tail(stderr: &str, stdout: &str) -> String {
+    let combined = format!("{stdout}\n{stderr}");
+    combined
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 
 fn choose_local_port(preferred: u16) -> Result<u16, String> {
     choose_local_port_with(preferred, probe_local_port)
@@ -1049,6 +1321,125 @@ async fn deploy_bridge(
     })
 }
 
+
+#[tauri::command]
+async fn probe_jetson_usb(profile: ConnectionProfile) -> Result<UsbProbeStatus, String> {
+    let remote = usb_probe_remote_command();
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法探测 Jetson USB：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() && stdout.trim().is_empty() {
+        return Ok(UsbProbeStatus {
+            mcu_present: false,
+            mcu_vid_pid: String::new(),
+            serial_path: None,
+            realsense_present: false,
+            realsense_lines: Vec::new(),
+            raw_lsusb: String::new(),
+            error: Some(format!(
+                "SSH/lsusb 失败：{}",
+                stderr_tail(&stderr, &stdout)
+            )),
+        });
+    }
+    Ok(parse_usb_probe(&stdout))
+}
+
+#[tauri::command]
+async fn restart_micro_ros_agent(profile: ConnectionProfile) -> Result<RemoteActionResult, String> {
+    let remote = restart_agent_remote_command();
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法重启 micro-ROS Agent：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code().unwrap_or(1);
+    if !output.status.success() {
+        return Ok(RemoteActionResult {
+            ok: false,
+            exit_code,
+            message: "micro-ROS Agent 重启失败".into(),
+            detail: stderr_tail(&stderr, &stdout),
+        });
+    }
+    Ok(RemoteActionResult {
+        ok: true,
+        exit_code: 0,
+        message: "micro-ROS Agent 已重启".into(),
+        detail: stderr_tail(&stderr, &stdout),
+    })
+}
+
+#[tauri::command]
+async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, String> {
+    let remote = arm_mode_remote_command(&profile, "status")?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法探测 arm mode：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "arm mode 探测失败：{}",
+            stderr_tail(&stderr, &stdout)
+        ));
+    }
+    parse_arm_mode_status(&stdout)
+}
+
+#[tauri::command]
+async fn start_arm_mode(profile: ConnectionProfile, mode: String) -> Result<RemoteActionResult, String> {
+    let remote = arm_mode_remote_command(&profile, &mode)?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法执行 arm mode：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code().unwrap_or(1);
+    if !output.status.success() {
+        return Ok(RemoteActionResult {
+            ok: false,
+            exit_code,
+            message: format!("arm mode `{mode}` 失败"),
+            detail: stderr_tail(&stderr, &stdout),
+        });
+    }
+    let (pid, label) = parse_remote_action_ok(&stdout).unwrap_or((0, mode.clone()));
+    Ok(RemoteActionResult {
+        ok: true,
+        exit_code: 0,
+        message: if mode == "stop" {
+            "Teleop/Trajectory 已停止".into()
+        } else {
+            format!("{label} 已启动 (pid {pid})")
+        },
+        detail: stderr_tail(&stderr, &stdout),
+    })
+}
+
+
 #[tauri::command]
 async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
     stop_tunnel(&state).await;
@@ -1063,6 +1454,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_ssh,
             check_micro_ros_agent,
+            probe_jetson_usb,
+            restart_micro_ros_agent,
+            probe_arm_mode,
+            start_arm_mode,
             check_ros_controllers,
             switch_ros_controller,
             call_joint4_calibration_service,
@@ -1370,4 +1765,64 @@ mod tests {
         assert!(root.join("scripts/deploy-bridge.mjs").is_file());
         assert!(root.join("bridge/easy_debug_bridge/package.xml").is_file());
     }
+
+    #[test]
+    fn parses_usb_probe_for_mcu_and_realsense() {
+        let sample = "Bus 001 Device 003: ID 0483:5740 STMicroelectronics Virtual COM Port\n\
+Bus 001 Device 004: ID 8086:0b3a Intel Corp. Intel(R) RealSense(TM) Depth Camera 455\n\
+__USB_SEP__\n\
+usb-STMicroelectronics_STM32_STLink_ABC\n\
+__BYID_SEP__\n\
+/dev/ttyACM0\n";
+        let parsed = parse_usb_probe(sample);
+        assert!(parsed.mcu_present);
+        assert_eq!(parsed.mcu_vid_pid, "0483:5740");
+        assert!(parsed.realsense_present);
+        assert!(parsed
+            .serial_path
+            .as_deref()
+            .unwrap_or("")
+            .contains("by-id"));
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn parses_usb_probe_missing_devices() {
+        let parsed = parse_usb_probe("Bus 001 Device 001: ID 1d6b:0002 Linux Foundation\n__USB_SEP__\n__BYID_SEP__\n");
+        assert!(!parsed.mcu_present);
+        assert!(!parsed.realsense_present);
+        assert!(parsed.serial_path.is_none());
+    }
+
+    #[test]
+    fn builds_arm_mode_and_agent_restart_commands() {
+        let teleop = arm_mode_remote_command(&profile(""), "teleop").unwrap();
+        assert!(teleop.contains("start_arm_teleop.sh"));
+        assert!(teleop.contains("--position-controller=teleop"));
+        assert!(teleop.contains("kill -INT"));
+        let traj = arm_mode_remote_command(&profile(""), "trajectory").unwrap();
+        assert!(traj.contains("trajectory") || traj.contains("move_group"));
+        let stop = arm_mode_remote_command(&profile(""), "stop").unwrap();
+        assert!(stop.contains("stop_pg"));
+        assert!(arm_mode_remote_command(&profile(""), "delete").is_err());
+        let bad = ConnectionProfile {
+            ros_setup_script: "bad;rm".into(),
+            ..profile("")
+        };
+        assert!(arm_mode_remote_command(&bad, "teleop").is_err());
+        let agent = restart_agent_remote_command();
+        assert!(agent.contains("systemctl restart micro-ros-agent-stm32h723.service"));
+        assert!(!agent.to_ascii_lowercase().contains("flash"));
+    }
+
+    #[test]
+    fn parses_arm_mode_status_line() {
+        let status = parse_arm_mode_status("noise\nARM|teleop|1|0|0|42|0|0\n").unwrap();
+        assert_eq!(status.mode, "teleop");
+        assert!(status.teleop_running);
+        assert!(!status.trajectory_running);
+        assert_eq!(status.teleop_pid, 42);
+        assert!(parse_arm_mode_status("unexpected").is_err());
+    }
+
 }

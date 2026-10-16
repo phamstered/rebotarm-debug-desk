@@ -11,11 +11,11 @@ import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { StatusPage } from "./StatusPage";
-import type { BridgeHelloInfo } from "./statusLogic";
+import type { BridgeHelloInfo, StatusCardAction, StatusCardModel } from "./statusLogic";
 import { formatHardwareMode } from "./statusLogic";
 import { TopicInspector } from "./TopicInspector";
 import { addFieldsToSeries } from "./dataGraphLogic";
-import type { AgentServiceStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo } from "./types";
+import type { AgentServiceStatus, ArmModeStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RemoteActionResult, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo, UsbProbeStatus } from "./types";
 import {
   addMonitorDashboard,
   addSeriesToDashboardPanel,
@@ -36,6 +36,7 @@ import {
 import type { MonitorWorkspace } from "./monitorLogic";
 import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
+import { createCommandPayload } from "./motorLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
 import {
@@ -358,6 +359,11 @@ export default function App() {
   const [bridgeHello, setBridgeHello] = useState<BridgeHelloInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentServiceStatus | null>(null);
   const [agentError, setAgentError] = useState("");
+  const [usbProbe, setUsbProbe] = useState<UsbProbeStatus | null>(null);
+  const [usbChecked, setUsbChecked] = useState(false);
+  const [armMode, setArmMode] = useState<ArmModeStatus | null>(null);
+  const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
+  const [statusActionNotice, setStatusActionNotice] = useState("");
   const [rosControl, setRosControl] = useState<RosControlStatus | null>(null);
   const [topicRefreshing, setTopicRefreshing] = useState(false);
   const [topicRefreshError, setTopicRefreshError] = useState("");
@@ -706,6 +712,123 @@ export default function App() {
     };
   }, [profile, stage]);
 
+  const refreshUsbAndArm = useCallback(async () => {
+    if (stage !== "connected" && !sshOk) return;
+    try {
+      const usb = await invoke<UsbProbeStatus>("probe_jetson_usb", { profile });
+      setUsbProbe(usb);
+      setUsbChecked(true);
+    } catch (reason) {
+      setUsbProbe({
+        mcuPresent: false,
+        mcuVidPid: "",
+        realsensePresent: false,
+        realsenseLines: [],
+        rawLsusb: "",
+        error: reason instanceof Error ? reason.message : String(reason),
+      });
+      setUsbChecked(true);
+    }
+    try {
+      setArmMode(await invoke<ArmModeStatus>("probe_arm_mode", { profile }));
+    } catch {
+      // keep previous arm mode on transient probe failure
+    }
+  }, [profile, stage, sshOk]);
+
+  useEffect(() => {
+    if (stage !== "connected") return;
+    let disposed = false;
+    const refresh = async () => {
+      if (disposed) return;
+      await refreshUsbAndArm();
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 10000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshUsbAndArm, stage]);
+
+  async function ensureHoldBeforeArmSwitch() {
+    if (!bridge || stage !== "connected") return;
+    try {
+      const positions = Array.isArray(jointState?.position) ? jointState.position.map((value) => Number(value) || 0) : [];
+      const jointCount = Array.isArray(jointState?.name) ? jointState.name.length : positions.length;
+      const mask = jointCount > 0 ? (1 << Math.min(jointCount, 31)) - 1 : 0;
+      await bridge.request(createCommandPayload(0, {
+        positions,
+        velocity: 0,
+        kp: 0,
+        kd: 0,
+        effort: 0,
+        active_joint_mask: mask,
+      }));
+    } catch {
+      setStatusActionNotice("HOLD 请求未确认，仍继续模式切换");
+    }
+  }
+
+  async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent") {
+    if (statusActionBusy) return;
+    setStatusActionBusy(actionId);
+    setStatusActionNotice("");
+    try {
+      if (mode === "agent") {
+        const result = await invoke<RemoteActionResult>("restart_micro_ros_agent", { profile });
+        setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
+        try {
+          setAgentStatus(await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile }));
+          setAgentError("");
+        } catch (reason) {
+          setAgentStatus(null);
+          setAgentError(reason instanceof Error ? reason.message : String(reason));
+        }
+        return;
+      }
+      if (mode === "teleop" || mode === "trajectory") {
+        await ensureHoldBeforeArmSwitch();
+      }
+      const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode });
+      setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
+      await refreshUsbAndArm();
+    } catch (reason) {
+      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setStatusActionBusy(null);
+    }
+  }
+
+  function handleStatusCardAction(action: StatusCardAction, _card: StatusCardModel) {
+    if (action.id === "usb-refresh") {
+      setStatusActionNotice("正在刷新 USB / 运行态…");
+      void refreshUsbAndArm().then(() => setStatusActionNotice("USB / 运行态已刷新"));
+      return;
+    }
+    if (action.id === "agent-restart") {
+      void runStatusRestart("agent-restart", "agent");
+      return;
+    }
+    if (action.id === "teleop-restart") {
+      void runStatusRestart("teleop-restart", "teleop");
+      return;
+    }
+    if (action.id === "trajectory-restart") {
+      void runStatusRestart("trajectory-restart", "trajectory");
+      return;
+    }
+    if (action.id === "realsense-restart") {
+      void runStatusRestart("realsense-restart", "realsense");
+    }
+  }
+
+  function handleStatusQuickAction(id: "teleop" | "trajectory" | "stop") {
+    if (id === "teleop") void runStatusRestart("teleop-restart", "teleop");
+    else if (id === "trajectory") void runStatusRestart("trajectory-restart", "trajectory");
+    else void runStatusRestart("arm-stop", "stop");
+  }
+
   useEffect(() => {
     if (stage !== "connected") return;
     const timer = window.setInterval(() => void refreshTopics(), settings.refreshIntervalSeconds * 1000);
@@ -743,6 +866,11 @@ export default function App() {
     setDeployProgress("");
     setAgentStatus(null);
     setAgentError("");
+    setUsbProbe(null);
+    setUsbChecked(false);
+    setArmMode(null);
+    setStatusActionBusy(null);
+    setStatusActionNotice("");
     setRosControl(null);
     setFocusController("");
     setTopicRefreshing(false);
@@ -820,6 +948,22 @@ export default function App() {
       } finally {
         setAgentChecked(true);
       }
+      void invoke<UsbProbeStatus>("probe_jetson_usb", { profile })
+        .then((usb) => { setUsbProbe(usb); setUsbChecked(true); })
+        .catch((reason) => {
+          setUsbProbe({
+            mcuPresent: false,
+            mcuVidPid: "",
+            realsensePresent: false,
+            realsenseLines: [],
+            rawLsusb: "",
+            error: reason instanceof Error ? reason.message : String(reason),
+          });
+          setUsbChecked(true);
+        });
+      void invoke<ArmModeStatus>("probe_arm_mode", { profile })
+        .then(setArmMode)
+        .catch(() => undefined);
       rememberLastKnownDomainId(profile.rosDomainId);
       setLastKnownDomainId(profile.rosDomainId);
       const successHistory = rememberConnectHistory({
@@ -1289,6 +1433,14 @@ export default function App() {
           rosControl={rosControl}
           lastKnownDomainId={lastKnownDomainId}
           highlightCardId={statusHighlightCardId}
+          usbProbe={usbProbe}
+          usbChecked={usbChecked}
+          armMode={armMode}
+          realsenseTopicSample={messages["/camera/camera/color/image_raw"]}
+          actionBusy={statusActionBusy}
+          actionNotice={statusActionNotice}
+          onCardAction={handleStatusCardAction}
+          onQuickAction={handleStatusQuickAction}
         />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage

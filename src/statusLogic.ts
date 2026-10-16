@@ -1,4 +1,11 @@
-import type { AgentServiceStatus, ConnectionProfile, HardwareStatus, RosControlStatus } from "./types";
+import type {
+  AgentServiceStatus,
+  ArmModeStatus,
+  ConnectionProfile,
+  HardwareStatus,
+  RosControlStatus,
+  UsbProbeStatus,
+} from "./types";
 import { defaultProfile } from "./types";
 import { domainMismatchHint, isAgentOnline, isRosReady } from "./appLogic";
 import type { TopicSample } from "./appLogic";
@@ -18,6 +25,14 @@ export type StatusRow = {
   tone?: StatusTone;
 };
 
+export type StatusCardAction = {
+  id: string;
+  label: string;
+  kind: "restart" | "refresh";
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
 export type StatusCardModel = {
   id: string;
   title: string;
@@ -25,6 +40,9 @@ export type StatusCardModel = {
   summary: string;
   rows: StatusRow[];
   note?: string;
+  detail?: string;
+  failureReason?: string;
+  actions?: StatusCardAction[];
 };
 
 export function toneLabel(tone: StatusTone): string {
@@ -67,6 +85,12 @@ export function formatFaultCode(faultCode: number | undefined): string {
   return faultCode === 0 ? `0 · ${info.name}` : `${faultCode} · ${info.name}`;
 }
 
+export function faultFailureReason(faultCode: number | undefined): string | undefined {
+  if (faultCode == null || !Number.isFinite(faultCode) || faultCode === 0) return undefined;
+  const info = motorFaults[faultCode];
+  return info?.description ?? `未知故障码 ${faultCode}`;
+}
+
 export function formatAgentSummary(agent: AgentServiceStatus | null, agentError: string, agentChecked: boolean): {
   tone: StatusTone;
   summary: string;
@@ -83,6 +107,95 @@ export function formatAgentSummary(agent: AgentServiceStatus | null, agentError:
 export function activeControllers(rosControl: RosControlStatus | null): string[] {
   if (!rosControl?.available) return [];
   return rosControl.controllers.filter((controller) => controller.state === "active").map((controller) => controller.name);
+}
+
+export function buildUsbCard(input: {
+  sshOk: boolean;
+  usbProbe: UsbProbeStatus | null;
+  usbChecked: boolean;
+}): StatusCardModel {
+  const { sshOk, usbProbe, usbChecked } = input;
+  const refreshAction: StatusCardAction = {
+    id: "usb-refresh",
+    label: "刷新检测",
+    kind: "refresh",
+    disabled: !sshOk,
+    disabledReason: sshOk ? undefined : "SSH 未就绪",
+  };
+
+  if (!sshOk) {
+    return {
+      id: "usb",
+      title: "USB CDC / 传输",
+      tone: "fail",
+      summary: "SSH 未就绪",
+      failureReason: "无法探测 USB：SSH 未连接或失败",
+      rows: [
+        { label: "MCU CDC", value: "—", tone: "idle" },
+        { label: "串口", value: "—" },
+        { label: "RealSense USB", value: "—", tone: "idle" },
+      ],
+      actions: [refreshAction],
+    };
+  }
+
+  if (!usbChecked && !usbProbe) {
+    return {
+      id: "usb",
+      title: "USB CDC / 传输",
+      tone: "idle",
+      summary: "检查中…",
+      rows: [
+        { label: "MCU CDC", value: "检查中…", tone: "idle" },
+        { label: "串口", value: "—" },
+        { label: "RealSense USB", value: "检查中…", tone: "idle" },
+      ],
+      actions: [refreshAction],
+    };
+  }
+
+  if (usbProbe?.error) {
+    return {
+      id: "usb",
+      title: "USB CDC / 传输",
+      tone: "fail",
+      summary: "探测失败",
+      failureReason: usbProbe.error,
+      rows: [
+        { label: "MCU CDC", value: "探测失败", tone: "fail" },
+        { label: "串口", value: "—" },
+        { label: "RealSense USB", value: "探测失败", tone: "fail" },
+      ],
+      actions: [refreshAction],
+    };
+  }
+
+  const mcuOk = Boolean(usbProbe?.mcuPresent);
+  const rsOk = Boolean(usbProbe?.realsensePresent);
+  const tone: StatusTone = mcuOk ? "ok" : "fail";
+  const serial = usbProbe?.serialPath?.trim() || "";
+  const vidPid = usbProbe?.mcuVidPid || "0483:5740";
+  return {
+    id: "usb",
+    title: "USB CDC / 传输",
+    tone,
+    summary: mcuOk ? `MCU 已识别 · ${vidPid}` : "MCU 未插",
+    detail: mcuOk
+      ? `STM32 Virtual ComPort ${vidPid}${serial ? ` · ${serial}` : ""}`
+      : undefined,
+    failureReason: mcuOk ? undefined : "未检测到 VID:PID 0483:5740（STM32 Virtual ComPort）",
+    rows: [
+      { label: "MCU CDC", value: mcuOk ? `已识别 · ${vidPid}` : "未插", tone: mcuOk ? "ok" : "fail" },
+      { label: "串口", value: serial || (mcuOk ? "未知" : "—"), tone: serial ? "ok" : "unknown" },
+      {
+        label: "RealSense USB",
+        value: rsOk ? `已识别 · Intel 8086${usbProbe?.realsenseLines?.[0] ? ` · ${usbProbe.realsenseLines[0]}` : ""}` : "未插",
+        tone: rsOk ? "ok" : "warn",
+      },
+    ],
+    note: usbProbe?.rawLsusb ? `lsusb 摘录：${usbProbe.rawLsusb.split("\n").filter(Boolean).slice(0, 3).join(" · ")}` : undefined,
+    actions: [refreshAction],
+  };
 }
 
 export function buildStatusCards(input: {
@@ -102,6 +215,11 @@ export function buildStatusCards(input: {
   jointStateTopic: string;
   rosControl: RosControlStatus | null;
   lastKnownDomainId: number | null;
+  usbProbe?: UsbProbeStatus | null;
+  usbChecked?: boolean;
+  armMode?: ArmModeStatus | null;
+  realsenseTopicSample?: TopicSample | undefined;
+  actionBusy?: string | null;
 }): StatusCardModel[] {
   const {
     stage,
@@ -120,15 +238,27 @@ export function buildStatusCards(input: {
     jointStateTopic,
     rosControl,
     lastKnownDomainId,
+    usbProbe = null,
+    usbChecked = false,
+    armMode = null,
+    realsenseTopicSample,
+    actionBusy = null,
   } = input;
 
   const sessionUp = stage === "connected" || sshOk;
   const tunnelPort = localPort ?? profile.localPort;
+  const rosReady = isRosReady(jointState);
+  const armGateOk = sshOk && rosReady;
+  const armGateReason = !sshOk ? "SSH 未就绪" : !rosReady ? "等待 JointState（ROS 未就绪）" : undefined;
+  const busy = (id: string) => actionBusy === id;
+
   const sshCard: StatusCardModel = {
     id: "ssh",
     title: "SSH / 隧道",
     tone: stage === "connected" || (sshOk && bridgeUp) ? "ok" : sshOk ? "warn" : stage === "failed" ? "fail" : "idle",
     summary: sessionUp ? (stage === "connected" ? "会话已建立" : "SSH 已通过") : stage === "failed" ? "未建立" : "未连接",
+    detail: sessionUp ? `localhost:${tunnelPort} → ${profile.host}:${remotePort}` : undefined,
+    failureReason: stage === "failed" ? "SSH 或隧道未建立" : undefined,
     rows: [
       { label: "会话", value: stage === "connected" ? "已连接" : sessionUp ? "进行中" : "未连接", tone: stage === "connected" ? "ok" : "idle" },
       { label: "本地转发", value: `localhost:${tunnelPort}`, tone: stage === "connected" ? "ok" : "idle" },
@@ -146,6 +276,8 @@ export function buildStatusCards(input: {
     title: "Bridge",
     tone: bridgeConnected ? "ok" : stage === "failed" ? "fail" : "idle",
     summary: bridgeConnected ? "WebSocket 已连接" : "未连接",
+    detail: bridgeConnected && hello?.bridgeVersion ? `版本 ${versionText}` : undefined,
+    failureReason: !bridgeConnected && stage === "failed" ? "Bridge WebSocket 未连接" : undefined,
     rows: [
       { label: "WS", value: bridgeConnected ? "已连接" : "未连接", tone: bridgeConnected ? "ok" : "idle" },
       { label: "bridge_version", value: hello?.bridgeVersion ?? "未知", tone: hello?.bridgeVersion ? "ok" : "unknown" },
@@ -158,11 +290,20 @@ export function buildStatusCards(input: {
   };
 
   const agent = formatAgentSummary(agentStatus, agentError, agentChecked);
+  const agentOnline = isAgentOnline(agentStatus);
   const agentCard: StatusCardModel = {
     id: "agent",
     title: "micro-ROS Agent",
     tone: agent.tone,
     summary: agent.summary,
+    detail: agentOnline && agentStatus
+      ? `${agentStatus.activeState}/${agentStatus.subState} · PID ${agentStatus.mainPid || "—"} · ${agentStatus.unitFileState || "—"}`
+      : undefined,
+    failureReason: agentError
+      ? agentError
+      : agentStatus && !agentOnline
+        ? `服务未运行（${agentStatus.activeState}/${agentStatus.subState}）`
+        : undefined,
     rows: [
       { label: "服务", value: "micro-ros-agent-stm32h723.service" },
       { label: "Active", value: agentStatus ? `${agentStatus.activeState}/${agentStatus.subState}` : agentError ? "检查失败" : "—", tone: agent.tone },
@@ -171,6 +312,15 @@ export function buildStatusCards(input: {
       { label: "XRCE 端口 / 会话", value: "未知", tone: "unknown" },
     ],
     note: agentError || agentStatus?.description || undefined,
+    actions: [
+      {
+        id: "agent-restart",
+        label: busy("agent-restart") ? "拉起中…" : "重新拉起",
+        kind: "restart",
+        disabled: !sshOk || busy("agent-restart"),
+        disabledReason: !sshOk ? "SSH 未就绪" : busy("agent-restart") ? "操作进行中" : undefined,
+      },
+    ],
   };
 
   const hardwareReceived = Boolean(hardwareStatus);
@@ -182,24 +332,26 @@ export function buildStatusCards(input: {
       : faultCode === 0
         ? "ok"
         : "fail";
+  const modeLabel = formatHardwareMode(hardwareStatus);
   const hardwareCard: StatusCardModel = {
     id: "hardware",
     title: "Hardware",
     tone: hardwareReceived ? (faultCode && faultCode !== 0 ? "fail" : "ok") : bridgeConnected ? "warn" : "idle",
     summary: hardwareReceived ? "已收到 HardwareStatus" : "未收到",
+    detail: hardwareReceived && faultCode === 0 ? `无故障 · ${modeLabel}` : hardwareReceived ? `${modeLabel}` : undefined,
+    failureReason: faultFailureReason(faultCode),
     rows: [
       { label: "HardwareStatus", value: hardwareReceived ? "已收到" : "未收到", tone: hardwareReceived ? "ok" : "idle" },
       { label: "fault_code", value: formatFaultCode(faultCode), tone: faultTone },
-      { label: "mode", value: formatHardwareMode(hardwareStatus), tone: hardwareReceived ? "ok" : "idle" },
+      { label: "mode", value: modeLabel, tone: hardwareReceived ? "ok" : "idle" },
       {
         label: "JointState",
-        value: isRosReady(jointState) ? "有数据" : "未流动",
-        tone: isRosReady(jointState) ? "ok" : "idle",
+        value: rosReady ? "有数据" : "未流动",
+        tone: rosReady ? "ok" : "idle",
       },
     ],
   };
 
-  const rosReady = isRosReady(jointState);
   const hz = jointStateSample?.hz;
   const count = jointStateSample?.count;
   const rosReadyCard: StatusCardModel = {
@@ -207,6 +359,8 @@ export function buildStatusCards(input: {
     title: "ROS 就绪",
     tone: rosReady ? "ok" : bridgeConnected ? "warn" : "idle",
     summary: rosReady ? "JointState 冒烟通过" : "等待 JointState",
+    detail: rosReady ? `${jointStateTopic} · ${formatHz(hz)}` : undefined,
+    failureReason: bridgeConnected && !rosReady ? "尚未收到 JointState，Monitor/Motor 与 Teleop/Trajectory 一键启动暂不可用" : undefined,
     rows: [
       { label: "Topic", value: jointStateTopic },
       { label: "冒烟", value: rosReady ? "已收到" : "未收到", tone: rosReady ? "ok" : "idle" },
@@ -234,6 +388,8 @@ export function buildStatusCards(input: {
         : actives.length > 0
           ? `${actives.length} 个 active`
           : "无 active Controller",
+    detail: actives.length > 0 ? actives.join(", ") : undefined,
+    failureReason: rosControl && !rosControl.available ? rosControl.message || "Controller Manager 不可用" : undefined,
     rows: [
       { label: "Manager", value: rosControl?.manager ?? "/controller_manager" },
       { label: "可用", value: rosControl ? (rosControl.available ? "是" : "否") : "—", tone: rosControl?.available ? "ok" : rosControl ? "fail" : "idle" },
@@ -249,6 +405,7 @@ export function buildStatusCards(input: {
     title: "DDS Domain",
     tone: domainHint ? "warn" : "ok",
     summary: `ROS_DOMAIN_ID=${profile.rosDomainId}`,
+    detail: domainHint || "与默认一致",
     rows: [
       { label: "当前", value: String(profile.rosDomainId), tone: domainHint ? "warn" : "ok" },
       { label: "默认", value: String(defaultProfile.rosDomainId) },
@@ -262,6 +419,8 @@ export function buildStatusCards(input: {
     title: "systemd",
     tone: agentStatus ? (isAgentOnline(agentStatus) ? "ok" : "warn") : agentError ? "fail" : "unknown",
     summary: "Agent 可查；Bridge 单元未探测",
+    detail: agentStatus ? `Agent ${agentStatus.activeState}/${agentStatus.subState}` : undefined,
+    failureReason: agentError || undefined,
     rows: [
       {
         label: "Agent 单元",
@@ -272,20 +431,168 @@ export function buildStatusCards(input: {
       { label: "Bridge 单元", value: "未知（未探测）", tone: "unknown" },
       { label: "Bridge journal", value: "未知", tone: "unknown" },
     ],
-    note: "仅复用现有 check_micro_ros_agent；不新增 SSH journal 调用。",
+    note: "Agent 重启走 systemctl restart；不刷写固件。",
   };
 
-  const usbCard: StatusCardModel = {
-    id: "usb",
-    title: "USB CDC / 传输",
-    tone: "unknown",
-    summary: "未知",
+  const usbCard = buildUsbCard({ sshOk, usbProbe, usbChecked });
+
+  const teleopRunning = Boolean(armMode?.teleopRunning);
+  const teleopCard: StatusCardModel = {
+    id: "teleop",
+    title: "Teleop",
+    tone: !sshOk ? "idle" : teleopRunning ? "ok" : "warn",
+    summary: !sshOk ? "SSH 未就绪" : teleopRunning ? "运行中" : "未运行",
+    detail: teleopRunning && armMode?.teleopPid ? `PID ${armMode.teleopPid} · start_arm_teleop.sh --position-controller=teleop` : teleopRunning ? "start_arm_teleop.sh --position-controller=teleop" : undefined,
+    failureReason: sshOk && !teleopRunning ? "Teleop 未拉起（可通过一键启动）" : undefined,
     rows: [
-      { label: "USB CDC", value: "未知", tone: "unknown" },
-      { label: "传输流", value: "未知", tone: "unknown" },
+      { label: "状态", value: teleopRunning ? "运行中" : "未运行", tone: teleopRunning ? "ok" : "idle" },
+      { label: "PID", value: armMode?.teleopPid ? String(armMode.teleopPid) : "—" },
+      { label: "脚本", value: "scripts/start_arm_teleop.sh" },
+      { label: "控制器", value: "teleop" },
     ],
-    note: "当前无现成探测 API；有检测后再接入。",
+    note: armMode?.message || "切换前会先 HOLD；与 Trajectory 互斥。",
+    actions: [
+      {
+        id: "teleop-restart",
+        label: busy("teleop-restart") ? "拉起中…" : "重新拉起",
+        kind: "restart",
+        disabled: !armGateOk || busy("teleop-restart"),
+        disabledReason: armGateReason || (busy("teleop-restart") ? "操作进行中" : undefined),
+      },
+    ],
   };
 
-  return [sshCard, bridgeCard, agentCard, hardwareCard, rosReadyCard, rosControlCard, domainCard, systemdCard, usbCard];
+  const trajRunning = Boolean(armMode?.trajectoryRunning);
+  const trajectoryCard: StatusCardModel = {
+    id: "trajectory",
+    title: "Trajectory / MoveIt",
+    tone: !sshOk ? "idle" : trajRunning ? "ok" : "warn",
+    summary: !sshOk ? "SSH 未就绪" : trajRunning ? "运行中" : "未运行",
+    detail: trajRunning
+      ? `PID ${armMode?.trajectoryPid || "—"} · move_group / trajectory controller`
+      : undefined,
+    failureReason: sshOk && !trajRunning ? "Trajectory/MoveIt 未拉起（可通过一键启动）" : undefined,
+    rows: [
+      { label: "状态", value: trajRunning ? "运行中" : "未运行", tone: trajRunning ? "ok" : "idle" },
+      { label: "PID", value: armMode?.trajectoryPid ? String(armMode.trajectoryPid) : "—" },
+      { label: "启动", value: "move_group.launch.py 或 teleop --position-controller=trajectory" },
+      { label: "互斥", value: "与 Teleop 互斥" },
+    ],
+    note: "切换前会先 HOLD；停止上一进程组后再启动。",
+    actions: [
+      {
+        id: "trajectory-restart",
+        label: busy("trajectory-restart") ? "拉起中…" : "重新拉起",
+        kind: "restart",
+        disabled: !armGateOk || busy("trajectory-restart"),
+        disabledReason: armGateReason || (busy("trajectory-restart") ? "操作进行中" : undefined),
+      },
+    ],
+  };
+
+  const rsUsb = Boolean(usbProbe?.realsensePresent);
+  const rsNode = Boolean(armMode?.realsenseRunning);
+  const rsHz = realsenseTopicSample?.hz;
+  const rsTopicOk = Boolean(rsHz && rsHz > 0);
+  let rsTone: StatusTone = "idle";
+  let rsSummary = "未知";
+  let rsFailure: string | undefined;
+  let rsDetail: string | undefined;
+  if (!sshOk) {
+    rsTone = "idle";
+    rsSummary = "SSH 未就绪";
+  } else if (!usbChecked && !usbProbe) {
+    rsTone = "idle";
+    rsSummary = "检查中…";
+  } else if (!rsUsb) {
+    rsTone = "fail";
+    rsSummary = "无 USB";
+    rsFailure = "未检测到 Intel RealSense（lsusb 8086:*）";
+  } else if (rsNode || rsTopicOk) {
+    rsTone = "ok";
+    rsSummary = rsTopicOk ? `运行中 · ${formatHz(rsHz)}` : "节点运行中";
+    rsDetail = rsTopicOk
+      ? `/camera/camera/color/image_raw · ${formatHz(rsHz)}`
+      : "USB 已识别且 RealSense 节点在跑";
+  } else {
+    rsTone = "warn";
+    rsSummary = "USB 有 · 无 Topic/节点";
+    rsFailure = "USB 已识别，但未检测到 RealSense 节点或图像 Topic；可一键拉起 rs_launch.py";
+  }
+  const realsenseCard: StatusCardModel = {
+    id: "realsense",
+    title: "RealSense",
+    tone: rsTone,
+    summary: rsSummary,
+    detail: rsDetail,
+    failureReason: rsFailure,
+    rows: [
+      { label: "USB 8086", value: rsUsb ? "已识别" : "未插", tone: rsUsb ? "ok" : "fail" },
+      { label: "节点", value: rsNode ? "运行中" : "未运行", tone: rsNode ? "ok" : "idle" },
+      { label: "图像 Topic", value: rsTopicOk ? formatHz(rsHz) : "无采样", tone: rsTopicOk ? "ok" : "idle" },
+      { label: "PID", value: armMode?.realsensePid ? String(armMode.realsensePid) : "—" },
+    ],
+    note: "重启使用 ros2 launch realsense2_camera rs_launch.py；不写入 ros2-stack。",
+    actions: [
+      {
+        id: "realsense-restart",
+        label: busy("realsense-restart") ? "拉起中…" : "重新拉起",
+        kind: "restart",
+        disabled: !sshOk || busy("realsense-restart"),
+        disabledReason: !sshOk ? "SSH 未就绪" : busy("realsense-restart") ? "操作进行中" : undefined,
+      },
+    ],
+  };
+
+  return [
+    sshCard,
+    bridgeCard,
+    agentCard,
+    hardwareCard,
+    rosReadyCard,
+    rosControlCard,
+    domainCard,
+    systemdCard,
+    usbCard,
+    teleopCard,
+    trajectoryCard,
+    realsenseCard,
+  ];
+}
+
+export type StatusQuickAction = {
+  id: "teleop" | "trajectory" | "stop";
+  label: string;
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
+export function buildStatusQuickActions(input: {
+  sshOk: boolean;
+  rosReady: boolean;
+  actionBusy?: string | null;
+}): StatusQuickAction[] {
+  const gateOk = input.sshOk && input.rosReady;
+  const reason = !input.sshOk ? "SSH 未就绪" : !input.rosReady ? "等待 JointState" : undefined;
+  const busy = input.actionBusy;
+  return [
+    {
+      id: "teleop",
+      label: busy === "teleop-restart" ? "启动 Teleop…" : "一键 Teleop",
+      disabled: !gateOk || busy === "teleop-restart" || busy === "trajectory-restart",
+      disabledReason: reason || (busy ? "操作进行中" : undefined),
+    },
+    {
+      id: "trajectory",
+      label: busy === "trajectory-restart" ? "启动 Trajectory…" : "一键 Trajectory",
+      disabled: !gateOk || busy === "teleop-restart" || busy === "trajectory-restart",
+      disabledReason: reason || (busy ? "操作进行中" : undefined),
+    },
+    {
+      id: "stop",
+      label: busy === "arm-stop" ? "停止中…" : "停止 Teleop/Trajectory",
+      disabled: !input.sshOk || busy === "arm-stop",
+      disabledReason: !input.sshOk ? "SSH 未就绪" : busy === "arm-stop" ? "操作进行中" : undefined,
+    },
+  ];
 }

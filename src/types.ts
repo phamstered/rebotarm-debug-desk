@@ -182,3 +182,33 @@ export const defaultProfile: ConnectionProfile = {
   statusTopic: "/stm32/status",
   tcpLink: "",
 };
+
+export type UsbProbeStatus = {
+  mcuPresent: boolean;
+  mcuVidPid: string;
+  serialPath?: string;
+  realsensePresent: boolean;
+  realsenseLines: string[];
+  rawLsusb: string;
+  error?: string;
+};
+
+export type ArmModeKind = "teleop" | "trajectory" | "realsense" | "idle" | "unknown";
+
+export type ArmModeStatus = {
+  mode: ArmModeKind;
+  teleopRunning: boolean;
+  trajectoryRunning: boolean;
+  realsenseRunning: boolean;
+  teleopPid: number;
+  trajectoryPid: number;
+  realsensePid: number;
+  message: string;
+};
+
+export type RemoteActionResult = {
+  ok: boolean;
+  exitCode: number;
+  message: string;
+  detail: string;
+};
