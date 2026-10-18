@@ -131,6 +131,7 @@ describe("statusLogic", () => {
       "usb",
       "teleop",
       "trajectory",
+      "vla",
       "realsense",
     ]);
     expect(cards.find((card) => card.id === "hardware")?.detail).toContain("无故障");
@@ -171,5 +172,79 @@ describe("statusLogic", () => {
     const quick = buildStatusQuickActions({ sshOk: true, rosReady: false });
     expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(true);
     expect(buildStatusQuickActions({ sshOk: true, rosReady: true }).find((item) => item.id === "teleop")?.disabled).toBe(false);
+  });
+
+  it("builds VLA card from controller active + chunk Hz and gates quick actions", () => {
+    const inactive = buildStatusCards({
+      stage: "connected",
+      sshOk: true,
+      bridgeUp: true,
+      localPort: 18765,
+      remotePort: 8765,
+      profile: { ...defaultProfile },
+      hello: null,
+      agentStatus: null,
+      agentError: "",
+      agentChecked: true,
+      hardwareStatus: null,
+      jointState: { name: ["j1"], position: [0] },
+      jointStateSample: undefined,
+      jointStateTopic: "/stm32/joint_states",
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "vla_position_controller", typeName: "microros_stm32h723_bridge/VlaPositionController", state: "inactive" },
+          { name: "gravity_compensation_controller", typeName: "t", state: "active" },
+          { name: "arm_teleop_controller", typeName: "t", state: "active" },
+        ],
+        message: "",
+      },
+      lastKnownDomainId: 0,
+    });
+    const vla = inactive.find((card) => card.id === "vla")!;
+    expect(vla.tone).toBe("warn");
+    expect(vla.actions?.map((action) => action.id)).toEqual(["vla-start", "vla-stop"]);
+    expect(vla.actions?.find((action) => action.id === "vla-start")?.disabled).toBe(false);
+    expect(vla.actions?.find((action) => action.id === "vla-stop")?.disabled).toBe(true);
+
+    const active = buildStatusCards({
+      stage: "connected",
+      sshOk: true,
+      bridgeUp: true,
+      localPort: 18765,
+      remotePort: 8765,
+      profile: { ...defaultProfile },
+      hello: null,
+      agentStatus: null,
+      agentError: "",
+      agentChecked: true,
+      hardwareStatus: null,
+      jointState: { name: ["j1"], position: [0] },
+      jointStateSample: undefined,
+      jointStateTopic: "/stm32/joint_states",
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "vla_position_controller", typeName: "t", state: "active" },
+          { name: "gravity_compensation_controller", typeName: "t", state: "active" },
+        ],
+        message: "",
+      },
+      lastKnownDomainId: 0,
+      vlaChunkSample: { data: {}, count: 20, firstAt: 0, lastAt: 1000, hz: 10 },
+    });
+    const running = active.find((card) => card.id === "vla")!;
+    expect(running.tone).toBe("ok");
+    expect(running.summary).toContain("10");
+    expect(running.actions?.find((action) => action.id === "vla-start")?.disabled).toBe(true);
+    expect(running.actions?.find((action) => action.id === "vla-stop")?.disabled).toBe(false);
+    expect(active.find((card) => card.id === "teleop")?.actions?.[0]?.disabled).toBe(true);
+
+    const quick = buildStatusQuickActions({ sshOk: true, rosReady: true, vlaActive: true });
+    expect(quick.find((item) => item.id === "vla")?.disabled).toBe(true);
+    expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(true);
+    expect(quick.find((item) => item.id === "stop")?.label).toContain("VLA");
   });
 });

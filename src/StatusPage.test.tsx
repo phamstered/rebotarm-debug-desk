@@ -63,7 +63,7 @@ describe("StatusPage", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Status" })).toBeVisible();
-    expect(screen.getByText(/一键 Teleop\/Trajectory/)).toBeVisible();
+    expect(screen.getByText(/一键 Teleop\/Trajectory\/VLA/)).toBeVisible();
     expect(screen.getByLabelText("状态卡片")).toBeVisible();
     expect(screen.getByLabelText("SSH / 隧道")).toBeVisible();
     expect(screen.getByLabelText("Bridge")).toBeVisible();
@@ -76,6 +76,7 @@ describe("StatusPage", () => {
     expect(screen.getByLabelText("USB CDC / 传输")).toBeVisible();
     expect(screen.getByLabelText("Teleop")).toBeVisible();
     expect(screen.getByLabelText("Trajectory / MoveIt")).toBeVisible();
+    expect(screen.getByLabelText("VLA")).toBeVisible();
     expect(screen.getByLabelText("RealSense")).toBeVisible();
     expect(screen.getByText("localhost:18765")).toBeVisible();
     expect(screen.getByText("HOLD")).toBeVisible();
@@ -83,10 +84,13 @@ describe("StatusPage", () => {
     expect(screen.getByTestId("status-detail-hardware")).toHaveTextContent(/无故障/);
     expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "一键 Trajectory" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "一键 VLA" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "刷新检测" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "一键 Teleop" }));
     expect(onQuickAction).toHaveBeenCalledWith("teleop");
+    await user.click(screen.getByRole("button", { name: "一键 VLA" }));
+    expect(onQuickAction).toHaveBeenCalledWith("vla");
     await user.click(screen.getByRole("button", { name: "刷新检测" }));
     expect(onCardAction).toHaveBeenCalled();
     expect(onCardAction.mock.calls[0][0].id).toBe("usb-refresh");

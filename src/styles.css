@@ -1037,6 +1037,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .status-card-action:disabled { opacity: .45; cursor: not-allowed; }
 .status-card-action.restart { border-color: #35716c; background: #153b3a; color: #dffefa; }
 .status-card-action.refresh { border-color: #3b5d88; background: #102033; }
+.status-card-action.stop { border-color: #6a5530; background: #241c11; color: #f0c27a; }
 .status-quick-actions {
   width: min(1280px, calc(100% - 44px)); margin: 12px auto 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
 }

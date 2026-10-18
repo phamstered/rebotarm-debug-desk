@@ -202,6 +202,49 @@ fn controller_switch_command(
     ))
 }
 
+fn controllers_switch_command(
+    profile: &ConnectionProfile,
+    activate: &[String],
+    deactivate: &[String],
+) -> Result<String, String> {
+    const MANAGER: &str = "/controller_manager";
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径包含不允许的字符".into());
+    }
+    if activate.is_empty() && deactivate.is_empty() {
+        return Err("至少需要一个 activate 或 deactivate Controller".into());
+    }
+    for name in activate.iter().chain(deactivate.iter()) {
+        if !valid_controller_name(name) {
+            return Err(format!("Controller 名称格式无效：{name}"));
+        }
+    }
+    let mut flags = String::new();
+    if !activate.is_empty() {
+        flags.push_str("--activate ");
+        flags.push_str(&activate.join(" "));
+    }
+    if !deactivate.is_empty() {
+        if !flags.is_empty() {
+            flags.push(' ');
+        }
+        flags.push_str("--deactivate ");
+        flags.push_str(&deactivate.join(" "));
+    }
+    Ok(format!(
+        "bash -lc 'source /opt/ros/humble/setup.bash; \
+         if [ -f \"{}\" ]; then source \"{}\"; fi; \
+         ROS_DOMAIN_ID={} timeout 10 ros2 control switch_controllers \
+         {} --strict --spin-time 1 -c {} 2>&1'",
+        profile.ros_setup_script,
+        profile.ros_setup_script,
+        profile.ros_domain_id,
+        flags,
+        MANAGER
+    ))
+}
+
+
 fn joint4_calibration_service(action: &str) -> Option<&'static str> {
     match action {
         "begin_pose" => Some("/joint4_calibration_controller/begin_pose"),
@@ -914,6 +957,44 @@ async fn switch_ros_controller(
 }
 
 #[tauri::command]
+async fn switch_ros_controllers(
+    profile: ConnectionProfile,
+    activate: Vec<String>,
+    deactivate: Vec<String>,
+) -> Result<String, String> {
+    let remote = controllers_switch_command(&profile, &activate, &deactivate)?;
+    let output = ssh_base(&profile)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(ssh_target(&profile))
+        .arg(remote)
+        .output()
+        .await
+        .map_err(|error| format!("无法执行 Controller 批量切换：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    if !output.status.success() {
+        return Err(format!(
+            "Controller 批量切换失败：{}",
+            ros_control_error(&combined)
+        ));
+    }
+    Ok(stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| strip_ansi(line.trim()))
+        .unwrap_or_else(|| {
+            format!(
+                "Controllers switch 完成（activate={} deactivate={}）",
+                activate.join(","),
+                deactivate.join(",")
+            )
+        }))
+}
+
+#[tauri::command]
 async fn call_joint4_calibration_service(
     profile: ConnectionProfile,
     action: String,
@@ -1469,6 +1550,7 @@ pub fn run() {
             start_arm_mode,
             check_ros_controllers,
             switch_ros_controller,
+            switch_ros_controllers,
             call_joint4_calibration_service,
             save_joint4_calibration_report,
             save_diagnostics_snapshot,
@@ -1549,6 +1631,27 @@ mod tests {
         assert!(deactivate.contains("--deactivate /arm/controller"));
         assert!(controller_switch_command(&profile(""), "arm;reboot", "activate").is_err());
         assert!(controller_switch_command(&profile(""), "arm_controller", "restart").is_err());
+    }
+
+    #[test]
+    fn builds_batch_ros_controller_switch_commands() {
+        let activate = vec!["vla_position_controller".into()];
+        let deactivate = vec![
+            "arm_teleop_controller".into(),
+            "arm_trajectory_controller".into(),
+        ];
+        let cmd = controllers_switch_command(&profile(""), &activate, &deactivate).unwrap();
+        assert!(cmd.contains("--activate vla_position_controller"));
+        assert!(cmd.contains("--deactivate arm_teleop_controller arm_trajectory_controller"));
+        assert!(cmd.contains("--strict --spin-time 1"));
+        assert!(!cmd.contains("--switch-timeout"));
+        assert!(controllers_switch_command(&profile(""), &[], &[]).is_err());
+        assert!(controllers_switch_command(
+            &profile(""),
+            &["bad;name".into()],
+            &[],
+        )
+        .is_err());
     }
 
     #[test]
