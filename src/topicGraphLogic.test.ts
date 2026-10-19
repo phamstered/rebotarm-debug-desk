@@ -34,19 +34,14 @@ describe("force-directed topic graph layout", () => {
     expect(layout.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true);
   });
 
-  it("keeps nodes inside a responsive canvas without overlapping circles", () => {
+  it("separates dense nodes without overlapping circles", () => {
     const dense: RosGraph = {
       nodes: Array.from({ length: 32 }, (_, index) => ({ id: `topic:/arm/topic_${index}`, label: `/arm/topic_${index}`, kind: "topic" as const, types: [] })),
       edges: Array.from({ length: 31 }, (_, index) => ({ source: "topic:/arm/topic_0", target: `topic:/arm/topic_${index + 1}`, relation: "publish" as const })),
     };
     const layout = layoutRosGraph(dense, { width: 500, height: 320 });
-    expect(layout.width).toBeGreaterThanOrEqual(680);
-    expect(layout.height).toBeGreaterThanOrEqual(560);
     layout.nodes.forEach((node, index) => {
-      expect(node.x).toBeGreaterThanOrEqual(node.radius);
-      expect(node.x).toBeLessThanOrEqual(layout.width - node.radius);
-      expect(node.y).toBeGreaterThanOrEqual(node.radius);
-      expect(node.y).toBeLessThanOrEqual(layout.height - node.radius);
+      expect(Number.isFinite(node.x) && Number.isFinite(node.y)).toBe(true);
       layout.nodes.slice(index + 1).forEach((other) => {
         expect(Math.hypot(node.x - other.x, node.y - other.y)).toBeGreaterThanOrEqual(node.radius + other.radius - 0.1);
       });
@@ -58,7 +53,6 @@ describe("force-directed topic graph layout", () => {
   it("is deterministic across refreshes and adapts to the viewport", () => {
     const wide = layoutRosGraph(graph, { width: 1500, height: 700 });
     const narrow = layoutRosGraph(graph, { width: 800, height: 560 });
-    expect(wide.width).toBe(1500);
     expect(layoutRosGraph(graph, { width: 800, height: 560 })).toEqual(narrow);
     expect(wide.nodes.some((node, index) => node.x !== narrow.nodes[index]?.x)).toBe(true);
   });
@@ -99,15 +93,15 @@ describe("force-directed topic graph layout", () => {
 });
 
 describe("topic graph drag and particle flow helpers", () => {
-  it("applies and prunes manual node positions inside the canvas", () => {
+  it("keeps manual positions outside the initial layout after refresh", () => {
     const layout = layoutRosGraph(graph, { width: 900, height: 600 });
     const driver = layout.nodes.find((node) => node.id === "node:/driver")!;
-    const moved = applyManualPositions(layout.nodes, { "node:/driver": { x: 120, y: 140 } }, layout);
+    const moved = applyManualPositions(layout.nodes, { "node:/driver": { x: 120, y: 140 } });
     expect(moved.find((node) => node.id === "node:/driver")).toMatchObject({ x: 120, y: 140 });
     expect(moved.find((node) => node.id === "topic:/joint_states")!.x).toBe(layout.nodes.find((node) => node.id === "topic:/joint_states")!.x);
-    const clamped = applyManualPositions([driver], { "node:/driver": { x: -50, y: 9999 } }, { width: 400, height: 300 });
-    expect(clamped[0]!.x).toBeGreaterThanOrEqual(driver.radius + 26);
-    expect(clamped[0]!.y).toBeLessThanOrEqual(300 - driver.radius - 26);
+    const unbounded = applyManualPositions([driver], { "node:/driver": { x: -500, y: 9999 } });
+    expect(unbounded[0]).toMatchObject({ x: -500, y: 9999 });
+    expect(fitCameraToNodes(unbounded, { width: 400, height: 300 }).scale).toBeGreaterThan(0);
     expect(pruneManualPositions({ "node:/driver": { x: 1, y: 2 }, "gone": { x: 3, y: 4 } }, ["node:/driver"])).toEqual({ "node:/driver": { x: 1, y: 2 } });
   });
 
@@ -152,6 +146,21 @@ describe("graph camera helpers", () => {
     const centered = centerCameraOn({ scale: 1, tx: 0, ty: 0 }, { x: 100, y: 50 }, viewport);
     expect(centered.tx).toBe(100);
     expect(centered.ty).toBe(100);
-    expect(resetCamera(viewport, { width: 200, height: 100 })).toEqual({ scale: 1, tx: 100, ty: 100 });
+    expect(resetCamera(viewport, nodes)).toEqual({ scale: 1, tx: 100, ty: 100 });
+    const moved = [{ x: -500, y: 800, radius: 10 }, { x: 900, y: -300, radius: 10 }];
+    const reset = resetCamera(viewport, moved);
+    expect(reset).toEqual({ scale: 1, tx: 0, ty: -100 });
+    const far = [{ x: -5000, y: 800, radius: 10 }, { x: 9000, y: -300, radius: 10 }];
+    const fit = fitCameraToNodes(far, viewport);
+    const left = -5010 * fit.scale + fit.tx;
+    const right = 9010 * fit.scale + fit.tx;
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(right).toBeLessThanOrEqual(viewport.width);
+    expect(fit.scale).toBeLessThan(0.25);
+    expect(zoomCameraAt(fit, { x: 200, y: 150 }, fit.scale * 1.1).scale).toBeCloseTo(fit.scale * 1.1);
+    const narrow = fitCameraToNodes(nodes, { width: 80, height: 60 });
+    expect(0 * narrow.scale + narrow.tx).toBeGreaterThan(0);
+    expect(200 * narrow.scale + narrow.tx).toBeLessThan(80);
+    expect(resetCamera(viewport, [])).toEqual({ scale: 1, tx: 0, ty: 0 });
   });
 });

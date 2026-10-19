@@ -80,15 +80,15 @@ export function TopicGraph({
   const dragRef = useRef<{ id: string; moved: boolean; originX: number; originY: number } | null>(null);
   const panRef = useRef<{ originX: number; originY: number; camera: GraphCamera } | null>(null);
   const suppressClickRef = useRef(false);
-  const didFitRef = useRef(false);
+  const didInitializeCameraRef = useRef(false);
   const centeredFocusRef = useRef("");
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
   const visibleGraph = useMemo(() => filterBridgeGraph(graph, showBridge), [graph, showBridge]);
   const layout = useMemo(() => layoutRosGraph(visibleGraph, viewport), [visibleGraph, viewport]);
   const displayNodes = useMemo(
-    () => applyManualPositions(layout.nodes, manualPositions, { width: layout.width, height: layout.height }),
-    [layout.nodes, layout.width, layout.height, manualPositions],
+    () => applyManualPositions(layout.nodes, manualPositions),
+    [layout.nodes, manualPositions],
   );
   const controllerFocus = useMemo(() => controllerGraphFocus(visibleGraph, focusController), [visibleGraph, focusController]);
   const positions = useMemo(() => new Map(displayNodes.map((node) => [node.id, node])), [displayNodes]);
@@ -118,12 +118,12 @@ export function TopicGraph({
 
   useEffect(() => {
     if (displayNodes.length === 0) {
-      didFitRef.current = false;
+      didInitializeCameraRef.current = false;
       return;
     }
-    if (didFitRef.current) return;
-    setCamera(fitCameraToNodes(displayNodes, viewport));
-    didFitRef.current = true;
+    if (didInitializeCameraRef.current) return;
+    setCamera(resetCamera(viewport, displayNodes));
+    didInitializeCameraRef.current = true;
   }, [displayNodes, viewport]);
 
   useEffect(() => {
@@ -296,7 +296,7 @@ export function TopicGraph({
           <span className="graph-zoom-label">{Math.round(camera.scale * 100)}%</span>
           <button type="button" aria-label="放大" onClick={() => zoomBy(1.2)}>+</button>
           <button type="button" onClick={() => setCamera(fitCameraToNodes(displayNodes, viewport))}>Fit</button>
-          <button type="button" onClick={() => setCamera(resetCamera(viewport, layout))}>Reset</button>
+          <button type="button" onClick={() => setCamera(resetCamera(viewport, displayNodes))}>Reset</button>
         </div>
         <label className="graph-bridge-toggle">
           <input

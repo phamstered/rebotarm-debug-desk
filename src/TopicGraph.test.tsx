@@ -112,6 +112,35 @@ describe("TopicGraph", () => {
     expect(container.querySelectorAll(".graph-flow-particle")).not.toHaveLength(0);
   });
 
+  it("keeps a node beyond the initial layout after refresh and frames it with Fit", async () => {
+    const bridge = bridgeDouble();
+    const { container } = render(<TopicGraph bridge={bridge} onSelectTopic={vi.fn()} />);
+    const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
+    fireEvent.pointerDown(topic, { button: 0, clientX: 10, clientY: 10, pointerId: 4 });
+    fireEvent.pointerMove(topic, { button: 0, clientX: -2000, clientY: 4000, pointerId: 4 });
+    fireEvent.pointerUp(topic, { button: 0, clientX: -2000, clientY: 4000, pointerId: 4 });
+    const moved = topic.getAttribute("transform")!;
+    const coordinates = moved.match(/translate\(([-\d.]+) ([-\d.]+)\)/);
+    expect(coordinates).not.toBeNull();
+    expect(Number(coordinates![1])).toBeLessThan(0);
+    expect(Number(coordinates![2])).toBeGreaterThan(560);
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新 Graph" }));
+    await act(async () => Promise.resolve());
+    expect(topic.getAttribute("transform")).toBe(moved);
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    const camera = container.querySelector("svg.graph-canvas > g")!.getAttribute("transform")!;
+    const view = camera.match(/translate\(([-\d.]+) ([-\d.]+)\) scale\(([-\d.]+)\)/);
+    expect(view).not.toBeNull();
+    const screenX = Number(coordinates![1]) * Number(view![3]) + Number(view![1]);
+    const screenY = Number(coordinates![2]) * Number(view![3]) + Number(view![2]);
+    expect(screenX).toBeGreaterThan(0);
+    expect(screenX).toBeLessThan(1200);
+    expect(screenY).toBeGreaterThan(0);
+    expect(screenY).toBeLessThan(560);
+    expect(topic.getAttribute("transform")).toBe(moved);
+  });
+
   it("keeps the selected node and the user's canvas pan without snapping back", async () => {
     const { container } = render(<TopicGraph bridge={bridgeDouble()} onSelectTopic={vi.fn()} />);
     const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
@@ -141,7 +170,8 @@ describe("TopicGraph", () => {
     const bridge = bridgeDouble();
     const user = userEvent.setup();
     render(<TopicGraph bridge={bridge} onSelectTopic={vi.fn()} />);
-    expect(await screen.findByText(/\d+%/)).toBeVisible();
+    await screen.findByRole("button", { name: "Topic /joint_states" });
+    expect(screen.getByText("100%")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "放大" }));
     expect(Number(screen.getByText(/\d+%/).textContent?.replace("%", ""))).toBeGreaterThan(100);
     await user.click(screen.getByRole("button", { name: "Fit" }));
