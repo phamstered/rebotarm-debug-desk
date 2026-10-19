@@ -73,7 +73,7 @@ export function DataCollectionPage({ profile, topics, rosReady }: {
     <div className="collection-grid">
       <section className="collection-card">
         <h2>数据集配置</h2><p>文件保存在 Jetson。相对路径从远端用户主目录解析。</p>
-        <fieldset disabled={running || Boolean(busy)} className="collection-form">
+        <fieldset disabled={running || (busy !== "" && busy !== "status")} className="collection-form">
           {textField("repoId", "数据集 ID", "namespace/dataset")}
           {textField("root", "Jetson 保存目录")}
           <label className="collection-wide">任务描述<textarea value={config.task} placeholder="例如：将红色方块放入托盘" onChange={(event) => update("task", event.target.value)} maxLength={2000} /></label>

@@ -87,7 +87,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 通过固定 `/lerobot_recorder/start_episode`、`save_episode`、`discard_episode`、`status` Trigger 服务控制 Episode；每 5 秒查询采集状态、帧数、已保存 Episode、FPS、任务和日志。仅开始 Episode 需要本会话收到 JointState；状态、保存、丢弃和结束在缺少反馈时仍可用。无有效帧时提示检查 Topic、同步与日志。
 - 丢弃当前 Episode 需要确认。存在采集中或未保存帧时拒绝结束；保存或丢弃后，才能「结束并完成数据集」。结束只向本应用启动且 PID/启动时间身份匹配的采集器发 SIGINT，等待正常 finalize；不会强杀编码进程。外部启动的采集器可操作 Episode，结束须回原终端。已保存过 Episode 时，以日志中的 `Dataset finalized` 确认正常收尾。
 - 数据集写入 Jetson，本页不上传。新建时拒绝已存在目录；续录需存在 `meta/info.json`，并提前检查 FPS、相机集合、七维 state/action 布局；图像分辨率及单位也须与原数据集一致。计数来自采集器服务，续录数据集在首个有效帧时打开，此前已保存计数可能为 0。
-- 表单偏好保存在本机；切换页面或断开连接后远端采集器继续运行，回到同一主机/ROS Domain 可恢复查询。远端进程记录、锁与日志按 ROS_DOMAIN_ID 隔离在 `~/.cache/robot-console/data-collection/domain-N/`。并发操作受保护；连接变化或页面卸载后的旧响应不会更新新页面。路径、Topic、数据集 ID 与参数在原生后端校验，任务文本以独立参数传递；本页不启动遥操作、不切换 Controller、不发布电机命令。
+- 表单偏好保存在本机；首次、周期性及手动状态查询不会锁定配置输入，查询成功或失败均保留输入内容和焦点。采集器运行中或状态变更操作执行期间，配置继续锁定。切换页面或断开连接后远端采集器继续运行，回到同一主机/ROS Domain 可恢复查询。远端进程记录、锁与日志按 ROS_DOMAIN_ID 隔离在 `~/.cache/robot-console/data-collection/domain-N/`。并发操作受保护；连接变化或页面卸载后的旧响应不会更新新页面。路径、Topic、数据集 ID 与参数在原生后端校验，任务文本以独立参数传递；本页不启动遥操作、不切换 Controller、不发布电机命令。
 - 隔离 ROS 冒烟测试：`python3 scripts/smoke-data-collection.py --host jetson --domain 197`，按需加 `--ros-setup` / `--ssh-port`，domain 必须选择现场未使用的隔离值。脚本在远端临时目录启动模拟采集器，只验证启动、Episode 服务、计数和退出，清理后不改动已安装 package 或真实数据集。
 
 ## 5. URDF 与 Three.js

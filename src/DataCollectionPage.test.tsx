@@ -17,6 +17,53 @@ beforeEach(() => { localStorage.clear(); localStorage.setItem(COLLECTION_STORAGE
 afterEach(() => vi.useRealTimers());
 
 describe("DataCollectionPage", () => {
+  it("keeps config editable while the initial status request is pending", async () => {
+    let resolveStatus!: (value: CollectionStatus) => void;
+    invoke.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+    const user = userEvent.setup();
+    render(<DataCollectionPage {...props} />);
+    const task = screen.getByLabelText("任务描述");
+    expect(task).toBeEnabled();
+    await user.click(task);
+    await user.type(task, " carefully");
+    await act(async () => resolveStatus(stopped));
+    expect(task).toHaveValue("pick cube carefully");
+    expect(task).toHaveFocus();
+  });
+
+  it("preserves typing and focus through pending, successful and failed periodic polls", async () => {
+    vi.useFakeTimers();
+    let resolvePoll!: (value: CollectionStatus) => void;
+    let rejectPoll!: (reason: Error) => void;
+    invoke.mockResolvedValueOnce(stopped)
+      .mockReturnValueOnce(new Promise((resolve) => { resolvePoll = resolve; }))
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectPoll = reject; }));
+    render(<DataCollectionPage {...props} />);
+    await act(async () => Promise.resolve());
+    const task = screen.getByLabelText("任务描述");
+    task.focus();
+    fireEvent.change(task, { target: { value: "pick cube first" } });
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(task).toBeEnabled();
+    expect(task).toHaveFocus();
+    fireEvent.change(task, { target: { value: "pick cube first second" } });
+    await act(async () => resolvePoll(stopped));
+    expect(task).toHaveValue("pick cube first second");
+    expect(task).toHaveFocus();
+
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(task).toBeEnabled();
+    fireEvent.change(task, { target: { value: "pick cube first second third" } });
+    await act(async () => rejectPoll(new Error("status unavailable")));
+    expect(screen.getByRole("alert")).toHaveTextContent("status unavailable");
+    expect(task).toBeEnabled();
+    expect(task).toHaveFocus();
+    expect(task).toHaveValue("pick cube first second third");
+    expect(JSON.parse(localStorage.getItem(COLLECTION_STORAGE_KEY)!).task).toBe("pick cube first second third");
+  });
+
   it("launches, records, saves and finalizes with distinct controls", async () => {
     invoke.mockImplementation((_command, { action }) => Promise.resolve(action === "status" ? stopped : action === "launch" ? idle : action === "start_episode" ? recording : action === "save_episode" ? { ...idle, savedEpisodes: 1 } : { ...stopped, savedEpisodes: 1, message: "dataset finalized" }));
     const user = userEvent.setup();
@@ -56,6 +103,7 @@ describe("DataCollectionPage", () => {
     await act(async () => Promise.resolve());
     const launch = screen.getByRole("button", { name: "启动采集器" });
     fireEvent.click(launch); fireEvent.click(launch);
+    expect(screen.getByLabelText("任务描述")).toBeDisabled();
     await act(async () => { vi.advanceTimersByTime(10000); });
     expect(invoke).toHaveBeenCalledTimes(2);
     await act(async () => resolveLaunch(idle));
