@@ -50,7 +50,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
-- 页面导航只保留在左侧 Navigation，**Status** 为第一项（只读状态总览卡片网格），其后为 Topics、Monitor、Motor 和 Calibration；Robot View / Topic Graph 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
+- 页面导航只保留在左侧 Navigation，**Status** 为第一项（只读状态总览卡片网格），其后为 Topics、Monitor、数据采集、Motor 和 Calibration；Robot View / Topic Graph 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
 - **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；Teleop / Trajectory / RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；切换前 HOLD、互斥停旧进程组）。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。无一键升级全部或自动刷写 STM32。
 - 已连接工具条固定在主区域顶部；窄窗口时状态灯换到下一行，Status 的说明和卡片在工具条下方独立滚动，不与连接控件重叠。
 - 已连接顶部工具条提供「切换主机」、连接配置、设置、压缩状态灯（含 ROS 就绪 / Bridge 版本徽章 / Fault 芯片 / Domain 提示）、连接名、隧道端口、Agent 与断开；Topics 页工具栏保留全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照与重置布局。
@@ -78,6 +78,17 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - `sensor_msgs/msg/Image` Topic（包括 `/camera/color/image_raw`）在数据 Tab 使用 Canvas 实时预览，支持 rgb8、bgr8、rgba8、bgra8、mono8、mono16 及对应 OpenCV 8UC/16UC1 编码、行步长和大小端转换。
 - Image 数据由 Bridge 使用 WebSocket 二进制帧全速传输，帧头保留 JSON 元数据、像素保持原始字节，避免 Base64 膨胀和大 JSON 解析；Canvas 使用浏览器动画帧合并绘制，不丢弃 Bridge 消息且不影响 Topic 频率统计。元数据展示尺寸、编码、step、时间戳与原始字节数但不展开二进制内容。
 - Graph 可以展示 ROS graph 中的全部 Topic；实时内容解析要求对应消息类型支持已安装在运行中的 Bridge ROS 环境。64 位整数超过 JavaScript 安全整数范围时以十进制字符串传输，非有限浮点数转为 `null`。
+
+## 数据采集（LeRobot v3）
+
+- Navigation 的「数据采集」页对接已安装的 `rebotarm_vla`；Mac 不需要 ROS 或 LeRobot。先在 Status 启动包含夹爪的 Teleop 和 RGB 相机，再配置数据集 ID、Jetson 保存目录、任务、FPS（默认 20）、腕部及可选固定相机 Topic。
+- 数据源默认 `/joint_states`、`/arm_teleop_controller/commands`、`/gripper_teleop_controller/commands`；关节状态须包含 `joint1..joint6` 与米制 `gripper_finger_left_joint`（0.05 m 打开、0 m 关闭）。采集器输出七维 state/action，夹爪按 0 打开、1 关闭归一化。原始 STM32 电机单位不应直接作为该默认数据源。
+- 「启动采集器」通过 Tauri `data_collection_action`，source 连接 Profile 的 ROS overlay，调用 Jetson 上的 Python（默认 `venvs/lerobot/bin/python`）执行 `python -m rebotarm_vla.lerobot_recorder --no-keyboard`。必须预先安装 `rebotarm_vla` 与兼容的 LeRobot v3；启动会实际导入 LeRobotDataset 检查后端依赖并报告错误，不安装软件。若虚拟环境包含 NVIDIA `cu12/lib` 或 `cudss/lib`，仅为预检和采集器子进程补充这些现有库路径，保留 ROS 的库路径。
+- 通过固定 `/lerobot_recorder/start_episode`、`save_episode`、`discard_episode`、`status` Trigger 服务控制 Episode；每 5 秒查询采集状态、帧数、已保存 Episode、FPS、任务和日志。仅开始 Episode 需要本会话收到 JointState；状态、保存、丢弃和结束在缺少反馈时仍可用。无有效帧时提示检查 Topic、同步与日志。
+- 丢弃当前 Episode 需要确认。存在采集中或未保存帧时拒绝结束；保存或丢弃后，才能「结束并完成数据集」。结束只向本应用启动且 PID/启动时间身份匹配的采集器发 SIGINT，等待正常 finalize；不会强杀编码进程。外部启动的采集器可操作 Episode，结束须回原终端。已保存过 Episode 时，以日志中的 `Dataset finalized` 确认正常收尾。
+- 数据集写入 Jetson，本页不上传。新建时拒绝已存在目录；续录需存在 `meta/info.json`，并提前检查 FPS、相机集合、七维 state/action 布局；图像分辨率及单位也须与原数据集一致。计数来自采集器服务，续录数据集在首个有效帧时打开，此前已保存计数可能为 0。
+- 表单偏好保存在本机；切换页面或断开连接后远端采集器继续运行，回到同一主机/ROS Domain 可恢复查询。远端进程记录、锁与日志按 ROS_DOMAIN_ID 隔离在 `~/.cache/robot-console/data-collection/domain-N/`。并发操作受保护；连接变化或页面卸载后的旧响应不会更新新页面。路径、Topic、数据集 ID 与参数在原生后端校验，任务文本以独立参数传递；本页不启动遥操作、不切换 Controller、不发布电机命令。
+- 隔离 ROS 冒烟测试：`python3 scripts/smoke-data-collection.py --host jetson --domain 197`，按需加 `--ros-setup` / `--ssh-port`，domain 必须选择现场未使用的隔离值。脚本在远端临时目录启动模拟采集器，只验证启动、Episode 服务、计数和退出，清理后不改动已安装 package 或真实数据集。
 
 ## 5. URDF 与 Three.js
 
@@ -173,6 +184,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
 | Topic Graph | ROS 图请求、无边界力导向布局、保留斜杠的 20 字符标签、选中后的画布平移、边界外节点拖动及刷新保留位置、Fit/Reset、占位粒子流速、Bridge 过滤、Controller 聚焦、节点订阅和刷新 | `src/bridge.test.ts`、`src/topicGraphLogic.test.ts`、`src/TopicGraph.test.tsx`、`src/App.test.tsx` |
 | Inspector | Topic/Node 详情、完整 Topic 名称、JSON 右键字段、图像预览、订阅失败提示 | `src/TopicInspector.test.tsx`、`src/App.test.tsx` |
+| 数据采集 | Navigation 入口、配置校验与持久化、Episode 启动/保存/丢弃/结束、并发与旧响应、SSH 参数安全、进程身份、续录检查、正常 finalize | `src/DataCollectionPage.test.tsx`、`src/dataCollectionLogic.test.ts`、`src/AppNav.test.tsx`、`src/App.test.tsx`、`src-tauri/src/data_collection.rs`、`src-tauri/tests/test_collection_remote.py` |
 | Monitor / DataGraph | Dashboard/Panel CRUD、Inspector 两级加入、Panel 多序列与四类图表、布局预设（localStorage + JSON 导入导出）、网格拖拽、共享准星、bag `/clock`/stamp 时间轴、播放条（暂停/1x/进度估算）、暂停跟随/冻结窗口、最大化、重置/锁定/紧凑、v1→v2 迁移、转矩 7 Panel、30s 窗口、Jetson bag play | `src/TopicInspector.test.tsx`、`src/monitorLogic.test.ts`、`src/monitorChartLogic.test.ts`、`src/MonitorChart.test.tsx`、`src/monitorTimeline.test.ts`、`src/MonitorPage.test.tsx`、`src/dataGraphLogic.test.ts`、`src/DataGraph.test.tsx`、`src/App.test.tsx`、`src-tauri` rosbag play 测试 |
 | 图像 Topic | Image WebSocket 二进制全速传输、动画帧合并绘制、RGB/BGR/RGBA/BGRA/Mono8/Mono16 转换、step/大小端、Canvas 预览及紧凑元数据 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`bridge/easy_debug_bridge/test/test_image_topic.py`、`src/bridge.test.ts`、`src/imageTopicLogic.test.ts`、`src/RosImagePreview.test.tsx`、`src/TopicInspector.test.tsx` |
 | 通用 Topic 解码 | 已安装消息类型的嵌套字段、数组、时间与大整数，ControllerState Inspector 路由、错误类型拒绝 | `bridge/easy_debug_bridge/test/test_topic_json.cpp`、`bridge/easy_debug_bridge/test/test_generic_topic.py`（ROS 集成）、`src/App.test.tsx` |

@@ -28,6 +28,9 @@ describe("AppNav", () => {
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(onSelect).toHaveBeenCalledWith("monitor");
 
+    await user.click(screen.getByRole("button", { name: "数据采集" }));
+    expect(onSelect).toHaveBeenCalledWith("collection");
+
     await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
     expect(onToggle).toHaveBeenCalledOnce();
   });
@@ -48,5 +51,6 @@ describe("AppNav", () => {
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Topics" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "数据采集" })).not.toBeDisabled();
   });
 });
