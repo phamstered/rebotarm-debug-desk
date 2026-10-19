@@ -49,6 +49,7 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 | 连接与会话 | [§1](docs/features.md#1-连接与会话) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_1-连接与会话) |
 | Topics / Graph / Inspector | [§2](docs/features.md#2-topics--graph--inspector) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_2-topics-graph-inspector) |
 | Monitor（多面板曲线 / bag 回放） | [Monitor](docs/features.md#monitor) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#monitor) |
+| LeRobot 数据采集 | [数据采集](docs/features.md#数据采集-lerobot-v3) |
 | Robot View（URDF） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_3-robot-view-urdf) |
 | MIT 电机控制 | [§4](docs/features.md#4-mit-电机控制) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_4-mit-电机控制) |
 | TCP 拖拽轨迹 | [§5](docs/features.md#5-tcp-拖拽轨迹) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_5-tcp-拖拽轨迹) |

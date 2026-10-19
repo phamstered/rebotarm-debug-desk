@@ -3,7 +3,7 @@ import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { isRosGatedPage, rosGatedNavReason } from "./appLogic";
 import type { RosGatedPage } from "./appLogic";
 
-export type AppPage = "status" | "dashboard" | "monitor" | "motor" | "calibration";
+export type AppPage = "status" | "dashboard" | "monitor" | "collection" | "motor" | "calibration";
 
 function StatusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 9h3M7 12h6M7 15h4"/><circle cx="17" cy="15" r="2.2"/></svg>;
@@ -25,10 +25,15 @@ function MotorIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>;
 }
 
+function CollectionIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/><circle cx="12" cy="12" r="2"/></svg>;
+}
+
 const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () => ReactElement }> = [
   { page: "status", label: "Status", title: "Status", icon: StatusIcon },
   { page: "dashboard", label: "Topics", title: "Topics", icon: DashboardIcon },
   { page: "monitor", label: "Monitor", title: "Monitor", icon: MonitorIcon },
+  { page: "collection", label: "数据采集", title: "LeRobot 数据采集", icon: CollectionIcon },
   { page: "motor", label: "Motor", title: "Motor", icon: MotorIcon },
   { page: "calibration", label: "Calibration", title: "Joint4 Calibration", icon: CalibrationIcon },
 ];

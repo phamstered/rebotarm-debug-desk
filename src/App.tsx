@@ -6,6 +6,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { BridgeClient } from "./bridge";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
+import { DataCollectionPage } from "./DataCollectionPage";
 import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { MotorPage } from "./MotorPage";
@@ -336,7 +337,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 export default function App() {
   const [appPage, setAppPage] = useState<AppPage>(() => {
     const saved = localStorage.getItem("robot-console-page");
-    return saved === "status" || saved === "motor" || saved === "calibration" || saved === "monitor" ? saved : "dashboard";
+    return saved === "status" || saved === "motor" || saved === "calibration" || saved === "monitor" || saved === "collection" ? saved : "dashboard";
   });
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
@@ -1547,6 +1548,8 @@ export default function App() {
           onCardAction={handleStatusCardAction}
           onQuickAction={handleStatusQuickAction}
         />
+      ) : appPage === "collection" ? (
+        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}

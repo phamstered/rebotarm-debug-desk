@@ -101,6 +101,10 @@ describe("App workflow", () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
       if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "data_collection_action") return Promise.resolve({
+        state: "stopped", managed: false, pid: 0, recording: false, pendingFrames: 0, savedEpisodes: 0,
+        fps: 0, task: "", repoId: "", root: "", message: "", log: "",
+      });
       if (command === "check_micro_ros_agent") return Promise.resolve({
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
@@ -137,6 +141,16 @@ describe("App workflow", () => {
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
+  });
+
+  it("opens data collection from Navigation before ROS feedback is ready", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: "数据采集" }));
+    expect(screen.getByRole("region", { name: "数据采集" })).toBeVisible();
+    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("data_collection_action", expect.objectContaining({ action: "status", config: null })));
+    expect(screen.getByRole("button", { name: "开始 Episode" })).toBeDisabled();
   });
 
   it("migrates the legacy topic, connects, discovers and subscribes topics", async () => {

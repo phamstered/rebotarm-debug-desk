@@ -7,6 +7,8 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Duration};
 
+mod data_collection;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectionProfile {
@@ -1541,8 +1543,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
+        .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
             check_ssh,
+            data_collection::data_collection_action,
             check_micro_ros_agent,
             probe_jetson_usb,
             restart_micro_ros_agent,

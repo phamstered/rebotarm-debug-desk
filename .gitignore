@@ -6,6 +6,7 @@ bridge/build/
 bridge/install/
 bridge/log/
 .DS_Store
+__pycache__/
 *.log
 docs/.vitepress/dist/
 docs/.vitepress/cache/

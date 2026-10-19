@@ -39,6 +39,7 @@ The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `
 10. Tauri polls `ros2 control list_controllers -c /controller_manager` over SSH every 30 seconds and shows controller names, types and states below Topics.
 11. With an active `JointTrajectoryController`, the Robot View shows a draggable TCP handle. A drag solves position-only IK against the URDF joint chain; releasing it publishes `trajectory_msgs/JointTrajectory` to the controller's `~/joint_trajectory` topic through the Bridge.
 12. Global toolbar operations that need host access bypass the WebSocket Bridge: Tauri runs a fixed, validated SSH command to start/stop `ros2 bag record -a`, while diagnostics snapshots are assembled in the WebView and written through a size- and extension-checked Rust command.
+13. Data Collection uses the Tauri `data_collection_action` command over SSH. A bundled Python adapter starts the installed `rebotarm_vla.lerobot_recorder` with the configured Jetson LeRobot Python, calls its fixed Trigger services using the system ROS Python, and tracks the launched PID plus Linux process start identity. Dataset images, videos and parquet files stay on the Jetson. The adapter does not publish robot commands or change controllers; finishing signals only its matching recorder and allows it to finalize normally.
 
 ## URDF assets
 
