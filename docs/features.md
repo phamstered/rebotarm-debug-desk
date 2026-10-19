@@ -63,17 +63,18 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ### 做什么
 
-左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、RealSense。成功卡片展示详情，失败卡片展示原因；可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory（及停止）。
+左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
 
 ### 怎么用
 
-连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片可滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory（切换前 HOLD，互斥停旧进程）。一键 Teleop 使用 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
+连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片可滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory/VLA（切换前 HOLD，互斥停旧进程）。一键 Teleop 使用 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。一键 VLA 经 `switch_controllers` 激活 `vla_position_controller`、停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`；chunk 来自 `/vla/joint_chunk`（`VlaJointChunk.positions[]`），Desk 不直写 `/stm32/joint_commands`。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
 
 ### 边界
 
 - 不自动 flash STM32；不把 Bridge 部署与 ros2-stack 同步绑成一键操作。
 - Agent 重启仅为 `systemctl restart`；RealSense 用 `rs_launch.py`，不写入 ros2-stack。
 - `bridge_build_id` / 最近部署结果 / XRCE 端口 / Bridge systemd 单元：仍可能显示「未知」。
+- VLA chunk Hz / Monitor `positions[]` 依赖 Bridge 能订阅 `microros_stm32h723_bridge/msg/VlaJointChunk`；类型未进入远端 Bridge 环境时 Status 仍可按 controller 状态启停。
 
 ---
 ## 2. Topics / Graph / Inspector

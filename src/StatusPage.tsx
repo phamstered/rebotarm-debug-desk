@@ -18,6 +18,7 @@ import {
   type StatusCardModel,
   type StatusTone,
 } from "./statusLogic";
+import { isVlaControllerActive } from "./vlaLogic";
 
 function ToneBadge({ tone }: { tone: StatusTone }) {
   return <span className={`status-card-tone ${tone}`}>{toneLabel(tone)}</span>;
@@ -108,6 +109,7 @@ export function StatusPage({
   usbChecked = false,
   armMode = null,
   realsenseTopicSample,
+  vlaChunkSample,
   actionBusy = null,
   actionNotice = "",
   onCardAction,
@@ -132,10 +134,11 @@ export function StatusPage({
   usbChecked?: boolean;
   armMode?: ArmModeStatus | null;
   realsenseTopicSample?: TopicSample | undefined;
+  vlaChunkSample?: TopicSample | undefined;
   actionBusy?: string | null;
   actionNotice?: string;
   onCardAction?: (action: StatusCardAction, card: StatusCardModel) => void;
-  onQuickAction?: (id: "teleop" | "trajectory" | "stop") => void;
+  onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "stop") => void;
 }) {
   const cards = buildStatusCards({
     stage,
@@ -158,12 +161,14 @@ export function StatusPage({
     usbChecked,
     armMode,
     realsenseTopicSample,
+    vlaChunkSample,
     actionBusy,
   });
   const quickActions = buildStatusQuickActions({
     sshOk,
     rosReady: isRosReady(jointState),
     actionBusy,
+    vlaActive: isVlaControllerActive(rosControl),
   });
 
   return (
@@ -171,7 +176,7 @@ export function StatusPage({
       <header className="status-page-header">
         <div>
           <h1>Status</h1>
-          <span>系统状态总览 · 可刷新 USB / 重启 Agent · 一键 Teleop/Trajectory</span>
+          <span>系统状态总览 · 可刷新 USB / 重启 Agent · 一键 Teleop/Trajectory/VLA</span>
         </div>
         <div className="status-page-meta" title="不刷写固件；Bridge 升级仍走既有 mismatch 提示">
           <span>NO FLASH</span>
@@ -179,7 +184,7 @@ export function StatusPage({
         </div>
       </header>
       <p className="status-page-banner" role="note">
-        重要组件展示成功详情或失败原因；可重启项提供「重新拉起」，纯 USB 仅「刷新检测」。一键 Teleop / Trajectory 经 SSH 启动，切换前 HOLD，互斥停旧进程。不提供一键升级全部、自动刷写 STM32。
+        重要组件展示成功详情或失败原因；可重启项提供「重新拉起」，纯 USB 仅「刷新检测」。一键 Teleop / Trajectory 经 SSH 启动；VLA 经 switch_controllers 激活 vla_position_controller（保持 gravity）。切换前 HOLD，互斥停旧进程。不提供一键升级全部、自动刷写 STM32。
       </p>
       <section className="status-quick-actions" aria-label="一键启动">
         {quickActions.map((action) => (

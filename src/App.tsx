@@ -73,6 +73,14 @@ import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit }
 import type { LayoutSizes } from "./layoutLogic";
 import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
 import type { ToolbarSettings } from "./toolbarLogic";
+import {
+  VLA_CHUNK_MESSAGE_TYPE,
+  VLA_CHUNK_TOPIC,
+  VLA_POSITION_CONTROLLER,
+  isVlaControllerActive,
+  listVlaStartActivate,
+  listVlaStartDeactivate,
+} from "./vlaLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "upgrading" | "connected" | "failed";
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
@@ -770,6 +778,84 @@ export default function App() {
     }
   }
 
+
+  async function switchVlaControllers(activate: string[], deactivate: string[]) {
+    const message = await invoke<string>("switch_ros_controllers", {
+      profile,
+      activate,
+      deactivate,
+    });
+    return message;
+  }
+
+  async function runVlaStart() {
+    if (statusActionBusy) return;
+    setStatusActionBusy("vla-start");
+    setStatusActionNotice("");
+    try {
+      await ensureHoldBeforeArmSwitch();
+      // Stop teleop/trajectory process groups so they do not reclaim position controllers.
+      try {
+        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
+        if (!stopResult.ok) {
+          setStatusActionNotice(`停止 Teleop/Trajectory 警告：${stopResult.message}`);
+        }
+      } catch (reason) {
+        setStatusActionNotice(`停止 Teleop/Trajectory 警告：${reason instanceof Error ? reason.message : String(reason)}`);
+      }
+      const status = await fetchRosControllers().catch(() => rosControl);
+      const activate = listVlaStartActivate(status);
+      const deactivate = listVlaStartDeactivate(status);
+      const message = await switchVlaControllers(activate, deactivate);
+      setStatusActionNotice(message || `已激活 ${VLA_POSITION_CONTROLLER}`);
+      await refreshRosControllers();
+      await refreshUsbAndArm();
+    } catch (reason) {
+      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
+      try { await refreshRosControllers(); } catch { /* ignore */ }
+    } finally {
+      setStatusActionBusy(null);
+    }
+  }
+
+  async function runVlaStop(alsoStopArm = false) {
+    if (statusActionBusy) return;
+    setStatusActionBusy(alsoStopArm ? "arm-stop" : "vla-stop");
+    setStatusActionNotice("");
+    try {
+      await ensureHoldBeforeArmSwitch();
+      if (alsoStopArm) {
+        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
+        if (!stopResult.ok) {
+          setStatusActionNotice(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
+        }
+      }
+      if (isVlaControllerActive(rosControl) || alsoStopArm) {
+        try {
+          const message = await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
+          setStatusActionNotice((current) => {
+            const vlaMsg = message || `已停用 ${VLA_POSITION_CONTROLLER}`;
+            return current ? `${current}；${vlaMsg}` : vlaMsg;
+          });
+        } catch (reason) {
+          // If VLA was not loaded, deactivation may fail — surface but continue.
+          const err = reason instanceof Error ? reason.message : String(reason);
+          setStatusActionNotice((current) => (current ? `${current}；VLA 停止：${err}` : `VLA 停止：${err}`));
+        }
+      } else if (!alsoStopArm) {
+        setStatusActionNotice("VLA 未运行");
+      } else {
+        setStatusActionNotice((current) => current || "已停止 Teleop/Trajectory");
+      }
+      await refreshRosControllers();
+      await refreshUsbAndArm();
+    } catch (reason) {
+      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setStatusActionBusy(null);
+    }
+  }
+
   async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent") {
     if (statusActionBusy) return;
     setStatusActionBusy(actionId);
@@ -789,6 +875,13 @@ export default function App() {
       }
       if (mode === "teleop" || mode === "trajectory") {
         await ensureHoldBeforeArmSwitch();
+        if (isVlaControllerActive(rosControl)) {
+          try {
+            await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
+          } catch (reason) {
+            setStatusActionNotice(`停用 VLA 警告：${reason instanceof Error ? reason.message : String(reason)}`);
+          }
+        }
       }
       const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode });
       setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
@@ -820,13 +913,22 @@ export default function App() {
     }
     if (action.id === "realsense-restart") {
       void runStatusRestart("realsense-restart", "realsense");
+      return;
+    }
+    if (action.id === "vla-start") {
+      void runVlaStart();
+      return;
+    }
+    if (action.id === "vla-stop") {
+      void runVlaStop(false);
     }
   }
 
-  function handleStatusQuickAction(id: "teleop" | "trajectory" | "stop") {
+  function handleStatusQuickAction(id: "teleop" | "trajectory" | "vla" | "stop") {
     if (id === "teleop") void runStatusRestart("teleop-restart", "teleop");
     else if (id === "trajectory") void runStatusRestart("trajectory-restart", "trajectory");
-    else void runStatusRestart("arm-stop", "stop");
+    else if (id === "vla") void runVlaStart();
+    else void runVlaStop(true);
   }
 
   useEffect(() => {
@@ -936,6 +1038,8 @@ export default function App() {
       bridge.send({ op: "subscribe", topic: profile.urdfTopic, type: "std_msgs/msg/String" });
       bridge.send({ op: "subscribe", topic: profile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
       bridge.send({ op: "subscribe", topic: profile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
+      // VlaJointChunk (positions[]); Bridge runtime decode required for Hz/Monitor sampling.
+      bridge.send({ op: "subscribe", topic: VLA_CHUNK_TOPIC, type: VLA_CHUNK_MESSAGE_TYPE });
 
       setStage("connected");
       activeStep = "agent";
@@ -1437,6 +1541,7 @@ export default function App() {
           usbChecked={usbChecked}
           armMode={armMode}
           realsenseTopicSample={messages["/camera/camera/color/image_raw"]}
+          vlaChunkSample={messages[VLA_CHUNK_TOPIC]}
           actionBusy={statusActionBusy}
           actionNotice={statusActionNotice}
           onCardAction={handleStatusCardAction}

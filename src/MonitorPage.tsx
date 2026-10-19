@@ -27,6 +27,7 @@ import {
   resolveMonitorViewNowMs,
 } from "./monitorTimeline";
 import type { RosbagPlayStatus } from "./types";
+import { createVlaChunkDashboard } from "./vlaLogic";
 
 const ReactGridLayout = WidthProvider(GridLayout);
 
@@ -343,6 +344,15 @@ export function MonitorPage({
           onClick={() => onAddDashboard(createTorqueDashboard(jointStateTopic))}
         >
           +转矩
+        </button>
+        <button
+          type="button"
+          className="monitor-panel-add"
+          aria-label="添加 VLA Chunk 仪表盘"
+          title="添加 /vla/joint_chunk positions[] 模板（VlaJointChunk）"
+          onClick={() => onAddDashboard(createVlaChunkDashboard())}
+        >
+          +VLA
         </button>
       </div>
 

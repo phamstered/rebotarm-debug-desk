@@ -10,6 +10,13 @@ import { defaultProfile } from "./types";
 import { domainMismatchHint, isAgentOnline, isRosReady } from "./appLogic";
 import type { TopicSample } from "./appLogic";
 import { motorFaults, modes } from "./motorLogic";
+import {
+  GRAVITY_COMPENSATION_CONTROLLER,
+  VLA_CHUNK_TOPIC,
+  VLA_POSITION_CONTROLLER,
+  isGravityCompensationActive,
+  isVlaControllerActive,
+} from "./vlaLogic";
 
 export type StatusTone = "ok" | "warn" | "fail" | "idle" | "unknown";
 
@@ -28,7 +35,7 @@ export type StatusRow = {
 export type StatusCardAction = {
   id: string;
   label: string;
-  kind: "restart" | "refresh";
+  kind: "restart" | "refresh" | "stop";
   disabled?: boolean;
   disabledReason?: string;
 };
@@ -219,6 +226,7 @@ export function buildStatusCards(input: {
   usbChecked?: boolean;
   armMode?: ArmModeStatus | null;
   realsenseTopicSample?: TopicSample | undefined;
+  vlaChunkSample?: TopicSample | undefined;
   actionBusy?: string | null;
 }): StatusCardModel[] {
   const {
@@ -242,6 +250,7 @@ export function buildStatusCards(input: {
     usbChecked = false,
     armMode = null,
     realsenseTopicSample,
+    vlaChunkSample,
     actionBusy = null,
   } = input;
 
@@ -456,8 +465,10 @@ export function buildStatusCards(input: {
         id: "teleop-restart",
         label: busy("teleop-restart") ? "拉起中…" : "重新拉起",
         kind: "restart",
-        disabled: !armGateOk || busy("teleop-restart"),
-        disabledReason: armGateReason || (busy("teleop-restart") ? "操作进行中" : undefined),
+        disabled: !armGateOk || busy("teleop-restart") || busy("vla-start") || busy("vla-stop") || isVlaControllerActive(rosControl),
+        disabledReason: armGateReason
+          || (isVlaControllerActive(rosControl) ? "先停止 VLA" : undefined)
+          || (busy("teleop-restart") || busy("vla-start") || busy("vla-stop") ? "操作进行中" : undefined),
       },
     ],
   };
@@ -484,8 +495,10 @@ export function buildStatusCards(input: {
         id: "trajectory-restart",
         label: busy("trajectory-restart") ? "拉起中…" : "重新拉起",
         kind: "restart",
-        disabled: !armGateOk || busy("trajectory-restart"),
-        disabledReason: armGateReason || (busy("trajectory-restart") ? "操作进行中" : undefined),
+        disabled: !armGateOk || busy("trajectory-restart") || busy("vla-start") || busy("vla-stop") || isVlaControllerActive(rosControl),
+        disabledReason: armGateReason
+          || (isVlaControllerActive(rosControl) ? "先停止 VLA" : undefined)
+          || (busy("trajectory-restart") || busy("vla-start") || busy("vla-stop") ? "操作进行中" : undefined),
       },
     ],
   };
@@ -544,6 +557,89 @@ export function buildStatusCards(input: {
     ],
   };
 
+
+  const vlaActive = isVlaControllerActive(rosControl);
+  const gravityOn = isGravityCompensationActive(rosControl);
+  const vlaHz = vlaChunkSample?.hz;
+  const vlaChunkOk = Boolean(vlaHz && vlaHz > 0);
+  let vlaTone: StatusTone = "idle";
+  let vlaSummary = "未知";
+  let vlaDetail: string | undefined;
+  let vlaFailure: string | undefined;
+  if (!sshOk) {
+    vlaTone = "idle";
+    vlaSummary = "SSH 未就绪";
+  } else if (!rosControl) {
+    vlaTone = "idle";
+    vlaSummary = "检查中…";
+  } else if (!rosControl.available) {
+    vlaTone = "fail";
+    vlaSummary = "Controller Manager 离线";
+    vlaFailure = rosControl.message || "无法查询控制器，无法判断 VLA 状态";
+  } else if (vlaActive) {
+    vlaTone = "ok";
+    vlaSummary = vlaChunkOk ? `运行中 · ${formatHz(vlaHz)}` : "控制器 active";
+    vlaDetail = vlaChunkOk
+      ? `${VLA_POSITION_CONTROLLER} · ${VLA_CHUNK_TOPIC} ${formatHz(vlaHz)}`
+      : `${VLA_POSITION_CONTROLLER} active · 等待 ${VLA_CHUNK_TOPIC}`;
+  } else {
+    vlaTone = "warn";
+    vlaSummary = "未运行";
+    vlaFailure = "vla_position_controller 未激活（可通过一键启动；与 arm_teleop / arm_trajectory 互斥）";
+  }
+  const vlaBusy = busy("vla-start") || busy("vla-stop");
+  const vlaCard: StatusCardModel = {
+    id: "vla",
+    title: "VLA",
+    tone: vlaTone,
+    summary: vlaSummary,
+    detail: vlaDetail,
+    failureReason: vlaFailure,
+    rows: [
+      {
+        label: "控制器",
+        value: vlaActive ? "active" : rosControl?.available ? "inactive" : "—",
+        tone: vlaActive ? "ok" : "idle",
+      },
+      { label: "名称", value: VLA_POSITION_CONTROLLER },
+      {
+        label: "Chunk Topic",
+        value: vlaChunkOk ? formatHz(vlaHz) : VLA_CHUNK_TOPIC,
+        tone: vlaChunkOk ? "ok" : "idle",
+      },
+      {
+        label: "Gravity",
+        value: gravityOn ? "active" : "未激活",
+        tone: gravityOn ? "ok" : "warn",
+      },
+    ],
+    note: `Scheme B：外部推理 → ${VLA_CHUNK_TOPIC} → ${VLA_POSITION_CONTROLLER}；并行 ${GRAVITY_COMPENSATION_CONTROLLER}；互斥 arm_teleop_controller / arm_trajectory_controller。Desk 不直写 /stm32/joint_commands。`,
+    actions: [
+      {
+        id: "vla-start",
+        label: busy("vla-start") ? "启动中…" : "启动 VLA",
+        kind: "restart",
+        disabled: !armGateOk || vlaBusy || vlaActive,
+        disabledReason: armGateReason
+          || (vlaActive ? "VLA 已在运行" : undefined)
+          || (vlaBusy ? "操作进行中" : undefined),
+      },
+      {
+        id: "vla-stop",
+        label: busy("vla-stop") ? "停止中…" : "停止 VLA",
+        kind: "stop",
+        disabled: !sshOk || vlaBusy || !vlaActive,
+        disabledReason: !sshOk
+          ? "SSH 未就绪"
+          : !vlaActive
+            ? "VLA 未运行"
+            : vlaBusy
+              ? "操作进行中"
+              : undefined,
+      },
+    ],
+  };
+
   return [
     sshCard,
     bridgeCard,
@@ -556,12 +652,13 @@ export function buildStatusCards(input: {
     usbCard,
     teleopCard,
     trajectoryCard,
+    vlaCard,
     realsenseCard,
   ];
 }
 
 export type StatusQuickAction = {
-  id: "teleop" | "trajectory" | "stop";
+  id: "teleop" | "trajectory" | "vla" | "stop";
   label: string;
   disabled?: boolean;
   disabledReason?: string;
@@ -571,28 +668,37 @@ export function buildStatusQuickActions(input: {
   sshOk: boolean;
   rosReady: boolean;
   actionBusy?: string | null;
+  vlaActive?: boolean;
 }): StatusQuickAction[] {
   const gateOk = input.sshOk && input.rosReady;
   const reason = !input.sshOk ? "SSH 未就绪" : !input.rosReady ? "等待 JointState" : undefined;
   const busy = input.actionBusy;
+  const modeBusy = busy === "teleop-restart" || busy === "trajectory-restart" || busy === "vla-start" || busy === "vla-stop" || busy === "arm-stop";
+  const vlaBlocks = Boolean(input.vlaActive);
   return [
     {
       id: "teleop",
       label: busy === "teleop-restart" ? "启动 Teleop…" : "一键 Teleop",
-      disabled: !gateOk || busy === "teleop-restart" || busy === "trajectory-restart",
-      disabledReason: reason || (busy ? "操作进行中" : undefined),
+      disabled: !gateOk || modeBusy || vlaBlocks,
+      disabledReason: reason || (vlaBlocks ? "先停止 VLA" : undefined) || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "trajectory",
       label: busy === "trajectory-restart" ? "启动 Trajectory…" : "一键 Trajectory",
-      disabled: !gateOk || busy === "teleop-restart" || busy === "trajectory-restart",
-      disabledReason: reason || (busy ? "操作进行中" : undefined),
+      disabled: !gateOk || modeBusy || vlaBlocks,
+      disabledReason: reason || (vlaBlocks ? "先停止 VLA" : undefined) || (modeBusy ? "操作进行中" : undefined),
+    },
+    {
+      id: "vla",
+      label: busy === "vla-start" ? "启动 VLA…" : "一键 VLA",
+      disabled: !gateOk || modeBusy || vlaBlocks,
+      disabledReason: reason || (vlaBlocks ? "VLA 已在运行" : undefined) || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "stop",
-      label: busy === "arm-stop" ? "停止中…" : "停止 Teleop/Trajectory",
-      disabled: !input.sshOk || busy === "arm-stop",
-      disabledReason: !input.sshOk ? "SSH 未就绪" : busy === "arm-stop" ? "操作进行中" : undefined,
+      label: busy === "arm-stop" || busy === "vla-stop" ? "停止中…" : "停止 Teleop/Trajectory/VLA",
+      disabled: !input.sshOk || busy === "arm-stop" || busy === "vla-stop",
+      disabledReason: !input.sshOk ? "SSH 未就绪" : busy === "arm-stop" || busy === "vla-stop" ? "操作进行中" : undefined,
     },
   ];
 }
