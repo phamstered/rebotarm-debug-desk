@@ -7,8 +7,6 @@ export type PositionedGraphNode = RosGraphNode & {
 };
 
 export type GraphLayout = {
-  width: number;
-  height: number;
   nodes: PositionedGraphNode[];
   edges: RosGraphEdge[];
 };
@@ -102,11 +100,6 @@ export function layoutRosGraph(graph: RosGraph, viewport: { width: number; heigh
     return source === undefined || target === undefined ? [] : [{ source, target }];
   });
   const velocity = positioned.map(() => ({ x: 0, y: 0 }));
-  const padding = 26;
-  const constrain = (node: PositionedGraphNode) => {
-    node.x = Math.max(node.radius + padding, Math.min(width - node.radius - padding, node.x));
-    node.y = Math.max(node.radius + padding, Math.min(height - node.radius - padding, node.y));
-  };
 
   // Deterministic force simulation: every refresh and resize converges from the same graph.
   for (let iteration = 0; iteration < 190; iteration += 1) {
@@ -147,7 +140,6 @@ export function layoutRosGraph(graph: RosGraph, viewport: { width: number; heigh
       motion.y = Math.max(-9, Math.min(9, (motion.y + forces[index]!.y) * 0.74));
       node.x += motion.x;
       node.y += motion.y;
-      constrain(node);
     });
   }
   // The final collision pass keeps labels and circles from overlapping.
@@ -165,13 +157,12 @@ export function layoutRosGraph(graph: RosGraph, viewport: { width: number; heigh
         const shift = overlap / 2 + 0.01;
         a.x -= dx / distance * shift; a.y -= dy / distance * shift;
         b.x += dx / distance * shift; b.y += dy / distance * shift;
-        constrain(a); constrain(b);
         moved = true;
       }
     }
     if (!moved) break;
   }
-  return { width, height, nodes: positioned, edges: graph.edges };
+  return { nodes: positioned, edges: graph.edges };
 }
 
 export type ManualGraphPositions = Record<string, { x: number; y: number }>;
@@ -184,15 +175,11 @@ export function fakeEdgeFlowHz(relation: RosGraphEdge["relation"]): number {
 export function applyManualPositions(
   nodes: PositionedGraphNode[],
   manual: ManualGraphPositions,
-  canvas: { width: number; height: number },
 ): PositionedGraphNode[] {
-  const padding = 26;
   return nodes.map((node) => {
     const override = manual[node.id];
     if (!override) return node;
-    const x = Math.max(node.radius + padding, Math.min(canvas.width - node.radius - padding, override.x));
-    const y = Math.max(node.radius + padding, Math.min(canvas.height - node.radius - padding, override.y));
-    return { ...node, x, y };
+    return { ...node, x: override.x, y: override.y };
   });
 }
 
@@ -274,7 +261,7 @@ export function screenToWorld(camera: GraphCamera, screen: { x: number; y: numbe
 }
 
 export function zoomCameraAt(camera: GraphCamera, screen: { x: number; y: number }, nextScale: number): GraphCamera {
-  const scale = clampCameraScale(nextScale);
+  const scale = Math.min(GRAPH_CAMERA_MAX_SCALE, Math.max(Math.min(GRAPH_CAMERA_MIN_SCALE, camera.scale), nextScale));
   const world = screenToWorld(camera, screen);
   return { scale, tx: screen.x - world.x * scale, ty: screen.y - world.y * scale };
 }
@@ -301,8 +288,12 @@ export function fitCameraToNodes(
   }
   const width = Math.max(1, maxX - minX);
   const height = Math.max(1, maxY - minY);
-  const scale = clampCameraScale(
-    Math.min((viewport.width - padding * 2) / width, (viewport.height - padding * 2) / height),
+  const horizontalPadding = Math.min(padding, viewport.width * 0.15);
+  const verticalPadding = Math.min(padding, viewport.height * 0.15);
+  const scale = Math.min(
+    GRAPH_CAMERA_MAX_SCALE,
+    (viewport.width - horizontalPadding * 2) / width,
+    (viewport.height - verticalPadding * 2) / height,
   );
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
@@ -315,12 +306,23 @@ export function fitCameraToNodes(
 
 export function resetCamera(
   viewport: { width: number; height: number },
-  layout: { width: number; height: number },
+  nodes: Array<{ x: number; y: number; radius: number }>,
 ): GraphCamera {
+  if (nodes.length === 0) return { scale: 1, tx: 0, ty: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x - node.radius);
+    minY = Math.min(minY, node.y - node.radius);
+    maxX = Math.max(maxX, node.x + node.radius);
+    maxY = Math.max(maxY, node.y + node.radius);
+  }
   return {
     scale: 1,
-    tx: Math.max(0, (viewport.width - layout.width) / 2),
-    ty: Math.max(0, (viewport.height - layout.height) / 2),
+    tx: viewport.width / 2 - (minX + maxX) / 2,
+    ty: viewport.height / 2 - (minY + maxY) / 2,
   };
 }
 
