@@ -42,7 +42,7 @@ flowchart TD
 | 控制器已加载 | `stm32h723_arm.launch.py` 在 **normal control** 条件下执行 `spawner vla_position_controller --inactive`。当 `position_controller:=none` 且开启重力或 Joint4 标定（例如 `start_arm_teleop.sh --mode=gravity` / `--mode=calibration`）时**不会**加载 VLA 控制器 |
 | 消息包已编译并 source | Jetson 上 `colcon build` 过 `microros_stm32h723_bridge`（含 `VlaJointChunk`），推理节点与 Bridge 的环境都 source 了该 `install/setup.bash` |
 | 工作区路径 | Desk 远端命令默认在 `$HOME/Project/rebotarm-ros2-stack` 找工作区，可用环境变量 `LEADER_FOLLOWER_WS` 覆盖（优先级：`LEADER_FOLLOWER_WS` → Profile 的 ROS setup 脚本所在工作区 → `$HOME/Project/rebotarm-ros2-stack` → 旧 `$HOME/Project/leader_follower`）|
-| 推荐启动方式 | `start_arm_teleop.sh` 没有 VLA 选项。推荐在 **Jetson 终端**运行 `./scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true`（加载 VLA inactive、gravity active），再在 Desk Status 启动 VLA。Gravity-ID（`position_controller:=none`）与 `state_only` 启动**不会**加载 VLA 控制器 |
+| 推荐启动方式 | `start_arm_teleop.sh` 没有 VLA 选项。teleop 与 trajectory 两种启动都会以 inactive 加载 VLA，只有 Gravity-ID（`position_controller:=none`）与 `state_only` 不加载。**推荐**组合：在 Jetson 终端运行 `./scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true`，然后在 Desk Status 启动 VLA。原因：没有重力补偿时，机械臂在 VLA 控制下会下垂 |
 | Desk 连接 | SSH 与 Bridge 已连接；JointState 已就绪（「启动 VLA」按钮的门控条件是 SSH 正常 **且** ROS 就绪）|
 
 在 Jetson 上可以先确认控制器状态：
