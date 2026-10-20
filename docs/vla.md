@@ -89,8 +89,25 @@ VLA active 时，Teleop / Trajectory 的「重新拉起」与一键按钮被禁�
 Desk 一键 Teleop 运行 `--position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`，一键 Trajectory 运行 `--position-controller=trajectory`（不带 `--gravity`）。两者都没有完全对应推荐的 `trajectory + gravity=true`。不过在这两种模式下 VLA 都会以 inactive 加载，gravity 也已加载（active 或 inactive），而「启动 VLA」会顺带激活未 active 的 gravity，所以控制器组合本身能凑齐。问题在于下面这条警告。
 :::
 
-::: warning 未验证：Desk 一键 Teleop/Trajectory 后再一键 VLA
-从代码看，Desk 一键 Teleop / Trajectory 运行的 `start_arm_teleop.sh` 在 ros2_control 未运行时会**自己**启动 `stm32h723_arm.launch.py`，并在脚本退出（收到 SIGINT）时清理 ros2_control（先请求 MODE_DISABLE，再停 `ros2_control_node`）。而「启动 VLA」第 2 步会停掉这个脚本，因此 Controller Manager 可能随之退出，第 4 步 `switch_controllers` 失败。这一点尚未在真机确认。因此推荐在 Jetson 终端手动运行 `./scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true`。这样启动的进程不在 Desk 的 pid 文件中，Desk 的 stop 不会停掉它，之后再在 Desk 中启动 VLA。
+::: danger ⚠️ 已知问题（未在真机验证）：Desk 一键 Teleop/Trajectory 后不要点「启动 VLA」
+**直到修复前，如果当前 ros2_control 是由 Desk 一键 Teleop / Trajectory 的脚本拉起的，不要使用「启动 VLA」/「一键 VLA」。**
+
+原因（来自代码阅读）：Desk 一键 Teleop / Trajectory 运行的 `start_arm_teleop.sh` 在 ros2_control 未运行时会**自己**启动 `stm32h723_arm.launch.py`，脚本退出时会连同 ros2_control 一起清理。「启动 VLA」第 2 步（`start_arm_mode stop`）会停掉这个脚本，于是：
+
+1. `ros2_control_node` 退出，`/stm32/joint_commands` **停止发布**；
+2. 固件 100 ms 后切到 **HOLD**：effort 为 0、**没有重力补偿**，较重的关节可能下垂；
+3. 500 ms 后锁存 **fault 11**：之后所有新指令都被拒绝，必须先安全回零，再**重启 MCU/固件**才能恢复；
+4. 第 4 步 `switch_controllers` 也会因 Controller Manager 不在而失败。
+
+fault 11 与固件超时行为见 [rebotarm-executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)。
+
+**替代做法**：在 Jetson 终端手动运行
+
+```bash
+./scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true
+```
+
+这样启动的进程不在 Desk 的 pid 文件（`~/.cache/robot-console/arm-*.pid`）中，Desk 的 stop 不会停掉它。之后再在 Desk Status 中启动 VLA。
 :::
 
 ### 4.3 停止 VLA / 回到 HOLD
@@ -217,7 +234,8 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 | 现象 | 可能原因 | 处理 |
 |------|----------|------|
 | 卡片「未运行」，启动报找不到 `vla_position_controller` | stack 未含 PR #16，或以 `position_controller:=none` + 重力/标定模式启动，VLA 未被加载 | 更新 stack 并重新编译；使用 normal control 启动；`ros2 control list_controllers` 确认 |
-| 「Controller Manager 离线」/ 切换超时 | `ros2_control_node` 未运行；或 Desk 停 Teleop 时一并停掉了 ros2_control（见 [4.2 的警告](#_4-2-启动-vla)）| 在 Jetson 独立启动 ros2_control 后重试 |
+| 「Controller Manager 离线」/ 切换超时 | `ros2_control_node` 未运行 | 在 Jetson 独立启动 ros2_control 后重试 |
+| ⚠️ 点「启动 VLA」后机械臂下垂、Controller Manager 消失、STM32 报 fault 11 | Desk 停掉了自己一键拉起的 Teleop/Trajectory 脚本，脚本连带停掉 ros2_control → `/stm32/joint_commands` 中断 → 固件 100 ms 进 HOLD（无重力补偿），500 ms 锁存 fault 11（见 [4.2 的危险提示](#_4-2-启动-vla)，未在真机验证）| 先安全回零，再重启 MCU/固件（见 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)）。之后在 Jetson 终端手动运行 `start_arm_teleop.sh --position-controller=trajectory --gravity=true`，再从 Desk 启动 VLA |
 | 「Controller 批量切换失败」 | Desk 只 deactivate 当前处于 active 的 teleop/trajectory，正常情况下 Humble 上的 `--strict` 切换不会因此失败。若仍失败，通常是任一控制器无法切换：teleop/trajectory 未被停用、gravity 状态异常、控制器名不一致等 | 查看提示中的 `switch_controllers` 输出；手动 `ros2 control list_controllers` 检查 |
 | 卡片「控制器 active · 等待 /vla/joint_chunk」 | 推理节点未发布；Topic 名不一致；`ROS_DOMAIN_ID` 不一致；或 Bridge 无法解码 | Jetson 上 `ros2 topic hz /vla/joint_chunk`；有数据则多半是 Bridge 解码问题（下一行）|
 | 有数据但 Hz / Monitor 曲线为空 | Bridge 没有 `VlaJointChunk` 的内置解码器，走运行时 introspection；若 Bridge 运行环境 source 的 stack 不含该消息，订阅报「无法加载消息类型」。Desk 只在连接时订阅一次 | 确保 Bridge 运行环境 source 了含 `VlaJointChunk` 的 stack；重新部署 / 重启 Bridge 后**重新连接** Desk。Status 启停不依赖此项 |
