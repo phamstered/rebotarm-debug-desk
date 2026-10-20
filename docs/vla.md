@@ -101,21 +101,24 @@ Desk 一键 Teleop 运行 `--position-controller=teleop --gravity=true --gripper
   2. 等待 `/stm32/status` 的 mode 变为 3（DISABLE），最多 10 s；
   3. 然后才停止 ros2_control。
 
-关键点（代码阅读，未在真机验证）：`safe_stop` 在 `MicroRosSystem` 里是一个**锁存标志**，只有硬件 `on_activate` 才会清除。服务一旦被调用，即使脚本被杀，只要 ros2_control 还活着，`write()` 就会继续完成回零，然后切到 DISABLE。回零期间位置目标被 safe stop 覆盖，VLA 的目标不起作用。可能的结果：
+关键点（代码阅读，未在真机验证）：`safe_stop` 在 `MicroRosSystem` 里是一个**锁存标志**，只有硬件 `on_activate` 才会清除。服务一旦被调用，即使脚本被杀，只要 ros2_control 还活着，`write()` 就会继续执行回零；回零期间位置目标被覆盖，VLA 的目标不起作用。之后的表现取决于启动时使用的**增益文件**。
+
+权威的排障说明以 stack 文档为准：[vla-usage.md「与 rebotarm-debug-desk 配合」](https://github.com/phamstered/rebotarm-ros2-stack/blob/33963c7/docs/vla-usage.md#与-rebotarm-debug-desk-配合)（stack [PR #21](https://github.com/phamstered/rebotarm-ros2-stack/pull/21)，尚未合并）。
 
 **结果 A：cleanup 完整执行**
 
-机械臂**意外运动回零位** → DISABLE → cleanup 停止 ros2_control。Controller Manager 退出，第 4 步 `switch_controllers` 失败。
+机械臂**意外运动回零位** → cleanup 停止 ros2_control。Controller Manager 退出，第 4 步 `switch_controllers` 失败。退出时固件若不在 DISABLE，按结果 B2 处理。
 
 **结果 B1：cleanup 被 SIGTERM 打断，但 ros2_control 仍在运行**
 
-1. ros2_control 继续完成回零（机械臂**意外运动回零位**），然后进入 DISABLE；
-2. 之后 ros2_control 用同一个序列号反复发 DISABLE 帧，固件按过期序列号拒收，`/stm32/status` 稳定显示 **`mode=3`、`fault_code=4`**（STALE_SEQUENCE）。DISABLE 下没有 500 ms 锁存，**不会**出现 fault 11；
-3. `switch_controllers` **报告成功**，Status 显示 VLA active，但机械臂**不动**。在硬件重新 activate 之前，safe stop 标志一直有效。
+机械臂**意外运动回零位**。`switch_controllers` **报告成功**，Status 显示 VLA active，但机械臂**不跟随 VLA**。`/stm32/status` 取决于增益文件：
 
-**结果 B2：ros2_control 在回零 / DISABLE 完成前退出**
+- **B1a：RETURN kp 全为 0 的增益**（`gravity_mit_gains.yaml`，仅 `position_controller=none` 的重力 / 标定启动使用）：直接进入 DISABLE，之后 ros2_control 用同一个序列号反复发 DISABLE 帧，固件按过期序列号拒收。`/stm32/status` 稳定显示 **`mode=3`、`fault_code=4`**，不会出现 fault 11。
+- **B1b：RETURN kp 非 0 的增益**（`arm_mit_gains.yaml` / `arm_gripper_mit_gains.yaml`，即 teleop / trajectory 启动、也就是 VLA 路径的默认增益）：发出一帧 DISABLE 后，`write()` 发现模式不是 RETURN，会以新序列号**重新进入 RETURN**，于是机械臂**在零位附近被刚性保持**。`/stm32/status` 多数时间为 **`mode=2`、`fault_code=0`**，偶尔出现 `fault_code=4`。**疑似 stack `MicroRosSystem` 的 bug**，修复方案尚待确认。此状态下硬件 `inactive` 会被拒绝（`on_deactivate` 要求固件先确认 DISABLE），重启 ros2_control 则很可能锁存 fault 11（见 B2）。目前从代码看**没有可靠的恢复方法**，只能安全回零后重启 MCU，以 stack 修复和 stack 文档为准。
 
-例如 `safe_stop` 服务调用失败或被拒，cleanup 直接去停 ros2_control。此时 `/stm32/joint_commands` **停止发布**：固件 100 ms 后切到 **HOLD**（effort 为 0、**没有重力补偿**，较重的关节可能下垂），500 ms 后锁存 **fault 11**，之后所有新指令都被拒绝，必须先安全回零，再**重启 MCU/固件**才能恢复。
+**结果 B2：ros2_control 在固件进入 DISABLE 之前退出**
+
+例如 `safe_stop` 服务调用失败或被拒后 cleanup 直接停 ros2_control，或在 B1b 状态下重启 ros2_control。`/stm32/joint_commands` **停止发布**后：固件只有在 **TRACK 模式下**才会先在 100 ms 后切到 **HOLD**（effort 为 0、**没有重力补偿**，较重的关节可能下垂）；在 RETURN 模式下没有这一步。两种模式都会在 500 ms 后锁存 **fault 11**，之后所有新指令都被拒绝，必须先安全回零，再**重启 MCU/固件**才能恢复。
 
 fault 11 与固件超时行为见 [rebotarm-executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)。
 
@@ -240,7 +243,7 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 
 - **切换前 HOLD**：Desk 启动/停止 VLA 前都会先发 HOLD；未确认时只提示并继续，不会中止切换。
 - **超时保持**：推理断流超过超时后控制器保持最后一次发出的位置。stack 文档要求：推理 stale 时上层 / 固件应保持 **HOLD**。控制器本身不会切换固件模式。
-- **固件侧保护**：固件有独立的指令超时 → HOLD、超时 fault 锁存、单帧 effort 上限，HOLD 下不做重力补偿，具体数值以 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md) 为准。
+- **固件侧保护**：固件有独立的指令超时 → HOLD（仅 TRACK 模式）、超时 fault 锁存、单帧 effort 上限，HOLD 下不做重力补偿，具体数值以 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md) 为准。
 - **限速**：每关节最大 `max_delta_per_sec`（默认 1.0 rad/s，`arm_controllers.yaml`）。
 - **限位**：`VlaPositionController` 本身**不**做位置限幅；位置限幅在 `MicroRosSystem` 中按 URDF `command_interface` 的 min/max 执行（`rebotarm.arm.micro_ros.xacro`：joint1 ±2.8，joint2/joint3 [-3.14, 0.0]，joint4 [-1.87, 1.57]，joint5 ±1.57，joint6 ±3.14 rad）。effort 由 `MicroRosSystem` 按 gains 文件 `effort_limits` 限幅。
 - **非法输入**：长度不符或含 NaN/Inf 的消息被丢弃；激活时若状态位置非有限，激活失败。
@@ -253,9 +256,10 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 |------|----------|------|
 | 卡片「未运行」，启动报找不到 `vla_position_controller` | stack 未含 PR #16，或以 `position_controller:=none` + 重力/标定模式启动，VLA 未被加载 | 更新 stack 并重新编译；使用 normal control 启动；`ros2 control list_controllers` 确认 |
 | 「Controller Manager 离线」/ 切换超时 | `ros2_control_node` 未运行 | 在 Jetson 独立启动 ros2_control 后重试 |
-| ⚠️ 点「启动 VLA」后机械臂意外回零，Controller Manager 消失 | 结果 A：Desk 停掉了自己一键拉起的 Teleop/Trajectory 脚本，脚本 cleanup 先 safe stop（回零 → DISABLE）再停 ros2_control（见 [4.2 的危险提示](#_4-2-启动-vla)；代码阅读，未在真机验证）| 在 Jetson 终端手动运行 `start_arm_teleop.sh --position-controller=trajectory --gravity=true`，再从 Desk 启动 VLA |
-| ⚠️ VLA 显示 active / 切换成功但机械臂不动；`/stm32/status` 稳定为 `mode=3`、`fault_code=4` | 结果 B1：`safe_stop` 已执行完（回零 → DISABLE），ros2_control 仍在运行；safe stop 标志只有硬件重新 activate 才会清除。代码阅读，未在真机验证 | **重启 MCU 没有用**。重启 ros2_control（停掉 `stm32h723_arm.launch.py` 后按推荐方式重新启动；`on_activate` 会接着 STM32 最后接受的序列号继续），或让硬件组件重新 activate：先把使用它的控制器设为 inactive，再执行 `ros2 control set_hardware_component_state Stm32H723ArmSystem inactive`，然后设回 `active`，最后重新激活控制器。后一种做法是根据代码推出的，stack 里没有现成脚本，也未验证 |
-| ⚠️ 机械臂下垂，`/stm32/status` 报 `fault_code=11` | 结果 B2：ros2_control 在回零 / DISABLE 前退出 → 固件 100 ms 进 HOLD（无重力补偿）→ 500 ms 锁存 fault 11 | 先安全回零，再重启 MCU/固件（见 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)），之后按推荐方式启动 |
+| ⚠️ 点「启动 VLA」后机械臂意外回零，Controller Manager 消失 | 结果 A：Desk 停掉了自己一键拉起的 Teleop/Trajectory 脚本，脚本 cleanup 先 safe stop 再停 ros2_control（见 [4.2 的危险提示](#_4-2-启动-vla)；代码阅读，未在真机验证）| 先检查 `/stm32/status`：有 fault 11 按最后一行处理。之后在 Jetson 终端手动运行 `start_arm_teleop.sh --position-controller=trajectory --gravity=true`，再从 Desk 启动 VLA |
+| ⚠️ `/stm32/status` 稳定为 `mode=3`、`fault_code=4`；VLA active 但不动 | 结果 B1a：`safe_stop` 已执行，ros2_control 仍在运行，使用 RETURN kp=0 的增益 | **重启 MCU 没有用**。先 deactivate 控制器，再 `ros2 control set_hardware_component_state Stm32H723ArmSystem inactive` → `active`，然后重新激活控制器；或重启 ros2_control。具体命令见 [stack 文档](https://github.com/phamstered/rebotarm-ros2-stack/blob/33963c7/docs/vla-usage.md#与-rebotarm-debug-desk-配合) |
+| ⚠️ `/stm32/status` 多为 `mode=2`（偶尔 `fault_code=4`），机械臂在零位附近刚性保持不动 | 结果 B1b：`safe_stop` 已执行，ros2_control 仍在运行，使用 RETURN kp≠0 的增益（VLA 默认）。疑似 stack bug（[PR #21](https://github.com/phamstered/rebotarm-ros2-stack/pull/21)）| 目前从代码看没有可靠的恢复方法：硬件 `inactive` 会被拒绝，重启 ros2_control 很可能锁存 fault 11。只能安全回零 + 重启 MCU，并以 [stack 文档](https://github.com/phamstered/rebotarm-ros2-stack/blob/33963c7/docs/vla-usage.md#与-rebotarm-debug-desk-配合) / stack 修复为准 |
+| ⚠️ `/stm32/status` 报 `fault_code=11` | 结果 B2：ros2_control 在固件 DISABLE 前退出（TRACK 下先 100 ms 进 HOLD、无重力补偿；RETURN 下没有这一步）→ 500 ms 锁存 fault 11 | 先安全回零，再重启 MCU/固件（见 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)），之后按推荐方式启动 |
 | 「Controller 批量切换失败」 | Desk 只 deactivate 当前处于 active 的 teleop/trajectory，正常情况下 Humble 上的 `--strict` 切换不会因此失败。若仍失败，通常是任一控制器无法切换：teleop/trajectory 未被停用、gravity 状态异常、控制器名不一致等 | 查看提示中的 `switch_controllers` 输出；手动 `ros2 control list_controllers` 检查 |
 | 卡片「控制器 active · 等待 /vla/joint_chunk」 | 推理节点未发布；Topic 名不一致；`ROS_DOMAIN_ID` 不一致；或 Bridge 无法解码 | Jetson 上 `ros2 topic hz /vla/joint_chunk`；有数据则多半是 Bridge 解码问题（下一行）|
 | 有数据但 Hz / Monitor 曲线为空 | Bridge 没有 `VlaJointChunk` 的内置解码器，走运行时 introspection；若 Bridge 运行环境 source 的 stack 不含该消息，订阅报「无法加载消息类型」。Desk 只在连接时订阅一次 | 确保 Bridge 运行环境 source 了含 `VlaJointChunk` 的 stack；重新部署 / 重启 Bridge 后**重新连接** Desk。Status 启停不依赖此项 |
