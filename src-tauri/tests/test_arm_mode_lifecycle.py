@@ -69,6 +69,13 @@ class LifecycleTests(unittest.TestCase):
         result, _, _ = self.run_shell("unset -f pgrep; pgrep -f '/controller_manager/'ros2_control_node >/dev/null && exit 44; arm_safe_stop")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_status_read_does_not_require_daemon_type_discovery(self):
+        result, _, _ = self.run_shell('''ros2() {
+            [[ "$*" == *"microros_stm32h723_bridge/msg/HardwareStatus --once --no-daemon"* ]] || return 1;
+            printf 'mode: 3\nfault_code: 0\nlast_command_sequence: 50\n';
+        }; arm_safe_stop''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_latched_fault_requires_on_site_reset(self):
         result, events, _ = self.run_shell("arm_safe_stop", mode=0, fault=11, controller=1)
         self.assertNotEqual(result.returncode, 0)

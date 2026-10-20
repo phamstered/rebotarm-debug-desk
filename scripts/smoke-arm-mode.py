@@ -38,7 +38,7 @@ def main():
     setup = status_body.split('mkdir -p "$HOME/.cache/robot-console";', 1)[0]
 
     def snapshot(phase, expected_mode=None):
-        output = ssh(setup + "timeout 6 ros2 topic echo /stm32/status --once")
+        output = ssh(setup + "timeout 6 ros2 topic echo /stm32/status microros_stm32h723_bridge/msg/HardwareStatus --once --no-daemon")
         values = {}
         for line in output.splitlines():
             if line.startswith(("mode:", "fault_code:", "last_command_sequence:", "active_joint_mask:")):

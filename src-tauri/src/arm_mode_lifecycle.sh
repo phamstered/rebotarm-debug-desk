@@ -2,7 +2,7 @@
 # firmware requires an uninterrupted stream until DISABLE is acknowledged.
 arm_status() {
     local sample
-    sample=$(timeout 5 ros2 topic echo /stm32/status --once 2>&1) || {
+    sample=$(timeout 5 ros2 topic echo /stm32/status microros_stm32h723_bridge/msg/HardwareStatus --once --no-daemon 2>&1) || {
         echo "Cannot read fresh STM32 HardwareStatus: $sample" >&2
         return 1
     }
