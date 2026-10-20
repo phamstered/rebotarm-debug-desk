@@ -1,6 +1,6 @@
 # VLA 使用指南（Scheme B）
 
-本文说明如何在 **Rebotarm Debug Desk** 中启停 VLA（Vision-Language-Action）控制、用 mock 发布器做冒烟测试、编写自己的推理节点，以及排查常见问题。控制器与消息定义在 ros2-stack 中，权威说明见 stack 文档 [VLA integration (scheme B)](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-integration.md)。
+本文说明如何在 **Rebotarm Debug Desk** 中启停 VLA（Vision-Language-Action）控制、用 mock 发布器做冒烟测试、编写自己的推理节点，以及排查常见问题。控制器与消息定义在 ros2-stack 中，控制器与参数的权威参考见 stack 文档 [VLA 使用（vla-usage.md）](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-usage.md)（stack PR #18）和 [VLA integration (scheme B)](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-integration.md)；固件侧超时、HOLD、fault 与 effort 限制见 executor 文档 [docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)（executor PR #9）。
 
 ::: tip 本文依据
 内容按 desk `main`（含 #94、#97/#100）与 `rebotarm-ros2-stack` `main`（含 #15、#16）的代码整理：desk `src/vlaLogic.ts`、`src/statusLogic.ts`、`src/App.tsx`、`src-tauri/src/lib.rs`、Bridge `bridge_node.cpp`；stack `vla_position_controller.cpp`、`VlaJointChunk.msg`、`arm_controllers.yaml`、`stm32h723_arm.launch.py`、`mock_vla_chunk_publisher.py`。标注「未验证」的内容仅来自代码阅读，未在真机上确认。
@@ -42,6 +42,7 @@ flowchart TD
 | 控制器已加载 | `stm32h723_arm.launch.py` 在 **normal control** 条件下执行 `spawner vla_position_controller --inactive`。当 `position_controller:=none` 且开启重力或 Joint4 标定（例如 `start_arm_teleop.sh --mode=gravity` / `--mode=calibration`）时**不会**加载 VLA 控制器 |
 | 消息包已编译并 source | Jetson 上 `colcon build` 过 `microros_stm32h723_bridge`（含 `VlaJointChunk`），推理节点与 Bridge 的环境都 source 了该 `install/setup.bash` |
 | 工作区路径 | Desk 远端命令默认在 `$HOME/Project/rebotarm-ros2-stack` 找工作区，可用环境变量 `LEADER_FOLLOWER_WS` 覆盖（优先级：`LEADER_FOLLOWER_WS` → Profile 的 ROS setup 脚本所在工作区 → `$HOME/Project/rebotarm-ros2-stack` → 旧 `$HOME/Project/leader_follower`）|
+| 推荐启动方式 | `start_arm_teleop.sh` 没有 VLA 选项。推荐在 **Jetson 终端**运行 `./scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true`（加载 VLA inactive、gravity active），再在 Desk Status 启动 VLA。Gravity-ID（`position_controller:=none`）与 `state_only` 启动**不会**加载 VLA 控制器 |
 | Desk 连接 | SSH 与 Bridge 已连接；JointState 已就绪（「启动 VLA」按钮的门控条件是 SSH 正常 **且** ROS 就绪）|
 
 在 Jetson 上可以先确认控制器状态：
@@ -84,8 +85,12 @@ ros2 control list_controllers
 
 VLA active 时，Teleop / Trajectory 的「重新拉起」与一键按钮被禁用，提示「先停止 VLA」。
 
-::: warning 未验证：一键 Teleop 后再一键 VLA
-从代码看，Desk 一键 Teleop 运行的 `start_arm_teleop.sh` 在 ros2_control 未运行时会**自己**启动 `stm32h723_arm.launch.py`，并在脚本退出（收到 SIGINT）时清理 ros2_control（先请求 MODE_DISABLE，再停 `ros2_control_node`）。而「启动 VLA」第 2 步会停掉这个脚本，因此 Controller Manager 可能随之退出，第 4 步 `switch_controllers` 失败。这一点尚未在真机确认。若遇到，请让 ros2_control 由**不受 Desk 管理**的进程启动（例如在 Jetson 终端手动运行 `start_arm_teleop.sh` 或 `ros2 launch microros_stm32h723_bridge stm32h723_arm.launch.py`），再在 Desk 中启动 VLA。
+::: info Desk 一键能否得到推荐组合
+Desk 一键 Teleop 运行 `--position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`，一键 Trajectory 运行 `--position-controller=trajectory`（不带 `--gravity`）。两者都没有完全对应推荐的 `trajectory + gravity=true`。不过在这两种模式下 VLA 都会以 inactive 加载，gravity 也已加载（active 或 inactive），而「启动 VLA」会顺带激活未 active 的 gravity，所以控制器组合本身能凑齐。问题在于下面这条警告。
+:::
+
+::: warning 未验证：Desk 一键 Teleop/Trajectory 后再一键 VLA
+从代码看，Desk 一键 Teleop / Trajectory 运行的 `start_arm_teleop.sh` 在 ros2_control 未运行时会**自己**启动 `stm32h723_arm.launch.py`，并在脚本退出（收到 SIGINT）时清理 ros2_control（先请求 MODE_DISABLE，再停 `ros2_control_node`）。而「启动 VLA」第 2 步会停掉这个脚本，因此 Controller Manager 可能随之退出，第 4 步 `switch_controllers` 失败。这一点尚未在真机确认。因此推荐在 Jetson 终端手动运行 `./scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true`。这样启动的进程不在 Desk 的 pid 文件中，Desk 的 stop 不会停掉它，之后再在 Desk 中启动 VLA。
 :::
 
 ### 4.3 停止 VLA / 回到 HOLD
@@ -126,6 +131,12 @@ ros2 run microros_stm32h723_bridge mock_vla_chunk_publisher.py \
 
 ::: danger mock 发的是绝对角
 mock 的第 i 个关节目标为 `amplitude_rad * sin(2π·frequency_hz·t + 0.35·i)`，即**围绕 0 rad 的绝对角**，不是相对当前姿态的偏移。若机械臂当前不在零位附近，启动后会以最高 `max_delta_per_sec`（默认 1 rad/s）的速度向零位附近移动。测试前请确认零位附近的工作空间无障碍。另外 joint2/joint3 的位置上限是 `0.0`，正半周会被 `MicroRosSystem` 限幅。
+
+只想验证「保持」行为时，可以只激活 VLA、**不发布**任何 chunk：控制器激活后保持当前位置。
+:::
+
+::: warning 不要只发一条
+`ros2 topic pub --once` 只发一条：受限速影响，机械臂只走约 0.2 rad（1.0 rad/s × 0.2 s 超时）就会因超时停住。推理节点必须**持续**发布。
 :::
 
 验证：Status VLA 卡片应显示「运行中 · ~10 Hz」（需要 Bridge 能解码，见[第 9 节](#_9-故障排查)）；也可在 Jetson 上运行 `ros2 topic hz /vla/joint_chunk`。
@@ -146,7 +157,7 @@ float32 timeout_sec
 |------|------|
 | `header` | 控制器**不读取**；超时按收到消息时控制器节点的时钟计算，而不是 `header.stamp`。建议照常填写 stamp / frame_id，方便录包和调试 |
 | `positions` | 目标关节角（rad），长度必须等于控制器 `joints` 数量（默认 6）。长度不符或含 NaN/Inf 时**整条丢弃**并节流告警，控制器保持原目标 |
-| `timeout_sec` | `> 0`（且有限）时，覆盖本条消息之后的超时时间；`<= 0` 时使用参数 `command_timeout_sec`（默认 0.2 s）。覆盖值一直有效，直到下一条消息 |
+| `timeout_sec` | `> 0`（且有限）时，覆盖本条消息之后的超时时间；`<= 0` 时使用参数 `command_timeout_sec`（默认 0.2 s）。覆盖值一直有效，直到下一条消息。代码中**没有上限** |
 
 - Topic：`/vla/joint_chunk`（控制器参数 `chunk_topic`），控制器订阅使用 `rclcpp::SystemDefaultsQoS()`；mock 发布器使用 depth 10 的默认 QoS，自写节点照此即可。
 - 关节顺序：`positions[i]` 对应控制器参数 `joints[i]`，默认为 `[joint1, joint2, joint3, joint4, joint5, joint6]`，与发布顺序无关（消息中没有关节名）。
@@ -193,7 +204,8 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 ## 8. 安全说明
 
 - **切换前 HOLD**：Desk 启动/停止 VLA 前都会先发 HOLD；未确认时只提示并继续，不会中止切换。
-- **超时保持**：推理断流超过超时后控制器保持最后指令位置。stack 文档要求：推理 stale 时上层 / 固件应保持 **HOLD**。控制器本身不会切换固件模式。
+- **超时保持**：推理断流超过超时后控制器保持最后一次发出的位置。stack 文档要求：推理 stale 时上层 / 固件应保持 **HOLD**。控制器本身不会切换固件模式。
+- **固件侧保护**：固件有独立的指令超时 → HOLD、超时 fault 锁存、单帧 effort 上限，HOLD 下不做重力补偿，具体数值以 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md) 为准。
 - **限速**：每关节最大 `max_delta_per_sec`（默认 1.0 rad/s，`arm_controllers.yaml`）。
 - **限位**：`VlaPositionController` 本身**不**做位置限幅；位置限幅在 `MicroRosSystem` 中按 URDF `command_interface` 的 min/max 执行（`rebotarm.arm.micro_ros.xacro`：joint1 ±2.8，joint2/joint3 [-3.14, 0.0]，joint4 [-1.87, 1.57]，joint5 ±1.57，joint6 ±3.14 rad）。effort 由 `MicroRosSystem` 按 gains 文件 `effort_limits` 限幅。
 - **非法输入**：长度不符或含 NaN/Inf 的消息被丢弃；激活时若状态位置非有限，激活失败。
@@ -206,11 +218,12 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 |------|----------|------|
 | 卡片「未运行」，启动报找不到 `vla_position_controller` | stack 未含 PR #16，或以 `position_controller:=none` + 重力/标定模式启动，VLA 未被加载 | 更新 stack 并重新编译；使用 normal control 启动；`ros2 control list_controllers` 确认 |
 | 「Controller Manager 离线」/ 切换超时 | `ros2_control_node` 未运行；或 Desk 停 Teleop 时一并停掉了 ros2_control（见 [4.2 的警告](#_4-2-启动-vla)）| 在 Jetson 独立启动 ros2_control 后重试 |
-| 「Controller 批量切换失败」 | `--strict` 下任一控制器无法切换：teleop/trajectory 未被停用、gravity 状态异常、控制器名不一致等 | 查看提示中的 `switch_controllers` 输出；手动 `ros2 control list_controllers` 检查 |
+| 「Controller 批量切换失败」 | Desk 只 deactivate 当前处于 active 的 teleop/trajectory，正常情况下 Humble 上的 `--strict` 切换不会因此失败。若仍失败，通常是任一控制器无法切换：teleop/trajectory 未被停用、gravity 状态异常、控制器名不一致等 | 查看提示中的 `switch_controllers` 输出；手动 `ros2 control list_controllers` 检查 |
 | 卡片「控制器 active · 等待 /vla/joint_chunk」 | 推理节点未发布；Topic 名不一致；`ROS_DOMAIN_ID` 不一致；或 Bridge 无法解码 | Jetson 上 `ros2 topic hz /vla/joint_chunk`；有数据则多半是 Bridge 解码问题（下一行）|
 | 有数据但 Hz / Monitor 曲线为空 | Bridge 没有 `VlaJointChunk` 的内置解码器，走运行时 introspection；若 Bridge 运行环境 source 的 stack 不含该消息，订阅报「无法加载消息类型」。Desk 只在连接时订阅一次 | 确保 Bridge 运行环境 source 了含 `VlaJointChunk` 的 stack；重新部署 / 重启 Bridge 后**重新连接** Desk。Status 启停不依赖此项 |
 | 机械臂不动，日志 `Ignoring VlaJointChunk: expected 6 positions` | `positions` 长度不对 | 发 6 个值，顺序 joint1..joint6 |
 | 机械臂停住，日志 `VlaJointChunk timed out` | 发布频率低于超时要求或推理卡住 | 提高频率，或在消息中设置合适的 `timeout_sec` |
+| 只动一下就停 | 只发了一条（如 `--once`），超时后保持 | 持续发布 |
 | 某关节只走到一半就停 | 被 URDF 限位截断（如 joint2/joint3 上限 0.0）| 检查目标是否在限位内 |
 
 ## 10. 与数据采集的关系
@@ -219,5 +232,7 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 
 ## 相关链接
 
-- stack：[docs/vla-integration.md](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-integration.md)、[controllers.md](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/controllers.md)
+- 固件：[rebotarm-executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)
+
+- stack：[docs/vla-usage.md](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-usage.md)、[docs/vla-integration.md](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-integration.md)、[controllers.md](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/controllers.md)
 - desk：[功能概览 · Status](./features#status-状态总览)、[基本功能与测试覆盖](./basic-features)、[Monitor](./features#monitor)
