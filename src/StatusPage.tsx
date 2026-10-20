@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AgentServiceStatus,
   ArmModeStatus,
@@ -149,8 +149,10 @@ export function StatusPage({
   actionBusy?: string | null;
   actionNotice?: string;
   onCardAction?: (action: StatusCardAction, card: StatusCardModel) => void;
-  onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "stop") => void;
+  onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop") => void;
 }) {
+  const [confirmDisable, setConfirmDisable] = useState(false);
+  const [supported, setSupported] = useState(false);
   const cards = buildStatusCards({
     stage,
     sshOk,
@@ -195,7 +197,7 @@ export function StatusPage({
         </div>
       </header>
       <p className="status-page-banner" role="note">
-        重要组件展示成功详情或失败原因；可重启项提供「重新拉起」，纯 USB 仅「刷新检测」。一键 Teleop / Trajectory 经 SSH 启动；VLA 经 switch_controllers 激活 vla_position_controller（保持 gravity）。切换前 HOLD，互斥停旧进程。不提供一键升级全部、自动刷写 STM32。
+        重要组件展示成功详情或失败原因；可重启项提供「重新拉起」，纯 USB 仅「刷新检测」。一键 Teleop / Trajectory 经 SSH 启动；VLA 经 switch_controllers 激活 vla_position_controller（保持 gravity）。Teleop / Trajectory 切换或停止时先确认 STM32 DISABLE，再等待旧进程退出；启动需通过完整自检。不提供一键升级全部、自动刷写 STM32。
       </p>
       <section className="status-quick-actions" aria-label="一键启动">
         {quickActions.map((action) => (
@@ -205,7 +207,10 @@ export function StatusPage({
               className={`status-quick-action ${action.id}`}
               disabled={action.disabled}
               title={action.disabledReason || action.label}
-              onClick={() => onQuickAction?.(action.id)}
+              onClick={() => {
+                if (action.id === "disable-stop") { setSupported(false); setConfirmDisable(true); }
+                else onQuickAction?.(action.id);
+              }}
             >
               {action.label}
             </button>
@@ -218,6 +223,19 @@ export function StatusPage({
         ))}
         {actionNotice && <output className="status-action-notice">{actionNotice}</output>}
       </section>
+      {confirmDisable && <div className="modal-backdrop">
+        <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="解除电机输出确认">
+          <header className="toolbar-modal-title"><strong>解除电机输出并停止</strong></header>
+          <div className="toolbar-modal-content">
+            <p>DISABLE 会解除机械臂与夹爪的电机输出。请先在现场支撑机械臂，确认夹爪释放无风险。此操作不会清除 STM32 锁存故障。</p>
+            <label className="safety-check"><input type="checkbox" checked={supported} onChange={(event) => setSupported(event.target.checked)} />机械臂已支撑，可以解除输出</label>
+          </div>
+          <footer className="toolbar-modal-actions">
+            <button type="button" onClick={() => setConfirmDisable(false)}>取消</button>
+            <button type="button" disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmDisable(false); onQuickAction?.("disable-stop"); }}>确认 DISABLE 并停止</button>
+          </footer>
+        </section>
+      </div>}
       <div className="status-card-grid" aria-label="状态卡片">
         {cards.map((card) => (
           <StatusCard key={card.id} card={card} highlighted={highlightCardId === card.id} onAction={onCardAction} />

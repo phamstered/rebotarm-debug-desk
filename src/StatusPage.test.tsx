@@ -93,6 +93,14 @@ describe("StatusPage", () => {
     expect(onQuickAction).toHaveBeenCalledWith("teleop");
     await user.click(screen.getByRole("button", { name: "一键 VLA" }));
     expect(onQuickAction).toHaveBeenCalledWith("vla");
+    await user.click(screen.getByRole("button", { name: "解除输出并停止" }));
+    expect(screen.getByRole("dialog", { name: "解除电机输出确认" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认 DISABLE 并停止" })).toBeDisabled();
+    expect(onQuickAction).not.toHaveBeenCalledWith("disable-stop");
+    await user.click(screen.getByRole("checkbox", { name: "机械臂已支撑，可以解除输出" }));
+    await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
+    expect(onQuickAction).toHaveBeenCalledWith("disable-stop");
+    expect(screen.queryByRole("dialog", { name: "解除电机输出确认" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "刷新检测" }));
     expect(onCardAction).toHaveBeenCalled();
     expect(onCardAction.mock.calls[0][0].id).toBe("usb-refresh");

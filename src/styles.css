@@ -1054,7 +1054,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 }
 .status-quick-action:hover:not(:disabled) { border-color: #42d6c7; }
 .status-quick-action:disabled { opacity: .45; cursor: not-allowed; }
-.status-quick-action.stop { border-color: #6a5530; background: #241c11; color: #f0c27a; }
+.status-quick-action.stop, .status-quick-action.disable-stop { border-color: #6a5530; background: #241c11; color: #f0c27a; }
 .status-action-notice { color: #8aa3b2; font-size: 11px; }
 
 
