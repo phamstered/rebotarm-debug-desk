@@ -77,6 +77,9 @@ def main():
         controllers_left = ssh(setup + "pgrep -f '^/opt/ros/humble/lib/controller_manager/ros2_control_node( |$)' || true")
         if controllers_left:
             raise RuntimeError(f"Controller process survived Stop: {controllers_left}")
+        teleop_left = ssh("pgrep -af '/[r]obo_driver/driver|/[j]oint_state_relay/relay_node' || true")
+        if teleop_left:
+            raise RuntimeError(f"Leader/relay process survived Stop: {teleop_left}")
     print(f"PASS: {args.cycles} live Teleop start/stop cycles", flush=True)
 
 
