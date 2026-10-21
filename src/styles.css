@@ -1179,5 +1179,8 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .collection-logs pre { max-height: 280px; overflow: auto; padding: 12px; background: #06121b; color: #8daab9; font: 11px/1.6 "SFMono-Regular", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .collection-confirm { padding: 12px; border: 1px solid #815740; border-radius: 6px; color: #edc69b; font-size: 12px; line-height: 1.6; }
 .collection-confirm > div { display: flex; gap: 8px; margin-top: 8px; }
+.collection-arm-status { margin-top: 0; padding: 10px 12px; border: 1px solid #1b3a49; border-radius: 8px; background: #091822; }
+.collection-arm-status > div { grid-template-columns: 52px minmax(0, 1fr); }
+.collection-danger-banner { margin: 12px 0; padding: 12px; border: 1px solid #8a3d3a; border-radius: 6px; background: #2f181a; color: #ffb4ad; font-size: 12px; line-height: 1.6; }
 @media (max-width: 1120px) { .collection-grid { grid-template-columns: minmax(0, 1fr); } .collection-page.has-session .collection-session { order: -1; } }
 @media (max-width: 620px) { .collection-page { padding: 12px; } .collection-card { padding: 14px; } .collection-form { grid-template-columns: minmax(0, 1fr); } .collection-metrics strong { font-size: 20px; } }

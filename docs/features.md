@@ -157,8 +157,8 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeRobot v3 数据集。先在 Status 启动含夹爪的 Teleop 和 RGB 相机，再填写 `namespace/dataset`、远端保存目录和任务描述，默认 20 Hz。腕部相机为必选，固定相机可选；「数据源与运行环境」可配置关节/动作 Topic 及 LeRobot Python。
 
 1. 点击「启动采集器」检查 Jetson 的包与 Python 依赖，启动后处于待采集状态。
-2. 场景准备好后点击「开始 Episode」。页面显示当前帧数、已保存 Episode、状态与日志。
-3. 完成一次示范后「保存为成功」，失败示范可「丢弃 Episode」。保存/丢弃后再复位物体。
+2. 场景准备好后点击「开始 Episode」。页面显示当前帧数、已保存 Episode、状态与日志；同时展示 `/stm32/status`（mode / fault_code / last_command_sequence）与关节时间戳健康度。非 TRACK、存在故障、stamp 全 0 或过期时禁用开始并提示原因。
+3. 完成一次示范后「保存成功 Episode」，失败示范可「丢弃 Episode」。采集中若故障或离开 TRACK，会出现建议丢弃的横幅（需手动确认）。保存/丢弃后再复位物体。
 4. 全部采集结束后，先处理当前 Episode，再「结束并完成数据集」，等待采集器正常 finalize。
 
 关节默认使用 `/joint_states`，包含六轴弧度与米制夹爪反馈；采集器将夹爪归一化为 0 打开、1 关闭。采集器记录实际发送给 follower 的映射/限速后动作。续录需选择原目录并保持相机、分辨率、FPS 和 state/action 布局一致；页面会预检 FPS、相机集合及七维布局。
