@@ -2,12 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConnectionProfile, TopicInfo } from "./types";
 import {
-  COLLECTION_STORAGE_KEY, collectionActions, collectionConfigError, collectionStateLabels,
+  COLLECTION_FAULT11_HINT, COLLECTION_STORAGE_KEY, collectionActions, collectionConfigError, collectionStateLabels,
   loadCollectionConfig, type CollectionAction, type CollectionConfig, type CollectionStatus,
 } from "./dataCollectionLogic";
 
-export function DataCollectionPage({ profile, topics, rosReady }: {
-  profile: ConnectionProfile; topics: TopicInfo[]; rosReady: boolean;
+export function DataCollectionPage({ profile, topics, rosReady, faultCode }: {
+  profile: ConnectionProfile; topics: TopicInfo[]; rosReady: boolean; faultCode?: number | null;
 }) {
   const [config, setConfig] = useState(loadCollectionConfig);
   const [status, setStatus] = useState<CollectionStatus | null>(null);
@@ -58,7 +58,8 @@ export function DataCollectionPage({ profile, topics, rosReady }: {
   }, [config]);
 
   const validationError = collectionConfigError(config);
-  const can = collectionActions(status, fresh, rosReady);
+  const can = collectionActions(status, fresh, rosReady, { faultCode });
+  const fault11Blocked = faultCode === 11;
   const running = Boolean(status && status.state !== "stopped");
   const update = <K extends keyof CollectionConfig>(key: K, value: CollectionConfig[K]) => setConfig((current) => ({ ...current, [key]: value }));
   const textField = (key: Exclude<keyof CollectionConfig, "fps" | "resume">, label: string, placeholder?: string, list?: string) => (
@@ -115,6 +116,7 @@ export function DataCollectionPage({ profile, topics, rosReady }: {
         </div>
         {busy && busy !== "status" && <p className="collection-notice" role="status">{({ launch: "正在启动采集器…", start_episode: "正在开始 Episode…", save_episode: "正在保存 Episode，请等待写入完成…", discard_episode: "正在丢弃 Episode…", finish: "正在完成数据集，请等待编码与元数据收尾…" })[busy]}</p>}
         {discardRequested && <div className="collection-confirm" role="alert">丢弃当前 Episode 的未保存帧？已保存 Episode 会保留。<div><button type="button" disabled={Boolean(busy) || !can.discard} onClick={() => void run("discard_episode")}>确认丢弃</button><button type="button" onClick={() => setDiscardRequested(false)}>取消</button></div></div>}
+        {fault11Blocked && <p className="collection-hint" role="alert">{COLLECTION_FAULT11_HINT}</p>}
         {!rosReady && <p className="collection-hint">等待 JointState（ROS 就绪）后可开始 Episode。</p>}
         {status?.recording && status.pendingFrames === 0 && <p className="collection-hint">尚未写入有效帧；请检查 Topic、数据新鲜度及日志。</p>}
         {notice && <output className="collection-notice">{notice}</output>}

@@ -12,9 +12,13 @@ import {
   isGravityCompensationActive,
   isVlaControllerActive,
   isVlaExclusivePositionController,
+  HOLD_ABORT_MESSAGE,
   listVlaStartActivate,
   listVlaStartDeactivate,
+  planVlaStartArmStop,
+  isHardwareTrack,
   vlaChunkPositionField,
+  vlaStartVerificationFailure,
 } from "./vlaLogic";
 
 function ros(controllers: RosControlStatus["controllers"]): RosControlStatus {
@@ -98,4 +102,56 @@ describe("vlaLogic", () => {
     expect(dashboard.name).toBe("VLA Joint Chunk");
     expect(dashboard.panels).toHaveLength(6);
   });
+  it("plans owns-skip-stop and refuses unknown ownership", () => {
+    expect(planVlaStartArmStop(null)).toEqual({ kind: "stop" });
+    expect(planVlaStartArmStop({
+      mode: "teleop",
+      teleopRunning: true,
+      trajectoryRunning: false,
+      realsenseRunning: false,
+      teleopPid: 9,
+      trajectoryPid: 0,
+      realsensePid: 0,
+      teleopOwnsRos2Control: true,
+      trajectoryOwnsRos2Control: false,
+      message: "",
+    }).kind).toBe("skip-stop");
+    expect(planVlaStartArmStop({
+      mode: "teleop",
+      teleopRunning: true,
+      trajectoryRunning: false,
+      realsenseRunning: false,
+      teleopPid: 9,
+      trajectoryPid: 0,
+      realsensePid: 0,
+      teleopOwnsRos2Control: null,
+      trajectoryOwnsRos2Control: false,
+      message: "",
+    })).toMatchObject({ kind: "refuse" });
+    expect(planVlaStartArmStop({
+      mode: "idle",
+      teleopRunning: false,
+      trajectoryRunning: false,
+      realsenseRunning: false,
+      teleopPid: 0,
+      trajectoryPid: 0,
+      realsensePid: 0,
+      teleopOwnsRos2Control: false,
+      trajectoryOwnsRos2Control: false,
+      message: "",
+    })).toEqual({ kind: "stop" });
+  });
+
+  it("aborts HOLD copy and verifies VLA start postconditions", () => {
+    expect(HOLD_ABORT_MESSAGE).toContain("已中止");
+    expect(isHardwareTrack({ mode: 1, mode_name: "TRACK" })).toBe(true);
+    expect(isHardwareTrack({ mode: 0, mode_name: "HOLD" })).toBe(false);
+    const inactive = ros([{ name: VLA_POSITION_CONTROLLER, typeName: "t", state: "inactive" }]);
+    expect(vlaStartVerificationFailure(inactive, null)).toContain("未处于 active");
+    const active = ros([{ name: VLA_POSITION_CONTROLLER, typeName: "t", state: "active" }]);
+    expect(vlaStartVerificationFailure(active, null)).toBeUndefined();
+    expect(vlaStartVerificationFailure(active, { mode: 0, mode_name: "HOLD" })).toContain("TRACK");
+    expect(vlaStartVerificationFailure(active, { mode: 1, mode_name: "TRACK" })).toBeUndefined();
+  });
+
 });

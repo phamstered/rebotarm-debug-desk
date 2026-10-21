@@ -13,7 +13,8 @@ import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { StatusPage } from "./StatusPage";
 import type { BridgeHelloInfo, StatusCardAction, StatusCardModel } from "./statusLogic";
-import { formatHardwareMode } from "./statusLogic";
+import { formatHardwareMode, isFault11Latched } from "./statusLogic";
+import { createCommandPayload } from "./motorLogic";
 import { TopicInspector } from "./TopicInspector";
 import { addFieldsToSeries } from "./dataGraphLogic";
 import type { AgentServiceStatus, ArmModeStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RemoteActionResult, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo, UsbProbeStatus } from "./types";
@@ -74,12 +75,15 @@ import type { LayoutSizes } from "./layoutLogic";
 import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
 import type { ToolbarSettings } from "./toolbarLogic";
 import {
+  HOLD_ABORT_MESSAGE,
   VLA_CHUNK_MESSAGE_TYPE,
   VLA_CHUNK_TOPIC,
   VLA_POSITION_CONTROLLER,
   isVlaControllerActive,
   listVlaStartActivate,
   listVlaStartDeactivate,
+  planVlaStartArmStop,
+  vlaStartVerificationFailure,
 } from "./vlaLogic";
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "upgrading" | "connected" | "failed";
@@ -364,6 +368,8 @@ export default function App() {
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
+  const hardwareStatusRef = useRef<HardwareStatus | null>(null);
+  useEffect(() => { hardwareStatusRef.current = hardwareStatus; }, [hardwareStatus]);
   const [bridgeHello, setBridgeHello] = useState<BridgeHelloInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentServiceStatus | null>(null);
   const [agentError, setAgentError] = useState("");
@@ -759,6 +765,30 @@ export default function App() {
     };
   }, [refreshUsbAndArm, stage]);
 
+  async function ensureHoldBeforeArmSwitch() {
+    if (!bridge || stage !== "connected") {
+      throw new Error(`${HOLD_ABORT_MESSAGE}：Bridge 未连接`);
+    }
+    try {
+      const positions = Array.isArray(jointState?.position)
+        ? jointState.position.map((value) => Number(value) || 0)
+        : [];
+      const jointCount = Array.isArray(jointState?.name) ? jointState.name.length : positions.length;
+      const mask = jointCount > 0 ? (1 << Math.min(jointCount, 31)) - 1 : 0;
+      await bridge.request(createCommandPayload(0, {
+        positions,
+        velocity: 0,
+        kp: 0,
+        kd: 0,
+        effort: 0,
+        active_joint_mask: mask,
+      }));
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      throw new Error(detail ? `${HOLD_ABORT_MESSAGE}：${detail}` : HOLD_ABORT_MESSAGE);
+    }
+  }
+
   async function switchVlaControllers(activate: string[], deactivate: string[]) {
     const message = await invoke<string>("switch_ros_controllers", {
       profile,
@@ -770,18 +800,43 @@ export default function App() {
 
   async function runVlaStart() {
     if (statusActionBusy) return;
+    if (isFault11Latched(hardwareStatus)) {
+      setStatusActionNotice("需先安全回零/托住，再重启 STM32（无软恢复）");
+      return;
+    }
     setStatusActionBusy("vla-start");
     setStatusActionNotice("");
     try {
-      const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
-      if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
+      await ensureHoldBeforeArmSwitch();
+      const stopPlan = planVlaStartArmStop(armMode);
+      if (stopPlan.kind === "refuse") {
+        throw new Error(stopPlan.reason);
+      }
+      if (stopPlan.kind === "stop") {
+        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
+        if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
+      }
       const status = await fetchRosControllers().catch(() => rosControl);
       const activate = listVlaStartActivate(status);
       const deactivate = listVlaStartDeactivate(status);
       const message = await switchVlaControllers(activate, deactivate);
-      setStatusActionNotice(message || `已激活 ${VLA_POSITION_CONTROLLER}`);
       await refreshRosControllers();
       await refreshUsbAndArm();
+      const verified = await fetchRosControllers().catch(() => rosControl);
+      let latestHardware = hardwareStatusRef.current;
+      if (latestHardware != null) {
+        const deadline = Date.now() + 2000;
+        while (Date.now() < deadline) {
+          latestHardware = hardwareStatusRef.current;
+          if (latestHardware && (latestHardware.mode_name?.toUpperCase() === "TRACK" || latestHardware.mode === 1)) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 150));
+        }
+        latestHardware = hardwareStatusRef.current;
+      }
+      const verifyFailure = vlaStartVerificationFailure(verified, latestHardware);
+      if (verifyFailure) throw new Error(verifyFailure);
+      const notice = message || `已激活 ${VLA_POSITION_CONTROLLER}`;
+      setStatusActionNotice(stopPlan.kind === "skip-stop" ? `${stopPlan.reason}；${notice}` : notice);
     } catch (reason) {
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
       try { await refreshRosControllers(); } catch { /* ignore */ }
@@ -843,6 +898,10 @@ export default function App() {
         return;
       }
       if (mode === "teleop" || mode === "trajectory") {
+        if (isFault11Latched(hardwareStatus)) {
+          throw new Error("需先安全回零/托住，再重启 STM32（无软恢复）");
+        }
+        // Teleop/Trajectory use SSH safe_stop (fail closed); do not publish one-shot Bridge HOLD.
         if (isVlaControllerActive(rosControl)) {
           await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
         }
@@ -1512,7 +1571,7 @@ export default function App() {
           onQuickAction={handleStatusQuickAction}
         />
       ) : appPage === "collection" ? (
-        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} />
+        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} faultCode={hardwareStatus?.fault_code} />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}

@@ -9,7 +9,10 @@ import {
   formatFaultCode,
   formatHardwareMode,
   formatHz,
+  FAULT_11_HARD_FAIL_COPY,
   HOLD_NO_GRAVITY_HINT,
+  fault11StartBlockReason,
+  isFault11Latched,
   isHardwareHold,
   VLA_ONE_CLICK_RISK_WARNING,
 } from "./statusLogic";
@@ -122,6 +125,8 @@ describe("statusLogic", () => {
         teleopPid: 99,
         trajectoryPid: 0,
         realsensePid: 0,
+        teleopOwnsRos2Control: true,
+        trajectoryOwnsRos2Control: false,
         message: "ok",
       },
     });
@@ -303,4 +308,47 @@ describe("statusLogic", () => {
     expect(track.warning).toBeUndefined();
     expect(track.detail).toContain("无故障");
   });
+  it("disables Teleop/Trajectory/VLA starts on fault_code 11", () => {
+    expect(isFault11Latched({ fault_code: 11 })).toBe(true);
+    expect(fault11StartBlockReason({ fault_code: 11 })).toBe(FAULT_11_HARD_FAIL_COPY);
+    expect(fault11StartBlockReason({ fault_code: 0 })).toBeUndefined();
+
+    const cards = buildStatusCards({
+      stage: "connected",
+      sshOk: true,
+      bridgeUp: true,
+      localPort: 18765,
+      remotePort: 8765,
+      profile: { ...defaultProfile },
+      hello: null,
+      agentStatus: null,
+      agentError: "",
+      agentChecked: true,
+      hardwareStatus: { mode: 0, mode_name: "HOLD", fault_code: 11 },
+      jointState: { name: ["j1"], position: [0] },
+      jointStateSample: undefined,
+      jointStateTopic: "/stm32/joint_states",
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [{ name: "vla_position_controller", typeName: "t", state: "inactive" }],
+        message: "",
+      },
+      lastKnownDomainId: 0,
+    });
+    expect(cards.find((card) => card.id === "teleop")?.actions?.[0]?.disabled).toBe(true);
+    expect(cards.find((card) => card.id === "teleop")?.actions?.[0]?.disabledReason).toBe(FAULT_11_HARD_FAIL_COPY);
+    expect(cards.find((card) => card.id === "vla")?.actions?.find((a) => a.id === "vla-start")?.disabledReason).toBe(FAULT_11_HARD_FAIL_COPY);
+
+    const quick = buildStatusQuickActions({
+      sshOk: true,
+      rosReady: true,
+      hardwareStatus: { fault_code: 11 },
+    });
+    expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(true);
+    expect(quick.find((item) => item.id === "vla")?.disabledReason).toBe(FAULT_11_HARD_FAIL_COPY);
+    // Stop remains available
+    expect(quick.find((item) => item.id === "stop")?.disabled).toBe(false);
+  });
+
 });

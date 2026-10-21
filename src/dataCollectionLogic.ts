@@ -65,17 +65,25 @@ export function loadCollectionConfig(storage: Pick<Storage, "getItem"> = localSt
   } catch { return { ...defaultCollectionConfig }; }
 }
 
-export function collectionActions(status: CollectionStatus | null, fresh: boolean, rosReady: boolean) {
+export function collectionActions(
+  status: CollectionStatus | null,
+  fresh: boolean,
+  rosReady: boolean,
+  options?: { faultCode?: number | null },
+) {
   const ready = fresh && Boolean(status);
   const idle = ready && status?.state === "idle";
+  const fault11 = options?.faultCode === 11;
   return {
-    launch: ready && status?.state === "stopped",
-    start: idle && !status?.pendingFrames && rosReady,
+    launch: ready && status?.state === "stopped" && !fault11,
+    start: idle && !status?.pendingFrames && rosReady && !fault11,
     save: ready && (status?.state === "recording" || idle) && Boolean(status?.pendingFrames),
     discard: ready && (status?.state === "recording" || (idle && Boolean(status?.pendingFrames))),
     finish: idle && status?.managed && !status?.pendingFrames,
   };
 }
+
+export const COLLECTION_FAULT11_HINT = "需先安全回零/托住，再重启 STM32（无软恢复）";
 
 export const collectionStateLabels: Record<CollectionStatus["state"], string> = {
   stopped: "未启动", starting: "启动中", idle: "待采集", recording: "正在采集", finalizing: "正在完成数据集",

@@ -35,4 +35,9 @@ describe("episode availability", () => {
     expect(collectionActions(idle, true, true).finish).toBe(true);
     expect(collectionActions({ ...idle, state: "finalizing" }, true, true)).toMatchObject({ launch: false, start: false, save: false, discard: false, finish: false });
   });
+  it("disables launch/start when fault_code is 11", () => {
+    expect(collectionActions(idle, true, true, { faultCode: 11 }).start).toBe(false);
+    expect(collectionActions({ ...idle, state: "stopped" }, true, true, { faultCode: 11 }).launch).toBe(false);
+    expect(collectionActions(idle, true, true, { faultCode: 0 }).start).toBe(true);
+  });
 });
