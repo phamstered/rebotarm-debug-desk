@@ -11,13 +11,14 @@ import { formatFaultCode, formatHardwareMode } from "./statusLogic";
 import type { ConnectionProfile, HardwareStatus, TopicInfo } from "./types";
 
 export function DataCollectionPage({
-  profile, topics, rosReady, hardwareStatus = null, jointStateSample,
+  profile, topics, rosReady, hardwareStatus = null, topicSamples = {},
 }: {
   profile: ConnectionProfile;
   topics: TopicInfo[];
   rosReady: boolean;
   hardwareStatus?: HardwareStatus | null;
-  jointStateSample?: TopicSample;
+  /** Bridge samples keyed by topic; stamp preflight uses config.stateTopic (default /stm32/joint_states). */
+  topicSamples?: Record<string, TopicSample>;
 }) {
   const [config, setConfig] = useState(loadCollectionConfig);
   const [status, setStatus] = useState<CollectionStatus | null>(null);
@@ -74,6 +75,7 @@ export function DataCollectionPage({
     return () => window.clearInterval(timer);
   }, []);
 
+  const jointStateSample = topicSamples[config.stateTopic];
   const armReady = collectionArmReady(hardwareStatus);
   const stampOk = collectionStampOk(jointStateSample, nowMs);
   const startBlockedReason = collectionStartBlockedReason({
@@ -91,7 +93,7 @@ export function DataCollectionPage({
     <label>{label}<input value={config[key]} placeholder={placeholder} list={list} onChange={(event) => update(key, event.target.value)} /></label>
   );
   const stampLabel = !jointStateSample
-    ? "未收到"
+    ? `未收到 ${config.stateTopic}`
     : !stampOk
       ? "无效 / 过期"
       : `${jointStateSample.hz > 0 ? `${jointStateSample.hz.toFixed(1)} Hz` : "有采样"} · 时间戳可用`;
@@ -122,8 +124,8 @@ export function DataCollectionPage({
         <datalist id="collection-image-topics">{topics.filter((topic) => topic.types.includes("sensor_msgs/msg/Image")).map((topic) => <option key={topic.name} value={topic.name} />)}</datalist>
         <datalist id="collection-state-topics">{topics.filter((topic) => topic.types.includes("sensor_msgs/msg/JointState")).map((topic) => <option key={topic.name} value={topic.name} />)}</datalist>
         {!running && validationError && <p className="collection-hint">{validationError}</p>}
-        <button type="button" className="collection-primary" disabled={Boolean(busy) || !can.launch || Boolean(validationError)} onClick={() => void run("launch", config)}>{busy === "launch" ? "正在启动采集器…" : "启动采集器"}</button>
-        <p className="collection-hint">先在 Status 启动 Teleop（含夹爪）和相机。关节状态应使用含夹爪米制位置的 /joint_states；腕部图像为 RGB。续录须保持相机、分辨率、FPS 和状态/动作布局一致。</p>
+        <button type="button" className="collection-primary" disabled={Boolean(busy) || !can.launch || Boolean(validationError)} onClick={() => void run("launch", config)}>{busy === "launch" ? "正在检查就绪并启动…" : "启动采集器"}</button>
+        <p className="collection-hint">先在 Status 启动 Teleop（含夹爪）和相机。默认关节状态 Topic 为 <code>/stm32/joint_states</code>（MCU/Agent 时间戳；host 时钟的 <code>/joint_states</code> 不适合 stamp 门禁）。腕部图像为 RGB。启动采集器与开始 Episode 前会在 Jetson 上硬跑 <code>scripts/check_collection_ready.sh</code>（不用 --warn-only）。续录须保持相机、分辨率、FPS 和状态/动作布局一致。</p>
       </section>
       <section className="collection-card collection-session">
         <div className="collection-card-title"><h2>Episode</h2><span className={`collection-state ${status?.recording ? "recording" : ""}`}>{!fresh ? "状态待确认" : status ? collectionStateLabels[status.state] : "检测中"}</span></div>
@@ -151,7 +153,7 @@ export function DataCollectionPage({
           <button type="button" className="collection-danger" disabled={Boolean(busy) || !can.discard} onClick={() => setDiscardRequested(true)}>丢弃 Episode</button>
           <button type="button" disabled={Boolean(busy) || !can.finish} onClick={() => void run("finish")}>{busy === "finish" ? "正在完成数据集…" : "结束并完成数据集"}</button>
         </div>
-        {busy && busy !== "status" && <p className="collection-notice" role="status">{({ launch: "正在启动采集器…", start_episode: "正在开始 Episode…", save_episode: "正在保存 Episode，请等待写入完成…", discard_episode: "正在丢弃 Episode…", finish: "正在完成数据集，请等待编码与元数据收尾…" })[busy]}</p>}
+        {busy && busy !== "status" && <p className="collection-notice" role="status">{({ launch: "正在检查采集就绪并启动采集器…", start_episode: "正在检查采集就绪并开始 Episode…", save_episode: "正在保存 Episode，请等待写入完成…", discard_episode: "正在丢弃 Episode…", finish: "正在完成数据集，请等待编码与元数据收尾…" })[busy]}</p>}
         {discardRequested && <div className="collection-confirm" role="alert">丢弃当前 Episode 的未保存帧？已保存 Episode 会保留。<div><button type="button" disabled={Boolean(busy) || !can.discard} onClick={() => void run("discard_episode")}>确认丢弃</button><button type="button" onClick={() => setDiscardRequested(false)}>取消</button></div></div>}
         {fault11Blocked && <p className="collection-hint" role="alert">{COLLECTION_FAULT11_HINT}</p>}
         {!can.start && startBlockedReason && status?.state === "idle" && fresh && <p className="collection-hint" role="status">{startBlockedReason}</p>}

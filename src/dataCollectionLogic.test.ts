@@ -105,3 +105,15 @@ describe("collection arm and stamp preflight", () => {
     expect(collectionRecordingHazardReason(null)).toMatch(/未收到/);
   });
 });
+
+describe("collection state topic default", () => {
+  it("defaults to /stm32/joint_states and migrates the old /joint_states preference", () => {
+    expect(defaultCollectionConfig.stateTopic).toBe("/stm32/joint_states");
+    expect(loadCollectionConfig({
+      getItem: () => JSON.stringify({ ...defaultCollectionConfig, stateTopic: "/joint_states", repoId: "robot/demo" }),
+    }).stateTopic).toBe("/stm32/joint_states");
+    expect(loadCollectionConfig({
+      getItem: () => JSON.stringify({ stateTopic: "/custom/joints", repoId: "robot/demo", task: "x", fps: 20, root: "d", wristImageTopic: "/a", baseImageTopic: "", armCommandTopic: "/b", gripperCommandTopic: "/c", pythonPath: "venvs/lerobot/bin/python", resume: false }),
+    }).stateTopic).toBe("/custom/joints");
+  });
+});

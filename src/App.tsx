@@ -1571,7 +1571,7 @@ export default function App() {
           onQuickAction={handleStatusQuickAction}
         />
       ) : appPage === "collection" ? (
-        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} jointStateSample={messages[profile.jointStateTopic]} />
+        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}

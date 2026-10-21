@@ -39,7 +39,7 @@ export const COLLECTION_JOINT_STALE_MS = 2000;
 export const defaultCollectionConfig: CollectionConfig = {
   repoId: "", root: "lerobot_datasets/rebotarm_dataset", task: "", fps: 20,
   wristImageTopic: "/camera/camera/color/image_raw", baseImageTopic: "",
-  stateTopic: "/joint_states", armCommandTopic: "/arm_teleop_controller/commands",
+  stateTopic: "/stm32/joint_states", armCommandTopic: "/arm_teleop_controller/commands",
   gripperCommandTopic: "/gripper_teleop_controller/commands", pythonPath: "venvs/lerobot/bin/python", resume: false,
 };
 
@@ -68,6 +68,9 @@ export function loadCollectionConfig(storage: Pick<Storage, "getItem"> = localSt
     for (const key of Object.keys(next) as Array<keyof CollectionConfig>) {
       if (typeof value[key] === typeof next[key]) Object.assign(next, { [key]: value[key] });
     }
+    // Old desk default was /joint_states (host-clock broadcaster). Stamp/Agent epoch
+    // is only valid on the STM32 republished topic — migrate the shipped default.
+    if (next.stateTopic === "/joint_states") next.stateTopic = defaultCollectionConfig.stateTopic;
     return next;
   } catch { return { ...defaultCollectionConfig }; }
 }

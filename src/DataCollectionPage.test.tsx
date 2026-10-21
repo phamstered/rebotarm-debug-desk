@@ -27,13 +27,17 @@ function freshSample(now = Date.now()): TopicSample {
   };
 }
 
+function stampSamples(sample = freshSample(), topic = defaultCollectionConfig.stateTopic) {
+  return { [topic]: sample };
+}
+
 function renderPage(overrides: Partial<ComponentProps<typeof DataCollectionPage>> = {}) {
   const props = {
     profile: defaultProfile,
     topics: [] as { name: string; types: string[] }[],
     rosReady: true,
     hardwareStatus: trackOk,
-    jointStateSample: freshSample(),
+    topicSamples: stampSamples(),
     ...overrides,
   };
   return { ...render(<DataCollectionPage {...props} />), props };
@@ -66,7 +70,7 @@ describe("DataCollectionPage", () => {
     invoke.mockResolvedValueOnce(stopped)
       .mockReturnValueOnce(new Promise((resolve) => { resolvePoll = resolve; }))
       .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectPoll = reject; }));
-    renderPage({ jointStateSample: freshSample(now) });
+    renderPage({ topicSamples: stampSamples(freshSample(now)) });
     await act(async () => Promise.resolve());
     const task = screen.getByLabelText("任务描述");
     task.focus();
@@ -129,7 +133,7 @@ describe("DataCollectionPage", () => {
     vi.setSystemTime(now);
     let resolveLaunch!: (value: CollectionStatus) => void;
     invoke.mockImplementation((_command, { action }) => action === "status" ? Promise.resolve(stopped) : new Promise((resolve) => { resolveLaunch = resolve; }));
-    const { rerender } = renderPage({ jointStateSample: freshSample(now) });
+    const { rerender } = renderPage({ topicSamples: stampSamples(freshSample(now)) });
     await act(async () => Promise.resolve());
     const launch = screen.getByRole("button", { name: "启动采集器" });
     fireEvent.click(launch); fireEvent.click(launch);
@@ -138,7 +142,7 @@ describe("DataCollectionPage", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     await act(async () => resolveLaunch(idle));
     // Keep joint sample fresh after wall-clock advanced under fake timers.
-    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={trackOk} jointStateSample={freshSample(Date.now())} />);
+    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={trackOk} topicSamples={stampSamples(freshSample(Date.now()))} />);
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeEnabled();
   });
 
@@ -146,7 +150,7 @@ describe("DataCollectionPage", () => {
     let resolveOld!: (value: CollectionStatus) => void;
     invoke.mockImplementation((_command, { profile }) => profile.host === "new-host" ? Promise.resolve(stopped) : new Promise((resolve) => { resolveOld = resolve; }));
     const { rerender } = renderPage();
-    rerender(<DataCollectionPage profile={{ ...defaultProfile, host: "new-host" }} topics={[]} rosReady hardwareStatus={trackOk} jointStateSample={freshSample()} />);
+    rerender(<DataCollectionPage profile={{ ...defaultProfile, host: "new-host" }} topics={[]} rosReady hardwareStatus={trackOk} topicSamples={stampSamples()} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "启动采集器" })).toBeEnabled());
     await act(async () => resolveOld(recording));
     expect(screen.queryByText("正在采集")).not.toBeInTheDocument();
@@ -171,15 +175,15 @@ describe("DataCollectionPage", () => {
     expect(screen.getByLabelText("机械臂与时间戳")).toHaveTextContent("7");
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeEnabled();
 
-    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={hold} jointStateSample={freshSample()} />);
+    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={hold} topicSamples={stampSamples()} />);
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(/HOLD/);
 
-    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={fault11} jointStateSample={freshSample()} />);
+    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={fault11} topicSamples={stampSamples()} />);
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(/故障码 11/);
 
-    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={null} jointStateSample={freshSample()} />);
+    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={null} topicSamples={stampSamples()} />);
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(/stm32\/status/);
   });
@@ -190,11 +194,27 @@ describe("DataCollectionPage", () => {
     await screen.findByText("正在采集");
     expect(screen.queryByText(/建议丢弃本 Episode/)).not.toBeInTheDocument();
 
-    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={fault11} jointStateSample={freshSample()} />);
+    rerender(<DataCollectionPage profile={defaultProfile} topics={[]} rosReady hardwareStatus={fault11} topicSamples={stampSamples()} />);
     const banner = screen.getByText(/采集中出现故障码 11/);
     expect(banner).toBeVisible();
     expect(banner).toHaveClass("collection-danger-banner");
     expect(banner).toHaveTextContent(/丢弃 Episode/);
     expect(invoke.mock.calls.every(([, args]) => args.action !== "discard_episode")).toBe(true);
+  });
+
+  it("samples stamp health from config.stateTopic, not a different profile joint topic", async () => {
+    invoke.mockResolvedValue(idle);
+    const now = Date.now();
+    const good = freshSample(now);
+    const zero = { ...freshSample(now), data: { header: { stamp: { sec: 0, nanosec: 0 } } } };
+    renderPage({
+      topicSamples: {
+        "/stm32/joint_states": good,
+        "/joint_states": zero,
+      },
+    });
+    await screen.findByText("待采集");
+    expect(screen.getByRole("button", { name: "开始 Episode" })).toBeEnabled();
+    expect(screen.getByLabelText("机械臂与时间戳")).toHaveTextContent("时间戳可用");
   });
 });
