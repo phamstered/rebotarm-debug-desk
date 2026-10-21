@@ -14,6 +14,7 @@ export default defineConfig({
       { text: '架构', link: '/architecture' },
       { text: '连接', link: '/connect' },
       { text: '功能', link: '/features' },
+      { text: 'VLA', link: '/vla' },
       { text: '安装', link: '/install' },
       { text: '部署 Bridge', link: '/deploy-bridge' },
       {
@@ -29,6 +30,7 @@ export default defineConfig({
           { text: '架构概览', link: '/architecture' },
           { text: '连接与 Bridge', link: '/connect' },
           { text: '功能概览', link: '/features' },
+          { text: 'VLA 使用指南', link: '/vla' },
           { text: 'macOS 安装 (install:mac)', link: '/install' },
           { text: '部署 Bridge (deploy:bridge)', link: '/deploy-bridge' },
         ],

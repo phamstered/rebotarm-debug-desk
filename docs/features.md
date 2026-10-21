@@ -75,6 +75,7 @@ JointState topic: /stm32/joint_states           # 内置默认
 - Agent 重启仅为 `systemctl restart`；RealSense 用 `rs_launch.py`，不写入 ros2-stack。
 - `bridge_build_id` / 最近部署结果 / XRCE 端口 / Bridge systemd 单元：仍可能显示「未知」。
 - VLA chunk Hz / Monitor `positions[]` 依赖 Bridge 能订阅 `microros_stm32h723_bridge/msg/VlaJointChunk`；类型未进入远端 Bridge 环境时 Status 仍可按 controller 状态启停。
+- VLA 前置条件、mock 测试、推理节点编写与排障见 [VLA 使用指南](./vla)。
 
 ---
 ## 2. Topics / Graph / Inspector
