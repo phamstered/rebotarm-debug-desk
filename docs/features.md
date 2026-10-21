@@ -27,7 +27,7 @@
 
 1. 打开连接配置（首次启动首页或顶部「连接配置」），填写 SSH：主机 / 用户 / 端口 / 私钥。需要时展开「高级」编辑 `ROS_DOMAIN_ID` 与 ROS 环境脚本（`install/setup.bash`）。URDF / JointState 等 Topic 使用内置默认，无需（也无法）在表单中改。首页可看上次连接摘要；Enter 连接，失败可用重试 / Esc 关闭错误。
 2. 点击连接。界面按阶段推进并展示失败原因。
-3. **默认**进入 Status；顶部工具条显示「切换主机」、状态灯、Bridge 版本徽章、连接名、隧道端口、Agent；可断开。`fault_code !== 0` 时 Fault 芯片可跳到 Status Hardware。
+3. **默认**进入 Status；顶部工具条显示「断开并重连…」、状态灯、Bridge 版本徽章、连接名、隧道端口、Agent；可断开。`fault_code !== 0` 时 Fault 芯片可跳到 Status Hardware。
 4. JointState 冒烟（ROS 就绪）前 Monitor / Motor 导航不可用。设置中可关闭「连接成功后打开 Status」。
 5. 连接中可再次打开配置并保存——**保存不会中断当前会话**，新值在下次重连时生效。
 
@@ -63,7 +63,7 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ### 做什么
 
-左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
+左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；禁用的一键/卡片操作旁显示短中文原因。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。VLA 卡片提示 Desk 一键 Teleop 拉起的 ros2_control 风险（见 PR #102）。可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
 
 ### 怎么用
 
@@ -157,7 +157,7 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 1. 点击「启动采集器」检查 Jetson 的包与 Python 依赖，启动后处于待采集状态。
 2. 场景准备好后点击「开始 Episode」。页面显示当前帧数、已保存 Episode、状态与日志。
-3. 完成一次示范后「保存成功 Episode」，失败示范可「丢弃 Episode」。保存/丢弃后再复位物体。
+3. 完成一次示范后「保存为成功」，失败示范可「丢弃 Episode」。保存/丢弃后再复位物体。
 4. 全部采集结束后，先处理当前 Episode，再「结束并完成数据集」，等待采集器正常 finalize。
 
 关节默认使用 `/joint_states`，包含六轴弧度与米制夹爪反馈；采集器将夹爪归一化为 0 打开、1 关闭。采集器记录实际发送给 follower 的映射/限速后动作。续录需选择原目录并保持相机、分辨率、FPS 和 state/action 布局一致；页面会预检 FPS、相机集合及七维布局。
@@ -201,7 +201,7 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 | mode | 含义 |
 |---|---|
-| 0 HOLD | 锁存反馈位置并用 Kp/Kd 保持 |
+| 0 HOLD | 锁存反馈位置并用 Kp/Kd 保持（无重力补偿，可能下垂；Status 显示注意色） |
 | 1 TRACK | 跟踪 position / velocity / kp / kd / effort |
 | 2 RETURN | 跟踪返回目标 |
 | 3 DISABLE | 撤销使能 |

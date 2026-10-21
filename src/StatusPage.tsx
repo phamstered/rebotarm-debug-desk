@@ -68,20 +68,31 @@ function StatusCard({
           </div>
         ))}
       </dl>
+      {card.warning && (
+        <p className="status-card-warning" role="note" data-testid={`status-warning-${card.id}`}>
+          {card.warning}
+        </p>
+      )}
       {card.note && <p className="status-card-note">{card.note}</p>}
       {card.actions && card.actions.length > 0 && (
         <div className="status-card-actions" aria-label={`${card.title} 操作`}>
           {card.actions.map((action) => (
-            <button
-              key={action.id}
-              type="button"
-              className={`status-card-action ${action.kind}`}
-              disabled={action.disabled}
-              title={action.disabledReason || action.label}
-              onClick={() => onAction?.(action, card)}
-            >
-              {action.label}
-            </button>
+            <div key={action.id} className="status-card-action-wrap">
+              <button
+                type="button"
+                className={`status-card-action ${action.kind}`}
+                disabled={action.disabled}
+                title={action.disabledReason || action.label}
+                onClick={() => onAction?.(action, card)}
+              >
+                {action.label}
+              </button>
+              {action.disabled && action.disabledReason && (
+                <p className="status-disabled-hint" data-testid={`status-disabled-${card.id}-${action.id}`}>
+                  {action.disabledReason}
+                </p>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -188,16 +199,22 @@ export function StatusPage({
       </p>
       <section className="status-quick-actions" aria-label="一键启动">
         {quickActions.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            className={`status-quick-action ${action.id}`}
-            disabled={action.disabled}
-            title={action.disabledReason || action.label}
-            onClick={() => onQuickAction?.(action.id)}
-          >
-            {action.label}
-          </button>
+          <div key={action.id} className="status-quick-action-wrap">
+            <button
+              type="button"
+              className={`status-quick-action ${action.id}`}
+              disabled={action.disabled}
+              title={action.disabledReason || action.label}
+              onClick={() => onQuickAction?.(action.id)}
+            >
+              {action.label}
+            </button>
+            {action.disabled && action.disabledReason && (
+              <p className="status-disabled-hint" data-testid={`status-quick-disabled-${action.id}`}>
+                {action.disabledReason}
+              </p>
+            )}
+          </div>
         ))}
         {actionNotice && <output className="status-action-notice">{actionNotice}</output>}
       </section>

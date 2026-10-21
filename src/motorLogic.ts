@@ -47,7 +47,7 @@ export const motorFaults: Record<number, FaultInfo> = {
   8: { name: "CAN_TX", description: "FDCAN 指令发送失败" },
   9: { name: "INIT", description: "电机初始化或 MIT 模式切换失败" },
   10: { name: "ENABLE_TIMEOUT", description: "电机使能超时" },
-  11: { name: "COMMAND_LOSS_LATCHED", description: "控制指令中断已锁存，需要重启 STM32 才能恢复" },
+  11: { name: "COMMAND_LOSS_LATCHED", description: "控制指令中断已锁存，需先安全回零/托住，再重启 STM32（无软恢复）" },
 };
 
 export function normalizeDecimal(value: string): string | null {

@@ -9,6 +9,9 @@ import {
   formatFaultCode,
   formatHardwareMode,
   formatHz,
+  HOLD_NO_GRAVITY_HINT,
+  isHardwareHold,
+  VLA_ONE_CLICK_RISK_WARNING,
 } from "./statusLogic";
 
 describe("statusLogic", () => {
@@ -23,6 +26,10 @@ describe("statusLogic", () => {
     expect(formatHardwareMode(null)).toBe("—");
     expect(formatHardwareMode({ mode: 0 })).toBe("HOLD");
     expect(formatHardwareMode({ mode: 1, mode_name: "TRACK" })).toBe("TRACK");
+    expect(faultFailureReason(11)).toContain("需先安全回零/托住，再重启 STM32");
+    expect(isHardwareHold({ mode: 0, fault_code: 0 })).toBe(true);
+    expect(isHardwareHold({ mode: 1, mode_name: "HOLD", fault_code: 0 })).toBe(true);
+    expect(isHardwareHold({ mode: 1, mode_name: "TRACK", fault_code: 0 })).toBe(false);
   });
 
   it("lists active controllers", () => {
@@ -135,6 +142,8 @@ describe("statusLogic", () => {
       "realsense",
     ]);
     expect(cards.find((card) => card.id === "hardware")?.detail).toContain("无故障");
+    expect(cards.find((card) => card.id === "hardware")?.tone).toBe("ok");
+    expect(cards.find((card) => card.id === "vla")?.warning).toBe(VLA_ONE_CLICK_RISK_WARNING);
     expect(cards.find((card) => card.id === "agent")?.actions?.[0]?.id).toBe("agent-restart");
     expect(cards.find((card) => card.id === "teleop")?.actions?.[0]?.kind).toBe("restart");
     expect(cards.find((card) => card.id === "usb")?.summary).toContain("0483:5740");
@@ -246,5 +255,52 @@ describe("statusLogic", () => {
     expect(quick.find((item) => item.id === "vla")?.disabled).toBe(true);
     expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(true);
     expect(quick.find((item) => item.id === "stop")?.label).toContain("VLA");
+  });
+
+  it("uses caution tone for HOLD with fault_code 0 and keeps TRACK ok", () => {
+    const hold = buildStatusCards({
+      stage: "connected",
+      sshOk: true,
+      bridgeUp: true,
+      localPort: 18765,
+      remotePort: 8765,
+      profile: { ...defaultProfile },
+      hello: null,
+      agentStatus: null,
+      agentError: "",
+      agentChecked: true,
+      hardwareStatus: { mode: 0, mode_name: "HOLD", fault_code: 0 },
+      jointState: { name: ["j1"], position: [0] },
+      jointStateSample: undefined,
+      jointStateTopic: "/stm32/joint_states",
+      rosControl: null,
+      lastKnownDomainId: 0,
+    }).find((card) => card.id === "hardware")!;
+    expect(hold.tone).toBe("warn");
+    expect(hold.detail).toContain(HOLD_NO_GRAVITY_HINT);
+    expect(hold.warning).toBe(HOLD_NO_GRAVITY_HINT);
+    expect(hold.failureReason).toBeUndefined();
+
+    const track = buildStatusCards({
+      stage: "connected",
+      sshOk: true,
+      bridgeUp: true,
+      localPort: 18765,
+      remotePort: 8765,
+      profile: { ...defaultProfile },
+      hello: null,
+      agentStatus: null,
+      agentError: "",
+      agentChecked: true,
+      hardwareStatus: { mode: 1, mode_name: "TRACK", fault_code: 0 },
+      jointState: null,
+      jointStateSample: undefined,
+      jointStateTopic: "/stm32/joint_states",
+      rosControl: null,
+      lastKnownDomainId: 0,
+    }).find((card) => card.id === "hardware")!;
+    expect(track.tone).toBe("ok");
+    expect(track.warning).toBeUndefined();
+    expect(track.detail).toContain("无故障");
   });
 });

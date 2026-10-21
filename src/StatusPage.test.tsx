@@ -81,7 +81,9 @@ describe("StatusPage", () => {
     expect(screen.getByText("localhost:18765")).toBeVisible();
     expect(screen.getByText("HOLD")).toBeVisible();
     expect(screen.getAllByText("forward_position_controller").length).toBeGreaterThan(0);
-    expect(screen.getByTestId("status-detail-hardware")).toHaveTextContent(/无故障/);
+    expect(screen.getByTestId("status-detail-hardware")).toHaveTextContent(/无重力补偿/);
+    expect(screen.getByTestId("status-warning-hardware")).toHaveTextContent(/无重力补偿，可能下垂/);
+    expect(screen.getByTestId("status-warning-vla")).toHaveTextContent(/ros2_control/);
     expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "一键 Trajectory" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "一键 VLA" })).toBeEnabled();
@@ -94,5 +96,29 @@ describe("StatusPage", () => {
     await user.click(screen.getByRole("button", { name: "刷新检测" }));
     expect(onCardAction).toHaveBeenCalled();
     expect(onCardAction.mock.calls[0][0].id).toBe("usb-refresh");
+  });
+
+  it("surfaces disabledReasons as on-page hints for gated quick actions", () => {
+    render(
+      <StatusPage
+        stage="connected"
+        sshOk={false}
+        bridgeUp={false}
+        localPort={null}
+        profile={{ ...defaultProfile, name: "desk" }}
+        hello={null}
+        agentStatus={null}
+        agentError=""
+        agentChecked={false}
+        hardwareStatus={null}
+        jointState={null}
+        jointStateSample={undefined}
+        rosControl={null}
+        lastKnownDomainId={null}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeDisabled();
+    expect(screen.getByTestId("status-quick-disabled-teleop")).toHaveTextContent("SSH 未就绪");
+    expect(screen.getByTestId("status-disabled-usb-usb-refresh")).toHaveTextContent("SSH 未就绪");
   });
 });

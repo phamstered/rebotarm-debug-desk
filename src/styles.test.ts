@@ -51,4 +51,13 @@ describe("connected page layout styles", () => {
     expect(getComputedStyle(compactBody).height).toBe("auto");
     expect(getComputedStyle(fullBody).gridTemplateColumns).toBe("minmax(0, 1fr) 168px");
   });
+
+  it("uses height 100% for Motor/Monitor/Calibration under connected-topbar (not 100vh)", async () => {
+    const { readFileSync } = await vi.importActual<{ readFileSync: (path: string, encoding: string) => string }>("node:fs");
+    const styles = readFileSync("src/styles.css", "utf8");
+    for (const sel of [".motor-page", ".monitor-page", ".calibration-page"]) {
+      expect(styles).toContain(`${sel} { height: 100%;`);
+      expect(styles).not.toContain(`${sel} { height: 100vh;`);
+    }
+  });
 });

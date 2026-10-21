@@ -49,6 +49,8 @@ export type StatusCardModel = {
   note?: string;
   detail?: string;
   failureReason?: string;
+  /** Visible caution banner (HOLD / VLA risk), distinct from failureReason. */
+  warning?: string;
   actions?: StatusCardAction[];
 };
 
@@ -84,6 +86,22 @@ export function formatHardwareMode(status: HardwareStatus | null): string {
   }
   return "—";
 }
+
+
+/** True when firmware reports HOLD (mode 0 / mode_name HOLD). */
+export function isHardwareHold(status: HardwareStatus | null | undefined): boolean {
+  if (!status) return false;
+  const name = status.mode_name?.trim().toUpperCase();
+  if (name === "HOLD") return true;
+  if (name) return false;
+  return status.mode === 0;
+}
+
+export const HOLD_NO_GRAVITY_HINT = "无重力补偿，可能下垂";
+
+/** Short Status warning: desk-launched teleop may tear down ros2_control when starting VLA. */
+export const VLA_ONE_CLICK_RISK_WARNING =
+  "注意：若 ros2_control 由 Desk 一键 Teleop/Trajectory 拉起，点「启动/一键 VLA」可能一并拆掉 Controller Manager。请先在 Jetson 独立启动后再切 VLA。详见 PR #102 / docs/vla.md。";
 
 export function formatFaultCode(faultCode: number | undefined): string {
   if (faultCode == null || !Number.isFinite(faultCode)) return "—";
@@ -334,25 +352,37 @@ export function buildStatusCards(input: {
 
   const hardwareReceived = Boolean(hardwareStatus);
   const faultCode = hardwareStatus?.fault_code;
+  const holdNoFault = hardwareReceived && faultCode === 0 && isHardwareHold(hardwareStatus);
   const faultTone: StatusTone = !hardwareReceived
     ? "idle"
     : faultCode == null
       ? "unknown"
       : faultCode === 0
-        ? "ok"
+        ? holdNoFault
+          ? "warn"
+          : "ok"
         : "fail";
   const modeLabel = formatHardwareMode(hardwareStatus);
+  let hardwareTone: StatusTone = "idle";
+  if (hardwareReceived) {
+    hardwareTone = faultCode && faultCode !== 0 ? "fail" : holdNoFault ? "warn" : "ok";
+  } else if (bridgeConnected) {
+    hardwareTone = "warn";
+  }
   const hardwareCard: StatusCardModel = {
     id: "hardware",
     title: "Hardware",
-    tone: hardwareReceived ? (faultCode && faultCode !== 0 ? "fail" : "ok") : bridgeConnected ? "warn" : "idle",
+    tone: hardwareTone,
     summary: hardwareReceived ? "已收到 HardwareStatus" : "未收到",
-    detail: hardwareReceived && faultCode === 0 ? `无故障 · ${modeLabel}` : hardwareReceived ? `${modeLabel}` : undefined,
+    detail: hardwareReceived && faultCode === 0
+      ? (holdNoFault ? `HOLD · ${HOLD_NO_GRAVITY_HINT}` : `无故障 · ${modeLabel}`)
+      : hardwareReceived ? `${modeLabel}` : undefined,
     failureReason: faultFailureReason(faultCode),
+    warning: holdNoFault ? HOLD_NO_GRAVITY_HINT : undefined,
     rows: [
       { label: "HardwareStatus", value: hardwareReceived ? "已收到" : "未收到", tone: hardwareReceived ? "ok" : "idle" },
       { label: "fault_code", value: formatFaultCode(faultCode), tone: faultTone },
-      { label: "mode", value: modeLabel, tone: hardwareReceived ? "ok" : "idle" },
+      { label: "mode", value: modeLabel, tone: hardwareReceived ? (holdNoFault ? "warn" : "ok") : "idle" },
       {
         label: "JointState",
         value: rosReady ? "有数据" : "未流动",
@@ -614,6 +644,7 @@ export function buildStatusCards(input: {
       },
     ],
     note: `Scheme B：外部推理 → ${VLA_CHUNK_TOPIC} → ${VLA_POSITION_CONTROLLER}；并行 ${GRAVITY_COMPENSATION_CONTROLLER}；互斥 arm_teleop_controller / arm_trajectory_controller。Desk 不直写 /stm32/joint_commands。`,
+    warning: VLA_ONE_CLICK_RISK_WARNING,
     actions: [
       {
         id: "vla-start",

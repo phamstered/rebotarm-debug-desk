@@ -13,7 +13,7 @@ describe("AppNav", () => {
     );
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toBeVisible();
     const nav = screen.getByRole("navigation", { name: "主工具栏" });
-    const navButtons = Array.from(nav.querySelectorAll(".app-nav-items > button"));
+    const navButtons = Array.from(nav.querySelectorAll(".app-nav-items .app-nav-item > button"));
     expect(navButtons[0]).toHaveTextContent("Status");
     expect(screen.getByRole("button", { name: "Topics" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Status" })).not.toHaveAttribute("aria-current");
@@ -48,6 +48,8 @@ describe("AppNav", () => {
     expect(screen.getByRole("button", { name: "Monitor" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Motor" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Monitor" }).getAttribute("title")).toContain("JointState");
+    expect(screen.getByTestId("nav-disabled-monitor")).toHaveTextContent("JointState");
+    expect(screen.getByTestId("nav-disabled-motor")).toHaveTextContent("电机控制");
     await user.click(screen.getByRole("button", { name: "Monitor" }));
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Topics" })).not.toBeDisabled();

@@ -1484,11 +1484,11 @@ export default function App() {
         <button
           type="button"
           className="toolbar-action switch-host"
-          aria-label="切换主机"
+          aria-label="断开并重连…"
           onClick={() => void disconnect()}
-          title="断开并返回连接页以更换主机（SSH 表单已收起到此）"
+          title="断开当前会话并返回连接页；不会保留本会话，可再选主机重连"
         >
-          <span aria-hidden="true">⇄</span>切换主机
+          <span aria-hidden="true">⇄</span>断开并重连…
         </button>
         <button type="button" className="toolbar-action" aria-label="连接配置" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效">
           <span aria-hidden="true">⌁</span>连接配置

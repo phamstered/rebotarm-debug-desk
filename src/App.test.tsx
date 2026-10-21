@@ -971,9 +971,9 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     expect(await screen.findByRole("heading", { name: "Status" })).toBeVisible();
     expect(screen.getByRole("banner", { name: "已连接工具条" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /切换主机/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /断开并重连…/ })).toBeVisible();
     expect(localStorage.getItem("robot-console-page")).toBe("status");
-    await user.click(screen.getByRole("button", { name: /切换主机/ }));
+    await user.click(screen.getByRole("button", { name: /断开并重连…/ }));
     expect(await screen.findByRole("button", { name: "连接 Jetson" })).toBeVisible();
   });
 

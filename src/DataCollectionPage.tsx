@@ -109,7 +109,7 @@ export function DataCollectionPage({ profile, topics, rosReady }: {
         </dl>}
         <div className="collection-actions">
           <button type="button" className="collection-primary" disabled={Boolean(busy) || !can.start} onClick={() => void run("start_episode")}>开始 Episode</button>
-          <button type="button" disabled={Boolean(busy) || !can.save} onClick={() => void run("save_episode")}>保存成功 Episode</button>
+          <button type="button" disabled={Boolean(busy) || !can.save} onClick={() => void run("save_episode")}>保存为成功</button>
           <button type="button" className="collection-danger" disabled={Boolean(busy) || !can.discard} onClick={() => setDiscardRequested(true)}>丢弃 Episode</button>
           <button type="button" disabled={Boolean(busy) || !can.finish} onClick={() => void run("finish")}>{busy === "finish" ? "正在完成数据集…" : "结束并完成数据集"}</button>
         </div>
