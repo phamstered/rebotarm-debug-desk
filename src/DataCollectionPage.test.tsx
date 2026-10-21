@@ -107,7 +107,7 @@ describe("DataCollectionPage", () => {
     await user.click(screen.getByRole("button", { name: "开始 Episode" }));
     expect(screen.getByText("正在采集")).toBeVisible();
     expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "保存为成功" }));
+    await user.click(screen.getByRole("button", { name: "保存成功 Episode" }));
     await user.click(screen.getByRole("button", { name: "结束并完成数据集" }));
     expect(screen.getByText("dataset finalized")).toBeVisible();
     expect(screen.getByLabelText("任务描述")).toBeEnabled();
