@@ -56,22 +56,28 @@ export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: 
           const disabled = Boolean(reason);
           const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.label;
           return (
-            <button
-              key={item.page}
-              className={page === item.page ? "active" : ""}
-              aria-current={page === item.page ? "page" : undefined}
-              aria-label={ariaLabel}
-              aria-disabled={disabled || undefined}
-              disabled={disabled}
-              title={disabled ? reason : item.title}
-              onClick={() => {
-                if (disabled) return;
-                onSelect(item.page);
-              }}
-            >
-              <item.icon />
-              <span>{item.label}</span>
-            </button>
+            <div key={item.page} className="app-nav-item">
+              <button
+                className={page === item.page ? "active" : ""}
+                aria-current={page === item.page ? "page" : undefined}
+                aria-label={ariaLabel}
+                aria-disabled={disabled || undefined}
+                disabled={disabled}
+                title={disabled ? reason : item.title}
+                onClick={() => {
+                  if (disabled) return;
+                  onSelect(item.page);
+                }}
+              >
+                <item.icon />
+                <span>{item.label}</span>
+              </button>
+              {disabled && reason && (
+                <p className="app-nav-disabled-hint" data-testid={`nav-disabled-${item.page}`}>
+                  {reason}
+                </p>
+              )}
+            </div>
           );
         })}
       </div>

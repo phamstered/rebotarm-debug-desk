@@ -97,7 +97,8 @@ describe("STM32 fault catalog", () => {
   it("documents every firmware fault 0 through 11", () => {
     expect(Object.keys(motorFaults).map(Number)).toEqual([...Array(12).keys()]);
     expect(faultInfo(3)).toMatchObject({ name: "COMMAND_LIMIT" });
-    expect(faultInfo(11).description).toContain("重启 STM32");
+    expect(faultInfo(11).description).toContain("需先安全回零/托住，再重启 STM32");
+    expect(faultInfo(11).description).toContain("无软恢复");
     expect(faultInfo(99).name).toBe("UNKNOWN");
   });
 });
