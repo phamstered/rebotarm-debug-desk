@@ -103,7 +103,7 @@ Desk 一键 Teleop 运行 `--position-controller=teleop --gravity=true --gripper
 
 关键点（代码阅读，未在真机验证）：`safe_stop` 在 `MicroRosSystem` 里是一个**锁存标志**，只有硬件 `on_activate` 才会清除。服务一旦被调用，即使脚本被杀，只要 ros2_control 还活着，`write()` 就会继续执行回零；回零期间位置目标被覆盖，VLA 的目标不起作用。之后的表现取决于启动时使用的**增益文件**。
 
-权威的排障说明以 stack 文档为准：[vla-usage.md「与 rebotarm-debug-desk 配合」](https://github.com/phamstered/rebotarm-ros2-stack/blob/33963c7/docs/vla-usage.md#与-rebotarm-debug-desk-配合)（stack [PR #21](https://github.com/phamstered/rebotarm-ros2-stack/pull/21)，尚未合并）。
+权威的排障说明以 stack 文档为准：[vla-usage.md「与 rebotarm-debug-desk 配合」](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-usage.md#与-rebotarm-debug-desk-配合)。
 
 **结果 A：cleanup 完整执行**
 
@@ -257,8 +257,8 @@ Monitor 工具栏的 **`+VLA`** 按钮新建名为「VLA Joint Chunk」的仪表
 | 卡片「未运行」，启动报找不到 `vla_position_controller` | stack 未含 PR #16，或以 `position_controller:=none` + 重力/标定模式启动，VLA 未被加载 | 更新 stack 并重新编译；使用 normal control 启动；`ros2 control list_controllers` 确认 |
 | 「Controller Manager 离线」/ 切换超时 | `ros2_control_node` 未运行 | 在 Jetson 独立启动 ros2_control 后重试 |
 | ⚠️ 点「启动 VLA」后机械臂意外回零，Controller Manager 消失 | 结果 A：Desk 停掉了自己一键拉起的 Teleop/Trajectory 脚本，脚本 cleanup 先 safe stop 再停 ros2_control（见 [4.2 的危险提示](#_4-2-启动-vla)；代码阅读，未在真机验证）| 先检查 `/stm32/status`：有 fault 11 按最后一行处理。之后在 Jetson 终端手动运行 `start_arm_teleop.sh --position-controller=trajectory --gravity=true`，再从 Desk 启动 VLA |
-| ⚠️ `/stm32/status` 稳定为 `mode=3`、`fault_code=4`；VLA active 但不动 | 结果 B1a：`safe_stop` 已执行，ros2_control 仍在运行，使用 RETURN kp=0 的增益 | **重启 MCU 没有用**。先 deactivate 控制器，再 `ros2 control set_hardware_component_state Stm32H723ArmSystem inactive` → `active`，然后重新激活控制器；或重启 ros2_control。具体命令见 [stack 文档](https://github.com/phamstered/rebotarm-ros2-stack/blob/33963c7/docs/vla-usage.md#与-rebotarm-debug-desk-配合) |
-| ⚠️ `/stm32/status` 多为 `mode=2`（偶尔 `fault_code=4`），机械臂在零位附近刚性保持不动 | 结果 B1b：`safe_stop` 已执行，ros2_control 仍在运行，使用 RETURN kp≠0 的增益（VLA 默认）。疑似 stack bug（[PR #21](https://github.com/phamstered/rebotarm-ros2-stack/pull/21)）| 目前从代码看没有可靠的恢复方法：硬件 `inactive` 会被拒绝，重启 ros2_control 很可能锁存 fault 11。只能安全回零 + 重启 MCU，并以 [stack 文档](https://github.com/phamstered/rebotarm-ros2-stack/blob/33963c7/docs/vla-usage.md#与-rebotarm-debug-desk-配合) / stack 修复为准 |
+| ⚠️ `/stm32/status` 稳定为 `mode=3`、`fault_code=4`；VLA active 但不动 | 结果 B1a：`safe_stop` 已执行，ros2_control 仍在运行，使用 RETURN kp=0 的增益 | **重启 MCU 没有用**。先 deactivate 控制器，再 `ros2 control set_hardware_component_state Stm32H723ArmSystem inactive` → `active`，然后重新激活控制器；或重启 ros2_control。具体命令见 [stack 文档](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-usage.md#与-rebotarm-debug-desk-配合) |
+| ⚠️ `/stm32/status` 多为 `mode=2`（偶尔 `fault_code=4`），机械臂在零位附近刚性保持不动 | 结果 B1b：`safe_stop` 已执行，ros2_control 仍在运行，使用 RETURN kp≠0 的增益（VLA 默认）。疑似 stack bug（[PR #21](https://github.com/phamstered/rebotarm-ros2-stack/pull/21)）| 目前从代码看没有可靠的恢复方法：硬件 `inactive` 会被拒绝，重启 ros2_control 很可能锁存 fault 11。只能安全回零 + 重启 MCU，并以 [stack 文档](https://github.com/phamstered/rebotarm-ros2-stack/blob/main/docs/vla-usage.md#与-rebotarm-debug-desk-配合) / stack 修复为准 |
 | ⚠️ `/stm32/status` 报 `fault_code=11` | 结果 B2：ros2_control 在固件 DISABLE 前退出（TRACK 下先 100 ms 进 HOLD、无重力补偿；RETURN 下没有这一步）→ 500 ms 锁存 fault 11 | 先安全回零，再重启 MCU/固件（见 [executor docs/vla.md](https://github.com/phamstered/rebotarm-executor/blob/main/docs/vla.md)），之后按推荐方式启动 |
 | 「Controller 批量切换失败」 | Desk 只 deactivate 当前处于 active 的 teleop/trajectory，正常情况下 Humble 上的 `--strict` 切换不会因此失败。若仍失败，通常是任一控制器无法切换：teleop/trajectory 未被停用、gravity 状态异常、控制器名不一致等 | 查看提示中的 `switch_controllers` 输出；手动 `ros2 control list_controllers` 检查 |
 | 卡片「控制器 active · 等待 /vla/joint_chunk」 | 推理节点未发布；Topic 名不一致；`ROS_DOMAIN_ID` 不一致；或 Bridge 无法解码 | Jetson 上 `ros2 topic hz /vla/joint_chunk`；有数据则多半是 Bridge 解码问题（下一行）|
