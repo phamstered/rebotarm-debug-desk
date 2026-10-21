@@ -403,8 +403,8 @@ mod tests {
 
     #[test]
     fn check_collection_ready_command_is_hard_gate_without_warn_only() {
-        let profile = profile();
-        let remote = check_collection_ready_remote_command(&profile).unwrap();
+        let base_profile = profile();
+        let remote = check_collection_ready_remote_command(&base_profile).unwrap();
         assert!(StdCommand::new("bash")
             .args(["-n", "-c", &remote])
             .status()
