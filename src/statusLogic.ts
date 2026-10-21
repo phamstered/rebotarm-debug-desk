@@ -689,7 +689,7 @@ export function buildStatusCards(input: {
 }
 
 export type StatusQuickAction = {
-  id: "teleop" | "trajectory" | "vla" | "stop";
+  id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop";
   label: string;
   disabled?: boolean;
   disabledReason?: string;
@@ -730,6 +730,12 @@ export function buildStatusQuickActions(input: {
       label: busy === "arm-stop" || busy === "vla-stop" ? "停止中…" : "停止 Teleop/Trajectory/VLA",
       disabled: !input.sshOk || busy === "arm-stop" || busy === "vla-stop",
       disabledReason: !input.sshOk ? "SSH 未就绪" : busy === "arm-stop" || busy === "vla-stop" ? "操作进行中" : undefined,
+    },
+    {
+      id: "disable-stop",
+      label: "解除输出并停止",
+      disabled: !input.sshOk || modeBusy,
+      disabledReason: !input.sshOk ? "SSH 未就绪" : modeBusy ? "操作进行中" : "需要现场支撑机械臂，DISABLE 后电机不再输出",
     },
   ];
 }

@@ -37,7 +37,6 @@ import {
 import type { MonitorWorkspace } from "./monitorLogic";
 import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
-import { createCommandPayload } from "./motorLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
 import {
@@ -760,26 +759,6 @@ export default function App() {
     };
   }, [refreshUsbAndArm, stage]);
 
-  async function ensureHoldBeforeArmSwitch() {
-    if (!bridge || stage !== "connected") return;
-    try {
-      const positions = Array.isArray(jointState?.position) ? jointState.position.map((value) => Number(value) || 0) : [];
-      const jointCount = Array.isArray(jointState?.name) ? jointState.name.length : positions.length;
-      const mask = jointCount > 0 ? (1 << Math.min(jointCount, 31)) - 1 : 0;
-      await bridge.request(createCommandPayload(0, {
-        positions,
-        velocity: 0,
-        kp: 0,
-        kd: 0,
-        effort: 0,
-        active_joint_mask: mask,
-      }));
-    } catch {
-      setStatusActionNotice("HOLD 请求未确认，仍继续模式切换");
-    }
-  }
-
-
   async function switchVlaControllers(activate: string[], deactivate: string[]) {
     const message = await invoke<string>("switch_ros_controllers", {
       profile,
@@ -794,16 +773,8 @@ export default function App() {
     setStatusActionBusy("vla-start");
     setStatusActionNotice("");
     try {
-      await ensureHoldBeforeArmSwitch();
-      // Stop teleop/trajectory process groups so they do not reclaim position controllers.
-      try {
-        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
-        if (!stopResult.ok) {
-          setStatusActionNotice(`停止 Teleop/Trajectory 警告：${stopResult.message}`);
-        }
-      } catch (reason) {
-        setStatusActionNotice(`停止 Teleop/Trajectory 警告：${reason instanceof Error ? reason.message : String(reason)}`);
-      }
+      const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
+      if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
       const status = await fetchRosControllers().catch(() => rosControl);
       const activate = listVlaStartActivate(status);
       const deactivate = listVlaStartDeactivate(status);
@@ -819,17 +790,14 @@ export default function App() {
     }
   }
 
-  async function runVlaStop(alsoStopArm = false) {
+  async function runVlaStop(alsoStopArm = false, disable = false) {
     if (statusActionBusy) return;
     setStatusActionBusy(alsoStopArm ? "arm-stop" : "vla-stop");
     setStatusActionNotice("");
     try {
-      await ensureHoldBeforeArmSwitch();
       if (alsoStopArm) {
-        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
-        if (!stopResult.ok) {
-          setStatusActionNotice(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
-        }
+        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: disable ? "disable-stop" : "stop" });
+        if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
       }
       if (isVlaControllerActive(rosControl) || alsoStopArm) {
         try {
@@ -875,13 +843,8 @@ export default function App() {
         return;
       }
       if (mode === "teleop" || mode === "trajectory") {
-        await ensureHoldBeforeArmSwitch();
         if (isVlaControllerActive(rosControl)) {
-          try {
-            await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
-          } catch (reason) {
-            setStatusActionNotice(`停用 VLA 警告：${reason instanceof Error ? reason.message : String(reason)}`);
-          }
+          await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
         }
       }
       const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode });
@@ -925,11 +888,11 @@ export default function App() {
     }
   }
 
-  function handleStatusQuickAction(id: "teleop" | "trajectory" | "vla" | "stop") {
+  function handleStatusQuickAction(id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop") {
     if (id === "teleop") void runStatusRestart("teleop-restart", "teleop");
     else if (id === "trajectory") void runStatusRestart("trajectory-restart", "trajectory");
     else if (id === "vla") void runVlaStart();
-    else void runVlaStop(true);
+    else void runVlaStop(true, id === "disable-stop");
   }
 
   useEffect(() => {

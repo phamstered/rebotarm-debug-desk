@@ -673,7 +673,8 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
                     if kill -0 \"$p\" 2>/dev/null; then \
                       if [ -z \"$marker\" ] || ps -p \"$p\" -o args= | grep -Fq \"$marker\"; then echo 1; return; fi; \
                     fi; echo 0; }; ";
-    let stop_fn = "stop_pg() { file=\"$1\"; marker=\"$2\"; pid=$(cat \"$file\" 2>/dev/null || true); \
+    let stop_fn = include_str!("arm_mode_lifecycle.sh");
+    let camera_stop_fn = "stop_camera_pg() { file=\"$1\"; marker=\"$2\"; pid=$(cat \"$file\" 2>/dev/null || true); \
                    if [ \"$(alive_pid \"$pid\" \"$marker\")\" = 1 ]; then \
                      kill -INT -\"$pid\" 2>/dev/null || kill -INT \"$pid\" 2>/dev/null || true; \
                      for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
@@ -681,6 +682,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
                      done; \
                      if [ \"$(alive_pid \"$pid\" \"$marker\")\" = 1 ]; then kill -TERM -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; fi; \
                    fi; rm -f \"$file\"; }; ";
+
     let status_body = format!(
         "{paths}{alive_fn}\
          tpid=$(cat \"$teleop_pid_file\" 2>/dev/null || true); \
@@ -700,50 +702,55 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
     );
     let body = match mode {
         "status" => format!("{setup}{status_body}"),
-        "stop" => format!(
-            "{paths}{alive_fn}{stop_fn}\
-             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
-             stop_pg \"$traj_pid_file\" \"\"; \
-             printf \"OK|0|stopped\\n\""
+        "stop" | "disable-stop" => format!(
+            "{setup}{paths}{alive_fn}{stop_fn}\
+             if [ \"{mode}\" = \"disable-stop\" ] || [ \"$(alive_pid \"$(cat \"$teleop_pid_file\" 2>/dev/null)\" \"start_arm_teleop\")\" = 1 ] || [ \"$(alive_pid \"$(cat \"$traj_pid_file\" 2>/dev/null)\" \"\")\" = 1 ]; then arm_safe_stop {stop_service} || exit 1; arm_stop_controller || exit 1; fi; \
+             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\" || exit 1; \
+             stop_pg \"$traj_pid_file\" \"\" || exit 1; \
+             printf \"OK|0|stopped\\n\"",
+            stop_service = if mode == "disable-stop" { "disable" } else { "safe_stop" },
         ),
         "teleop" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
-             stop_pg \"$traj_pid_file\" \"\"; \
-             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
+             arm_safe_stop || exit 1; arm_stop_controller || exit 1; \
+             stop_pg \"$traj_pid_file\" \"\" || exit 1; \
+             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\" || exit 1; \
              setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true \
-               >\"$HOME/.cache/robot-console/arm-teleop.log\" 2>&1 </dev/null & pid=$!; \
-             printf \"%s\\n\" \"$pid\" >\"$teleop_pid_file\"; sleep 1; \
-             if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-teleop.log\" >&2; exit 1; fi; \
+               >\"$HOME/.cache/robot-console/arm-teleop.log\" 2>&1 </dev/null 9>&- & pid=$!; \
+             printf \"%s\\n\" \"$pid\" >\"$teleop_pid_file\"; \
+             wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-teleop.log\" \"End-to-end self-check passed:\" || exit 1; \
              printf \"OK|%s|teleop\\n\" \"$pid\""
         ),
         "trajectory" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
-             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\"; \
-             stop_pg \"$traj_pid_file\" \"\"; \
-             if [ -f \"$ws/scripts/start_arm_teleop.sh\" ]; then \
-               setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory \
-                 >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null & pid=$!; \
-             else \
-               setsid nohup ros2 launch rebotarm_moveit_config move_group.launch.py \
-                 >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null & pid=$!; \
-             fi; \
-             printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; sleep 1; \
-             if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-trajectory.log\" >&2; exit 1; fi; \
+             if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
+             arm_safe_stop || exit 1; arm_stop_controller || exit 1; \
+             stop_pg \"$teleop_pid_file\" \"start_arm_teleop\" || exit 1; \
+             stop_pg \"$traj_pid_file\" \"\" || exit 1; \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory \
+               >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null 9>&- & pid=$!; \
+             printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; \
+             wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"Controller self-check passed:\" || exit 1; \
              printf \"OK|%s|trajectory\\n\" \"$pid\""
         ),
         "realsense" => format!(
-            "{setup}{paths}{alive_fn}{stop_fn}\
-             stop_pg \"$rs_pid_file\" \"realsense\"; \
+            "{setup}{paths}{alive_fn}{camera_stop_fn}\
+             stop_camera_pg \"$rs_pid_file\" \"realsense\" || exit 1; \
              setsid nohup ros2 launch realsense2_camera rs_launch.py \
-               >\"$HOME/.cache/robot-console/arm-realsense.log\" 2>&1 </dev/null & pid=$!; \
+               >\"$HOME/.cache/robot-console/arm-realsense.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$rs_pid_file\"; sleep 1; \
              if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-realsense.log\" >&2; exit 1; fi; \
              printf \"OK|%s|realsense\\n\" \"$pid\""
         ),
         _ => return Err("不支持的 arm mode 操作".into()),
     };
-    Ok(format!("bash -lc '{body}'"))
+    let body = if mode == "status" {
+        body
+    } else {
+        format!("mkdir -p \"$HOME/.cache/robot-console\"; exec 9>\"$HOME/.cache/robot-console/arm-mode.lock\"; flock -n 9 || {{ echo \"Another arm-mode operation is in progress\" >&2; exit 1; }}; {body}")
+    };
+    Ok(format!("bash -lc '{}'", body.replace('\'', "'\\''")))
 }
 
 fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
@@ -1522,7 +1529,7 @@ async fn start_arm_mode(profile: ConnectionProfile, mode: String) -> Result<Remo
     Ok(RemoteActionResult {
         ok: true,
         exit_code: 0,
-        message: if mode == "stop" {
+        message: if mode == "stop" || mode == "disable-stop" {
             "Teleop/Trajectory 已停止".into()
         } else {
             format!("{label} 已启动 (pid {pid})")
@@ -1919,7 +1926,14 @@ __BYID_SEP__\n\
         assert!(teleop.contains("setup_script%/install/setup.bash"));
         assert!(teleop.contains("export LEADER_FOLLOWER_WS=\"$ws\""));
         assert!(teleop.contains("--position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true"));
-        assert!(teleop.contains("kill -INT"));
+        assert!(teleop.contains("kill -TERM \"$pid\""));
+        assert!(teleop.contains("arm_stop_controller || exit 1"));
+        assert!(!teleop.contains("kill -INT -"));
+        assert!(!teleop.contains("kill -TERM -"));
+        assert!(teleop.contains("flock -n 9"));
+        assert!(teleop.contains("wait_arm_ready \"$pid\""));
+        assert!(teleop.find("arm_safe_stop || exit 1;").unwrap()
+            < teleop.find("stop_pg \"$traj_pid_file\"").unwrap());
         assert!(teleop.find("missing $ws/scripts/start_arm_teleop.sh").unwrap()
             < teleop.find("stop_pg \"$traj_pid_file\"").unwrap());
         let custom = ConnectionProfile {
@@ -1941,6 +1955,29 @@ __BYID_SEP__\n\
         let agent = restart_agent_remote_command();
         assert!(agent.contains("systemctl restart micro-ros-agent-stm32h723.service"));
         assert!(!agent.to_ascii_lowercase().contains("flash"));
+    }
+
+    #[test]
+    fn arm_lifecycle_preserves_watchdog_with_simulated_ros() {
+        let output = std::process::Command::new("python3")
+            .arg("tests/test_arm_mode_lifecycle.py")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output().unwrap();
+        assert!(output.status.success(), "{}{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn arm_commands_are_valid_shell_and_can_be_exported_for_smoke_testing() {
+        for mode in ["teleop", "trajectory", "stop", "disable-stop", "status", "realsense"] {
+            let command = arm_mode_remote_command(&profile(""), mode).unwrap();
+            assert!(std::process::Command::new("bash").args(["-n", "-c", &command])
+                .status().unwrap().success());
+            if let Ok(directory) = std::env::var("ROBOT_CONSOLE_ARM_SMOKE_DIR") {
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(std::path::Path::new(&directory).join(format!("{mode}.sh")), command).unwrap();
+            }
+        }
     }
 
     #[test]

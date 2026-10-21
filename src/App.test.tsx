@@ -977,6 +977,60 @@ describe("App workflow", () => {
     expect(await screen.findByRole("button", { name: "连接 Jetson" })).toBeVisible();
   });
 
+  it("repeats Teleop start/stop without publishing an isolated motor command", async () => {
+    localStorage.removeItem("easy-debug-navigate-status-on-connect");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("heading", { name: "Status" });
+    emitRosReady();
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      await user.click(screen.getByRole("button", { name: "一键 Teleop" }));
+      await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "teleop" })));
+      await waitFor(() => expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeEnabled());
+      await user.click(screen.getByRole("button", { name: "停止 Teleop/Trajectory/VLA" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "停止 Teleop/Trajectory/VLA" })).toBeEnabled());
+    }
+    expect(doubles.invoke.mock.calls.filter(([command, args]) => command === "start_arm_mode" && args.mode === "teleop")).toHaveLength(5);
+    expect(doubles.invoke.mock.calls.filter(([command, args]) => command === "start_arm_mode" && args.mode === "stop")).toHaveLength(5);
+    expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({ op: "joint_command" }));
+    expect(doubles.send).not.toHaveBeenCalledWith(expect.objectContaining({ op: "joint_command" }));
+  });
+
+  it("keeps Teleop busy until native self-check completes and surfaces its failure", async () => {
+    localStorage.removeItem("easy-debug-navigate-status-on-connect");
+    const implementation = doubles.invoke.getMockImplementation()!;
+    let finish!: (value: unknown) => void;
+    doubles.invoke.mockImplementation((command: string, args: unknown) => command === "start_arm_mode"
+      ? new Promise((resolve) => { finish = resolve; }) : implementation(command, args));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("heading", { name: "Status" });
+    emitRosReady();
+    await user.click(screen.getByRole("button", { name: "一键 Teleop" }));
+    expect(screen.getByRole("button", { name: "启动 Teleop…" })).toBeDisabled();
+    await act(async () => finish({ ok: false, exitCode: 1, message: "Teleop 启动失败", detail: "COMMAND_LOSS_LATCHED" }));
+    expect(await screen.findByText("Teleop 启动失败：COMMAND_LOSS_LATCHED")).toBeVisible();
+    expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeEnabled();
+  });
+
+  it("uses explicit DISABLE stop only after confirming physical support", async () => {
+    localStorage.removeItem("easy-debug-navigate-status-on-connect");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("heading", { name: "Status" });
+    await user.click(screen.getByRole("button", { name: "解除输出并停止" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(doubles.invoke).not.toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "disable-stop" }));
+    await user.click(screen.getByRole("button", { name: "解除输出并停止" }));
+    await user.click(screen.getByRole("checkbox", { name: "机械臂已支撑，可以解除输出" }));
+    await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
+    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "disable-stop" })));
+    expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({ op: "joint_command" }));
+  });
+
   it("gates Monitor and Motor until JointState smoke is green", async () => {
     const user = userEvent.setup();
     render(<App />);
