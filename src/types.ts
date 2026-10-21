@@ -203,6 +203,10 @@ export type ArmModeStatus = {
   teleopPid: number;
   trajectoryPid: number;
   realsensePid: number;
+  /** True when Desk teleop pid owns ros2_control (child launch or log). Null = unknown while running. */
+  teleopOwnsRos2Control: boolean | null;
+  /** True when Desk trajectory pid owns ros2_control. Null = unknown while running. */
+  trajectoryOwnsRos2Control: boolean | null;
   message: string;
 };
 

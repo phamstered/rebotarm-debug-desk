@@ -99,9 +99,22 @@ export function isHardwareHold(status: HardwareStatus | null | undefined): boole
 
 export const HOLD_NO_GRAVITY_HINT = "无重力补偿，可能下垂";
 
-/** Short Status warning: desk-launched teleop may tear down ros2_control when starting VLA. */
+/** Short Status note: Start VLA skips tearing down owned ros2_control; unknown ownership refuses. */
 export const VLA_ONE_CLICK_RISK_WARNING =
-  "注意：若 ros2_control 由 Desk 一键 Teleop/Trajectory 拉起，点「启动/一键 VLA」可能一并拆掉 Controller Manager。请先在 Jetson 独立启动后再切 VLA。详见 PR #102 / docs/vla.md。";
+  "启动 VLA：若 Desk 一键 Teleop/Trajectory 持有 ros2_control，将跳过 stop、仅 switch_controllers；无法确认归属时拒绝启动。显式「停止」仍可拆除。详见 docs/vla.md。";
+
+/** fault_code 11 hard-fail copy (no soft recovery). */
+export const FAULT_11_HARD_FAIL_COPY = "需先安全回零/托住，再重启 STM32（无软恢复）";
+
+/** True when HardwareStatus.fault_code === 11 (COMMAND_LOSS_LATCHED). */
+export function isFault11Latched(status: { fault_code?: number } | null | undefined): boolean {
+  return status?.fault_code === 11;
+}
+
+/** Disable Teleop/Trajectory/VLA start when fault 11 is latched. */
+export function fault11StartBlockReason(status: { fault_code?: number } | null | undefined): string | undefined {
+  return isFault11Latched(status) ? FAULT_11_HARD_FAIL_COPY : undefined;
+}
 
 export function formatFaultCode(faultCode: number | undefined): string {
   if (faultCode == null || !Number.isFinite(faultCode)) return "—";
@@ -275,8 +288,13 @@ export function buildStatusCards(input: {
   const sessionUp = stage === "connected" || sshOk;
   const tunnelPort = localPort ?? profile.localPort;
   const rosReady = isRosReady(jointState);
-  const armGateOk = sshOk && rosReady;
-  const armGateReason = !sshOk ? "SSH 未就绪" : !rosReady ? "等待 JointState（ROS 未就绪）" : undefined;
+  const fault11Reason = fault11StartBlockReason(hardwareStatus);
+  const armGateOk = sshOk && rosReady && !fault11Reason;
+  const armGateReason = !sshOk
+    ? "SSH 未就绪"
+    : !rosReady
+      ? "等待 JointState（ROS 未就绪）"
+      : fault11Reason;
   const busy = (id: string) => actionBusy === id;
 
   const sshCard: StatusCardModel = {
@@ -700,9 +718,15 @@ export function buildStatusQuickActions(input: {
   rosReady: boolean;
   actionBusy?: string | null;
   vlaActive?: boolean;
+  hardwareStatus?: { fault_code?: number } | null;
 }): StatusQuickAction[] {
-  const gateOk = input.sshOk && input.rosReady;
-  const reason = !input.sshOk ? "SSH 未就绪" : !input.rosReady ? "等待 JointState" : undefined;
+  const fault11Reason = fault11StartBlockReason(input.hardwareStatus);
+  const gateOk = input.sshOk && input.rosReady && !fault11Reason;
+  const reason = !input.sshOk
+    ? "SSH 未就绪"
+    : !input.rosReady
+      ? "等待 JointState"
+      : fault11Reason;
   const busy = input.actionBusy;
   const modeBusy = busy === "teleop-restart" || busy === "trajectory-restart" || busy === "vla-start" || busy === "vla-stop" || busy === "arm-stop";
   const vlaBlocks = Boolean(input.vlaActive);

@@ -100,6 +100,11 @@ struct ArmModeStatus {
     teleop_pid: u32,
     trajectory_pid: u32,
     realsense_pid: u32,
+    /// Whether the Desk teleop script owns ros2_control (child launch or log).
+    /// `None` means unknown while the process is alive (Start VLA must refuse).
+    teleop_owns_ros2_control: Option<bool>,
+    /// Whether the Desk trajectory script owns ros2_control.
+    trajectory_owns_ros2_control: Option<bool>,
     message: String,
 }
 
@@ -684,7 +689,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
                    fi; rm -f \"$file\"; }; ";
 
     let status_body = format!(
-        "{paths}{alive_fn}\
+        "{paths}{alive_fn}{stop_fn}\
          tpid=$(cat \"$teleop_pid_file\" 2>/dev/null || true); \
          jpid=$(cat \"$traj_pid_file\" 2>/dev/null || true); \
          rpid=$(cat \"$rs_pid_file\" 2>/dev/null || true); \
@@ -695,11 +700,23 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
          echo \"$nodes\" | grep -Eqi \"teleop|leader_follower\" && talive=1; \
          echo \"$nodes\" | grep -Eqi \"move_group\" && jalive=1; \
          echo \"$nodes\" | grep -Eqi \"realsense|camera/camera\" && ralive=1; \
+         towns=0; jowns=0; \
+         if [ \"$talive\" = 1 ]; then \
+           if [ -n \"$tpid\" ] && [ \"$tpid\" != 0 ] && [ \"$(alive_pid \"$tpid\" \"start_arm_teleop\")\" = 1 ]; then \
+             towns=$(owns_ros2 \"$tpid\" \"$HOME/.cache/robot-console/arm-teleop.log\" \"start_arm_teleop\"); \
+           else towns=2; fi; \
+         fi; \
+         if [ \"$jalive\" = 1 ]; then \
+           if [ -n \"$jpid\" ] && [ \"$jpid\" != 0 ] && [ \"$(alive_pid \"$jpid\" \"\")\" = 1 ]; then \
+             jowns=$(owns_ros2 \"$jpid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"\"); \
+           else jowns=2; fi; \
+         fi; \
          mode=idle; \
          if [ \"$talive\" = 1 ]; then mode=teleop; elif [ \"$jalive\" = 1 ]; then mode=trajectory; elif [ \"$ralive\" = 1 ]; then mode=realsense; fi; \
-         printf \"ARM|%s|%s|%s|%s|%s|%s|%s\\n\" \"$mode\" \"$talive\" \"$jalive\" \"$ralive\" \
-           \"${{tpid:-0}}\" \"${{jpid:-0}}\" \"${{rpid:-0}}\""
+         printf \"ARM|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n\" \"$mode\" \"$talive\" \"$jalive\" \"$ralive\" \
+           \"${{tpid:-0}}\" \"${{jpid:-0}}\" \"${{rpid:-0}}\" \"$towns\" \"$jowns\""
     );
+
     let body = match mode {
         "status" => format!("{setup}{status_body}"),
         "stop" | "disable-stop" => format!(
@@ -753,6 +770,17 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
     Ok(format!("bash -lc '{}'", body.replace('\'', "'\\''")))
 }
 
+fn parse_owns_flag(raw: Option<&str>, running: bool) -> Option<bool> {
+    if !running {
+        return Some(false);
+    }
+    match raw.unwrap_or("2") {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
 fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
     let line = output
         .lines()
@@ -770,6 +798,8 @@ fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
     let teleop_pid = fields[4].parse().unwrap_or_default();
     let trajectory_pid = fields[5].parse().unwrap_or_default();
     let realsense_pid = fields[6].parse().unwrap_or_default();
+    let teleop_owns = parse_owns_flag(fields.get(7).copied(), teleop_running);
+    let trajectory_owns = parse_owns_flag(fields.get(8).copied(), trajectory_running);
     Ok(ArmModeStatus {
         mode,
         teleop_running,
@@ -782,6 +812,8 @@ fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
             0
         },
         realsense_pid: if realsense_running { realsense_pid } else { 0 },
+        teleop_owns_ros2_control: teleop_owns,
+        trajectory_owns_ros2_control: trajectory_owns,
         message: "arm mode 状态已刷新".into(),
     })
 }
@@ -2043,11 +2075,17 @@ __BYID_SEP__\n\
 
     #[test]
     fn parses_arm_mode_status_line() {
-        let status = parse_arm_mode_status("noise\nARM|teleop|1|0|0|42|0|0\n").unwrap();
+        let status = parse_arm_mode_status("noise\nARM|teleop|1|0|0|42|0|0|1|0\n").unwrap();
         assert_eq!(status.mode, "teleop");
         assert!(status.teleop_running);
         assert!(!status.trajectory_running);
         assert_eq!(status.teleop_pid, 42);
+        assert_eq!(status.teleop_owns_ros2_control, Some(true));
+        assert_eq!(status.trajectory_owns_ros2_control, Some(false));
+        let unknown = parse_arm_mode_status("ARM|teleop|1|0|0|42|0|0|2|0\n").unwrap();
+        assert_eq!(unknown.teleop_owns_ros2_control, None);
+        let legacy = parse_arm_mode_status("ARM|teleop|1|0|0|42|0|0\n").unwrap();
+        assert_eq!(legacy.teleop_owns_ros2_control, None);
         assert!(parse_arm_mode_status("unexpected").is_err());
     }
 

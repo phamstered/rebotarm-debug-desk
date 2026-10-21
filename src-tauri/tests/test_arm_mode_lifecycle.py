@@ -174,5 +174,41 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+
+    def test_owns_ros2_via_child_or_log_and_unknown(self):
+        result, _, _ = self.run_shell(
+            'alive_pid() { echo 1; }; '
+            'pgrep() { if [[ "$*" == *"-P"* ]]; then echo "999 python3 stm32h723_arm.launch.py"; fi; }; '
+            'out=$(owns_ros2 123 "$ROOT/log" start_arm_teleop); echo "owns=$out"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("owns=1", result.stdout)
+
+        result, _, _ = self.run_shell(
+            'alive_pid() { echo 1; }; '
+            'pgrep() { return 1; }; '
+            'echo "Starting STM32H723 arm ros2_control" > "$ROOT/log"; '
+            'out=$(owns_ros2 123 "$ROOT/log" start_arm_teleop); echo "owns=$out"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("owns=1", result.stdout)
+
+        result, _, _ = self.run_shell(
+            'alive_pid() { echo 1; }; '
+            'pgrep() { return 1; }; '
+            'out=$(owns_ros2 123 "$ROOT/log" start_arm_teleop); echo "owns=$out"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("owns=0", result.stdout)
+
+        result, _, _ = self.run_shell(
+            'alive_pid() { echo 0; }; '
+            'out=$(owns_ros2 123 "$ROOT/log" start_arm_teleop); echo "owns=$out"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("owns=0", result.stdout)
+
+
+
 if __name__ == "__main__":
     unittest.main()

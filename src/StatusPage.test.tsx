@@ -55,6 +55,8 @@ describe("StatusPage", () => {
           teleopPid: 0,
           trajectoryPid: 0,
           realsensePid: 0,
+          teleopOwnsRos2Control: false,
+          trajectoryOwnsRos2Control: false,
           message: "",
         }}
         onCardAction={onCardAction}

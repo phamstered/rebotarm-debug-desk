@@ -115,7 +115,7 @@ describe("App workflow", () => {
         realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
       });
       if (command === "probe_arm_mode") return Promise.resolve({
-        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false, teleopOwnsRos2Control: false, trajectoryOwnsRos2Control: false,
         teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
@@ -221,7 +221,7 @@ describe("App workflow", () => {
         realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
       });
       if (command === "probe_arm_mode") return Promise.resolve({
-        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false, teleopOwnsRos2Control: false, trajectoryOwnsRos2Control: false,
         teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
@@ -301,7 +301,7 @@ describe("App workflow", () => {
         realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
       });
       if (command === "probe_arm_mode") return Promise.resolve({
-        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false, teleopOwnsRos2Control: false, trajectoryOwnsRos2Control: false,
         teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
@@ -476,7 +476,7 @@ describe("App workflow", () => {
         realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
       });
       if (command === "probe_arm_mode") return Promise.resolve({
-        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false, teleopOwnsRos2Control: false, trajectoryOwnsRos2Control: false,
         teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
@@ -666,7 +666,7 @@ describe("App workflow", () => {
         realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
       });
       if (command === "probe_arm_mode") return Promise.resolve({
-        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false, teleopOwnsRos2Control: false, trajectoryOwnsRos2Control: false,
         teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
@@ -1107,7 +1107,7 @@ describe("App workflow", () => {
         realsensePresent: false, realsenseLines: [], rawLsusb: "0483:5740",
       });
       if (command === "probe_arm_mode") return Promise.resolve({
-        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false,
+        mode: "idle", teleopRunning: false, trajectoryRunning: false, realsenseRunning: false, teleopOwnsRos2Control: false, trajectoryOwnsRos2Control: false,
         teleopPid: 0, trajectoryPid: 0, realsensePid: 0, message: "idle",
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });

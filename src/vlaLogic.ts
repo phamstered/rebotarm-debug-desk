@@ -4,7 +4,7 @@
  * (+ parallel gravity_compensation_controller). Desk never writes /stm32/joint_commands for VLA.
  */
 
-import type { ControllerInfo, RosControlStatus } from "./types";
+import type { ArmModeStatus, ControllerInfo, HardwareStatus, RosControlStatus } from "./types";
 import { createSeries } from "./dataGraphLogic";
 import {
   createPanelFromSeries,
@@ -154,4 +154,88 @@ export function createVlaChunkLayoutPresetPanels(jointCount = DEFAULT_VLA_JOINT_
     layout: layouts[index]!,
     series: { topic: series.topic, fieldPath: series.fieldPath, color: series.color },
   }));
+}
+
+/** Bridge HOLD failed — abort Teleop/Trajectory/VLA start (fail closed). */
+export const HOLD_ABORT_MESSAGE = "HOLD 请求未确认，已中止模式切换";
+
+export type VlaStartArmStopPlan =
+  | { kind: "skip-stop"; reason: string }
+  | { kind: "stop" }
+  | { kind: "refuse"; reason: string };
+
+function ownsWhileRunning(running: boolean, owns: boolean | null | undefined): "owns" | "not-owns" | "unknown" | "idle" {
+  if (!running) return "idle";
+  if (owns === true) return "owns";
+  if (owns === false) return "not-owns";
+  return "unknown";
+}
+
+/**
+ * Decide whether Start VLA may call `start_arm_mode stop`.
+ * If Teleop/Trajectory owns ros2_control → skip stop (only switch_controllers).
+ * If ownership cannot be determined while a pid is alive → refuse (fail closed).
+ * Explicit user Stop Teleop/Trajectory/VLA may still tear down.
+ */
+export function planVlaStartArmStop(armMode: ArmModeStatus | null | undefined): VlaStartArmStopPlan {
+  const teleop = ownsWhileRunning(Boolean(armMode?.teleopRunning), armMode?.teleopOwnsRos2Control);
+  const trajectory = ownsWhileRunning(Boolean(armMode?.trajectoryRunning), armMode?.trajectoryOwnsRos2Control);
+
+  if (teleop === "unknown") {
+    return {
+      kind: "refuse",
+      reason: "无法确认 Teleop 是否持有 ros2_control，已拒绝启动 VLA（请先停止 Teleop 或刷新运行态）",
+    };
+  }
+  if (trajectory === "unknown") {
+    return {
+      kind: "refuse",
+      reason: "无法确认 Trajectory 是否持有 ros2_control，已拒绝启动 VLA（请先停止 Trajectory 或刷新运行态）",
+    };
+  }
+  if (teleop === "owns" || trajectory === "owns") {
+    const who = teleop === "owns" && trajectory === "owns"
+      ? "Teleop/Trajectory"
+      : teleop === "owns"
+        ? "Teleop"
+        : "Trajectory";
+    return {
+      kind: "skip-stop",
+      reason: `${who} 持有 ros2_control，跳过 stop，仅切换控制器`,
+    };
+  }
+  return { kind: "stop" };
+}
+
+/** True when firmware reports TRACK (mode 1 / mode_name TRACK). */
+export function isHardwareTrack(status: HardwareStatus | null | undefined): boolean {
+  if (!status) return false;
+  const name = status.mode_name?.trim().toUpperCase();
+  if (name === "TRACK") return true;
+  if (name) return false;
+  return status.mode === 1;
+}
+
+/**
+ * After switch_controllers success: require vla_position_controller active.
+ * If /stm32/status (HardwareStatus) is available in the flow, also require TRACK.
+ * Returns a Chinese failure reason, or undefined when checks pass.
+ */
+export function vlaStartVerificationFailure(
+  rosControl: RosControlStatus | null | undefined,
+  hardwareStatus: HardwareStatus | null | undefined,
+): string | undefined {
+  if (!isVlaControllerActive(rosControl)) {
+    return "启动校验失败：vla_position_controller 未处于 active";
+  }
+  if (hardwareStatus == null) {
+    // TRACK check skipped when HardwareStatus is not available in this flow.
+    return undefined;
+  }
+  if (!isHardwareTrack(hardwareStatus)) {
+    const modeLabel = hardwareStatus.mode_name?.trim()
+      || (typeof hardwareStatus.mode === "number" ? `mode ${hardwareStatus.mode}` : "未知");
+    return `启动校验失败：固件未进入 TRACK（当前 ${modeLabel}）`;
+  }
+  return undefined;
 }

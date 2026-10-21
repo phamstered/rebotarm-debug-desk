@@ -126,3 +126,26 @@ wait_arm_ready() {
     echo "Arm startup timed out; inspect its log and use Stop to request a confirmed safe shutdown." >&2
     return 1
 }
+
+# 0=not owns, 1=owns, 2=unknown (pid alive but unreadable). Used by Start VLA fail-closed.
+owns_ros2() {
+    local pid="$1" log="$2" marker="$3"
+    if [ "$(alive_pid "$pid" "$marker")" != 1 ]; then
+        echo 0
+        return
+    fi
+    case "$pid" in *[!0-9]*|""|0)
+        echo 2
+        return
+        ;;
+    esac
+    if pgrep -P "$pid" -a 2>/dev/null | grep -Fq 'stm32h723_arm.launch.py'; then
+        echo 1
+        return
+    fi
+    if [ -f "$log" ] && grep -Fq 'Starting STM32H723 arm ros2_control' "$log" 2>/dev/null; then
+        echo 1
+        return
+    fi
+    echo 0
+}

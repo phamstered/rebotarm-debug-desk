@@ -182,6 +182,7 @@ export function StatusPage({
     rosReady: isRosReady(jointState),
     actionBusy,
     vlaActive: isVlaControllerActive(rosControl),
+    hardwareStatus,
   });
 
   return (
