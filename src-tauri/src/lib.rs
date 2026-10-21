@@ -2029,15 +2029,11 @@ __BYID_SEP__\n\
                 ros_setup_script: setup_path.into(),
                 ..profile("")
             };
+            // Full `bash -lc '…'` keeps nested quote escapes from lifecycle.sh valid.
             let command = arm_mode_remote_command(&selected, "status").unwrap();
-            let body = command
-                .strip_prefix("bash -lc '")
-                .unwrap()
-                .strip_suffix('\'')
-                .unwrap();
             let output = std::process::Command::new("bash")
                 .arg("-c")
-                .arg(body)
+                .arg(&command)
                 .env("HOME", &root)
                 .env_remove("LEADER_FOLLOWER_WS")
                 .output()
