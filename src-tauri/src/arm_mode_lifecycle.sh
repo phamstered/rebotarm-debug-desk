@@ -69,7 +69,7 @@ arm_stop_controller() {
             return 1
         fi
         # The script can exit while its separately grouped controller survives.
-        # Stop this domain's confirmed-disabled publisher before the supervisor.
+        # Stop this domain confirmed-disabled publisher before the supervisor.
         kill -INT "$pid" || return 1
         deadline=$((SECONDS + 20))
         while kill -0 "$pid" 2>/dev/null; do
