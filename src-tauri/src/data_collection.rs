@@ -1,11 +1,14 @@
-use super::{is_safe_setup_script, ssh_base, ssh_target, ConnectionProfile};
+use super::{is_safe_setup_script, ssh_base, ssh_target, stderr_tail, ConnectionProfile};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::State;
+use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 const REMOTE_HELPER: &str = include_str!("collection_remote.py");
 const RESULT_PREFIX: &str = "ROBOT_CONSOLE_COLLECTION=";
+/// Per-topic timeout passed to Jetson `check_collection_ready.sh` (hard gate).
+const COLLECTION_READY_TOPIC_TIMEOUT_SECS: u32 = 8;
 
 #[derive(Default)]
 pub struct CollectionState(AtomicBool);
@@ -122,6 +125,49 @@ fn shell_word(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// Workspace root hint from `…/install/setup.bash` (profile rosSetupScript).
+/// Empty when the setup path does not end with that suffix.
+fn collection_workspace_hint(ros_setup_script: &str) -> Option<String> {
+    const SUFFIX: &str = "/install/setup.bash";
+    let root = ros_setup_script.strip_suffix(SUFFIX)?;
+    if root.is_empty() || !is_safe_setup_script(root) {
+        return None;
+    }
+    Some(root.to_string())
+}
+
+/// SSH remote command that hard-runs stack `scripts/check_collection_ready.sh`
+/// (no `--warn-only`). Workspace resolution mirrors arm teleop:
+/// `LEADER_FOLLOWER_WS` → setup-script parent → `$HOME/Project/rebotarm-ros2-stack`.
+fn check_collection_ready_remote_command(profile: &ConnectionProfile) -> Result<String, String> {
+    if !is_safe_setup_script(&profile.ros_setup_script) {
+        return Err("ROS 环境脚本路径无效".into());
+    }
+    let domain = profile.ros_domain_id;
+    let timeout_secs = COLLECTION_READY_TOPIC_TIMEOUT_SECS;
+    let body = format!(
+        "set -e; cd \"$HOME\"; \
+setup_script={setup}; \
+case \"$setup_script\" in /*) ;; *) setup_script=\"$HOME/$setup_script\";; esac; \
+ws=\"${{LEADER_FOLLOWER_WS:-}}\"; \
+if [ -z \"$ws\" ]; then \
+  case \"$setup_script\" in */install/setup.bash) candidate=\"${{setup_script%/install/setup.bash}}\";; *) candidate=\"\";; esac; \
+  if [ -n \"$candidate\" ] && [ -f \"$candidate/scripts/check_collection_ready.sh\" ]; then ws=\"$candidate\"; \
+  elif [ -f \"$HOME/Project/rebotarm-ros2-stack/scripts/check_collection_ready.sh\" ]; then ws=\"$HOME/Project/rebotarm-ros2-stack\"; \
+  elif [ -f \"$HOME/Project/leader_follower/scripts/check_collection_ready.sh\" ]; then ws=\"$HOME/Project/leader_follower\"; \
+  else ws=\"${{candidate:-$HOME/Project/rebotarm-ros2-stack}}\"; fi; \
+fi; \
+script=\"$ws/scripts/check_collection_ready.sh\"; \
+if [ ! -f \"$script\" ]; then echo \"missing $script（需要 rebotarm-ros2-stack 的 check_collection_ready.sh）\" >&2; exit 1; fi; \
+export LEADER_FOLLOWER_WS=\"$ws\" ROS_DOMAIN_ID={domain}; \
+bash \"$script\" --ros-domain-id={domain} --workspace=\"$ws\" --timeout={timeout}",
+        setup = shell_word(&profile.ros_setup_script),
+        domain = domain,
+        timeout = timeout_secs,
+    );
+    Ok(format!("bash -lc {}", shell_word(&body)))
+}
+
 fn remote_command(
     profile: &ConnectionProfile,
     action: &str,
@@ -169,6 +215,44 @@ fn parse_result(stdout: &str) -> Result<CollectionStatus, String> {
     serde_json::from_value(value).map_err(|error| format!("采集状态字段无效：{error}"))
 }
 
+fn ssh_output_command(profile: &ConnectionProfile, remote: String) -> Command {
+    let mut command = ssh_base(profile);
+    command
+        .kill_on_drop(true)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg("ServerAliveInterval=15")
+        .arg("-o")
+        .arg("ServerAliveCountMax=3")
+        .arg("--")
+        .arg(ssh_target(profile))
+        .arg(remote);
+    command
+}
+
+async fn run_collection_ready_gate(profile: &ConnectionProfile) -> Result<(), String> {
+    let remote = check_collection_ready_remote_command(profile)?;
+    let output = timeout(
+        Duration::from_secs(u64::from(COLLECTION_READY_TOPIC_TIMEOUT_SECS) * 2 + 20),
+        ssh_output_command(profile, remote).output(),
+    )
+    .await
+    .map_err(|_| "采集就绪检查超时；请确认 Jetson 上 Agent /stm32 话题可用后重试")?
+    .map_err(|error| format!("采集就绪检查 SSH 失败：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = stderr_tail(&stderr, &stdout);
+    Err(if detail.is_empty() {
+        "采集就绪检查未通过（Jetson check_collection_ready.sh 退出非零）".into()
+    } else {
+        format!("采集就绪检查未通过：\n{detail}")
+    })
+}
+
 #[tauri::command]
 pub async fn data_collection_action(
     profile: ConnectionProfile,
@@ -182,19 +266,10 @@ pub async fn data_collection_action(
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .map_err(|_| "另一项采集操作正在执行")?;
     let _guard = OperationGuard(&state.0);
-    let mut command = ssh_base(&profile);
-    command
-        .kill_on_drop(true)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg("-o")
-        .arg("ServerAliveInterval=15")
-        .arg("-o")
-        .arg("ServerAliveCountMax=3")
-        .arg("--")
-        .arg(ssh_target(&profile))
-        .arg(remote);
-    let output = timeout(Duration::from_secs(150), command.output())
+    if action == "launch" || action == "start_episode" {
+        run_collection_ready_gate(&profile).await?;
+    }
+    let output = timeout(Duration::from_secs(150), ssh_output_command(&profile, remote).output())
         .await
         .map_err(|_| "采集操作超时；远端操作可能仍在执行，请刷新状态确认")?
         .map_err(|error| format!("采集 SSH 失败：{error}"))?;
@@ -203,7 +278,7 @@ pub async fn data_collection_action(
     if !output.status.success() && !stdout.lines().any(|line| line.starts_with(RESULT_PREFIX)) {
         return Err(format!(
             "采集 SSH/ROS 环境失败：{}",
-            super::stderr_tail(&stderr, &stdout)
+            stderr_tail(&stderr, &stdout)
         ));
     }
     parse_result(&stdout)
@@ -212,7 +287,7 @@ pub async fn data_collection_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
+    use std::process::Command as StdCommand;
 
     fn profile() -> ConnectionProfile {
         ConnectionProfile {
@@ -222,11 +297,11 @@ mod tests {
             ssh_port: 22,
             local_port: 18765,
             remote_port: 8765,
-            ros_domain_id: 0,
+            ros_domain_id: 7,
             ros_setup_script: "Project/rebotarm-ros2-stack/install/setup.bash".into(),
-            joint_state_topic: "/joint_states".into(),
-            command_topic: "/joint_command".into(),
-            status_topic: "/status".into(),
+            joint_state_topic: "/stm32/joint_states".into(),
+            command_topic: "/stm32/joint_commands".into(),
+            status_topic: "/stm32/status".into(),
         }
     }
 
@@ -238,7 +313,7 @@ mod tests {
             fps: 20,
             wrist_image_topic: "/camera/camera/color/image_raw".into(),
             base_image_topic: "".into(),
-            state_topic: "/joint_states".into(),
+            state_topic: "/stm32/joint_states".into(),
             arm_command_topic: "/arm_teleop_controller/commands".into(),
             gripper_command_topic: "/gripper_teleop_controller/commands".into(),
             python_path: "venvs/lerobot/bin/python".into(),
@@ -281,7 +356,7 @@ mod tests {
     #[test]
     fn shell_words_preserve_task_text_without_executing_it() {
         let value = "抓取 'cube' \"red\" $(echo BAD) `echo BAD`\nnext line";
-        let output = Command::new("bash")
+        let output = StdCommand::new("bash")
             .arg("-c")
             .arg(format!("printf %s {}", shell_word(value)))
             .output()
@@ -291,7 +366,7 @@ mod tests {
         let mut config = config();
         config.task = value.into();
         let remote = remote_command(&profile(), "launch", Some(&config)).unwrap();
-        assert!(Command::new("bash")
+        assert!(StdCommand::new("bash")
             .args(["-n", "-c", &remote])
             .status()
             .unwrap()
@@ -312,8 +387,47 @@ mod tests {
     }
 
     #[test]
+    fn collection_workspace_hint_from_setup_script() {
+        assert_eq!(
+            collection_workspace_hint("Project/rebotarm-ros2-stack/install/setup.bash").as_deref(),
+            Some("Project/rebotarm-ros2-stack")
+        );
+        assert_eq!(
+            collection_workspace_hint("/home/jialiang/Project/rebotarm-ros2-stack/install/setup.bash")
+                .as_deref(),
+            Some("/home/jialiang/Project/rebotarm-ros2-stack")
+        );
+        assert!(collection_workspace_hint("install/setup.bash").is_none());
+        assert!(collection_workspace_hint("Project/rebotarm-ros2-stack/setup.bash").is_none());
+    }
+
+    #[test]
+    fn check_collection_ready_command_is_hard_gate_without_warn_only() {
+        let base_profile = profile();
+        let remote = check_collection_ready_remote_command(&base_profile).unwrap();
+        assert!(StdCommand::new("bash")
+            .args(["-n", "-c", &remote])
+            .status()
+            .unwrap()
+            .success());
+        assert!(remote.contains("check_collection_ready.sh"));
+        assert!(remote.contains("--ros-domain-id=7"));
+        assert!(remote.contains("--timeout=8"));
+        assert!(remote.contains("--workspace="));
+        assert!(
+            !remote.contains("--warn-only"),
+            "Episode/launch must hard-fail; never pass --warn-only: {remote}"
+        );
+        assert!(remote.contains("LEADER_FOLLOWER_WS"));
+        assert!(remote.contains("Project/rebotarm-ros2-stack"));
+        let mut bad = profile();
+        bad.ros_setup_script = "../evil/install/setup.bash".into();
+        assert!(check_collection_ready_remote_command(&bad).is_err());
+    }
+
+    #[test]
     fn remote_helper_runs_with_simulated_services_and_processes() {
-        let output = Command::new("python3")
+        let output = StdCommand::new("python3")
             .arg("tests/test_collection_remote.py")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .output()
