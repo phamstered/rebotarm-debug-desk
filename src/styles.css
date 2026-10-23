@@ -1001,8 +1001,46 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .status-page-meta { min-width: 0; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .status-page-meta span { color: #587586; font: 8px/1 "SFMono-Regular", monospace; letter-spacing: .04em; }
 .status-page-meta strong { max-width: 280px; overflow: hidden; color: #8cc8c4; font: 10px/1.2 "SFMono-Regular", monospace; text-overflow: ellipsis; white-space: nowrap; }
-.status-page-banner { width: min(1280px, calc(100% - 44px)); margin: 14px auto 0; padding: 10px 13px; border: 1px solid #1e3a48; border-radius: 9px; background: linear-gradient(90deg, #0d1c26, #0a151d); color: #8aa3b2; font-size: 11px; line-height: 1.45; }
-.status-card-grid { width: min(1280px, calc(100% - 44px)); margin: 14px auto 28px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.status-page-banner { width: min(1280px, calc(100% - 44px)); margin: 14px auto 0; padding: 8px 12px; border: 1px solid #1e3a48; border-radius: 9px; background: linear-gradient(90deg, #0d1c26, #0a151d); color: #8aa3b2; font-size: 11px; line-height: 1.4; }
+.status-sticky-alert {
+  position: sticky; z-index: 7; top: 54px;
+  width: min(1280px, calc(100% - 44px)); margin: 10px auto 0; padding: 10px 14px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px;
+  border-radius: 9px; font-size: 12px; line-height: 1.4;
+}
+.status-sticky-alert strong { font-size: 12px; letter-spacing: .02em; }
+.status-sticky-alert.tone-fail { border: 1px solid #8a3d38; background: #2b1716; color: #ffb0ab; }
+.status-sticky-alert.tone-warn { border: 1px solid #6a5530; background: #241c11; color: #f0c27a; }
+.status-zones { width: min(1280px, calc(100% - 44px)); margin: 12px auto 28px; display: grid; gap: 18px; }
+.status-zone { min-width: 0; display: grid; gap: 10px; }
+.status-zone.primary { padding: 12px; border: 1px solid #2a4a52; border-radius: 12px; background: rgba(12, 28, 34, .55); }
+.status-zone-title { display: flex; align-items: center; gap: 10px; margin: 0; color: #e1eff6; font-size: 13px; font-weight: 700; }
+.status-zone-title h2 { margin: 0; font-size: 13px; }
+.status-zone-badge { padding: 2px 7px; border-radius: 999px; border: 1px solid #35716c; background: #153b3a; color: #9fe7de; font: 9px/1.2 "SFMono-Regular", monospace; }
+.status-zone-hint { color: #6d8999; font-size: 10px; font-weight: 500; }
+.status-zone-details > summary.status-zone-title { cursor: pointer; list-style: none; }
+.status-zone-details > summary.status-zone-title::-webkit-details-marker { display: none; }
+.status-zone-details[open] > summary.status-zone-title { margin-bottom: 10px; }
+.status-card-grid { width: 100%; margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.status-card-grid.zone-connection { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.status-card-grid.zone-hardware { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.status-card-grid.zone-control { grid-template-columns: minmax(0, 1fr); }
+.status-card-grid.zone-sensors { grid-template-columns: minmax(0, 1fr); }
+.status-card.compact { gap: 8px; padding: 11px 12px; }
+.status-mode-strip { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 16px; }
+.status-mode-segment {
+  display: inline-flex; flex-wrap: wrap; gap: 0; padding: 3px; border: 1px solid #2a4a52; border-radius: 11px; background: #08151e;
+}
+.status-mode-segment .status-quick-action-wrap { margin: 0; }
+.status-mode-segment .status-quick-action {
+  border-radius: 8px; border-color: transparent; background: transparent; box-shadow: none;
+  padding: 8px 14px;
+}
+.status-mode-segment .status-quick-action.active {
+  border-color: #35716c; background: linear-gradient(180deg, #1a4a48, #143938); color: #e7fffb;
+}
+.status-mode-stops { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.status-mode-idle { margin: 0; color: #6d8999; font-size: 11px; }
 .status-card { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 13px 14px; border: 1px solid #1e3645; border-radius: 10px; background: #0a1721; box-shadow: 0 10px 30px rgba(0, 0, 0, .12); }
 .status-card.tone-ok { border-color: #275550; }
 .status-card.tone-warn { border-color: #6a5530; }
@@ -1059,10 +1097,16 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 
 
 @media (max-width: 1100px) {
-  .status-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .status-card-grid,
+  .status-card-grid.zone-connection,
+  .status-card-grid.zone-hardware { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  .status-card-grid { grid-template-columns: 1fr; }
+  .status-card-grid,
+  .status-card-grid.zone-connection,
+  .status-card-grid.zone-hardware,
+  .status-card-grid.zone-control,
+  .status-card-grid.zone-sensors { grid-template-columns: 1fr; }
 }
 
 

@@ -985,11 +985,11 @@ describe("App workflow", () => {
     await screen.findByRole("heading", { name: "Status" });
     emitRosReady();
     for (let cycle = 0; cycle < 5; cycle += 1) {
-      await user.click(screen.getByRole("button", { name: "一键 Teleop" }));
+      await user.click(screen.getByRole("button", { name: "Teleop" }));
       await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "teleop" })));
-      await waitFor(() => expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeEnabled());
-      await user.click(screen.getByRole("button", { name: "停止 Teleop/Trajectory/VLA" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "停止 Teleop/Trajectory/VLA" })).toBeEnabled());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled());
+      await user.click(screen.getByRole("button", { name: "停止" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeEnabled());
     }
     expect(doubles.invoke.mock.calls.filter(([command, args]) => command === "start_arm_mode" && args.mode === "teleop")).toHaveLength(5);
     expect(doubles.invoke.mock.calls.filter(([command, args]) => command === "start_arm_mode" && args.mode === "stop")).toHaveLength(5);
@@ -1008,11 +1008,11 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
     emitRosReady();
-    await user.click(screen.getByRole("button", { name: "一键 Teleop" }));
-    expect(screen.getByRole("button", { name: "启动 Teleop…" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Teleop" }));
+    expect(screen.getByRole("button", { name: "启动中…" })).toBeDisabled();
     await act(async () => finish({ ok: false, exitCode: 1, message: "Teleop 启动失败", detail: "COMMAND_LOSS_LATCHED" }));
     expect(await screen.findByText("Teleop 启动失败：COMMAND_LOSS_LATCHED")).toBeVisible();
-    expect(screen.getByRole("button", { name: "一键 Teleop" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled();
   });
 
   it("uses explicit DISABLE stop only after confirming physical support", async () => {
@@ -1021,10 +1021,10 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
-    await user.click(screen.getByRole("button", { name: "解除输出并停止" }));
+    await user.click(screen.getByRole("button", { name: "解除输出" }));
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(doubles.invoke).not.toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "disable-stop" }));
-    await user.click(screen.getByRole("button", { name: "解除输出并停止" }));
+    await user.click(screen.getByRole("button", { name: "解除输出" }));
     await user.click(screen.getByRole("checkbox", { name: "机械臂已支撑，可以解除输出" }));
     await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
     await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "disable-stop" })));
