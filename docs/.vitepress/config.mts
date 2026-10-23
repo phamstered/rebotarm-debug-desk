@@ -41,7 +41,7 @@ export default defineConfig({
           { text: '基本功能与测试覆盖', link: '/basic-features' },
           { text: 'Bridge 协议', link: '/protocol' },
           { text: 'Joint4 标定', link: '/joint4-calibration' },
-          { text: '重力辨识（设计）', link: '/gravity-identification' },
+          { text: '重力辨识', link: '/gravity-identification' },
         ],
       },
     ],

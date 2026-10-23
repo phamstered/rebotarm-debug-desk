@@ -154,7 +154,37 @@ export type BridgeEnvelope = {
   bridge_version?: string;
   bridge_build_id?: string;
   ros_distro?: string;
+  /** GravityIdentification Bridge ops (stack PR #23). */
+  joint_mask?: number;
+  pose_set_id?: string[];
+  settle_time_s?: number;
+  capture_window_s?: number;
+  write_yaml?: boolean;
+  hot_reload?: boolean;
+  output_yaml_path?: string;
+  max_effort_nm?: number;
+  max_velocity_rad_s?: number;
+  command_timeout_ms?: number;
+  lock_gripper?: boolean;
+  phase?: number;
+  pose_index?: number;
+  pose_count?: number;
+  residual_nm?: number[];
+  measured_effort_nm?: number[];
+  model_effort_nm?: number[];
+  rmse_running?: number;
+  fault_code?: number;
+  success?: boolean;
+  gravity_scales?: number[];
+  torque_biases_nm?: number[];
+  rmse_per_joint?: number[];
+  rmse_total?: number;
+  yaml_path?: string;
+  status?: string;
+  accepted?: boolean;
+  code?: number;
 };
+
 
 export type HardwareStatus = {
   last_command_sequence?: number;

@@ -1,3 +1,4 @@
+/** @vitest-environment happy-dom */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -54,5 +55,18 @@ describe("AppNav", () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Topics" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "数据采集" })).not.toBeDisabled();
+  });
+
+  it("gates 重力辨识 until ROS ready and can select when ready", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <AppNav page="status" expanded rosReady={false} onSelect={onSelect} onToggle={() => undefined} />,
+    );
+    expect(screen.getByRole("button", { name: "重力辨识" })).toBeDisabled();
+    expect(screen.getByTestId("nav-disabled-gravity")).toHaveTextContent("重力辨识");
+    rerender(<AppNav page="status" expanded rosReady onSelect={onSelect} onToggle={() => undefined} />);
+    await user.click(screen.getByRole("button", { name: "重力辨识" }));
+    expect(onSelect).toHaveBeenCalledWith("gravity");
   });
 });

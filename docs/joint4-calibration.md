@@ -4,6 +4,8 @@
 
 本页面用于采集 joint4 多个静态姿态并请求 `joint4_calibration_controller` 进行重力与 camera_link 等效负载回归。结果只显示和保存；Rebotarm Debug Desk 不会修改 URDF、控制器 YAML 或在线参数。
 
+> 全臂一键辨识见独立页 [重力辨识](./gravity-identification)（`mode=PAYLOAD_SUBMODE` 时 Desk 链回本页，不在此重复 Trigger）。
+
 ## 前置条件
 
 1. 机械臂由操作者可靠托住，物理急停随时可用，周围没有人员和障碍物。

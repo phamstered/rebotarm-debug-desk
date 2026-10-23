@@ -455,14 +455,15 @@ export function bridgeVersionBadgeTone(check: BridgeVersionCheck | null | undefi
 }
 
 /** Pages that require JointState smoke (ROS ready) before navigation. */
-export type RosGatedPage = "monitor" | "motor";
+export type RosGatedPage = "monitor" | "motor" | "gravity";
 
 export function isRosGatedPage(page: string): page is RosGatedPage {
-  return page === "monitor" || page === "motor";
+  return page === "monitor" || page === "motor" || page === "gravity";
 }
 
 export function rosGatedNavReason(page: RosGatedPage, rosReady: boolean): string {
   if (rosReady) return "";
   if (page === "monitor") return "需先收到 JointState（ROS 就绪）后才能打开 Monitor";
+  if (page === "gravity") return "需先收到 JointState（ROS 就绪）后才能打开重力辨识";
   return "需先收到 JointState（ROS 就绪）后才能打开电机控制";
 }

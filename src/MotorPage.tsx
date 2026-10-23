@@ -10,12 +10,16 @@ export function MotorPage({
   status,
   commandTopic,
   onStreamingChange,
+  controlLocked = false,
+  controlLockedReason = "",
 }: {
   bridge: BridgeClient;
   jointState: JointState | null;
   status: HardwareStatus | null;
   commandTopic: string;
   onStreamingChange(streaming: boolean): void;
+  controlLocked?: boolean;
+  controlLockedReason?: string;
 }) {
   return (
     <main className="motor-page">
@@ -33,11 +37,18 @@ export function MotorPage({
         <strong>发送前确认现场安全</strong>
         <span>只有已使能且被固件 active_joint_mask 覆盖的关节会写入控制量；离开此页面会停止持续发送并下发 DISABLE。</span>
       </div>
+      {controlLocked && controlLockedReason && (
+        <div className="motor-page-safety motor-page-locked" role="status">
+          <strong>控制已锁定</strong>
+          <span>{controlLockedReason}</span>
+        </div>
+      )}
       <MotorControl
         bridge={bridge}
         jointState={jointState}
         status={status}
         onStreamingChange={onStreamingChange}
+        controlLocked={controlLocked}
       />
     </main>
   );

@@ -1228,3 +1228,24 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .collection-danger-banner { margin: 12px 0; padding: 12px; border: 1px solid #8a3d3a; border-radius: 6px; background: #2f181a; color: #ffb4ad; font-size: 12px; line-height: 1.6; }
 @media (max-width: 1120px) { .collection-grid { grid-template-columns: minmax(0, 1fr); } .collection-page.has-session .collection-session { order: -1; } }
 @media (max-width: 620px) { .collection-page { padding: 12px; } .collection-card { padding: 14px; } .collection-form { grid-template-columns: minmax(0, 1fr); } .collection-metrics strong { font-size: 20px; } }
+
+/* Gravity Identification */
+.gravity-id-grid { align-items: start; }
+.gravity-id-joint-mask { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+.gravity-id-joint-mask label { display: inline-flex; align-items: center; gap: 5px; color: #9fb7c3; font-size: 11px; }
+.gravity-id-actions { display: flex; gap: 8px; margin-top: 12px; }
+.gravity-id-actions .primary { flex: 1; }
+.gravity-id-actions .danger { flex: 0 0 auto; }
+.gravity-id-note-line { display: block; margin-top: 2px; }
+.gravity-id-payload-hint { margin: 10px 0; padding: 10px; border: 1px solid #3a5a4a; border-radius: 8px; background: #0c1f1a; color: #9fd6c0; font-size: 10px; }
+.gravity-id-payload-hint .primary { margin-top: 8px; width: 100%; padding: 8px; }
+.gravity-id-message { margin: 10px 0 0; color: #8aa0ad; font-size: 10px; overflow-wrap: anywhere; }
+.gravity-id-table-wrap { margin-top: 12px; overflow-x: auto; }
+.gravity-id-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.gravity-id-table th, .gravity-id-table td { padding: 6px 8px; border: 1px solid #1e3645; text-align: right; color: #c5d6df; }
+.gravity-id-table th[scope="row"], .gravity-id-table thead th { text-align: left; color: #7f97a6; background: #07141d; }
+.gravity-id-path { overflow-wrap: anywhere; font-size: 10px; }
+.gravity-id-result-card { margin: 0 16px 16px; }
+.motor-page-locked { border-color: #684b28 !important; background: linear-gradient(90deg, #251c11, #181811) !important; }
+.motor-page-locked strong { color: #f1bd74 !important; }
+.app-shell.nav-collapsed .gravity-id-page .calibration-header { padding-left: 28px; }

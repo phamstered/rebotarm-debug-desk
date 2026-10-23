@@ -141,7 +141,11 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - App Logo 使用简化双关节机械臂、金属材质和单一青色状态光，适配深色界面与 macOS Dock 小尺寸显示。
 - 设计源文件位于 `assets/logo/robot-console-icon.png`，应用内品牌图和 Tauri macOS Bundle 共用同一视觉资源。
 
-## 9. Joint4 重力标定
+## 9. 重力辨识（Bridge/UI；orchestrator pending）
+
+**不标「已实现」。** Desk 已提供「重力辨识」页与 Bridge op（`gravity_id_*` → `/StartGravityID`，对齐 [stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)）；端到端辨识依赖 stack orchestrator，未完成前不得写入本表「已实现」矩阵。说明见 [重力辨识](./gravity-identification)。`command_timeout_ms` 仅 host 对齐，MCU 仍为编译期约 100/500 ms。
+
+## 10. Joint4 重力标定
 
 - 左侧 Calibration 页面订阅 `/joint4_calibration_controller/status`，展示关节位置、速度、模型/修正/所需力矩、参考位置、稳定时间与保护状态。
 - 标定流程通过受限的 `std_srvs/srv/Trigger` 服务执行 Begin、Capture、Release、Fit 和 Reset，界面不直接写入 URDF 或控制参数。
@@ -149,7 +153,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - `safety_fault` 会锁定采样和拟合；托住 joint4 后可执行 Release 清除新版 Controller 的故障锁存。对旧版 Controller，姿态已释放且速度不超过 0.05 rad/s 时允许重新 Begin，以当前安全位置重建参考，避免界面与 Controller 互相锁死。
 - 标定采样和拟合结果可保存为本机 JSON/CSV 审计报告。
 
-## 10. TCP 拖拽轨迹下发
+## 11. TCP 拖拽轨迹下发
 
 - Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先，留空时在叶子 link 中按命名特征（tool0/tcp/gripper/ee_link/flange 等）加链深度自动挑选，并在视图右上角展示实际使用的 link。
 - 仅当 `/controller_manager` 存在 active 的轨迹控制器时开放拖拽；识别规则为类型 `joint_trajectory_controller/JointTrajectoryController` 优先、名称含 traj 次之。ROS Control 列表会用“轨迹”标记对应 Controller，Robot View 右上角显示其名称和 `/…/joint_trajectory` Topic。
@@ -160,7 +164,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 下发失败或 IK 未收敛时把模型恢复到反馈位姿并在视图内展示原因，不隐藏失败。
 - Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求该 Topic 已有订阅者；关节名重复、点数/长度不一致、非有限数值以及非严格递增的 `time_from_start` 都会被拒绝。
 
-## 11. 全局工具栏、诊断与 rosbag
+## 12. 全局工具栏、诊断与 rosbag
 
 - “暂停显示”只冻结 WebView 对 Topic、JointState 和硬件状态消息的消费，不断开 Bridge，也不停止后台 rosbag；恢复后从下一条消息继续更新。
 - “全部刷新”同时刷新 Topics 和 ROS Control 列表，并复用各自的并发保护。
@@ -169,7 +173,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
 - “重置布局”恢复 Topics 页默认左右宽度、Topics/ROS Control 分割比例并展开侧栏和数据面板；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
 
-## 12. 单元测试覆盖矩阵
+## 13. 单元测试覆盖矩阵
 
 | 功能域 | 覆盖内容 | 测试位置 |
 |---|---|---|
@@ -204,7 +208,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | macOS 安装 | release 构建后安装到 `/Applications`、失败回滚原安装 | `scripts/install-macos-app.node-test.mjs` |
 | Bridge 部署 | 参数解析、rsync 参数、远端脚本与校验输出解析 | `scripts/deploy-bridge.node-test.mjs` |
 
-## 13. 测试命令
+## 14. 测试命令
 
 每次功能变更必须执行：
 

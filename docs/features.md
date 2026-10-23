@@ -282,7 +282,7 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 完整步骤与故障恢复：[Joint4 标定操作指南](./joint4-calibration)。
 
-全臂一键重力 / 参数辨识（`/StartGravityID`）为**独立**设计页，Joint4 负载细标定仅作其可选子模式入口，见 [§8 重力辨识（设计草案）](#_8-重力辨识设计草案)。
+全臂一键重力 / 参数辨识（`/StartGravityID`）为**独立**页（Bridge/UI 就绪，orchestrator E2E pending），Joint4 负载细标定仅作其可选子模式入口，见 [§8 重力辨识](#_8-重力辨识)。
 
 ---
 
@@ -316,24 +316,30 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ---
 
-## 8. 重力辨识（设计草案）
+## 8. 重力辨识
 
-> **未实现。** 本节与 [重力辨识 UI 设计](./gravity-identification) 仅作产品/协议对齐；正式行为以落地 PR 后的 `basic-features` 为准。
+> **Desk Bridge + UI 已就绪；stack orchestrator E2E 仍 pending。** 勿在 `basic-features` 标「已实现」直至与 [#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) 编排器联调通过。详见 [重力辨识](./gravity-identification)。
 
-### 做什么（规划）
+### 做什么
 
-独立 **「重力辨识」** 页调用 ROS action `/StartGravityID`（`GravityIdentification`，见 [rebotarm-ros2-stack#12](https://github.com/phamstered/rebotarm-ros2-stack/pull/12)）：选择 `joint_mask`、Start/Abort、展示 phase / pose 进度与残差力矩，结果表含 `gravity_scales`、`torque_biases_nm`、RMSE、`yaml_path`，并可 Apply 到 `GravityCompensation`。
+独立 **「重力辨识」** 导航页调用 ROS action `/StartGravityID`（`GravityIdentification`，接口冻结见 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)）：
 
-Desk **只做 UI**；编排在 ros2-stack，固件 HOLD/fault 在 executor。与 [Joint4 标定](./joint4-calibration) 分离，Joint4 作为可选 payload 子模式入口。
+- Goal：`joint_mask`（默认 0x3F）、`mode` FULL_ARM / PAYLOAD、settle/capture、YAML/hot_reload、limits、`lock_gripper`
+- 安全：`confirmation: "ARMED"`；Start / Abort（Abort 运行中始终可用）
+- Feedback：phase 名、pose 进度、residual/measured/model、`rmse_running`、fault
+- Result：scales / biases / per-joint RMSE、`yaml_path`
+- PAYLOAD 模式：链到现有 [Joint4 标定](./joint4-calibration)（不复用 Trigger UI）
+- Bridge op：`gravity_id_send_goal` / `cancel` / `feedback` / `result` / `status`（见 [protocol](./protocol)）
+- `command_timeout_ms` 仅 host 对齐；MCU 仍为编译期约 100/500 ms
 
-### 安全（规划，不得弱化）
+Desk **只做 UI + Bridge**；辨识算法与写 YAML 在 ros2-stack；固件 HOLD/fault 在 executor。
 
-ARMED 门、运行中禁用 Motor 滑块与 TCP；Abort/超时/**命令丢失(fault 11)** → **HOLD**（非 DISABLE）；静置前馈用 TRACK@v≈0；Desk 断开再 cancel + 既有 DISABLE。故障码用现网十进制（如 4/7/11）。详见设计页。
+### 安全（不得弱化）
 
-线框与 Bridge proposed op：[重力辨识 UI（设计草案）](./gravity-identification)。
+ARMED 门、运行中禁用 Motor 滑块；Abort/超时/**命令丢失(fault 11)** → **HOLD**（非 DISABLE）；静置前馈用 TRACK@v≈0。故障码用现网十进制（如 4/7/11）。
 
 ---
 
 ## 明确不在当前切片内
 
-见 [架构 · Current limits](./architecture#current-limits)：例如 TF 可视化、rosbag 本地下载/索引/客户端解析等仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。重力辨识 UI / Bridge action 客户端见上节设计草案，尚未实现。
+见 [架构 · Current limits](./architecture#current-limits)：例如 TF 可视化、rosbag 本地下载/索引/客户端解析等仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。重力辨识 UI / Bridge action 客户端见上节；Desk 侧已落地，stack orchestrator E2E 仍 pending。
