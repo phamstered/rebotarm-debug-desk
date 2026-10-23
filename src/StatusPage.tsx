@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentServiceStatus,
   ArmModeStatus,
@@ -10,8 +10,11 @@ import type {
 import type { TopicSample } from "./appLogic";
 import { isRosReady } from "./appLogic";
 import {
+  buildHardwareStickyAlert,
   buildStatusCards,
   buildStatusQuickActions,
+  groupStatusZones,
+  resolveActiveControlMode,
   toneLabel,
   type BridgeHelloInfo,
   type StatusCardAction,
@@ -28,10 +31,12 @@ function StatusCard({
   card,
   highlighted,
   onAction,
+  compact,
 }: {
   card: StatusCardModel;
   highlighted: boolean;
   onAction?: (action: StatusCardAction, card: StatusCardModel) => void;
+  compact?: boolean;
 }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -43,7 +48,7 @@ function StatusCard({
     <article
       ref={ref}
       id={`status-card-${card.id}`}
-      className={`status-card tone-${card.tone}${highlighted ? " highlighted" : ""}`}
+      className={`status-card tone-${card.tone}${highlighted ? " highlighted" : ""}${compact ? " compact" : ""}`}
       aria-label={card.title}
       data-highlighted={highlighted ? "true" : undefined}
     >
@@ -177,6 +182,12 @@ export function StatusPage({
     vlaChunkSample,
     actionBusy,
   });
+  const zones = useMemo(() => groupStatusZones(cards), [cards]);
+  const stickyAlert = useMemo(() => buildHardwareStickyAlert(hardwareStatus), [hardwareStatus]);
+  const activeMode = useMemo(
+    () => resolveActiveControlMode({ armMode, rosControl }),
+    [armMode, rosControl],
+  );
   const quickActions = buildStatusQuickActions({
     sshOk,
     rosReady: isRosReady(jointState),
@@ -190,7 +201,7 @@ export function StatusPage({
       <header className="status-page-header">
         <div>
           <h1>Status</h1>
-          <span>系统状态总览 · 可刷新 USB / 重启 Agent · 一键 Teleop/Trajectory/VLA</span>
+          <span>四区总览 · USB/Agent 可刷新 · 模式条启停</span>
         </div>
         <div className="status-page-meta" title="不刷写固件；Bridge 升级仍走既有 mismatch 提示">
           <span>NO FLASH</span>
@@ -198,32 +209,127 @@ export function StatusPage({
         </div>
       </header>
       <p className="status-page-banner" role="note">
-        重要组件展示成功详情或失败原因；可重启项提供「重新拉起」，纯 USB 仅「刷新检测」。一键 Teleop / Trajectory 经 SSH 启动；VLA 经 switch_controllers 激活 vla_position_controller（保持 gravity）。Teleop / Trajectory 切换或停止时先确认 STM32 DISABLE，再等待旧进程退出；启动需通过完整自检。不提供一键升级全部、自动刷写 STM32。
+        NO FLASH：不刷写 STM32、无一键升级全部。模式条互斥启停 Teleop / Trajectory / VLA；停止与解除输出仍走既有安全确认。
       </p>
-      <section className="status-quick-actions" aria-label="一键启动">
-        {quickActions.map((action) => (
-          <div key={action.id} className="status-quick-action-wrap">
-            <button
-              type="button"
-              className={`status-quick-action ${action.id}`}
-              disabled={action.disabled}
-              title={action.disabledReason || action.label}
-              onClick={() => {
-                if (action.id === "disable-stop") { setSupported(false); setConfirmDisable(true); }
-                else onQuickAction?.(action.id);
-              }}
+      {stickyAlert && (
+        <div
+          className={`status-sticky-alert tone-${stickyAlert.tone}`}
+          role="alert"
+          data-testid="status-sticky-alert"
+          data-kind={stickyAlert.kind}
+        >
+          <strong>{stickyAlert.title}</strong>
+          <span>{stickyAlert.message}</span>
+        </div>
+      )}
+      <div className="status-zones" aria-label="状态分区">
+        {zones.map((zone) => {
+          const isControl = zone.id === "control";
+          const isSensors = zone.id === "sensors";
+          const zoneCards = isControl
+            ? zone.cards.filter((card) => card.id === activeMode)
+            : zone.cards;
+          const body = (
+            <>
+              {isControl && (
+                <section className="status-mode-strip" aria-label="控制模式启停">
+                  <div className="status-mode-segment" role="group" aria-label="互斥模式">
+                    {quickActions.filter((action) => action.id === "teleop" || action.id === "trajectory" || action.id === "vla").map((action) => (
+                      <div key={action.id} className="status-quick-action-wrap">
+                        <button
+                          type="button"
+                          className={`status-quick-action ${action.id}${activeMode === action.id ? " active" : ""}`}
+                          disabled={action.disabled}
+                          aria-pressed={activeMode === action.id}
+                          title={action.disabledReason || action.label}
+                          onClick={() => onQuickAction?.(action.id)}
+                        >
+                          {action.label}
+                        </button>
+                        {action.disabled && action.disabledReason && (
+                          <p className="status-disabled-hint" data-testid={`status-quick-disabled-${action.id}`}>
+                            {action.disabledReason}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="status-mode-stops" role="group" aria-label="停止">
+                    {quickActions.filter((action) => action.id === "stop" || action.id === "disable-stop").map((action) => (
+                      <div key={action.id} className="status-quick-action-wrap">
+                        <button
+                          type="button"
+                          className={`status-quick-action ${action.id}`}
+                          disabled={action.disabled}
+                          title={action.disabledReason || action.label}
+                          onClick={() => {
+                            if (action.id === "disable-stop") { setSupported(false); setConfirmDisable(true); }
+                            else onQuickAction?.(action.id);
+                          }}
+                        >
+                          {action.label}
+                        </button>
+                        {action.disabled && action.disabledReason && (
+                          <p className="status-disabled-hint" data-testid={`status-quick-disabled-${action.id}`}>
+                            {action.disabledReason}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {actionNotice && <output className="status-action-notice">{actionNotice}</output>}
+                </section>
+              )}
+              {isControl && !activeMode && (
+                <p className="status-mode-idle" data-testid="status-mode-idle">当前无运行中模式 · 使用上方模式条启动</p>
+              )}
+              <div
+                className={`status-card-grid zone-${zone.id}${zone.primary ? " primary" : ""}`}
+                aria-label={`${zone.title} 卡片`}
+              >
+                {zoneCards.map((card) => (
+                  <StatusCard
+                    key={card.id}
+                    card={card}
+                    highlighted={highlightCardId === card.id}
+                    onAction={onCardAction}
+                    compact={zone.id === "connection"}
+                  />
+                ))}
+              </div>
+            </>
+          );
+
+          if (isSensors) {
+            return (
+              <section key={zone.id} className={`status-zone zone-${zone.id}`} aria-label={zone.title}>
+                <details className="status-zone-details" open={false}>
+                  <summary className="status-zone-title">
+                    <span>{zone.title}</span>
+                    <span className="status-zone-hint">RealSense 等</span>
+                  </summary>
+                  {body}
+                </details>
+              </section>
+            );
+          }
+
+          return (
+            <section
+              key={zone.id}
+              className={`status-zone zone-${zone.id}${zone.primary ? " primary" : ""}`}
+              aria-label={zone.title}
+              data-primary={zone.primary ? "true" : undefined}
             >
-              {action.label}
-            </button>
-            {action.disabled && action.disabledReason && (
-              <p className="status-disabled-hint" data-testid={`status-quick-disabled-${action.id}`}>
-                {action.disabledReason}
-              </p>
-            )}
-          </div>
-        ))}
-        {actionNotice && <output className="status-action-notice">{actionNotice}</output>}
-      </section>
+              <header className="status-zone-title">
+                <h2>{zone.title}</h2>
+                {zone.primary && <span className="status-zone-badge">主区</span>}
+              </header>
+              {body}
+            </section>
+          );
+        })}
+      </div>
       {confirmDisable && <div className="modal-backdrop">
         <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="解除电机输出确认">
           <header className="toolbar-modal-title"><strong>解除电机输出并停止</strong></header>
@@ -237,11 +343,6 @@ export function StatusPage({
           </footer>
         </section>
       </div>}
-      <div className="status-card-grid" aria-label="状态卡片">
-        {cards.map((card) => (
-          <StatusCard key={card.id} card={card} highlighted={highlightCardId === card.id} onAction={onCardAction} />
-        ))}
-      </div>
     </main>
   );
 }

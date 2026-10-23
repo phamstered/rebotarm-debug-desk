@@ -15,6 +15,7 @@ import {
   VLA_CHUNK_TOPIC,
   VLA_POSITION_CONTROLLER,
   isGravityCompensationActive,
+  isHardwareTrack,
   isVlaControllerActive,
 } from "./vlaLogic";
 
@@ -53,6 +54,38 @@ export type StatusCardModel = {
   warning?: string;
   actions?: StatusCardAction[];
 };
+
+export type StatusZoneId = "connection" | "hardware" | "control" | "sensors";
+
+export type StatusZoneModel = {
+  id: StatusZoneId;
+  title: string;
+  primary?: boolean;
+  collapsedByDefault?: boolean;
+  cards: StatusCardModel[];
+};
+
+export type StatusStickyAlert = {
+  tone: "warn" | "fail";
+  title: string;
+  message: string;
+  kind: "fault" | "hold" | "fault11";
+};
+
+export type ActiveControlMode = "teleop" | "trajectory" | "vla" | null;
+
+export const STATUS_ZONE_META: Array<{
+  id: StatusZoneId;
+  title: string;
+  primary?: boolean;
+  collapsedByDefault?: boolean;
+  cardIds: string[];
+}> = [
+  { id: "connection", title: "连接", cardIds: ["ssh", "bridge", "agent"] },
+  { id: "hardware", title: "硬件健康", primary: true, cardIds: ["usb", "hardware", "ros2-control", "ros-ready"] },
+  { id: "control", title: "控制模式", cardIds: ["teleop", "trajectory", "vla"] },
+  { id: "sensors", title: "传感器 / 高级", collapsedByDefault: true, cardIds: ["realsense"] },
+];
 
 export function toneLabel(tone: StatusTone): string {
   switch (tone) {
@@ -116,6 +149,64 @@ export function fault11StartBlockReason(status: { fault_code?: number } | null |
   return isFault11Latched(status) ? FAULT_11_HARD_FAIL_COPY : undefined;
 }
 
+/** Page-level sticky alert for fault≠0 / HOLD / fault 11. */
+export function buildHardwareStickyAlert(status: HardwareStatus | null | undefined): StatusStickyAlert | null {
+  if (!status) return null;
+  const faultCode = status.fault_code;
+  if (isFault11Latched(status)) {
+    return {
+      tone: "fail",
+      kind: "fault11",
+      title: "故障 11 · COMMAND_LOSS_LATCHED",
+      message: FAULT_11_HARD_FAIL_COPY,
+    };
+  }
+  if (faultCode != null && Number.isFinite(faultCode) && faultCode !== 0) {
+    return {
+      tone: "fail",
+      kind: "fault",
+      title: `故障 ${faultCode}`,
+      message: faultFailureReason(faultCode) || formatFaultCode(faultCode),
+    };
+  }
+  if (isHardwareHold(status)) {
+    return {
+      tone: "warn",
+      kind: "hold",
+      title: "HOLD",
+      message: HOLD_NO_GRAVITY_HINT,
+    };
+  }
+  return null;
+}
+
+export function formatLastCommandSequence(status: HardwareStatus | null | undefined): string {
+  const seq = status?.last_command_sequence;
+  if (seq == null || !Number.isFinite(seq)) return "—";
+  return String(seq);
+}
+
+export function resolveActiveControlMode(input: {
+  armMode?: ArmModeStatus | null;
+  rosControl?: RosControlStatus | null;
+}): ActiveControlMode {
+  if (isVlaControllerActive(input.rosControl ?? null)) return "vla";
+  if (input.armMode?.teleopRunning) return "teleop";
+  if (input.armMode?.trajectoryRunning) return "trajectory";
+  return null;
+}
+
+export function groupStatusZones(cards: StatusCardModel[]): StatusZoneModel[] {
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  return STATUS_ZONE_META.map((zone) => ({
+    id: zone.id,
+    title: zone.title,
+    primary: zone.primary,
+    collapsedByDefault: zone.collapsedByDefault,
+    cards: zone.cardIds.map((id) => byId.get(id)).filter((card): card is StatusCardModel => Boolean(card)),
+  }));
+}
+
 export function formatFaultCode(faultCode: number | undefined): string {
   if (faultCode == null || !Number.isFinite(faultCode)) return "—";
   const info = motorFaults[faultCode];
@@ -164,14 +255,14 @@ export function buildUsbCard(input: {
   if (!sshOk) {
     return {
       id: "usb",
-      title: "USB CDC / 传输",
+      title: "USB CDC / ACM",
       tone: "fail",
       summary: "SSH 未就绪",
       failureReason: "无法探测 USB：SSH 未连接或失败",
       rows: [
         { label: "MCU CDC", value: "—", tone: "idle" },
         { label: "串口", value: "—" },
-        { label: "RealSense USB", value: "—", tone: "idle" },
+        { label: "VID:PID", value: "0483:5740", tone: "idle" },
       ],
       actions: [refreshAction],
     };
@@ -180,13 +271,13 @@ export function buildUsbCard(input: {
   if (!usbChecked && !usbProbe) {
     return {
       id: "usb",
-      title: "USB CDC / 传输",
+      title: "USB CDC / ACM",
       tone: "idle",
       summary: "检查中…",
       rows: [
         { label: "MCU CDC", value: "检查中…", tone: "idle" },
         { label: "串口", value: "—" },
-        { label: "RealSense USB", value: "检查中…", tone: "idle" },
+        { label: "VID:PID", value: "0483:5740", tone: "idle" },
       ],
       actions: [refreshAction],
     };
@@ -195,41 +286,36 @@ export function buildUsbCard(input: {
   if (usbProbe?.error) {
     return {
       id: "usb",
-      title: "USB CDC / 传输",
+      title: "USB CDC / ACM",
       tone: "fail",
       summary: "探测失败",
       failureReason: usbProbe.error,
       rows: [
         { label: "MCU CDC", value: "探测失败", tone: "fail" },
         { label: "串口", value: "—" },
-        { label: "RealSense USB", value: "探测失败", tone: "fail" },
+        { label: "VID:PID", value: "0483:5740", tone: "fail" },
       ],
       actions: [refreshAction],
     };
   }
 
   const mcuOk = Boolean(usbProbe?.mcuPresent);
-  const rsOk = Boolean(usbProbe?.realsensePresent);
   const tone: StatusTone = mcuOk ? "ok" : "fail";
   const serial = usbProbe?.serialPath?.trim() || "";
   const vidPid = usbProbe?.mcuVidPid || "0483:5740";
   return {
     id: "usb",
-    title: "USB CDC / 传输",
+    title: "USB CDC / ACM",
     tone,
     summary: mcuOk ? `MCU 已识别 · ${vidPid}` : "MCU 未插",
     detail: mcuOk
       ? `STM32 Virtual ComPort ${vidPid}${serial ? ` · ${serial}` : ""}`
       : undefined,
-    failureReason: mcuOk ? undefined : "未检测到 VID:PID 0483:5740（STM32 Virtual ComPort）",
+    failureReason: mcuOk ? undefined : "未检测到 VID:PID 0483:5740（STM32 Virtual ComPort / ttyACM）",
     rows: [
       { label: "MCU CDC", value: mcuOk ? `已识别 · ${vidPid}` : "未插", tone: mcuOk ? "ok" : "fail" },
-      { label: "串口", value: serial || (mcuOk ? "未知" : "—"), tone: serial ? "ok" : "unknown" },
-      {
-        label: "RealSense USB",
-        value: rsOk ? `已识别 · Intel 8086${usbProbe?.realsenseLines?.[0] ? ` · ${usbProbe.realsenseLines[0]}` : ""}` : "未插",
-        tone: rsOk ? "ok" : "warn",
-      },
+      { label: "串口", value: serial || (mcuOk ? "未知" : "—"), tone: serial ? "ok" : mcuOk ? "unknown" : "idle" },
+      { label: "VID:PID", value: vidPid, tone: mcuOk ? "ok" : "fail" },
     ],
     note: usbProbe?.rawLsusb ? `lsusb 摘录：${usbProbe.rawLsusb.split("\n").filter(Boolean).slice(0, 3).join(" · ")}` : undefined,
     actions: [refreshAction],
@@ -288,13 +374,6 @@ export function buildStatusCards(input: {
   const sessionUp = stage === "connected" || sshOk;
   const tunnelPort = localPort ?? profile.localPort;
   const rosReady = isRosReady(jointState);
-  const fault11Reason = fault11StartBlockReason(hardwareStatus);
-  const armGateOk = sshOk && rosReady && !fault11Reason;
-  const armGateReason = !sshOk
-    ? "SSH 未就绪"
-    : !rosReady
-      ? "等待 JointState（ROS 未就绪）"
-      : fault11Reason;
   const busy = (id: string) => actionBusy === id;
 
   const sshCard: StatusCardModel = {
@@ -316,26 +395,58 @@ export function buildStatusCards(input: {
   const versionText = hello?.bridgeVersion
     ? `${hello.bridgeVersion}${hello.bridgeBuildId ? ` (${hello.bridgeBuildId})` : ""}`
     : "未知（等待 hello）";
+  const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId, defaultProfile.rosDomainId);
+  const bridgeRows: StatusRow[] = [
+    { label: "WS", value: bridgeConnected ? "已连接" : "未连接", tone: bridgeConnected ? "ok" : "idle" },
+  ];
+  if (hello?.bridgeVersion) {
+    bridgeRows.push({ label: "bridge_version", value: hello.bridgeVersion, tone: "ok" });
+  }
+  if (hello?.bridgeBuildId) {
+    bridgeRows.push({ label: "bridge_build_id", value: hello.bridgeBuildId, tone: "ok" });
+  }
+  if (hello?.rosDistro) {
+    bridgeRows.push({ label: "ros_distro", value: hello.rosDistro, tone: "ok" });
+  }
+  bridgeRows.push(
+    { label: "监听期望", value: `127.0.0.1:${remotePort}` },
+    { label: "DDS Domain", value: String(profile.rosDomainId), tone: domainHint ? "warn" : "ok" },
+  );
+  if (domainHint || lastKnownDomainId != null) {
+    bridgeRows.push({
+      label: "Domain 提示",
+      value: domainHint || (lastKnownDomainId == null ? "与默认一致" : `上次成功 ${lastKnownDomainId}`),
+      tone: domainHint ? "warn" : "ok",
+    });
+  }
   const bridgeCard: StatusCardModel = {
     id: "bridge",
     title: "Bridge",
-    tone: bridgeConnected ? "ok" : stage === "failed" ? "fail" : "idle",
+    tone: bridgeConnected
+      ? (domainHint ? "warn" : "ok")
+      : stage === "failed" ? "fail" : "idle",
     summary: bridgeConnected ? "WebSocket 已连接" : "未连接",
-    detail: bridgeConnected && hello?.bridgeVersion ? `版本 ${versionText}` : undefined,
+    detail: bridgeConnected && hello?.bridgeVersion
+      ? `版本 ${versionText} · ROS_DOMAIN_ID=${profile.rosDomainId}`
+      : bridgeConnected
+        ? `ROS_DOMAIN_ID=${profile.rosDomainId}`
+        : undefined,
     failureReason: !bridgeConnected && stage === "failed" ? "Bridge WebSocket 未连接" : undefined,
-    rows: [
-      { label: "WS", value: bridgeConnected ? "已连接" : "未连接", tone: bridgeConnected ? "ok" : "idle" },
-      { label: "bridge_version", value: hello?.bridgeVersion ?? "未知", tone: hello?.bridgeVersion ? "ok" : "unknown" },
-      { label: "bridge_build_id", value: hello?.bridgeBuildId ?? "未知", tone: hello?.bridgeBuildId ? "ok" : "unknown" },
-      { label: "ros_distro", value: hello?.rosDistro ?? "未知", tone: hello?.rosDistro ? "ok" : "unknown" },
-      { label: "监听期望", value: `127.0.0.1:${remotePort}` },
-      { label: "最近部署", value: "未知", tone: "unknown" },
-    ],
-    note: hello ? `版本：${versionText}` : "hello 尚未收到；版本字段待 Bridge 回包。部署结果不由本页持久化。",
+    rows: bridgeRows,
+    note: domainHint || (hello ? undefined : "hello 尚未收到；版本字段待 Bridge 回包。"),
   };
 
   const agent = formatAgentSummary(agentStatus, agentError, agentChecked);
   const agentOnline = isAgentOnline(agentStatus);
+  const agentRows: StatusRow[] = [
+    { label: "服务", value: "micro-ros-agent-stm32h723.service" },
+    { label: "Active", value: agentStatus ? `${agentStatus.activeState}/${agentStatus.subState}` : agentError ? "检查失败" : "—", tone: agent.tone },
+    { label: "PID", value: agentStatus?.mainPid ? String(agentStatus.mainPid) : "—" },
+    { label: "开机 / systemd", value: agentStatus?.unitFileState || "—" },
+  ];
+  if (agentStatus?.description) {
+    agentRows.push({ label: "systemd 描述", value: agentStatus.description, tone: "ok" });
+  }
   const agentCard: StatusCardModel = {
     id: "agent",
     title: "micro-ROS Agent",
@@ -349,14 +460,8 @@ export function buildStatusCards(input: {
       : agentStatus && !agentOnline
         ? `服务未运行（${agentStatus.activeState}/${agentStatus.subState}）`
         : undefined,
-    rows: [
-      { label: "服务", value: "micro-ros-agent-stm32h723.service" },
-      { label: "Active", value: agentStatus ? `${agentStatus.activeState}/${agentStatus.subState}` : agentError ? "检查失败" : "—", tone: agent.tone },
-      { label: "PID", value: agentStatus?.mainPid ? String(agentStatus.mainPid) : "—" },
-      { label: "开机", value: agentStatus?.unitFileState || "—" },
-      { label: "XRCE 端口 / 会话", value: "未知", tone: "unknown" },
-    ],
-    note: agentError || agentStatus?.description || undefined,
+    rows: agentRows,
+    note: agentError || "Agent 重启走 systemctl restart；不刷写固件。",
     actions: [
       {
         id: "agent-restart",
@@ -401,6 +506,11 @@ export function buildStatusCards(input: {
       { label: "HardwareStatus", value: hardwareReceived ? "已收到" : "未收到", tone: hardwareReceived ? "ok" : "idle" },
       { label: "fault_code", value: formatFaultCode(faultCode), tone: faultTone },
       { label: "mode", value: modeLabel, tone: hardwareReceived ? (holdNoFault ? "warn" : "ok") : "idle" },
+      {
+        label: "last_command_sequence",
+        value: formatLastCommandSequence(hardwareStatus),
+        tone: hardwareReceived && hardwareStatus?.last_command_sequence != null ? "ok" : "idle",
+      },
       {
         label: "JointState",
         value: rosReady ? "有数据" : "未流动",
@@ -456,99 +566,44 @@ export function buildStatusCards(input: {
     note: rosControl?.message || undefined,
   };
 
-  const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId, defaultProfile.rosDomainId);
-  const domainCard: StatusCardModel = {
-    id: "dds",
-    title: "DDS Domain",
-    tone: domainHint ? "warn" : "ok",
-    summary: `ROS_DOMAIN_ID=${profile.rosDomainId}`,
-    detail: domainHint || "与默认一致",
-    rows: [
-      { label: "当前", value: String(profile.rosDomainId), tone: domainHint ? "warn" : "ok" },
-      { label: "默认", value: String(defaultProfile.rosDomainId) },
-      { label: "上次成功", value: lastKnownDomainId == null ? "—" : String(lastKnownDomainId) },
-      { label: "提示", value: domainHint || "与默认一致", tone: domainHint ? "warn" : "ok" },
-    ],
-  };
-
-  const systemdCard: StatusCardModel = {
-    id: "systemd",
-    title: "systemd",
-    tone: agentStatus ? (isAgentOnline(agentStatus) ? "ok" : "warn") : agentError ? "fail" : "unknown",
-    summary: "Agent 可查；Bridge 单元未探测",
-    detail: agentStatus ? `Agent ${agentStatus.activeState}/${agentStatus.subState}` : undefined,
-    failureReason: agentError || undefined,
-    rows: [
-      {
-        label: "Agent 单元",
-        value: agentStatus ? `${agentStatus.activeState}/${agentStatus.subState}` : agentError ? "检查失败" : "未知",
-        tone: agentStatus ? (isAgentOnline(agentStatus) ? "ok" : "warn") : agentError ? "fail" : "unknown",
-      },
-      { label: "Agent journal", value: agentStatus?.description || agentError || "未知", tone: agentStatus?.description ? "ok" : "unknown" },
-      { label: "Bridge 单元", value: "未知（未探测）", tone: "unknown" },
-      { label: "Bridge journal", value: "未知", tone: "unknown" },
-    ],
-    note: "Agent 重启走 systemctl restart；不刷写固件。",
-  };
-
   const usbCard = buildUsbCard({ sshOk, usbProbe, usbChecked });
 
   const teleopRunning = Boolean(armMode?.teleopRunning);
   const teleopCard: StatusCardModel = {
     id: "teleop",
     title: "Teleop",
-    tone: !sshOk ? "idle" : teleopRunning ? "ok" : "warn",
+    tone: !sshOk ? "idle" : teleopRunning ? "ok" : "idle",
     summary: !sshOk ? "SSH 未就绪" : teleopRunning ? "运行中" : "未运行",
-    detail: teleopRunning && armMode?.teleopPid ? `PID ${armMode.teleopPid} · start_arm_teleop.sh --position-controller=teleop` : teleopRunning ? "start_arm_teleop.sh --position-controller=teleop" : undefined,
-    failureReason: sshOk && !teleopRunning ? "Teleop 未拉起（可通过一键启动）" : undefined,
+    detail: teleopRunning && armMode?.teleopPid
+      ? `PID ${armMode.teleopPid} · start_arm_teleop.sh --position-controller=teleop`
+      : teleopRunning
+        ? "start_arm_teleop.sh --position-controller=teleop"
+        : undefined,
     rows: [
       { label: "状态", value: teleopRunning ? "运行中" : "未运行", tone: teleopRunning ? "ok" : "idle" },
       { label: "PID", value: armMode?.teleopPid ? String(armMode.teleopPid) : "—" },
       { label: "脚本", value: "scripts/start_arm_teleop.sh" },
       { label: "控制器", value: "teleop" },
     ],
-    note: armMode?.message || "切换前会先 HOLD；与 Trajectory 互斥。",
-    actions: [
-      {
-        id: "teleop-restart",
-        label: busy("teleop-restart") ? "拉起中…" : "重新拉起",
-        kind: "restart",
-        disabled: !armGateOk || busy("teleop-restart") || busy("vla-start") || busy("vla-stop") || isVlaControllerActive(rosControl),
-        disabledReason: armGateReason
-          || (isVlaControllerActive(rosControl) ? "先停止 VLA" : undefined)
-          || (busy("teleop-restart") || busy("vla-start") || busy("vla-stop") ? "操作进行中" : undefined),
-      },
-    ],
+    note: armMode?.message || "由上方模式条启动；切换前会先 HOLD；与 Trajectory/VLA 互斥。",
   };
 
   const trajRunning = Boolean(armMode?.trajectoryRunning);
   const trajectoryCard: StatusCardModel = {
     id: "trajectory",
     title: "Trajectory / MoveIt",
-    tone: !sshOk ? "idle" : trajRunning ? "ok" : "warn",
+    tone: !sshOk ? "idle" : trajRunning ? "ok" : "idle",
     summary: !sshOk ? "SSH 未就绪" : trajRunning ? "运行中" : "未运行",
     detail: trajRunning
       ? `PID ${armMode?.trajectoryPid || "—"} · move_group / trajectory controller`
       : undefined,
-    failureReason: sshOk && !trajRunning ? "Trajectory/MoveIt 未拉起（可通过一键启动）" : undefined,
     rows: [
       { label: "状态", value: trajRunning ? "运行中" : "未运行", tone: trajRunning ? "ok" : "idle" },
       { label: "PID", value: armMode?.trajectoryPid ? String(armMode.trajectoryPid) : "—" },
       { label: "启动", value: "move_group.launch.py 或 teleop --position-controller=trajectory" },
-      { label: "互斥", value: "与 Teleop 互斥" },
+      { label: "互斥", value: "与 Teleop/VLA 互斥" },
     ],
-    note: "切换前会先 HOLD；停止上一进程组后再启动。",
-    actions: [
-      {
-        id: "trajectory-restart",
-        label: busy("trajectory-restart") ? "拉起中…" : "重新拉起",
-        kind: "restart",
-        disabled: !armGateOk || busy("trajectory-restart") || busy("vla-start") || busy("vla-stop") || isVlaControllerActive(rosControl),
-        disabledReason: armGateReason
-          || (isVlaControllerActive(rosControl) ? "先停止 VLA" : undefined)
-          || (busy("trajectory-restart") || busy("vla-start") || busy("vla-stop") ? "操作进行中" : undefined),
-      },
-    ],
+    note: "由上方模式条启动；切换前会先 HOLD；停止上一进程组后再启动。",
   };
 
   const rsUsb = Boolean(usbProbe?.realsensePresent);
@@ -610,10 +665,13 @@ export function buildStatusCards(input: {
   const gravityOn = isGravityCompensationActive(rosControl);
   const vlaHz = vlaChunkSample?.hz;
   const vlaChunkOk = Boolean(vlaHz && vlaHz > 0);
+  const fwTrack = isHardwareTrack(hardwareStatus);
+  const fwHold = isHardwareHold(hardwareStatus);
   let vlaTone: StatusTone = "idle";
   let vlaSummary = "未知";
   let vlaDetail: string | undefined;
   let vlaFailure: string | undefined;
+  let vlaWarning: string | undefined = VLA_ONE_CLICK_RISK_WARNING;
   if (!sshOk) {
     vlaTone = "idle";
     vlaSummary = "SSH 未就绪";
@@ -625,17 +683,54 @@ export function buildStatusCards(input: {
     vlaSummary = "Controller Manager 离线";
     vlaFailure = rosControl.message || "无法查询控制器，无法判断 VLA 状态";
   } else if (vlaActive) {
-    vlaTone = "ok";
-    vlaSummary = vlaChunkOk ? `运行中 · ${formatHz(vlaHz)}` : "控制器 active";
-    vlaDetail = vlaChunkOk
-      ? `${VLA_POSITION_CONTROLLER} · ${VLA_CHUNK_TOPIC} ${formatHz(vlaHz)}`
-      : `${VLA_POSITION_CONTROLLER} active · 等待 ${VLA_CHUNK_TOPIC}`;
+    if (fwTrack) {
+      vlaTone = "ok";
+      vlaSummary = vlaChunkOk ? `TRACK · ${formatHz(vlaHz)}` : "TRACK · 控制器 active";
+      vlaDetail = vlaChunkOk
+        ? `${VLA_POSITION_CONTROLLER} · TRACK · ${VLA_CHUNK_TOPIC} ${formatHz(vlaHz)}`
+        : `${VLA_POSITION_CONTROLLER} active · 固件 TRACK`;
+      vlaWarning = undefined;
+    } else if (fwHold || hardwareStatus) {
+      vlaTone = "warn";
+      vlaSummary = "控制器 active · 固件未 TRACK";
+      vlaDetail = `固件 ${formatHardwareMode(hardwareStatus)}（期望 TRACK；HOLD/safe_stop 闩锁未解除）`;
+      vlaWarning = "VLA 控制器已切换，但固件仍非 TRACK；请确认未卡在 safe_stop/HOLD。";
+    } else {
+      vlaTone = "ok";
+      vlaSummary = vlaChunkOk ? `运行中 · ${formatHz(vlaHz)}` : "控制器 active";
+      vlaDetail = vlaChunkOk
+        ? `${VLA_POSITION_CONTROLLER} · ${VLA_CHUNK_TOPIC} ${formatHz(vlaHz)}`
+        : `${VLA_POSITION_CONTROLLER} active · 等待 ${VLA_CHUNK_TOPIC}`;
+    }
   } else {
-    vlaTone = "warn";
+    vlaTone = "idle";
     vlaSummary = "未运行";
-    vlaFailure = "vla_position_controller 未激活（可通过一键启动；与 arm_teleop / arm_trajectory 互斥）";
   }
-  const vlaBusy = busy("vla-start") || busy("vla-stop");
+  const vlaRows: StatusRow[] = [
+    {
+      label: "控制器",
+      value: vlaActive ? "active" : rosControl?.available ? "inactive" : "—",
+      tone: vlaActive ? "ok" : "idle",
+    },
+    { label: "名称", value: VLA_POSITION_CONTROLLER },
+    {
+      label: "Chunk Topic",
+      value: vlaChunkOk ? formatHz(vlaHz) : VLA_CHUNK_TOPIC,
+      tone: vlaChunkOk ? "ok" : "idle",
+    },
+    {
+      label: "Gravity",
+      value: gravityOn ? "active" : "未激活",
+      tone: gravityOn ? "ok" : vlaActive ? "warn" : "idle",
+    },
+  ];
+  if (vlaActive) {
+    vlaRows.push({
+      label: "固件闩锁",
+      value: fwTrack ? "TRACK" : fwHold ? "HOLD / safe_stop" : formatHardwareMode(hardwareStatus),
+      tone: fwTrack ? "ok" : "warn",
+    });
+  }
   const vlaCard: StatusCardModel = {
     id: "vla",
     title: "VLA",
@@ -643,50 +738,9 @@ export function buildStatusCards(input: {
     summary: vlaSummary,
     detail: vlaDetail,
     failureReason: vlaFailure,
-    rows: [
-      {
-        label: "控制器",
-        value: vlaActive ? "active" : rosControl?.available ? "inactive" : "—",
-        tone: vlaActive ? "ok" : "idle",
-      },
-      { label: "名称", value: VLA_POSITION_CONTROLLER },
-      {
-        label: "Chunk Topic",
-        value: vlaChunkOk ? formatHz(vlaHz) : VLA_CHUNK_TOPIC,
-        tone: vlaChunkOk ? "ok" : "idle",
-      },
-      {
-        label: "Gravity",
-        value: gravityOn ? "active" : "未激活",
-        tone: gravityOn ? "ok" : "warn",
-      },
-    ],
-    note: `Scheme B：外部推理 → ${VLA_CHUNK_TOPIC} → ${VLA_POSITION_CONTROLLER}；并行 ${GRAVITY_COMPENSATION_CONTROLLER}；互斥 arm_teleop_controller / arm_trajectory_controller。Desk 不直写 /stm32/joint_commands。`,
-    warning: VLA_ONE_CLICK_RISK_WARNING,
-    actions: [
-      {
-        id: "vla-start",
-        label: busy("vla-start") ? "启动中…" : "启动 VLA",
-        kind: "restart",
-        disabled: !armGateOk || vlaBusy || vlaActive,
-        disabledReason: armGateReason
-          || (vlaActive ? "VLA 已在运行" : undefined)
-          || (vlaBusy ? "操作进行中" : undefined),
-      },
-      {
-        id: "vla-stop",
-        label: busy("vla-stop") ? "停止中…" : "停止 VLA",
-        kind: "stop",
-        disabled: !sshOk || vlaBusy || !vlaActive,
-        disabledReason: !sshOk
-          ? "SSH 未就绪"
-          : !vlaActive
-            ? "VLA 未运行"
-            : vlaBusy
-              ? "操作进行中"
-              : undefined,
-      },
-    ],
+    rows: vlaRows,
+    note: `Scheme B：外部推理 → ${VLA_CHUNK_TOPIC} → ${VLA_POSITION_CONTROLLER}；并行 ${GRAVITY_COMPENSATION_CONTROLLER}。由上方模式条启停。`,
+    warning: vlaWarning,
   };
 
   return [
@@ -696,8 +750,6 @@ export function buildStatusCards(input: {
     hardwareCard,
     rosReadyCard,
     rosControlCard,
-    domainCard,
-    systemdCard,
     usbCard,
     teleopCard,
     trajectoryCard,
@@ -733,31 +785,31 @@ export function buildStatusQuickActions(input: {
   return [
     {
       id: "teleop",
-      label: busy === "teleop-restart" ? "启动 Teleop…" : "一键 Teleop",
+      label: busy === "teleop-restart" ? "启动中…" : "Teleop",
       disabled: !gateOk || modeBusy || vlaBlocks,
       disabledReason: reason || (vlaBlocks ? "先停止 VLA" : undefined) || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "trajectory",
-      label: busy === "trajectory-restart" ? "启动 Trajectory…" : "一键 Trajectory",
+      label: busy === "trajectory-restart" ? "启动中…" : "Trajectory",
       disabled: !gateOk || modeBusy || vlaBlocks,
       disabledReason: reason || (vlaBlocks ? "先停止 VLA" : undefined) || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "vla",
-      label: busy === "vla-start" ? "启动 VLA…" : "一键 VLA",
+      label: busy === "vla-start" ? "启动中…" : "VLA",
       disabled: !gateOk || modeBusy || vlaBlocks,
       disabledReason: reason || (vlaBlocks ? "VLA 已在运行" : undefined) || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "stop",
-      label: busy === "arm-stop" || busy === "vla-stop" ? "停止中…" : "停止 Teleop/Trajectory/VLA",
+      label: busy === "arm-stop" || busy === "vla-stop" ? "停止中…" : "停止",
       disabled: !input.sshOk || busy === "arm-stop" || busy === "vla-stop",
       disabledReason: !input.sshOk ? "SSH 未就绪" : busy === "arm-stop" || busy === "vla-stop" ? "操作进行中" : undefined,
     },
     {
       id: "disable-stop",
-      label: "解除输出并停止",
+      label: "解除输出",
       disabled: !input.sshOk || modeBusy,
       disabledReason: !input.sshOk ? "SSH 未就绪" : modeBusy ? "操作进行中" : "需要现场支撑机械臂，DISABLE 后电机不再输出",
     },
