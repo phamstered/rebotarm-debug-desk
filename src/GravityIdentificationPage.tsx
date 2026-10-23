@@ -5,12 +5,15 @@ import {
   JOINT_BIT_LABELS,
   MODE_FULL_ARM_GRAVITY,
   MODE_PAYLOAD_SUBMODE,
+  PAYLOAD_MODE_UI_HINT,
+  STACK_BRINGUP_NOTES,
   buildGravityIdCancelPayload,
   buildGravityIdSendGoalPayload,
   canAbortGravityId,
   canSendGravityIdGoal,
   defaultGravityIdGoalForm,
   faultCodeLabel,
+  isPayloadModeBlocked,
   isSessionRunningPhase,
   jointBitsFromMask,
   jointMaskFromBits,
@@ -161,7 +164,7 @@ export function GravityIdentificationPage({
       <header className="calibration-header">
         <div>
           <strong>重力辨识</strong>
-          <span>/StartGravityID · GravityIdentification</span>
+          <span>/StartGravityID · FULL_ARM（stack #24）</span>
         </div>
         <div className="calibration-connection">
           <strong>SESSION</strong>
@@ -181,6 +184,16 @@ export function GravityIdentificationPage({
         </button>
       </div>
 
+      <div className="calibration-notice gravity-id-bringup" role="note">
+        <strong>Jetson bring-up（stack #24）</strong>
+        {STACK_BRINGUP_NOTES.map((note) => (
+          <span key={note} className="gravity-id-note-line">{note}</span>
+        ))}
+        <span className="gravity-id-note-line">
+          FULL_ARM：内置 12 姿态；TRACK@v≈0 + Pinocchio 前馈；YAML + gravity_compensation hot-reload 由编排器完成（Desk 只发 Goal）。
+        </span>
+      </div>
+
       {error && <div className="calibration-alert" role="alert"><div><strong>错误</strong><span>{error}</span></div></div>}
       {notice && <div className="calibration-notice">{notice}</div>}
 
@@ -189,7 +202,7 @@ export function GravityIdentificationPage({
           <div className="calibration-card-title">
             <div>
               <strong>Goal</strong>
-              <span>对齐 stack PR #23 冻结字段</span>
+              <span>IDL #23 · 编排 #24 FULL_ARM</span>
             </div>
           </div>
 
@@ -226,8 +239,9 @@ export function GravityIdentificationPage({
           </label>
 
           {form.mode === MODE_PAYLOAD_SUBMODE && (
-            <div className="gravity-id-payload-hint">
-              <p>Payload 子模式请使用现有 Joint4 标定流程，勿在本页重复 Trigger。</p>
+            <div className="gravity-id-payload-hint" role="status">
+              <p>{PAYLOAD_MODE_UI_HINT}</p>
+              <p className="gravity-id-note-line">与 stack 拒绝文案一致：v1 only supports FULL_ARM_GRAVITY。</p>
               <button type="button" className="primary" onClick={onNavigateCalibration}>
                 打开 Joint4 标定
               </button>
@@ -271,7 +285,7 @@ export function GravityIdentificationPage({
           <label className="arm-check">
             <input type="checkbox" checked={form.hotReload} disabled={running}
               onChange={(e) => updateForm("hotReload", e.target.checked)} />
-            hot_reload（编排侧热加载；orchestrator 未就绪时可能无效）
+            hot_reload（stack #24：写 YAML 后 set_parameters → gravity_compensation_controller）
           </label>
           <label className="arm-check">
             <input type="checkbox" checked={form.lockGripper} disabled={running}
@@ -291,13 +305,16 @@ export function GravityIdentificationPage({
           </label>
 
           <div className="control-actions gravity-id-actions">
-            <button type="button" className="primary" disabled={!startAllowed || form.mode === MODE_PAYLOAD_SUBMODE} onClick={() => void start()}>
+            <button type="button" className="primary" disabled={!startAllowed || isPayloadModeBlocked(form.mode)} onClick={() => void start()}>
               {busy === "start" ? "发送中…" : "Start"}
             </button>
             <button type="button" className="danger" disabled={!abortAllowed && busy !== "abort"} onClick={() => void abort()}>
               {busy === "abort" ? "中止中…" : "Abort"}
             </button>
           </div>
+          {isPayloadModeBlocked(form.mode) && (
+            <small className="safety-note" role="status">{PAYLOAD_MODE_UI_HINT}</small>
+          )}
           <small className="safety-note">
             Abort 始终可用（运行中）；目标为固件 HOLD，不是 DISABLE。fault 11（命令丢失）同样 → HOLD。
           </small>

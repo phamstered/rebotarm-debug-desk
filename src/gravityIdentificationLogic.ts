@@ -1,4 +1,4 @@
-/** Gravity Identification UI logic — aligned to stack PR #23 /StartGravityID freeze. */
+/** Gravity Identification UI logic — stack #23 IDL freeze + #24 FULL_ARM orchestrator. */
 
 export const GRAVITY_ID_ACTION = "/StartGravityID";
 export const GRAVITY_ID_ACTION_TYPE = "microros_stm32h723_bridge/action/GravityIdentification";
@@ -44,7 +44,7 @@ export const GRAVITY_ID_DEFAULTS = {
   writeYaml: true,
   hotReload: true,
   outputYamlPath: "",
-  maxEffortNm: 1.0,
+  maxEffortNm: 10.0,
   maxVelocityRadS: 0.15,
   commandTimeoutMs: 100,
   lockGripper: true,
@@ -53,9 +53,23 @@ export const GRAVITY_ID_DEFAULTS = {
 /** Firmware / host notes to surface in UI (no firmware changes). */
 export const FIRMWARE_SAFETY_NOTES = [
   "会话中必须持续发送 JointCommand；约 100 ms 无命令进入 HOLD，约 500 ms 锁存 fault 11。",
-  "HOLD 会清零 MIT effort；需要重力前馈采样时用 TRACK、velocity≈0、effort=前馈。",
-  "|effort|≤10 Nm。J1–J3 为 DM4340P、J4–J6 为 DM4310，勿假设同一激励适合全部关节。",
+  "HOLD 会清零 MIT effort；stack #24 采样用 TRACK@v≈0 + Pinocchio 重力前馈。",
+  "|effort|≤10 Nm。J1–J3 为 DM4340P、J4–J6 为 DM4310；FULL_ARM 内置 12 姿态分幅值激励。",
 ] as const;
+
+/** Jetson bring-up (stack #24) — Desk 不启动这些 launch。 */
+export const STACK_BRINGUP_NOTES = [
+  "推荐：ros2 launch microros_stm32h723_bridge stm32h723_arm.launch.py state_only:=true",
+  "再启动：ros2 launch microros_stm32h723_bridge gravity_identification.launch.py",
+  "state_only 避免 MicroRosSystem 与编排器抢 /stm32/joint_commands。",
+] as const;
+
+/** Matches stack #24 handle_goal reject for MODE_PAYLOAD_SUBMODE. */
+export const PAYLOAD_MODE_REJECT_MESSAGE =
+  "Rejecting PAYLOAD_SUBMODE: v1 only supports FULL_ARM_GRAVITY (use joint4_calibration_controller for payload)";
+
+export const PAYLOAD_MODE_UI_HINT =
+  "stack #24 v1 拒绝 PAYLOAD_SUBMODE。请打开 Joint4 标定（joint4_calibration_controller），勿在本页 Start。";
 
 export type GravityIdGoalForm = {
   jointMask: number;
@@ -152,6 +166,10 @@ export function sessionStateFromPhase(
   return "idle";
 }
 
+export function isPayloadModeBlocked(mode: number): boolean {
+  return Number(mode) === MODE_PAYLOAD_SUBMODE;
+}
+
 export function canSendGravityIdGoal(confirmation: string, session: GravityIdSessionState): boolean {
   if (session === "running" || session === "canceling") return false;
   return confirmation === "ARMED";
@@ -181,8 +199,11 @@ export function buildGravityIdSendGoalPayload(
     return { ok: false, error: "Goal 数值不得为负" };
   }
   const mode = Number(form.mode);
-  if (mode !== MODE_FULL_ARM_GRAVITY && mode !== MODE_PAYLOAD_SUBMODE) {
-    return { ok: false, error: "mode 仅支持 FULL_ARM_GRAVITY(0) 或 PAYLOAD_SUBMODE(1)" };
+  if (mode === MODE_PAYLOAD_SUBMODE) {
+    return { ok: false, error: PAYLOAD_MODE_REJECT_MESSAGE };
+  }
+  if (mode !== MODE_FULL_ARM_GRAVITY) {
+    return { ok: false, error: "mode 仅支持 FULL_ARM_GRAVITY(0)；PAYLOAD_SUBMODE 由 stack #24 v1 拒绝" };
   }
   return { ok: true, payload: {
     op: "gravity_id_send_goal",

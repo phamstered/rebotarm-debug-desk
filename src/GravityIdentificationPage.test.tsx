@@ -1,4 +1,3 @@
-/** @vitest-environment happy-dom */
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -108,6 +107,7 @@ describe("GravityIdentificationPage", () => {
     await user.selectOptions(screen.getByLabelText("辨识模式"), "1");
     expect(screen.getByRole("button", { name: "打开 Joint4 标定" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+    expect(screen.getAllByText(/v1 only supports FULL_ARM|拒绝 PAYLOAD_SUBMODE/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "打开 Joint4 标定" }));
     expect(doubles.onCalib).toHaveBeenCalled();
   });

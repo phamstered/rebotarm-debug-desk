@@ -197,6 +197,8 @@ int main() {
     goal.confirmation = "ARMED";
     goal.mode = 9;
     assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::InvalidMode);
+    goal.mode = 1;
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::PayloadRejected);
     goal.mode = 0;
     goal.settle_time_s = std::nan("");
     assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::NonFinite);

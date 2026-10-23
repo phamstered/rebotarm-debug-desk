@@ -1,8 +1,8 @@
-/** @vitest-environment happy-dom */
 import { describe, expect, it } from "vitest";
 import {
   MODE_FULL_ARM_GRAVITY,
   MODE_PAYLOAD_SUBMODE,
+  PAYLOAD_MODE_REJECT_MESSAGE,
   DEFAULT_JOINT_MASK,
   PHASE_ARMING,
   PHASE_CAPTURING,
@@ -93,10 +93,11 @@ describe("gravityIdentificationLogic ARMED gate", () => {
 
   it("rejects invalid mode / non-finite goal fields", () => {
     const form = defaultGravityIdGoalForm();
-    expect(buildGravityIdSendGoalPayload({ ...form, mode: 9 }, "ARMED", "x")).toEqual({
+    expect(buildGravityIdSendGoalPayload({ ...form, mode: MODE_PAYLOAD_SUBMODE }, "ARMED", "x")).toEqual({
       ok: false,
-      error: "mode 仅支持 FULL_ARM_GRAVITY(0) 或 PAYLOAD_SUBMODE(1)",
+      error: PAYLOAD_MODE_REJECT_MESSAGE,
     });
+    expect(buildGravityIdSendGoalPayload({ ...form, mode: 9 }, "ARMED", "x").ok).toBe(false);
     expect(buildGravityIdSendGoalPayload({ ...form, settleTimeS: Number.NaN }, "ARMED", "x")).toEqual({
       ok: false,
       error: "Goal 数值必须为有限值",

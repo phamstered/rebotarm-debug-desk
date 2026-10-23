@@ -310,7 +310,7 @@ struct GravityIdGoalFields {
   bool write_yaml = true;
   bool hot_reload = true;
   std::string output_yaml_path;
-  double max_effort_nm = 1.0;
+  double max_effort_nm = 10.0;
   double max_velocity_rad_s = 0.15;
   double command_timeout_ms = 100.0;
   bool lock_gripper = true;
@@ -321,6 +321,7 @@ enum class GravityIdGoalValidation {
   Ok,
   NotArmed,
   InvalidMode,
+  PayloadRejected,
   NonFinite,
   Negative,
 };
@@ -336,7 +337,10 @@ inline uint32_t gravity_id_effective_mask(uint32_t joint_mask) {
 
 inline GravityIdGoalValidation validate_gravity_id_goal(const GravityIdGoalFields &goal) {
   if (goal.confirmation != "ARMED") return GravityIdGoalValidation::NotArmed;
-  if (goal.mode != GRAVITY_ID_MODE_FULL_ARM && goal.mode != GRAVITY_ID_MODE_PAYLOAD) {
+  if (goal.mode == GRAVITY_ID_MODE_PAYLOAD) {
+    return GravityIdGoalValidation::PayloadRejected;
+  }
+  if (goal.mode != GRAVITY_ID_MODE_FULL_ARM) {
     return GravityIdGoalValidation::InvalidMode;
   }
   if (!std::isfinite(goal.settle_time_s) || !std::isfinite(goal.capture_window_s) ||
@@ -356,6 +360,9 @@ inline std::string gravity_id_goal_validation_message(GravityIdGoalValidation va
     case GravityIdGoalValidation::Ok: return "";
     case GravityIdGoalValidation::NotArmed: return "控制面板尚未解锁";
     case GravityIdGoalValidation::InvalidMode: return "无效的 GravityIdentification.mode";
+    case GravityIdGoalValidation::PayloadRejected:
+      return "Rejecting PAYLOAD_SUBMODE: v1 only supports FULL_ARM_GRAVITY "
+             "(use joint4_calibration_controller for payload)";
     case GravityIdGoalValidation::NonFinite: return "GravityIdentification Goal 包含非有限数值";
     case GravityIdGoalValidation::Negative: return "GravityIdentification Goal 数值不得为负";
   }

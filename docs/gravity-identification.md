@@ -2,9 +2,12 @@
 
 适用于 **Rebotarm Debug Desk**（仓库 [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)）。
 
-> **状态：实现中（Desk Bridge + UI 已落地；stack 编排器 E2E 未完成）。**  
-> 页面与 Bridge op 对齐 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) 冻结的 `/StartGravityID`（`microros_stm32h723_bridge/action/GravityIdentification`）。  
-> **勿**将 `docs/basic-features.md` 标为「已实现」直至与 orchestrator 端到端联调通过；当前表述为 **Bridge/UI ready，stack orchestrator pending**。
+> **状态：实现中（Desk Bridge + UI 已落地；对齐 stack [#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) IDL + [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) FULL_ARM 编排）。**  
+> Desk 调用 `/StartGravityID`；**FULL_ARM** 由 `gravity_identification_node` 执行（12 姿态、TRACK@v≈0 + Pinocchio 前馈、abort→HOLD、YAML + GC hot-reload）。  
+> **PAYLOAD_SUBMODE**：stack #24 v1 **拒绝**（用现有 Joint4 / `joint4_calibration_controller`）；Desk UI 禁用 Start 并链到 Joint4。  
+> Jetson：合并 stack main+#24 后重建 Bridge（需 action IDL）。推荐 bring-up：`state_only:=true` + `gravity_identification.launch.py`。  
+> `docs/basic-features.md` 仍不标完整「已实现」直至 Jetson 实机 E2E；当前为 **Bridge/UI ready + stack FULL_ARM orchestrator in #24**。
+
 
 ## 1. 产品定位
 
@@ -30,10 +33,12 @@
 
 1. **Goal**
    - `joint_mask`：J1–J6 复选框（bit0=joint1 …；默认全选 / `0x3F`；全不选时 Bridge 按 `0x3F`）
-   - `mode`：`FULL_ARM_GRAVITY`（0，默认） / `PAYLOAD_SUBMODE`（1，链到 Joint4）
+   - `mode`：`FULL_ARM_GRAVITY`（0，默认，可 Start） / `PAYLOAD_SUBMODE`（1，**Desk 禁用 Start**；stack #24 拒绝，链到 Joint4）
    - `settle_time_s` / `capture_window_s`、`write_yaml` / `hot_reload`、`output_yaml_path`
    - `max_effort_nm` / `max_velocity_rad_s` / `command_timeout_ms` / `lock_gripper`
    - **`command_timeout_ms`**：仅对齐 **host / 编排侧**期望；**不会**改变 MCU 编译期超时（约 **100 ms** 无命令 → HOLD，约 **500 ms** → fault **11**）。UI 旁注已标明。
+   - 默认 `max_effort_nm=10`（与 stack #24 Goal 示例一致；硬限仍 |effort|≤10）
+   - FULL_ARM：编排器内置 **12** 姿态；j1–3 / j4–6 分幅值；Desk 不规划姿态
 2. **安全与控制**
    - 安全确认 → 与 Motor 一致的 **`confirmation: "ARMED"`** 门
    - **Start** / **Abort**（Abort 在 running/canceling 始终可用）
@@ -53,7 +58,7 @@
 ```
 
 - 全臂一键 ID **不**复用 Joint4 的 Begin/Capture/Fit Trigger UI。
-- Payload 子模式第一版仍走 `joint4_calibration_controller`；Desk 跳转现有 Calibration，避免两套采样门互相覆盖。
+- **PAYLOAD**：stack #24 v1 在 action `handle_goal` 拒绝（文案含 `joint4_calibration_controller`）；Desk 同步禁用 Start + 链到 [Joint4 标定](./joint4-calibration)。
 - 文档交叉链接：[Joint4 标定](./joint4-calibration) · 功能概览 [§6](./features#_6-joint4-标定) · [§8](./features#_8-重力辨识)。
 
 ## 3. Bridge / 协议（已实现）
@@ -88,7 +93,7 @@ Action 头经 `#if __has_include(<microros_stm32h723_bridge/action/gravity_ident
   "write_yaml": true,
   "hot_reload": true,
   "output_yaml_path": "",
-  "max_effort_nm": 1.0,
+  "max_effort_nm": 10.0,
   "max_velocity_rad_s": 0.15,
   "command_timeout_ms": 100,
   "lock_gripper": true
@@ -113,7 +118,7 @@ Action 头经 `#if __has_include(<microros_stm32h723_bridge/action/gravity_ident
 
 ### 3.2 Action 字段摘要（权威在 stack#23）
 
-**Goal：** `joint_mask`、`mode`（0=`MODE_FULL_ARM_GRAVITY` / 1=`MODE_PAYLOAD_SUBMODE`）、`pose_set_id[]`、settle/capture、YAML + hot-reload、力矩/速度上限、`command_timeout_ms`、`lock_gripper`。默认 `joint_mask=0x3F`。
+**Goal：** `joint_mask`、`mode`（v1 仅 0=FULL_ARM；1=PAYLOAD 拒绝）、`pose_set_id[]`（#24 忽略并 WARN）、settle/capture、YAML + hot-reload、力矩/速度上限、`command_timeout_ms`、`lock_gripper`。默认 `joint_mask=0x3F`，`max_effort_nm=10`。
 
 **Feedback：** `phase` 0–10、`pose_index`/`pose_count`、`active_joint_mask`、残差/力矩数组、`rmse_running`、`fault_code`、`message`。
 
@@ -169,14 +174,14 @@ Desk/Bridge 原样透传 `fault_code`，勿按位掩码解析。会话相关：
 - [x] Bridge op + `bridge_core` 校验单测；`docs/protocol.md` 已同步
 - [x] 前端页面 + ARMED 门 + Motor 运行中锁定
 - [x] 固件约束与 `command_timeout_ms` host-only 说明出现在 UI
-- [ ] Jetson 上编进 action IDL 后联调 Feedback/Result
-- [ ] stack orchestrator E2E（激励/拟合/写 YAML）
-- [ ] `docs/basic-features.md` 标「已实现」（**仅在 E2E 后**）
+- [ ] Jetson：main+#24 后重建 Bridge（action IDL）并实机 E2E Feedback/Result
+- [x] stack FULL_ARM orchestrator（[#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24)；Jetson 实机仍待）
+- [ ] `docs/basic-features.md` 标完整「已实现」（**仅在 Jetson E2E 后**）
 - [x] `npm test`（前端逻辑/页面；Bridge core 随 CI）
 
 ## 参考
 
-- Stack 接口冻结：[rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)（历史设计讨论见 [#12](https://github.com/phamstered/rebotarm-ros2-stack/pull/12)）
+- Stack IDL：[rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) · FULL_ARM 编排 [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24)
 - 固件契约：[rebotarm-executor](https://github.com/phamstered/rebotarm-executor) · HOLD/TRACK / fault 11
 - 现有手工标定：[Joint4 标定操作指南](./joint4-calibration)
 - 协议：[Bridge 协议](./protocol)

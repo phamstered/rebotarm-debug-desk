@@ -13,7 +13,7 @@ Messages are UTF-8 JSON WebSocket text frames.
 Hello response (sent immediately after the request):
 
 ```json
-{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"31cf41290c88","ros_distro":"humble"}
+{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"ef557a4ab733","ros_distro":"humble"}
 ```
 
 `bridge_version` comes from `bridge/easy_debug_bridge/package.xml`. `bridge_build_id` is a short content hash of the Bridge package sources (generated into `bridge_build_id.hpp` / `src/bridgeVersion.ts` by `npm run generate:bridge-build-id`). Older Bridges may omit `bridge_build_id`.
@@ -87,7 +87,7 @@ JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint
 
 ### GravityIdentification（`/StartGravityID`）
 
-对齐 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)。Bridge 使用 `rclcpp_action` 客户端；若 Jetson 未安装 action 头，运行时返回错误（需 stack #23 的 `microros_stm32h723_bridge` action）。
+对齐 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) IDL 与 [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) FULL_ARM 编排。 Jetson bring-up：`stm32h723_arm.launch.py state_only:=true` + `gravity_identification.launch.py`。Bridge 使用 `rclcpp_action` 客户端；若 Jetson 未安装 action 头，运行时返回错误（需 stack #23 的 `microros_stm32h723_bridge` action）。
 
 Send goal（**必须** `confirmation: "ARMED"`）：
 
@@ -104,14 +104,14 @@ Send goal（**必须** `confirmation: "ARMED"`）：
   "write_yaml": true,
   "hot_reload": true,
   "output_yaml_path": "",
-  "max_effort_nm": 1.0,
+  "max_effort_nm": 10.0,
   "max_velocity_rad_s": 0.15,
   "command_timeout_ms": 100,
   "lock_gripper": true
 }
 ```
 
-- `mode`：`0` = `MODE_FULL_ARM_GRAVITY`，`1` = `MODE_PAYLOAD_SUBMODE`（Desk 链到 Joint4 标定页，不在本 op 复用 Trigger）。
+- `mode`：仅 `0`（FULL_ARM）。`1`（PAYLOAD）由 Bridge 拒绝（与 [stack#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) 一致）；请用 Joint4 标定。
 - `joint_mask` 默认 / 全 0 时按 `0x3F`。
 - `command_timeout_ms`：**仅 host/编排对齐**；MCU 仍为编译期约 100 ms HOLD / 500 ms fault 11，本字段不改固件超时。
 

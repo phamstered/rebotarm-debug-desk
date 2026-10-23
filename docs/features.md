@@ -318,21 +318,22 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ## 8. 重力辨识
 
-> **Desk Bridge + UI 已就绪；stack orchestrator E2E 仍 pending。** 勿在 `basic-features` 标「已实现」直至与 [#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) 编排器联调通过。详见 [重力辨识](./gravity-identification)。
+> **Desk Bridge + UI 已就绪；stack [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) FULL_ARM 编排已合入 PR（Jetson 实机 E2E 仍 pending）。** 勿在 `basic-features` 标完整「已实现」直至实机联调。详见 [重力辨识](./gravity-identification)。
 
 ### 做什么
 
 独立 **「重力辨识」** 导航页调用 ROS action `/StartGravityID`（`GravityIdentification`，接口冻结见 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)）：
 
-- Goal：`joint_mask`（默认 0x3F）、`mode` FULL_ARM / PAYLOAD、settle/capture、YAML/hot_reload、limits、`lock_gripper`
+- Goal：`joint_mask`（默认 0x3F）、`mode` **仅 FULL_ARM 可 Start**（PAYLOAD 禁用并链 Joint4；与 stack #24 拒绝一致）、settle/capture、YAML/hot_reload、`max_effort_nm` 默认 10、`lock_gripper`
 - 安全：`confirmation: "ARMED"`；Start / Abort（Abort 运行中始终可用）
 - Feedback：phase 名、pose 进度、residual/measured/model、`rmse_running`、fault
 - Result：scales / biases / per-joint RMSE、`yaml_path`
-- PAYLOAD 模式：链到现有 [Joint4 标定](./joint4-calibration)（不复用 Trigger UI）
+- PAYLOAD：Desk/Bridge 拒绝 Start；打开 [Joint4 标定](./joint4-calibration)
 - Bridge op：`gravity_id_send_goal` / `cancel` / `feedback` / `result` / `status`（见 [protocol](./protocol)）
+- Bring-up：`state_only:=true` + `gravity_identification.launch.py`；FULL_ARM 12 姿态 / TRACK 前馈 / YAML+hot-reload 由 stack #24 完成
 - `command_timeout_ms` 仅 host 对齐；MCU 仍为编译期约 100/500 ms
 
-Desk **只做 UI + Bridge**；辨识算法与写 YAML 在 ros2-stack；固件 HOLD/fault 在 executor。
+Desk **只做 UI + Bridge**；激励/拟合/写 YAML/hot-reload 在 ros2-stack #24；固件 HOLD/fault 在 executor。
 
 ### 安全（不得弱化）
 
@@ -342,4 +343,4 @@ ARMED 门、运行中禁用 Motor 滑块；Abort/超时/**命令丢失(fault 11)
 
 ## 明确不在当前切片内
 
-见 [架构 · Current limits](./architecture#current-limits)：例如 TF 可视化、rosbag 本地下载/索引/客户端解析等仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。重力辨识 UI / Bridge action 客户端见上节；Desk 侧已落地，stack orchestrator E2E 仍 pending。
+见 [架构 · Current limits](./architecture#current-limits)：例如 TF 可视化、rosbag 本地下载/索引/客户端解析等仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。重力辨识 UI / Bridge 见上节；Desk 已落地，stack #24 FULL_ARM 编排已提供，Jetson 实机 E2E 仍 pending。

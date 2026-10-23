@@ -7,7 +7,7 @@ const doubles = vi.hoisted(() => ({
   save: vi.fn(),
   connect: vi.fn().mockResolvedValue({
     bridge_version: "0.1.0",
-    bridge_build_id: "31cf41290c88",
+    bridge_build_id: "ef557a4ab733",
     ros_distro: "humble",
   }),
   listTopics: vi.fn().mockResolvedValue([
@@ -182,7 +182,7 @@ describe("App workflow", () => {
   it("prompts to upgrade when Bridge build id mismatches", async () => {
     doubles.connect.mockResolvedValueOnce({
       bridge_version: "0.1.0",
-      bridge_build_id: "deadbeef0001",
+      bridge_build_id: "ef557a4ab733",
       ros_distro: "humble",
     });
     const user = userEvent.setup();
@@ -206,7 +206,7 @@ describe("App workflow", () => {
       })
       .mockResolvedValueOnce({
         bridge_version: "0.1.0",
-        bridge_build_id: "31cf41290c88",
+        bridge_build_id: "ef557a4ab733",
         ros_distro: "humble",
       });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {

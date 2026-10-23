@@ -143,7 +143,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 ## 9. 重力辨识（Bridge/UI；orchestrator pending）
 
-**不标「已实现」。** Desk 已提供「重力辨识」页与 Bridge op（`gravity_id_*` → `/StartGravityID`，对齐 [stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)）；端到端辨识依赖 stack orchestrator，未完成前不得写入本表「已实现」矩阵。说明见 [重力辨识](./gravity-identification)。`command_timeout_ms` 仅 host 对齐，MCU 仍为编译期约 100/500 ms。
+**不标完整「已实现」。** Desk 已提供「重力辨识」页与 Bridge op（`gravity_id_*` → `/StartGravityID`）。stack [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) 提供 FULL_ARM 编排（12 姿态、TRACK 前馈、YAML+hot-reload）；PAYLOAD 拒绝。Jetson 实机 E2E 前不写入「已实现」矩阵。Bring-up：`state_only` + `gravity_identification.launch.py`。见 [重力辨识](./gravity-identification)。
 
 ## 10. Joint4 重力标定
 
