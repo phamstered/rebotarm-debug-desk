@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -21,9 +22,12 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 add_executable(bridge_node src/bridge_node.cpp)
 target_include_directories(bridge_node PRIVATE include)
 ament_target_dependencies(bridge_node
-  ament_index_cpp rclcpp std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
+  ament_index_cpp rclcpp rclcpp_action std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
   trajectory_msgs microros_stm32h723_bridge rosidl_typesupport_introspection_cpp)
 target_link_libraries(bridge_node Boost::system Boost::thread)
+# GravityIdentification client is gated in bridge_node.cpp via __has_include on
+# microros_stm32h723_bridge/action/gravity_identification.hpp (stack PR #23).
+# Without that header the binary still builds; gravity_id_* ops return a clear error.
 
 install(TARGETS bridge_node DESTINATION lib/${PROJECT_NAME})
 

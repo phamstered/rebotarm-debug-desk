@@ -9,6 +9,7 @@ import { AppNav } from "./AppNav";
 import { DataCollectionPage } from "./DataCollectionPage";
 import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
+import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { StatusPage } from "./StatusPage";
@@ -340,7 +341,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 export default function App() {
   const [appPage, setAppPage] = useState<AppPage>(() => {
     const saved = localStorage.getItem("robot-console-page");
-    return saved === "status" || saved === "motor" || saved === "calibration" || saved === "monitor" || saved === "collection" ? saved : "dashboard";
+    return saved === "status" || saved === "motor" || saved === "calibration" || saved === "gravity" || saved === "monitor" || saved === "collection" ? saved : "dashboard";
   });
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
@@ -385,6 +386,7 @@ export default function App() {
   const [controllerAction, setControllerAction] = useState<{ name: string; action: "activate" | "deactivate" } | null>(null);
   const [controllerActionMessage, setControllerActionMessage] = useState("");
   const [controllerActionError, setControllerActionError] = useState("");
+  const [gravitySessionActive, setGravitySessionActive] = useState(false);
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>("robot");
@@ -1005,6 +1007,7 @@ export default function App() {
     setControllerActionMessage("");
     setControllerActionError("");
     setControlStreaming(false);
+    setGravitySessionActive(false);
     setEffectiveLocalPort(null);
     setLiveUpdates(true);
     setRosbagStatus(null);
@@ -1572,6 +1575,12 @@ export default function App() {
         />
       ) : appPage === "collection" ? (
         <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
+      ) : appPage === "gravity" ? (
+        <GravityIdentificationPage
+          bridge={bridge}
+          onNavigateCalibration={() => setAppPage("calibration")}
+          onSessionActiveChange={setGravitySessionActive}
+        />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}
@@ -1617,6 +1626,8 @@ export default function App() {
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
           onStreamingChange={setControlStreaming}
+          controlLocked={gravitySessionActive}
+          controlLockedReason={gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
         />
       ) : (
       <main className={`workspace ${sidebars.right ? "" : "right-sidebar-collapsed"}`} style={layoutStyle}>

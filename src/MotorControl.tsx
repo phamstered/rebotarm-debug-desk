@@ -37,11 +37,13 @@ export function MotorControl({
   jointState,
   status,
   onStreamingChange,
+  controlLocked = false,
 }: {
   bridge: BridgeClient;
   jointState: JointState | null;
   status: HardwareStatus | null;
   onStreamingChange(streaming: boolean): void;
+  controlLocked?: boolean;
 }) {
   const [mode, setMode] = useState<CommandMode>(DEFAULT_MODE);
   const [motors, setMotors] = useState<MotorRowInput[]>(() => createDefaultMotors());
@@ -57,6 +59,14 @@ export function MotorControl({
   const preflightPendingRef = useRef(false);
 
   const jointCount = inferredJointCount(jointState);
+
+  useEffect(() => {
+    if (controlLocked && streaming) {
+      // Gravity ID (or other exclusive session) owns the arm — stop Motor stream; leave DISABLE to operator.
+      setStreaming(false);
+      setResult("控制已锁定：已停止 Motor 连续发送");
+    }
+  }, [controlLocked, streaming]);
   useEffect(() => {
     setMotors((current) => resizeMotors(current, jointCount));
   }, [jointCount]);
@@ -283,14 +293,14 @@ export function MotorControl({
         </div>
 
         <label className="arm-check">
-          <input type="checkbox" checked={armed} disabled={streaming || mode === 3} aria-label="安全确认" onChange={(event) => {
+          <input type="checkbox" checked={armed} disabled={streaming || controlLocked || mode === 3} aria-label="安全确认" onChange={(event) => {
             setArmed(event.target.checked);
           }} />
           我已确认机械臂周围安全，本次连接允许发送电机指令
         </label>
 
         <div className="control-actions">
-          <button className="send-command" disabled={streaming || (mode !== 3 && !armed)} onClick={start}>
+          <button className="send-command" disabled={streaming || controlLocked || (mode !== 3 && !armed)} onClick={start}>
             {mode === 3 ? "发送 DISABLE" : "开始 20 Hz 发送"}
           </button>
           <button className="stop-command" onClick={disable}>停止并 DISABLE</button>

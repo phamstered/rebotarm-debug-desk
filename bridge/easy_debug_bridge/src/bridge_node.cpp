@@ -6,6 +6,11 @@
 #include <boost/property_tree/ptree.hpp>
 #include <microros_stm32h723_bridge/msg/hardware_status.hpp>
 #include <microros_stm32h723_bridge/msg/joint_command.hpp>
+#if __has_include(<microros_stm32h723_bridge/action/gravity_identification.hpp>)
+#define EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID 1
+#include <rclcpp_action/rclcpp_action.hpp>
+#include <microros_stm32h723_bridge/action/gravity_identification.hpp>
+#endif
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/typesupport_helpers.hpp>
@@ -378,6 +383,12 @@ class BridgeNode : public rclcpp::Node {
         publish_joint_command(session, request, request_id);
       } else if (op == "trajectory_command") {
         publish_trajectory_command(session, request, request_id);
+      } else if (op == "gravity_id_send_goal") {
+        gravity_id_send_goal(session, request, request_id);
+      } else if (op == "gravity_id_cancel") {
+        gravity_id_cancel(session, request_id);
+      } else if (op == "gravity_id_status") {
+        gravity_id_send_status(session, request_id);
       } else {
         session->send(error_message(request_id, "未知操作：" + op));
       }
@@ -892,6 +903,245 @@ class BridgeNode : public rclcpp::Node {
                   ",\"points\":" + std::to_string(command.points.size()) + "}");
   }
 
+
+  static std::string float_array_json(const std::vector<float> &values) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < values.size(); ++i) {
+      if (i) out << ',';
+      if (std::isfinite(values[i])) out << values[i];
+      else out << "null";
+    }
+    out << ']';
+    return out.str();
+  }
+
+  static std::string string_array_json(const std::vector<std::string> &values) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < values.size(); ++i) {
+      if (i) out << ',';
+      out << json_quote(values[i]);
+    }
+    out << ']';
+    return out.str();
+  }
+
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+  using GravityIdentification = microros_stm32h723_bridge::action::GravityIdentification;
+  using GoalHandleGravityId = rclcpp_action::ClientGoalHandle<GravityIdentification>;
+
+  void ensure_gravity_id_client() {
+    if (!gravity_id_client_) {
+      gravity_id_client_ = rclcpp_action::create_client<GravityIdentification>(
+          this, "/StartGravityID");
+    }
+  }
+#endif
+
+    easy_debug_bridge::GravityIdGoalFields parse_gravity_id_goal(
+      const boost::property_tree::ptree &request) const {
+    easy_debug_bridge::GravityIdGoalFields goal;
+    goal.joint_mask = request.get<uint32_t>("joint_mask", easy_debug_bridge::GRAVITY_ID_DEFAULT_JOINT_MASK);
+    goal.mode = static_cast<uint8_t>(request.get<int>("mode", 0));
+    goal.settle_time_s = request.get<double>("settle_time_s", 1.5);
+    goal.capture_window_s = request.get<double>("capture_window_s", 1.0);
+    goal.write_yaml = request.get<bool>("write_yaml", true);
+    goal.hot_reload = request.get<bool>("hot_reload", true);
+    goal.output_yaml_path = request.get<std::string>("output_yaml_path", "");
+    goal.max_effort_nm = request.get<double>("max_effort_nm", 1.0);
+    goal.max_velocity_rad_s = request.get<double>("max_velocity_rad_s", 0.15);
+    goal.command_timeout_ms = request.get<double>("command_timeout_ms", 100.0);
+    goal.lock_gripper = request.get<bool>("lock_gripper", true);
+    goal.confirmation = request.get<std::string>("confirmation", "");
+    if (const auto ids = request.get_child_optional("pose_set_id")) {
+      for (const auto &item : *ids) {
+        goal.pose_set_id.push_back(item.second.get_value<std::string>());
+      }
+    }
+    return goal;
+  }
+
+  void gravity_id_send_status(const std::shared_ptr<WebSocketSession> &session,
+                              const std::string &request_id) {
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+    std::string status = "idle";
+    {
+      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+      status = gravity_id_status_;
+    }
+    session->send("{\"op\":\"gravity_id_status\",\"request_id\":" + json_quote(request_id) +
+                  ",\"status\":" + json_quote(status) + "}");
+#else
+    session->send(error_message(
+        request_id,
+        "GravityIdentification action 未编译进 Bridge（Jetson 需 stack PR #23 的 "
+        "microros_stm32h723_bridge，并重新 colcon build easy_debug_bridge）"));
+#endif
+  }
+
+  void gravity_id_cancel(const std::shared_ptr<WebSocketSession> &session,
+                         const std::string &request_id) {
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+    std::shared_ptr<GoalHandleGravityId> handle;
+    {
+      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+      handle = gravity_id_goal_handle_;
+      gravity_id_status_ = "canceling";
+    }
+    if (!handle) {
+      session->send(error_message(request_id, "没有正在执行的 GravityIdentification goal"));
+      return;
+    }
+    ensure_gravity_id_client();
+    gravity_id_client_->async_cancel_goal(
+        handle,
+        [this, session, request_id](auto /*cancel_response*/) {
+          session->send("{\"op\":\"gravity_id_cancel_ack\",\"request_id\":" +
+                        json_quote(request_id) + "}");
+          broadcast("{\"op\":\"gravity_id_status\",\"status\":\"canceling\"}");
+        });
+#else
+    session->send(error_message(
+        request_id,
+        "GravityIdentification action 未编译进 Bridge（Jetson 需 stack PR #23 的 "
+        "microros_stm32h723_bridge，并重新 colcon build easy_debug_bridge）"));
+#endif
+  }
+
+  void gravity_id_send_goal(const std::shared_ptr<WebSocketSession> &session,
+                            const boost::property_tree::ptree &request,
+                            const std::string &request_id) {
+    const auto fields = parse_gravity_id_goal(request);
+    const auto validation = easy_debug_bridge::validate_gravity_id_goal(fields);
+    if (validation != easy_debug_bridge::GravityIdGoalValidation::Ok) {
+      session->send(error_message(
+          request_id, easy_debug_bridge::gravity_id_goal_validation_message(validation)));
+      return;
+    }
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+    ensure_gravity_id_client();
+    if (!gravity_id_client_->wait_for_action_server(std::chrono::milliseconds(500))) {
+      session->send(error_message(request_id, "GravityIdentification action 服务器 /StartGravityID 不可用"));
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+      if (gravity_id_goal_handle_) {
+        session->send(error_message(request_id, "已有 GravityIdentification goal 在执行，请先 Abort"));
+        return;
+      }
+    }
+
+    using GravityIdentification = microros_stm32h723_bridge::action::GravityIdentification;
+    auto goal = GravityIdentification::Goal();
+    goal.joint_mask = easy_debug_bridge::gravity_id_effective_mask(fields.joint_mask);
+    goal.mode = fields.mode;
+    goal.pose_set_id = fields.pose_set_id;
+    goal.settle_time_s = static_cast<float>(fields.settle_time_s);
+    goal.capture_window_s = static_cast<float>(fields.capture_window_s);
+    goal.write_yaml = fields.write_yaml;
+    goal.hot_reload = fields.hot_reload;
+    goal.output_yaml_path = fields.output_yaml_path;
+    goal.max_effort_nm = static_cast<float>(fields.max_effort_nm);
+    goal.max_velocity_rad_s = static_cast<float>(fields.max_velocity_rad_s);
+    goal.command_timeout_ms = static_cast<float>(fields.command_timeout_ms);
+    goal.lock_gripper = fields.lock_gripper;
+
+    auto options = rclcpp_action::Client<GravityIdentification>::SendGoalOptions();
+    options.goal_response_callback =
+        [this, session, request_id](std::shared_ptr<GoalHandleGravityId> handle) {
+          if (!handle) {
+            {
+              std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+              gravity_id_status_ = "idle";
+              gravity_id_goal_handle_.reset();
+            }
+            session->send(error_message(request_id, "GravityIdentification goal 被拒绝"));
+            broadcast("{\"op\":\"gravity_id_status\",\"status\":\"rejected\"}");
+            return;
+          }
+          {
+            std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+            gravity_id_goal_handle_ = handle;
+            gravity_id_status_ = "executing";
+            gravity_id_last_feedback_at_ = std::chrono::steady_clock::time_point{};
+          }
+          session->send("{\"op\":\"gravity_id_send_goal_ack\",\"request_id\":" +
+                        json_quote(request_id) + ",\"accepted\":true}");
+          broadcast("{\"op\":\"gravity_id_status\",\"status\":\"executing\"}");
+        };
+    options.feedback_callback =
+        [this](GoalHandleGravityId::SharedPtr,
+               const std::shared_ptr<const GravityIdentification::Feedback> feedback) {
+          const auto now = std::chrono::steady_clock::now();
+          {
+            std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+            if (gravity_id_last_feedback_at_.time_since_epoch().count() != 0) {
+              const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now - gravity_id_last_feedback_at_).count();
+              if (elapsed < 100) return;  // throttle ≤10 Hz
+            }
+            gravity_id_last_feedback_at_ = now;
+          }
+          std::ostringstream out;
+          out << "{\"op\":\"gravity_id_feedback\""
+              << ",\"phase\":" << static_cast<int>(feedback->phase)
+              << ",\"pose_index\":" << feedback->pose_index
+              << ",\"pose_count\":" << feedback->pose_count
+              << ",\"active_joint_mask\":" << feedback->active_joint_mask
+              << ",\"residual_nm\":" << float_array_json(feedback->residual_nm)
+              << ",\"measured_effort_nm\":" << float_array_json(feedback->measured_effort_nm)
+              << ",\"model_effort_nm\":" << float_array_json(feedback->model_effort_nm)
+              << ",\"rmse_running\":" << feedback->rmse_running
+              << ",\"fault_code\":" << feedback->fault_code
+              << ",\"message\":" << json_quote(feedback->message) << '}';
+          broadcast(out.str());
+        };
+    options.result_callback =
+        [this](const GoalHandleGravityId::WrappedResult &result) {
+          {
+            std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+            gravity_id_goal_handle_.reset();
+            gravity_id_status_ = "idle";
+          }
+          const bool success = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
+                               result.result && result.result->success;
+          std::ostringstream out;
+          out << "{\"op\":\"gravity_id_result\""
+              << ",\"success\":" << (success ? "true" : "false")
+              << ",\"code\":" << static_cast<int>(result.code);
+          if (result.result) {
+            out << ",\"fault_code\":" << result.result->fault_code
+                << ",\"gravity_scales\":" << float_array_json(result.result->gravity_scales)
+                << ",\"torque_biases_nm\":" << float_array_json(result.result->torque_biases_nm)
+                << ",\"rmse_per_joint\":" << float_array_json(result.result->rmse_per_joint)
+                << ",\"rmse_total\":" << result.result->rmse_total
+                << ",\"yaml_path\":" << json_quote(result.result->yaml_path)
+                << ",\"message\":" << json_quote(result.result->message);
+          } else {
+            out << ",\"fault_code\":0,\"gravity_scales\":[],\"torque_biases_nm\":[],"
+                   "\"rmse_per_joint\":[],\"rmse_total\":0,\"yaml_path\":\"\","
+                   "\"message\":" << json_quote("GravityIdentification 无 result 载荷");
+          }
+          out << '}';
+          broadcast(out.str());
+          broadcast("{\"op\":\"gravity_id_status\",\"status\":\"idle\"}");
+        };
+
+    {
+      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+      gravity_id_status_ = "accepted";
+    }
+    gravity_id_client_->async_send_goal(goal, options);
+#else
+    session->send(error_message(
+        request_id,
+        "GravityIdentification action 未编译进 Bridge（Jetson 需 stack PR #23 的 "
+        "microros_stm32h723_bridge，并重新 colcon build easy_debug_bridge）"));
+#endif
+  }
+
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
   trajectory_publisher(const std::string &topic) {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
@@ -926,6 +1176,15 @@ class BridgeNode : public rclcpp::Node {
   uint32_t sequence_{0};
   std::chrono::steady_clock::time_point status_received_at_{};
   std::chrono::steady_clock::time_point joint_received_at_{};
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+  rclcpp_action::Client<microros_stm32h723_bridge::action::GravityIdentification>::SharedPtr
+      gravity_id_client_;
+  std::shared_ptr<rclcpp_action::ClientGoalHandle<
+      microros_stm32h723_bridge::action::GravityIdentification>> gravity_id_goal_handle_;
+#endif
+  std::mutex gravity_id_mutex_;
+  std::string gravity_id_status_{"idle"};
+  std::chrono::steady_clock::time_point gravity_id_last_feedback_at_{};
 };
 
 void WebSocketSession::run() {

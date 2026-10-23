@@ -183,5 +183,30 @@ int main() {
   sequence = UINT32_MAX;
   const auto wrapped = easy_debug_bridge::allocate_sequences(sequence, 1);
   assert(wrapped.front() == 0);
+
+  {
+    using easy_debug_bridge::GravityIdGoalFields;
+    using easy_debug_bridge::GravityIdGoalValidation;
+    GravityIdGoalFields goal;
+    goal.confirmation = "ARMED";
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::Ok);
+    assert(easy_debug_bridge::gravity_id_effective_mask(0) == 0x3Fu);
+    assert(easy_debug_bridge::gravity_id_effective_mask(0x15) == 0x15u);
+    goal.confirmation = "";
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::NotArmed);
+    goal.confirmation = "ARMED";
+    goal.mode = 9;
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::InvalidMode);
+    goal.mode = 1;
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::PayloadRejected);
+    goal.mode = 0;
+    goal.settle_time_s = std::nan("");
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::NonFinite);
+    goal.settle_time_s = 1.0;
+    goal.max_effort_nm = -0.1;
+    assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::Negative);
+    assert(!easy_debug_bridge::gravity_id_goal_validation_message(GravityIdGoalValidation::NotArmed).empty());
+  }
+
   return 0;
 }

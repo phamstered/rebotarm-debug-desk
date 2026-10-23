@@ -46,7 +46,7 @@ features:
 4. [macOS 安装](./install) — `npm run install:mac`
 5. [部署 Bridge](./deploy-bridge) — `npm run deploy:bridge`
 
-详细行为与测试覆盖见 [基本功能与测试覆盖](./basic-features)；WebSocket 字段见 [Bridge 协议](./protocol)。设计中的全臂重力辨识 UI 见 [重力辨识（设计草案）](./gravity-identification)。
+详细行为与测试覆盖见 [基本功能与测试覆盖](./basic-features)；WebSocket 字段见 [Bridge 协议](./protocol)。全臂重力辨识（Desk Bridge/UI 就绪，stack orchestrator E2E pending）见 [重力辨识](./gravity-identification)。
 
 ## 本机开发
 

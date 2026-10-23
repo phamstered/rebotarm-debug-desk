@@ -298,4 +298,75 @@ inline std::pair<int32_t, uint32_t> duration_fields(double seconds) {
   return {static_cast<int32_t>(whole), static_cast<uint32_t>(nanoseconds)};
 }
 
+
+// --- GravityIdentification (/StartGravityID) ---------------------------------
+
+struct GravityIdGoalFields {
+  uint32_t joint_mask = 0x3Fu;
+  uint8_t mode = 0;
+  std::vector<std::string> pose_set_id;
+  double settle_time_s = 1.5;
+  double capture_window_s = 1.0;
+  bool write_yaml = true;
+  bool hot_reload = true;
+  std::string output_yaml_path;
+  double max_effort_nm = 10.0;
+  double max_velocity_rad_s = 0.15;
+  double command_timeout_ms = 100.0;
+  bool lock_gripper = true;
+  std::string confirmation;
+};
+
+enum class GravityIdGoalValidation {
+  Ok,
+  NotArmed,
+  InvalidMode,
+  PayloadRejected,
+  NonFinite,
+  Negative,
+};
+
+inline constexpr uint32_t GRAVITY_ID_DEFAULT_JOINT_MASK = 0x3Fu;
+inline constexpr uint8_t GRAVITY_ID_MODE_FULL_ARM = 0;
+inline constexpr uint8_t GRAVITY_ID_MODE_PAYLOAD = 1;
+
+inline uint32_t gravity_id_effective_mask(uint32_t joint_mask) {
+  if (joint_mask == 0) return GRAVITY_ID_DEFAULT_JOINT_MASK;
+  return joint_mask & GRAVITY_ID_DEFAULT_JOINT_MASK;
+}
+
+inline GravityIdGoalValidation validate_gravity_id_goal(const GravityIdGoalFields &goal) {
+  if (goal.confirmation != "ARMED") return GravityIdGoalValidation::NotArmed;
+  if (goal.mode == GRAVITY_ID_MODE_PAYLOAD) {
+    return GravityIdGoalValidation::PayloadRejected;
+  }
+  if (goal.mode != GRAVITY_ID_MODE_FULL_ARM) {
+    return GravityIdGoalValidation::InvalidMode;
+  }
+  if (!std::isfinite(goal.settle_time_s) || !std::isfinite(goal.capture_window_s) ||
+      !std::isfinite(goal.max_effort_nm) || !std::isfinite(goal.max_velocity_rad_s) ||
+      !std::isfinite(goal.command_timeout_ms)) {
+    return GravityIdGoalValidation::NonFinite;
+  }
+  if (goal.settle_time_s < 0.0 || goal.capture_window_s < 0.0 || goal.max_effort_nm < 0.0 ||
+      goal.max_velocity_rad_s < 0.0 || goal.command_timeout_ms < 0.0) {
+    return GravityIdGoalValidation::Negative;
+  }
+  return GravityIdGoalValidation::Ok;
+}
+
+inline std::string gravity_id_goal_validation_message(GravityIdGoalValidation validation) {
+  switch (validation) {
+    case GravityIdGoalValidation::Ok: return "";
+    case GravityIdGoalValidation::NotArmed: return "控制面板尚未解锁";
+    case GravityIdGoalValidation::InvalidMode: return "无效的 GravityIdentification.mode";
+    case GravityIdGoalValidation::PayloadRejected:
+      return "Rejecting PAYLOAD_SUBMODE: v1 only supports FULL_ARM_GRAVITY "
+             "(use joint4_calibration_controller for payload)";
+    case GravityIdGoalValidation::NonFinite: return "GravityIdentification Goal 包含非有限数值";
+    case GravityIdGoalValidation::Negative: return "GravityIdentification Goal 数值不得为负";
+  }
+  return "未知 GravityIdentification 校验结果";
+}
+
 }  // namespace easy_debug_bridge

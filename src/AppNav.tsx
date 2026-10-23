@@ -3,7 +3,7 @@ import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { isRosGatedPage, rosGatedNavReason } from "./appLogic";
 import type { RosGatedPage } from "./appLogic";
 
-export type AppPage = "status" | "dashboard" | "monitor" | "collection" | "motor" | "calibration";
+export type AppPage = "status" | "dashboard" | "monitor" | "collection" | "motor" | "calibration" | "gravity";
 
 function StatusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 9h3M7 12h6M7 15h4"/><circle cx="17" cy="15" r="2.2"/></svg>;
@@ -25,6 +25,10 @@ function MotorIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>;
 }
 
+function GravityIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10"/><path d="m8 9 4 4 4-4"/><ellipse cx="12" cy="18" rx="7" ry="3"/></svg>;
+}
+
 function CollectionIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/><circle cx="12" cy="12" r="2"/></svg>;
 }
@@ -36,6 +40,7 @@ const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () =
   { page: "collection", label: "数据采集", title: "LeRobot 数据采集", icon: CollectionIcon },
   { page: "motor", label: "Motor", title: "Motor", icon: MotorIcon },
   { page: "calibration", label: "Calibration", title: "Joint4 Calibration", icon: CalibrationIcon },
+  { page: "gravity", label: "重力辨识", title: "重力辨识 /StartGravityID", icon: GravityIcon },
 ];
 
 export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: {
@@ -54,7 +59,7 @@ export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: 
           const gated = isRosGatedPage(item.page);
           const reason = gated ? rosGatedNavReason(item.page as RosGatedPage, rosReady) : "";
           const disabled = Boolean(reason);
-          const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.label;
+          const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.page === "gravity" ? "重力辨识" : item.label;
           return (
             <div key={item.page} className="app-nav-item">
               <button

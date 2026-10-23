@@ -13,7 +13,7 @@ Messages are UTF-8 JSON WebSocket text frames.
 Hello response (sent immediately after the request):
 
 ```json
-{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"8a023e7a0bad","ros_distro":"humble"}
+{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"ef557a4ab733","ros_distro":"humble"}
 ```
 
 `bridge_version` comes from `bridge/easy_debug_bridge/package.xml`. `bridge_build_id` is a short content hash of the Bridge package sources (generated into `bridge_build_id.hpp` / `src/bridgeVersion.ts` by `npm run generate:bridge-build-id`). Older Bridges may omit `bridge_build_id`.
@@ -83,6 +83,49 @@ JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint
 ```
 
 `topic` 必须以 `/joint_trajectory` 结尾且只含字母数字下划线斜杠，否则拒绝。`trajectory_points` 最多 64 个点，`joint_names` 最多 32 个且不允许重复或空白；每个点的 `positions` 长度必须等于 `joint_names`，`velocities` 可为空数组，`time_from_start` 必须为正且严格递增。所有数值必须有限。Topic 上没有订阅者时返回 error。
+
+
+### GravityIdentification（`/StartGravityID`）
+
+对齐 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23) IDL 与 [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) FULL_ARM 编排。 Jetson bring-up：`stm32h723_arm.launch.py state_only:=true` + `gravity_identification.launch.py`。Bridge 使用 `rclcpp_action` 客户端；若 Jetson 未安装 action 头，运行时返回错误（需 stack #23 的 `microros_stm32h723_bridge` action）。
+
+Send goal（**必须** `confirmation: "ARMED"`）：
+
+```json
+{
+  "op": "gravity_id_send_goal",
+  "request_id": "uuid",
+  "confirmation": "ARMED",
+  "joint_mask": 63,
+  "mode": 0,
+  "pose_set_id": [],
+  "settle_time_s": 1.5,
+  "capture_window_s": 1.0,
+  "write_yaml": true,
+  "hot_reload": true,
+  "output_yaml_path": "",
+  "max_effort_nm": 10.0,
+  "max_velocity_rad_s": 0.15,
+  "command_timeout_ms": 100,
+  "lock_gripper": true
+}
+```
+
+- `mode`：仅 `0`（FULL_ARM）。`1`（PAYLOAD）由 Bridge 拒绝（与 [stack#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) 一致）；请用 Joint4 标定。
+- `joint_mask` 默认 / 全 0 时按 `0x3F`。
+- `command_timeout_ms`：**仅 host/编排对齐**；MCU 仍为编译期约 100 ms HOLD / 500 ms fault 11，本字段不改固件超时。
+
+Cancel：
+
+```json
+{"op":"gravity_id_cancel","request_id":"uuid"}
+```
+
+可选状态查询：
+
+```json
+{"op":"gravity_id_status","request_id":"uuid"}
+```
 
 ## Responses and events
 
@@ -177,3 +220,45 @@ Trajectory command acknowledgement:
 ```json
 {"op":"trajectory_command_ack","request_id":"uuid","joints":2,"points":2}
 ```
+
+Gravity ID feedback（Bridge → Desk，节流 ≤10 Hz）：
+
+```json
+{
+  "op": "gravity_id_feedback",
+  "phase": 5,
+  "pose_index": 3,
+  "pose_count": 12,
+  "active_joint_mask": 63,
+  "residual_nm": [0.1, 0.2, 0.05, 0.3, 0.0, 0.0],
+  "measured_effort_nm": [],
+  "model_effort_nm": [],
+  "rmse_running": 0.12,
+  "fault_code": 0,
+  "message": "capturing pose 3"
+}
+```
+
+Gravity ID result：
+
+```json
+{
+  "op": "gravity_id_result",
+  "success": true,
+  "fault_code": 0,
+  "gravity_scales": [1,1,1,1,1,1],
+  "torque_biases_nm": [0,0,0,0,0,0],
+  "rmse_per_joint": [0.01,0.01,0.01,0.01,0.01,0.01],
+  "rmse_total": 0.02,
+  "yaml_path": "/path/to/gravity.yaml",
+  "message": "ok"
+}
+```
+
+Gravity ID status（推送或应答）：
+
+```json
+{"op":"gravity_id_status","status":"executing"}
+```
+
+

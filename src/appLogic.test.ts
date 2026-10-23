@@ -242,6 +242,7 @@ describe("home connect polish helpers", () => {
     expect(rosGatedNavReason("monitor", false)).toContain("JointState");
     expect(rosGatedNavReason("motor", true)).toBe("");
     expect(isRosGatedPage("monitor")).toBe(true);
+    expect(isRosGatedPage("gravity")).toBe(true);
     expect(isRosGatedPage("status")).toBe(false);
   });
 });
