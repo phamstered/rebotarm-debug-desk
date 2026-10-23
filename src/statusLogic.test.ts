@@ -214,10 +214,11 @@ describe("statusLogic", () => {
     expect(cards.find((card) => card.id === "teleop")?.tone).toBe("idle");
     expect(cards.find((card) => card.id === "trajectory")?.tone).toBe("idle");
     expect(cards.find((card) => card.id === "vla")?.tone).toBe("idle");
+    // list_controllers available but no position controller active → ignore script PID flags (#106)
     expect(resolveActiveControlMode({
       armMode: baseCardInput.armMode,
       rosControl: baseCardInput.rosControl,
-    })).toBe("teleop");
+    })).toBeNull();
     expect(resolveActiveControlMode({
       armMode: { ...baseCardInput.armMode, teleopRunning: false },
       rosControl: {
@@ -227,6 +228,103 @@ describe("statusLogic", () => {
         message: "",
       },
     })).toBe("vla");
+  });
+
+  it("prefers list_controllers position controller over script PID flags for strip selection", () => {
+    const teleopCtrl = {
+      manager: "/controller_manager",
+      available: true,
+      controllers: [
+        { name: "arm_teleop_controller", typeName: "t", state: "active" },
+        { name: "gravity_compensation_controller", typeName: "t", state: "active" },
+      ],
+      message: "",
+    };
+    expect(resolveActiveControlMode({
+      armMode: { ...baseCardInput.armMode, teleopRunning: false, trajectoryRunning: true },
+      rosControl: teleopCtrl,
+    })).toBe("teleop");
+
+    expect(resolveActiveControlMode({
+      armMode: { ...baseCardInput.armMode, teleopRunning: true, trajectoryRunning: false },
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "arm_trajectory_controller", typeName: "t", state: "active" },
+          { name: "arm_teleop_controller", typeName: "t", state: "inactive" },
+        ],
+        message: "",
+      },
+    })).toBe("trajectory");
+
+    // When ros2_control unavailable, fall back to script flags
+    expect(resolveActiveControlMode({
+      armMode: { ...baseCardInput.armMode, teleopRunning: true },
+      rosControl: { manager: "/controller_manager", available: false, controllers: [], message: "offline" },
+    })).toBe("teleop");
+    expect(resolveActiveControlMode({
+      armMode: { ...baseCardInput.armMode, teleopRunning: false, trajectoryRunning: true },
+      rosControl: null,
+    })).toBe("trajectory");
+  });
+
+  it("shows real controller names and Gravity row on all three mode details", () => {
+    const teleopCards = buildStatusCards({
+      ...baseCardInput,
+      armMode: { ...baseCardInput.armMode, mode: "teleop", teleopRunning: true, teleopPid: 99 },
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "arm_teleop_controller", typeName: "t", state: "active" },
+          { name: "gravity_compensation_controller", typeName: "t", state: "inactive" },
+        ],
+        message: "",
+      },
+    });
+    const teleop = teleopCards.find((card) => card.id === "teleop")!;
+    expect(teleop.rows.find((row) => row.label === "控制器")?.value).toBe("arm_teleop_controller");
+    expect(teleop.rows.find((row) => row.label === "Gravity")?.tone).toBe("warn");
+    expect(teleop.warning).toContain("gravity_compensation_controller");
+
+    const trajCards = buildStatusCards({
+      ...baseCardInput,
+      armMode: { ...baseCardInput.armMode, mode: "trajectory", teleopRunning: false, teleopPid: 0, trajectoryRunning: true, trajectoryPid: 55 },
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "arm_trajectory_controller", typeName: "t", state: "active" },
+          { name: "gravity_compensation_controller", typeName: "t", state: "active" },
+        ],
+        message: "",
+      },
+    });
+    const traj = trajCards.find((card) => card.id === "trajectory")!;
+    expect(traj.rows.find((row) => row.label === "控制器")?.value).toBe("arm_trajectory_controller");
+    expect(traj.rows.find((row) => row.label === "Gravity")?.value).toContain("active");
+    expect(traj.rows.find((row) => row.label === "Gravity")?.tone).toBe("ok");
+    expect(traj.warning).toBeUndefined();
+
+    const vlaCards = buildStatusCards({
+      ...baseCardInput,
+      armMode: { ...baseCardInput.armMode, mode: "idle", teleopRunning: false, teleopPid: 0 },
+      hardwareStatus: { mode: 1, mode_name: "TRACK", fault_code: 0 },
+      rosControl: {
+        manager: "/controller_manager",
+        available: true,
+        controllers: [
+          { name: "vla_position_controller", typeName: "t", state: "active" },
+          { name: "gravity_compensation_controller", typeName: "t", state: "inactive" },
+        ],
+        message: "",
+      },
+    });
+    const vla = vlaCards.find((card) => card.id === "vla")!;
+    expect(vla.rows.find((row) => row.label === "Gravity")?.tone).toBe("warn");
+    expect(vla.warning).toContain("gravity_compensation_controller");
+    expect(vla.tone).toBe("warn");
   });
 
   it("builds sticky alerts for HOLD / fault / fault 11", () => {

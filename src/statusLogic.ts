@@ -11,9 +11,13 @@ import { domainMismatchHint, isAgentOnline, isRosReady } from "./appLogic";
 import type { TopicSample } from "./appLogic";
 import { motorFaults, modes } from "./motorLogic";
 import {
+  ARM_TELEOP_CONTROLLER,
+  ARM_TRAJECTORY_CONTROLLER,
   GRAVITY_COMPENSATION_CONTROLLER,
   VLA_CHUNK_TOPIC,
   VLA_POSITION_CONTROLLER,
+  isArmTeleopControllerActive,
+  isArmTrajectoryControllerActive,
   isGravityCompensationActive,
   isHardwareTrack,
   isVlaControllerActive,
@@ -186,14 +190,52 @@ export function formatLastCommandSequence(status: HardwareStatus | null | undefi
   return String(seq);
 }
 
+/**
+ * Prefer active position controller from list_controllers when available
+ * (VLA / Teleop / Trajectory), so strip selection stays consistent after
+ * switch_controllers without stopping scripts (#106). Fall back to script
+ * PID flags only when ros2_control data is missing.
+ */
 export function resolveActiveControlMode(input: {
   armMode?: ArmModeStatus | null;
   rosControl?: RosControlStatus | null;
 }): ActiveControlMode {
-  if (isVlaControllerActive(input.rosControl ?? null)) return "vla";
+  const rosControl = input.rosControl ?? null;
+  if (rosControl?.available) {
+    if (isVlaControllerActive(rosControl)) return "vla";
+    if (isArmTeleopControllerActive(rosControl)) return "teleop";
+    if (isArmTrajectoryControllerActive(rosControl)) return "trajectory";
+    return null;
+  }
   if (input.armMode?.teleopRunning) return "teleop";
   if (input.armMode?.trajectoryRunning) return "trajectory";
   return null;
+}
+
+/** Gravity row shared by Teleop / Trajectory / VLA mode detail. */
+export function gravityCompensationRow(input: {
+  rosControl: RosControlStatus | null | undefined;
+  modeActive: boolean;
+}): StatusRow {
+  const rosControl = input.rosControl ?? null;
+  if (!rosControl) {
+    return { label: "Gravity", value: "—", tone: "idle" };
+  }
+  if (!rosControl.available) {
+    return { label: "Gravity", value: "不可用", tone: "fail" };
+  }
+  const gravityOn = isGravityCompensationActive(rosControl);
+  return {
+    label: "Gravity",
+    value: gravityOn ? `active · ${GRAVITY_COMPENSATION_CONTROLLER}` : `未激活 · ${GRAVITY_COMPENSATION_CONTROLLER}`,
+    tone: gravityOn ? "ok" : input.modeActive ? "warn" : "idle",
+  };
+}
+
+export function gravityInactiveWarning(modeActive: boolean, rosControl: RosControlStatus | null | undefined): string | undefined {
+  if (!modeActive || !rosControl?.available) return undefined;
+  if (isGravityCompensationActive(rosControl)) return undefined;
+  return `${GRAVITY_COMPENSATION_CONTROLLER} 未激活（建议与位置控制器并行；Trajectory bring-up 尤其需要）`;
 }
 
 export function groupStatusZones(cards: StatusCardModel[]): StatusZoneModel[] {
@@ -568,42 +610,53 @@ export function buildStatusCards(input: {
 
   const usbCard = buildUsbCard({ sshOk, usbProbe, usbChecked });
 
-  const teleopRunning = Boolean(armMode?.teleopRunning);
+  const teleopScriptRunning = Boolean(armMode?.teleopRunning);
+  const teleopControllerActive = isArmTeleopControllerActive(rosControl);
+  const teleopActive = rosControl?.available ? teleopControllerActive : teleopScriptRunning;
+  const teleopGravityWarn = gravityInactiveWarning(teleopActive, rosControl);
   const teleopCard: StatusCardModel = {
     id: "teleop",
     title: "Teleop",
-    tone: !sshOk ? "idle" : teleopRunning ? "ok" : "idle",
-    summary: !sshOk ? "SSH 未就绪" : teleopRunning ? "运行中" : "未运行",
-    detail: teleopRunning && armMode?.teleopPid
-      ? `PID ${armMode.teleopPid} · start_arm_teleop.sh --position-controller=teleop`
-      : teleopRunning
-        ? "start_arm_teleop.sh --position-controller=teleop"
-        : undefined,
+    tone: !sshOk ? "idle" : teleopActive ? (teleopGravityWarn ? "warn" : "ok") : "idle",
+    summary: !sshOk ? "SSH 未就绪" : teleopActive ? "运行中" : "未运行",
+    detail: teleopActive
+      ? (armMode?.teleopPid
+        ? `PID ${armMode.teleopPid} · ${ARM_TELEOP_CONTROLLER}`
+        : ARM_TELEOP_CONTROLLER)
+      : undefined,
     rows: [
-      { label: "状态", value: teleopRunning ? "运行中" : "未运行", tone: teleopRunning ? "ok" : "idle" },
+      { label: "状态", value: teleopActive ? "运行中" : "未运行", tone: teleopActive ? "ok" : "idle" },
       { label: "PID", value: armMode?.teleopPid ? String(armMode.teleopPid) : "—" },
       { label: "脚本", value: "scripts/start_arm_teleop.sh" },
-      { label: "控制器", value: "teleop" },
+      { label: "控制器", value: ARM_TELEOP_CONTROLLER, tone: teleopControllerActive ? "ok" : teleopActive ? "warn" : "idle" },
+      gravityCompensationRow({ rosControl, modeActive: teleopActive }),
     ],
     note: armMode?.message || "由上方模式条启动；切换前会先 HOLD；与 Trajectory/VLA 互斥。",
+    warning: teleopGravityWarn,
   };
 
-  const trajRunning = Boolean(armMode?.trajectoryRunning);
+  const trajScriptRunning = Boolean(armMode?.trajectoryRunning);
+  const trajControllerActive = isArmTrajectoryControllerActive(rosControl);
+  const trajActive = rosControl?.available ? trajControllerActive : trajScriptRunning;
+  const trajGravityWarn = gravityInactiveWarning(trajActive, rosControl);
   const trajectoryCard: StatusCardModel = {
     id: "trajectory",
     title: "Trajectory / MoveIt",
-    tone: !sshOk ? "idle" : trajRunning ? "ok" : "idle",
-    summary: !sshOk ? "SSH 未就绪" : trajRunning ? "运行中" : "未运行",
-    detail: trajRunning
-      ? `PID ${armMode?.trajectoryPid || "—"} · move_group / trajectory controller`
+    tone: !sshOk ? "idle" : trajActive ? (trajGravityWarn ? "warn" : "ok") : "idle",
+    summary: !sshOk ? "SSH 未就绪" : trajActive ? "运行中" : "未运行",
+    detail: trajActive
+      ? `PID ${armMode?.trajectoryPid || "—"} · ${ARM_TRAJECTORY_CONTROLLER}`
       : undefined,
     rows: [
-      { label: "状态", value: trajRunning ? "运行中" : "未运行", tone: trajRunning ? "ok" : "idle" },
+      { label: "状态", value: trajActive ? "运行中" : "未运行", tone: trajActive ? "ok" : "idle" },
       { label: "PID", value: armMode?.trajectoryPid ? String(armMode.trajectoryPid) : "—" },
       { label: "启动", value: "move_group.launch.py 或 teleop --position-controller=trajectory" },
+      { label: "控制器", value: ARM_TRAJECTORY_CONTROLLER, tone: trajControllerActive ? "ok" : trajActive ? "warn" : "idle" },
       { label: "互斥", value: "与 Teleop/VLA 互斥" },
+      gravityCompensationRow({ rosControl, modeActive: trajActive }),
     ],
-    note: "由上方模式条启动；切换前会先 HOLD；停止上一进程组后再启动。",
+    note: "由上方模式条启动；切换前会先 HOLD；停止上一进程组后再启动。建议并行 gravity_compensation。",
+    warning: trajGravityWarn,
   };
 
   const rsUsb = Boolean(usbProbe?.realsensePresent);
@@ -662,7 +715,6 @@ export function buildStatusCards(input: {
 
 
   const vlaActive = isVlaControllerActive(rosControl);
-  const gravityOn = isGravityCompensationActive(rosControl);
   const vlaHz = vlaChunkSample?.hz;
   const vlaChunkOk = Boolean(vlaHz && vlaHz > 0);
   const fwTrack = isHardwareTrack(hardwareStatus);
@@ -706,6 +758,18 @@ export function buildStatusCards(input: {
     vlaTone = "idle";
     vlaSummary = "未运行";
   }
+  const vlaGravityWarn = gravityInactiveWarning(vlaActive, rosControl);
+  if (vlaActive && vlaGravityWarn && vlaTone === "ok") {
+    vlaTone = "warn";
+  }
+  let mergedVlaWarning = vlaWarning;
+  if (vlaActive && vlaGravityWarn) {
+    if (!mergedVlaWarning || mergedVlaWarning === VLA_ONE_CLICK_RISK_WARNING) {
+      mergedVlaWarning = vlaGravityWarn;
+    } else if (!mergedVlaWarning.includes(GRAVITY_COMPENSATION_CONTROLLER)) {
+      mergedVlaWarning = `${mergedVlaWarning}；${vlaGravityWarn}`;
+    }
+  }
   const vlaRows: StatusRow[] = [
     {
       label: "控制器",
@@ -718,11 +782,7 @@ export function buildStatusCards(input: {
       value: vlaChunkOk ? formatHz(vlaHz) : VLA_CHUNK_TOPIC,
       tone: vlaChunkOk ? "ok" : "idle",
     },
-    {
-      label: "Gravity",
-      value: gravityOn ? "active" : "未激活",
-      tone: gravityOn ? "ok" : vlaActive ? "warn" : "idle",
-    },
+    gravityCompensationRow({ rosControl, modeActive: vlaActive }),
   ];
   if (vlaActive) {
     vlaRows.push({
@@ -740,7 +800,7 @@ export function buildStatusCards(input: {
     failureReason: vlaFailure,
     rows: vlaRows,
     note: `Scheme B：外部推理 → ${VLA_CHUNK_TOPIC} → ${VLA_POSITION_CONTROLLER}；并行 ${GRAVITY_COMPENSATION_CONTROLLER}。由上方模式条启停。`,
-    warning: vlaWarning,
+    warning: mergedVlaWarning,
   };
 
   return [

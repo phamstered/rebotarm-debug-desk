@@ -37,10 +37,16 @@ export const DEFAULT_VLA_JOINT_COUNT = 6;
 
 export const DEFAULT_VLA_MONITOR_DASHBOARD_NAME = "VLA Joint Chunk";
 
+/** Exact name from arm_controllers.yaml — Teleop position controller. */
+export const ARM_TELEOP_CONTROLLER = "arm_teleop_controller";
+
+/** Exact name from arm_controllers.yaml — Trajectory position controller. */
+export const ARM_TRAJECTORY_CONTROLLER = "arm_trajectory_controller";
+
 /** Exact names from arm_controllers.yaml — mutually exclusive with VLA on position interfaces. */
 export const VLA_EXCLUSIVE_CONTROLLER_NAMES = [
-  "arm_teleop_controller",
-  "arm_trajectory_controller",
+  ARM_TELEOP_CONTROLLER,
+  ARM_TRAJECTORY_CONTROLLER,
 ] as const;
 
 function normalizeControllerName(name: string): string {
@@ -79,6 +85,26 @@ export function findController(
 
 export function isVlaControllerActive(rosControl: RosControlStatus | null | undefined): boolean {
   const controller = findController(rosControl, (entry) => isVlaPositionController(entry.name));
+  return controller?.state === "active";
+}
+
+export function isArmTeleopController(name: string): boolean {
+  const n = normalizeControllerName(name);
+  return n === ARM_TELEOP_CONTROLLER || n.includes("arm_teleop") || n === "teleop";
+}
+
+export function isArmTrajectoryController(name: string): boolean {
+  const n = normalizeControllerName(name);
+  return n === ARM_TRAJECTORY_CONTROLLER || n.includes("arm_trajectory") || n === "trajectory";
+}
+
+export function isArmTeleopControllerActive(rosControl: RosControlStatus | null | undefined): boolean {
+  const controller = findController(rosControl, (entry) => isArmTeleopController(entry.name));
+  return controller?.state === "active";
+}
+
+export function isArmTrajectoryControllerActive(rosControl: RosControlStatus | null | undefined): boolean {
+  const controller = findController(rosControl, (entry) => isArmTrajectoryController(entry.name));
   return controller?.state === "active";
 }
 

@@ -128,6 +128,15 @@ describe("StatusPage", () => {
           teleopRunning: true,
           teleopPid: 99,
         }}
+        rosControl={{
+          manager: "/controller_manager",
+          available: true,
+          controllers: [
+            { name: "arm_teleop_controller", typeName: "t", state: "active" },
+            { name: "gravity_compensation_controller", typeName: "t", state: "active" },
+          ],
+          message: "",
+        }}
       />,
     );
     expect(screen.queryByTestId("status-sticky-alert")).not.toBeInTheDocument();
@@ -135,8 +144,38 @@ describe("StatusPage", () => {
     expect(screen.queryByLabelText("Trajectory / MoveIt")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("VLA")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Teleop" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("arm_teleop_controller")).toBeVisible();
+    expect(screen.getByText(/Gravity/)).toBeVisible();
     // Mode cards no longer expose primary restart; Agent/RealSense may still offer 重新拉起.
     expect(screen.queryByLabelText("Teleop 操作")).not.toBeInTheDocument();
+  });
+
+  it("prefers list_controllers over teleopRunning for strip selection after switch_controllers", () => {
+    render(
+      <StatusPage
+        {...baseProps}
+        armMode={{
+          ...baseProps.armMode,
+          mode: "teleop",
+          teleopRunning: true,
+          teleopPid: 99,
+        }}
+        rosControl={{
+          manager: "/controller_manager",
+          available: true,
+          controllers: [
+            { name: "arm_teleop_controller", typeName: "t", state: "inactive" },
+            { name: "arm_trajectory_controller", typeName: "t", state: "active" },
+            { name: "gravity_compensation_controller", typeName: "t", state: "active" },
+          ],
+          message: "",
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Trajectory" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Teleop" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByLabelText("Trajectory / MoveIt")).toBeVisible();
+    expect(screen.getByText("arm_trajectory_controller")).toBeVisible();
   });
 
   it("surfaces disabledReasons as on-page hints for gated quick actions", () => {

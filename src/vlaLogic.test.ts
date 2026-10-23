@@ -9,6 +9,10 @@ import {
   VLA_POSITION_CONTROLLER,
   createVlaChunkDashboard,
   createVlaChunkSeries,
+  ARM_TELEOP_CONTROLLER,
+  ARM_TRAJECTORY_CONTROLLER,
+  isArmTeleopControllerActive,
+  isArmTrajectoryControllerActive,
   isGravityCompensationActive,
   isVlaControllerActive,
   isVlaExclusivePositionController,
@@ -154,4 +158,19 @@ describe("vlaLogic", () => {
     expect(vlaStartVerificationFailure(active, { mode: 1, mode_name: "TRACK" })).toBeUndefined();
   });
 
+  it("detects arm teleop and trajectory controller active state", () => {
+    expect(ARM_TELEOP_CONTROLLER).toBe("arm_teleop_controller");
+    expect(ARM_TRAJECTORY_CONTROLLER).toBe("arm_trajectory_controller");
+    const teleop = ros([
+      { name: "arm_teleop_controller", typeName: "t", state: "active" },
+      { name: "arm_trajectory_controller", typeName: "t", state: "inactive" },
+    ]);
+    expect(isArmTeleopControllerActive(teleop)).toBe(true);
+    expect(isArmTrajectoryControllerActive(teleop)).toBe(false);
+    const traj = ros([
+      { name: "/arm_trajectory_controller", typeName: "t", state: "active" },
+    ]);
+    expect(isArmTrajectoryControllerActive(traj)).toBe(true);
+    expect(isArmTeleopControllerActive(traj)).toBe(false);
+  });
 });
