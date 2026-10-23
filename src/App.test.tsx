@@ -182,7 +182,7 @@ describe("App workflow", () => {
   it("prompts to upgrade when Bridge build id mismatches", async () => {
     doubles.connect.mockResolvedValueOnce({
       bridge_version: "0.1.0",
-      bridge_build_id: "ef557a4ab733",
+      bridge_build_id: "deadbeef0001",
       ros_distro: "humble",
     });
     const user = userEvent.setup();
