@@ -83,7 +83,9 @@ export function finalizeLoadedUrdfMesh(object: Object3D): void {
 
 export function decodeBase64(value: string): Uint8Array {
   const binary = atob(value);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 export function resolvePackageRelative(baseUri: string, relative: string): string {

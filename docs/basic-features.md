@@ -79,6 +79,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - **Monitor** 导航页：Grafana 式 **Dashboard → Panel → Chart**。多仪表盘（创建/重命名/删除，配置写入 localStorage `robot-console-monitor` v2 并在重启后恢复）；默认「Motor Torque」仪表盘含 **7 个可拖拽/缩放 Panel**（`effort[0..6]`，`react-grid-layout` 12 列，共享 30 秒时间窗与共享准星，Y 轴各自缩放）。每个 Panel 可选时序图（折线/点/时间柱）、柱状图（按字段最新值，横向/竖向）、环形图（正值占比）和 Gauge（最新值、可设范围与阈值）；无有效值时显示等待提示。紧凑 Panel 的标题、类型选择和移除按钮位于同一拖拽栏；独立 DataGraph 仍保留右侧图例。支持暂停跟随（冻结采样+时间窗）、双击最大化、重置布局、锁定布局与紧凑排列（锁定/紧凑偏好持久化；最大化仅会话内）。旧版单序列 Panel 和 `panels[].series[]` 标签页配置会在加载时迁移，图表设置与命名布局预设可持久化。全局「暂停显示」与 Monitor「暂停跟随」同源。
 - Monitor Bag 回放：经 Tauri SSH 在 Jetson 执行 `ros2 bag play <path> --clock`，曲线仍走 Bridge 实时订阅；本机解析 bag / 下载 / 索引未实现。路径校验与录制相同（拒绝 `~`、`.`/`..`、shell 元字符等）。
 - `sensor_msgs/msg/Image` Topic（包括 `/camera/color/image_raw`）在数据 Tab 使用 Canvas 实时预览，支持 rgb8、bgr8、rgba8、bgra8、mono8、mono16 及对应 OpenCV 8UC/16UC1 编码、行步长和大小端转换。
+- 图像只投递给明确订阅的 WebSocket 连接；取消订阅或断线后释放兴趣，最后一个兴趣消失后释放对应 ROS 图像订阅。仅在 Topics 的 Inspector 数据 Tab 可见且实时显示开启时订阅选中图像；切主导航、折叠 Inspector/右侧栏、切详情 Tab、暂停实时或隐藏窗口会取消图像订阅，返回自动恢复。已取消兴趣的残留帧不会重新填充预览。
 - Image 数据由 Bridge 使用 WebSocket 二进制帧全速传输，帧头保留 JSON 元数据、像素保持原始字节，避免 Base64 膨胀和大 JSON 解析；Canvas 使用浏览器动画帧合并绘制，不丢弃 Bridge 消息且不影响 Topic 频率统计。元数据展示尺寸、编码、step、时间戳与原始字节数但不展开二进制内容。
 - Graph 可以展示 ROS graph 中的全部 Topic；实时内容解析要求对应消息类型支持已安装在运行中的 Bridge ROS 环境。64 位整数超过 JavaScript 安全整数范围时以十进制字符串传输，非有限浮点数转为 `null`。
 
@@ -105,7 +106,10 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 通过 Bridge 获取 `package://` 资源，支持 STL、DAE、OBJ、PNG、JPG/JPEG；兼容 ROS 2 `--symlink-install` 产生的 package 内资源链接，并在跟随链接前拒绝绝对路径与 `..` 目录穿越。
 - 解析 DAE 相对纹理路径，生成临时 Blob URL，并在资源释放时回收 URL。
 - Bridge 对 package 资源先执行词法路径边界检查，再跟随 package 内的资源符号链接，禁止 URI 越过 package share 目录。
-- 大型 URDF 网格采用顺序加载，避免多个 Base64 WebSocket 响应同时排队；单个资源使用 30 秒超时，并在失败提示中显示具体 `package://` URI。
+- 大型 URDF 网格采用顺序加载，避免多个大型 WebSocket 响应同时排队；单个资源使用 30 秒超时，并在失败提示中显示具体 `package://` URI。
+- 首次访问后保留已加载的 Three.js 场景、相机和 OrbitControls；切换 Topic Graph 或主导航后返回无需重取资源或重建场景。隐藏时停止帧循环并取消未结束的 TCP 拖拽；未完成的加载则取消，返回时重试。资源和纹理全部完成后才显示模型，并显示获取/解析进度。
+- 会话内资源使用 128 MiB LRU 字节缓存，同时请求同 URI 会合并。失败不缓存，超出预算的单文件可使用但不留存；断开/重连会清空缓存，URDF 变化释放旧场景，Blob URL、geometry、material 和 texture 随场景释放。同 URI 文件内容改变后需重连获取新版。
+- 资源优先走 `RCR1` 原始二进制帧，兼容旧 Bridge Base64 响应；单文件上限 64 MiB。切页/断线会取消本地等待及后续资源请求，迟到结果不会挂到新场景；已发送的远端资源读取不会被中止。
 - Robot View 的 URDF 错误与轨迹控制器状态使用同一个响应式 heads-up 网格排版，在常规和窄面板下不会互相覆盖。
 - Tauri CSP 同时允许 Three.js 通过 `connect-src blob:` 获取 STL/DAE/OBJ Blob；网格解析失败时显示 Blob 路径和底层错误原因。
 
@@ -198,7 +202,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 | 通用 Topic 解码 | 已安装消息类型的嵌套字段、数组、时间与大整数，ControllerState Inspector 路由、错误类型拒绝 | `bridge/easy_debug_bridge/test/test_topic_json.cpp`、`bridge/easy_debug_bridge/test/test_generic_topic.py`（ROS 集成）、`src/App.test.tsx` |
 | ROS Control | CLI 输出解析、ANSI 清理、超时说明、Controller 状态展示、Activate/Deactivate、操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
-| URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx` |
+| URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx`、`src/resourceCacheLogic.test.ts`、`src/urdfAssetLogic.test.ts`、`src/UrdfViewer.test.tsx`、`bridge/easy_debug_bridge/test/test_viewer_transport.py` |
 | 电机输入 | 默认 TRACK/Kp/Kd、多电机使能掩码、行程默认 ±0.35、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
 | 电机交互 | 独立导航页、7 个默认关节、安全确认、每关节滑块/使能、使用当前位置、20 Hz 流、切页 DISABLE | `src/App.test.tsx`、`src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |

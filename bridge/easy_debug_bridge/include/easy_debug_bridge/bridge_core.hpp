@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,13 +30,13 @@ inline std::string base64_encode(const std::vector<uint8_t> &data) {
   return result;
 }
 
-inline std::vector<uint8_t> binary_image_frame(
-    const std::string &metadata_json, const std::vector<uint8_t> &pixels) {
+inline std::vector<uint8_t> binary_payload_frame(
+    const std::string &metadata_json, const std::vector<uint8_t> &pixels, char kind) {
   if (metadata_json.size() > UINT32_MAX) return {};
   const uint32_t metadata_size = static_cast<uint32_t>(metadata_json.size());
   std::vector<uint8_t> frame;
   frame.reserve(8 + metadata_json.size() + pixels.size());
-  frame.insert(frame.end(), {'R', 'C', 'I', '1'});
+  frame.insert(frame.end(), {'R', 'C', static_cast<uint8_t>(kind), '1'});
   frame.push_back(static_cast<uint8_t>((metadata_size >> 24) & 0xff));
   frame.push_back(static_cast<uint8_t>((metadata_size >> 16) & 0xff));
   frame.push_back(static_cast<uint8_t>((metadata_size >> 8) & 0xff));
@@ -43,6 +45,41 @@ inline std::vector<uint8_t> binary_image_frame(
   frame.insert(frame.end(), pixels.begin(), pixels.end());
   return frame;
 }
+
+inline std::vector<uint8_t> binary_image_frame(const std::string &metadata, const std::vector<uint8_t> &pixels) {
+  return binary_payload_frame(metadata, pixels, 'I');
+}
+inline std::vector<uint8_t> binary_resource_frame(const std::string &metadata, const std::vector<uint8_t> &bytes) {
+  return binary_payload_frame(metadata, bytes, 'R');
+}
+
+// Guarded by BridgeNode's subscription mutex. Only image delivery is session-scoped.
+class ImageInterests {
+ public:
+  void add(const std::string &topic, uint64_t client) { topics_[topic].insert(client); }
+  bool remove(const std::string &topic, uint64_t client) {
+    auto it = topics_.find(topic);
+    if (it == topics_.end()) return false;
+    it->second.erase(client);
+    if (!it->second.empty()) return false;
+    topics_.erase(it); return true;
+  }
+  std::vector<std::string> disconnect(uint64_t client) {
+    std::vector<std::string> empty;
+    for (auto it = topics_.begin(); it != topics_.end();) {
+      it->second.erase(client);
+      if (it->second.empty()) { empty.push_back(it->first); it = topics_.erase(it); }
+      else ++it;
+    }
+    return empty;
+  }
+  std::set<uint64_t> clients(const std::string &topic) const {
+    const auto it = topics_.find(topic);
+    return it == topics_.end() ? std::set<uint64_t>{} : it->second;
+  }
+ private:
+  std::map<std::string, std::set<uint64_t>> topics_;
+};
 
 struct CommandFields {
   int mode;
