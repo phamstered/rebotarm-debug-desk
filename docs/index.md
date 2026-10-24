@@ -45,6 +45,7 @@ features:
 3. [功能概览](./features) — 模块说明、操作步骤与 HTML 流程图
 4. [macOS 安装](./install) — `npm run install:mac`
 5. [部署 Bridge](./deploy-bridge) — `npm run deploy:bridge`
+6. [TODO / 待办列表](./todo) — 已讨论、尚未实现的方案与验收清单
 
 详细行为与测试覆盖见 [基本功能与测试覆盖](./basic-features)；WebSocket 字段见 [Bridge 协议](./protocol)。全臂重力辨识（Desk Bridge/UI 就绪，stack orchestrator E2E pending）见 [重力辨识](./gravity-identification)。
 
