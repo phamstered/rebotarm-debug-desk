@@ -13,7 +13,7 @@ Messages are UTF-8 JSON WebSocket text frames.
 Hello response (sent immediately after the request):
 
 ```json
-{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"ef557a4ab733","ros_distro":"humble"}
+{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"02e6f31f50e3","ros_distro":"humble"}
 ```
 
 `bridge_version` comes from `bridge/easy_debug_bridge/package.xml`. `bridge_build_id` is a short content hash of the Bridge package sources (generated into `bridge_build_id.hpp` / `src/bridgeVersion.ts` by `npm run generate:bridge-build-id`). Older Bridges may omit `bridge_build_id`.
@@ -45,6 +45,16 @@ Hello response (sent immediately after the request):
 ```json
 {"op":"resource","request_id":"uuid","uri":"package://robot_description/meshes/base.stl"}
 ```
+
+图像订阅使用每连接兴趣集合：重复 `subscribe` 不增加引用计数；只向明确订阅该 Image Topic 的连接发送像素。取消订阅或断开不会影响其他连接，最后一个兴趣消失后释放对应 ROS 订阅。其他消息类型继续沿用共享订阅/广播。
+
+```json
+{"op":"unsubscribe","request_id":"uuid","topic":"/camera/color/image_raw"}
+```
+
+`unsubscribe` 当前仅支持 Image；已订阅的非 Image Topic 返回 error。不存在的 Image 订阅可幂等取消。成功响应为 `{"op":"unsubscribed","request_id":"uuid","topic":"/camera/color/image_raw"}`，其后不会继续向该连接写入该 Topic 图像（ACK 前已排队的帧仍可能先到达）。名称必须是合法绝对 ROS 名称。
+
+资源请求可增加 `"encoding":"binary"`。省略或 `"base64"` 返回原有 JSON，其他编码返回 error。新桌面优先请求二进制，并可解码忽略该参数的旧 Bridge Base64 响应。
 
 MIT joint command:
 
@@ -200,6 +210,16 @@ Resource:
   "base64":"..."
 }
 ```
+
+二进制资源为单条 WebSocket binary message（可能由多个 WebSocket continuation frame 组成）：
+
+| 字节 | 内容 |
+| --- | --- |
+| 0–3 | ASCII `RCR1`，与图像的 `RCI1` 区分 |
+| 4–7 | 大端 uint32，UTF-8 JSON 元数据长度 |
+| 8… | 元数据后紧接原始文件字节 |
+
+元数据：`{"op":"resource","request_id":"uuid","uri":"package://robot_description/meshes/base.stl","mime":"model/stl","data_length":1234}`。`data_length` 必须与实际负载长度完全相符；零字节文件合法。客户端按 `request_id` 关联请求，资源响应不参与 Topic 广播。超过 64 MiB、读取不完整和不存在的文件返回带 `request_id` 的 error。取消本地请求会清除等待并忽略迟到响应；当前不会撤销服务器已开始的读取或写入。
 
 `uri` 仅接受 `package://<package>/<relative-path>`。Bridge 会在跟随资源符号链接前校验相对路径边界，因此兼容 ROS 2 `--symlink-install`，同时拒绝绝对路径、package 根目录和越过 package 目录的 `..` 路径。
 

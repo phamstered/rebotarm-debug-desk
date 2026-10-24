@@ -135,6 +135,9 @@ export type BridgeEnvelope = {
   uri?: string;
   mime?: string;
   base64?: string;
+  encoding?: "binary" | "base64";
+  resource_bytes?: Uint8Array;
+  data_length?: number;
   mode?: number;
   /** Scalar (legacy joint1) or per-joint positions matching Bridge array index. */
   position?: number | number[];

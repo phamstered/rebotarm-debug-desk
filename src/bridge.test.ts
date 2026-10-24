@@ -191,3 +191,53 @@ describe("BridgeClient", () => {
     expect(() => new BridgeClient().send({ op: "hello" })).toThrow("Bridge 尚未连接");
   });
 });
+
+function resourceFrame(id: string, length = 3, actual = 3) {
+  const metadata = new TextEncoder().encode(JSON.stringify({ op: "resource", request_id: id, uri: "package://robot/a.stl", mime: "model/stl", data_length: length }));
+  const frame = new Uint8Array(8 + metadata.length + actual);
+  frame.set([82, 67, 82, 49]); new DataView(frame.buffer).setUint32(4, metadata.length, false); frame.set(metadata, 8);
+  return frame.buffer;
+}
+
+describe("binary resource transport", () => {
+  beforeEach(() => { FakeWebSocket.instances = []; vi.stubGlobal("WebSocket", FakeWebSocket); });
+  it("validates frames and exposes a zero-copy byte view", () => {
+    const frame = resourceFrame("request");
+    const result = decodeBridgeEnvelope(frame);
+    expect(result.resource_bytes?.buffer).toBe(frame);
+    expect(result.resource_bytes?.byteLength).toBe(3);
+    expect(() => decodeBridgeEnvelope(resourceFrame("request", 4, 3))).toThrow("长度");
+    const invalid = new Uint8Array(frame.slice(0)); new DataView(invalid.buffer).setUint32(4, 100000, false);
+    expect(() => decodeBridgeEnvelope(invalid.buffer)).toThrow("不完整");
+  });
+  it("caches binary resources, falls back to old Base64 replies and clears on reconnect", async () => {
+    const bridge = new BridgeClient();
+    const ready = bridge.connect(defaultProfile);
+    const ws = FakeWebSocket.instances[0]; ws.open(); ws.message({ op: "hello" }); await ready;
+    const resource = bridge.getResource("package://robot/a.stl");
+    await Promise.resolve(); await Promise.resolve();
+    const request = JSON.parse(ws.sent.at(-1)!);
+    expect(request.encoding).toBe("binary");
+    ws.binaryMessage(resourceFrame(request.request_id));
+    expect((await resource).bytes.length).toBe(3);
+    const sent = ws.sent.length;
+    await bridge.getResource("package://robot/a.stl"); expect(ws.sent).toHaveLength(sent);
+    bridge.close();
+    const next = bridge.connect(defaultProfile); const newer = FakeWebSocket.instances[1]; newer.open(); newer.message({ op: "hello" }); await next;
+    const legacy = bridge.getResource("package://robot/a.stl");
+    await Promise.resolve(); await Promise.resolve();
+    newer.message({ op: "resource", request_id: JSON.parse(newer.sent.at(-1)!).request_id, base64: "AQID" });
+    expect([...(await legacy).bytes]).toEqual([1, 2, 3]); bridge.close();
+  });
+  it("aborts obsolete requests and does not leak request timeouts on send failure", async () => {
+    const bridge = new BridgeClient();
+    const abort = new AbortController();
+    await expect(bridge.request({ op: "topics" })).rejects.toThrow("尚未连接");
+    const ready = bridge.connect(defaultProfile); const ws = FakeWebSocket.instances[0]; ws.open(); ws.message({ op: "hello" }); await ready;
+    const pending = bridge.request({ op: "resource" }, 30000, abort.signal);
+    const id = JSON.parse(ws.sent.at(-1)!).request_id;
+    abort.abort(); await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    ws.binaryMessage(resourceFrame(id)); // A late response cannot recreate the cancelled request.
+    bridge.close();
+  });
+});

@@ -82,6 +82,7 @@ export function TopicInspector({
   monitorPanels = [],
   selectedMonitorPanelId = "",
   onAddToDataGraph,
+  onDataVisibilityChange,
 }: {
   bridge?: Pick<BridgeClient, "getTopicInfo" | "getNodeInfo">;
   selected: string;
@@ -92,9 +93,11 @@ export function TopicInspector({
   monitorPanels?: Array<{ id: string; name: string; panels?: Array<{ id: string; title: string }> }>;
   selectedMonitorPanelId?: string;
   onAddToDataGraph?(fieldPath: string, dashboardId: string, panelId: string | null): void;
+  onDataVisibilityChange?(visible: boolean): void;
 }) {
   const imageTopic = isRosImageType(topicType);
   const [tab, setTab] = useState<"data" | "details">("data");
+  useEffect(() => { onDataVisibilityChange?.(tab === "data" && !selectedNode); }, [tab, selectedNode, onDataVisibilityChange]);
   const [topicDetails, setTopicDetails] = useState<TopicDetails | null>(null);
   const [nodeDetails, setNodeDetails] = useState<NodeDetails | null>(null);
   const [detailsError, setDetailsError] = useState("");

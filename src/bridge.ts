@@ -6,27 +6,39 @@ export type BridgeHello = {
   ros_distro?: string;
 };
 
+import { decodeBase64 } from "./urdfLogic";
+import { SessionResourceCache, loadAborted } from "./resourceCacheLogic";
+
 type Listener = (message: BridgeEnvelope) => void;
 
 const IMAGE_MAGIC = [0x52, 0x43, 0x49, 0x31]; // RCI1
+const RESOURCE_MAGIC = [0x52, 0x43, 0x52, 0x31]; // RCR1
 
 export function decodeBridgeEnvelope(payload: string | ArrayBuffer): BridgeEnvelope {
   if (typeof payload === "string") return JSON.parse(payload) as BridgeEnvelope;
   const bytes = new Uint8Array(payload);
-  if (bytes.length < 8 || !IMAGE_MAGIC.every((value, index) => bytes[index] === value)) {
-    throw new Error("未知的 Bridge 二进制消息");
-  }
+  const image = IMAGE_MAGIC.every((value, index) => bytes[index] === value);
+  const resource = RESOURCE_MAGIC.every((value, index) => bytes[index] === value);
+  if (bytes.length < 8 || (!image && !resource)) throw new Error("未知的 Bridge 二进制消息");
   const metadataLength = new DataView(payload).getUint32(4, false);
-  const pixelOffset = 8 + metadataLength;
-  if (pixelOffset > bytes.length) throw new Error("Bridge 图像消息不完整");
-  const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(8, pixelOffset))) as BridgeEnvelope;
-  if (!metadata.data || typeof metadata.data !== "object") throw new Error("Bridge 图像元数据无效");
-  (metadata.data as Record<string, unknown>).data_bytes = bytes.subarray(pixelOffset);
+  const offset = 8 + metadataLength;
+  if (offset > bytes.length) throw new Error("Bridge 二进制元数据不完整");
+  const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(8, offset))) as BridgeEnvelope;
+  if (resource) {
+    if (metadata.op !== "resource" || !metadata.request_id || !metadata.uri || metadata.data_length !== bytes.length - offset) {
+      throw new Error("Bridge 资源帧长度或元数据无效");
+    }
+    metadata.resource_bytes = bytes.subarray(offset);
+  } else {
+    if (metadata.op !== "topic_message" || !metadata.data || typeof metadata.data !== "object") throw new Error("Bridge 图像元数据无效");
+    (metadata.data as Record<string, unknown>).data_bytes = bytes.subarray(offset);
+  }
   return metadata;
 }
 
 export class BridgeClient {
   private socket: WebSocket | null = null;
+  private resources = new SessionResourceCache();
   private listeners = new Set<Listener>();
   private pending = new Map<
     string,
@@ -65,14 +77,16 @@ export class BridgeClient {
       };
       socket.onmessage = (event) => {
         if (this.socket !== socket) return;
-        const message = decodeBridgeEnvelope(event.data as string | ArrayBuffer);
+        let message: BridgeEnvelope;
+        try { message = decodeBridgeEnvelope(event.data as string | ArrayBuffer); }
+        catch (reason) { this.rejectPending(new Error(`Bridge 协议错误：${String(reason)}`)); socket.close(); return; }
         if (message.request_id && this.pending.has(message.request_id)) {
           const pending = this.pending.get(message.request_id)!;
           if (message.op === "error") pending.reject(new Error(message.message ?? "Bridge 请求失败"));
           else pending.resolve(message);
           this.pending.delete(message.request_id);
         }
-        this.listeners.forEach((listener) => listener(message));
+        if (message.op !== "resource") this.listeners.forEach((listener) => listener(message));
         if (!helloResolved && message.op === "hello") {
           finishHello({
             bridge_version: message.bridge_version,
@@ -84,6 +98,7 @@ export class BridgeClient {
       socket.onclose = () => {
         if (this.socket !== socket) return;
         this.socket = null;
+        this.resources.clear();
         this.rejectPending(new Error("Bridge 连接已断开"));
         if (opened) this.listeners.forEach((listener) => listener({ op: "disconnected" }));
         if (!helloResolved) {
@@ -95,6 +110,7 @@ export class BridgeClient {
   }
 
   async connect(profile: ConnectionProfile): Promise<BridgeHello> {
+    this.close();
     let lastError: unknown = new Error("Bridge 尚未就绪");
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
@@ -108,6 +124,7 @@ export class BridgeClient {
   }
 
   close() {
+    this.resources.clear();
     const socket = this.socket;
     this.socket = null;
     this.rejectPending(new Error("Bridge 连接已关闭"));
@@ -128,25 +145,32 @@ export class BridgeClient {
     this.socket.send(JSON.stringify(message));
   }
 
-  request(message: BridgeEnvelope, timeoutMs = 10000): Promise<BridgeEnvelope> {
+  request(message: BridgeEnvelope, timeoutMs = 10000, signal?: AbortSignal): Promise<BridgeEnvelope> {
+    if (signal?.aborted) return Promise.reject(loadAborted());
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => {
+      const cleanup = () => {
+        window.clearTimeout(timer); signal?.removeEventListener("abort", abort);
         this.pending.delete(requestId);
-        reject(new Error(`${message.op} 请求超时`));
-      }, timeoutMs);
+      };
+      const abort = () => { cleanup(); reject(loadAborted()); };
+      const timer = window.setTimeout(() => { cleanup(); reject(new Error(`${message.op} 请求超时`)); }, timeoutMs);
       this.pending.set(requestId, {
-        resolve: (response) => {
-          window.clearTimeout(timer);
-          resolve(response);
-        },
-        reject: (error) => {
-          window.clearTimeout(timer);
-          reject(error);
-        },
+        resolve: (response) => { cleanup(); resolve(response); },
+        reject: (error) => { cleanup(); reject(error); },
       });
-      this.send({ ...message, request_id: requestId });
+      signal?.addEventListener("abort", abort, { once: true });
+      try { this.send({ ...message, request_id: requestId }); }
+      catch (reason) { cleanup(); reject(reason); }
     });
+  }
+
+  getResource(uri: string, signal?: AbortSignal) {
+    return this.resources.get(uri, async (requestSignal) => {
+      const response = await this.request({ op: "resource", uri, encoding: "binary" }, 30_000, requestSignal);
+      if (!response.resource_bytes && response.base64 == null) throw new Error(`Bridge 未返回资源：${uri}`);
+      return { bytes: response.resource_bytes ?? decodeBase64(response.base64!), mime: response.mime ?? "application/octet-stream" };
+    }, signal);
   }
 
   async listTopics(): Promise<TopicInfo[]> {
