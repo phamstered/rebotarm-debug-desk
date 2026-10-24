@@ -511,7 +511,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
   .app-toolbar .ghost { margin-left: 3px; }
 }
 
-.app-shell { width: 100vw; height: 100vh; display: grid; grid-template-columns: 168px minmax(0, 1fr); background: #071019; transition: grid-template-columns .18s ease; }
+.app-shell { width: 100vw; height: 100vh; display: grid; grid-template-columns: 168px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); background: #071019; transition: grid-template-columns .18s ease; }
 .app-shell.nav-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 .app-page-content { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 
@@ -883,17 +883,18 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 
 .app-shell.nav-collapsed .monitor-page-header, .app-shell.nav-collapsed .status-page-header { padding-left: 28px; }
 
-.app-nav { z-index: 20; min-width: 0; display: flex; flex-direction: column; overflow: hidden; color: #829aa9; border-right: 1px solid #1b3141; background: #08141d; transition: opacity .12s ease; }
+.app-nav { grid-row: 1 / -1; z-index: 20; min-width: 0; min-height: 0; display: grid; grid-template-rows: subgrid; overflow: hidden; color: #829aa9; border-right: 1px solid #1b3141; background: #08141d; transition: opacity .12s ease; }
 .app-nav.collapsed { visibility: hidden; opacity: 0; pointer-events: none; }
-.app-nav-brand { flex: 0 0 54px; display: flex; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid var(--line); color: #d9e8f2; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.app-nav-brand { min-height: 54px; display: flex; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid var(--line); color: #d9e8f2; font-size: 11px; font-weight: 750; white-space: nowrap; }
 .app-nav-brand img { width: 28px; height: 28px; border-radius: 8px; }
+.app-nav-body { min-height: 0; display: flex; flex-direction: column; overflow: auto; }
 .app-nav-items { display: grid; gap: 5px; padding: 10px 8px; }
 .app-nav button { display: flex; align-items: center; gap: 10px; min-width: 0; height: 38px; padding: 0 10px; color: #829aa9; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 11px; font-weight: 680; text-align: left; white-space: nowrap; }
 .app-nav button:hover { color: #cce0ea; background: #102431; }
 .app-nav button.active { color: #e5fffb; border-color: #275550; background: #153834; }
 .app-nav svg { flex: 0 0 18px; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .app-nav-items svg rect { fill: currentColor; stroke: none; opacity: .9; }
-.app-nav-toggle { margin: auto 8px 10px; }
+.app-nav-toggle { flex: 0 0 auto; margin: auto 8px 10px; }
 .nav-reopen { position: fixed; z-index: 40; left: 0; top: 58px; width: 19px; height: 42px; padding: 0; color: #86aaa9; border: 1px solid #28504f; border-left: 0; border-radius: 0 8px 8px 0; background: rgba(10, 29, 37, .94); }
 .app-shell.nav-collapsed .workspace header, .app-shell.nav-collapsed .calibration-header, .app-shell.nav-collapsed .motor-page-header, .app-shell.nav-collapsed .status-page-header { padding-left: 28px; }
 
@@ -1146,9 +1147,9 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .bridge-version-badge.ok { color: #9fe7de; }
 
 .app-main-column {
-  min-width: 0; min-height: 0; display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  height: 100vh; overflow: hidden;
+  grid-row: 1 / -1; min-width: 0; min-height: 0; display: grid;
+  grid-template-rows: subgrid;
+  height: 100%; overflow: hidden;
 }
 .connected-topbar {
   display: flex; flex-wrap: wrap; align-content: center; align-items: center; gap: 6px 8px; min-width: 0; min-height: 46px;
