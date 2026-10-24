@@ -246,3 +246,14 @@ export type RemoteActionResult = {
   message: string;
   detail: string;
 };
+
+export type ControlLogSource = "teleop" | "trajectory" | "controller" | "realsense";
+export type ControlLogSnapshot = {
+  source: ControlLogSource;
+  path: string;
+  exists: boolean;
+  content: string;
+  truncated: boolean;
+  sizeBytes: number;
+  revision: string;
+};

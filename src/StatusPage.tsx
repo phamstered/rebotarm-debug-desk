@@ -16,11 +16,15 @@ import {
   groupStatusZones,
   resolveActiveControlMode,
   toneLabel,
+  statusZoneForCard,
+  summarizeStatusZone,
+  type StatusZoneId,
   type BridgeHelloInfo,
   type StatusCardAction,
   type StatusCardModel,
   type StatusTone,
 } from "./statusLogic";
+import { ControlLogViewer } from "./ControlLogViewer";
 import { isVlaControllerActive } from "./vlaLogic";
 
 function ToneBadge({ tone }: { tone: StatusTone }) {
@@ -130,6 +134,7 @@ export function StatusPage({
   actionNotice = "",
   onCardAction,
   onQuickAction,
+  onClearHighlight,
 }: {
   stage: string;
   sshOk: boolean;
@@ -153,9 +158,16 @@ export function StatusPage({
   vlaChunkSample?: TopicSample | undefined;
   actionBusy?: string | null;
   actionNotice?: string;
+  onClearHighlight?: () => void;
   onCardAction?: (action: StatusCardAction, card: StatusCardModel) => void;
   onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop") => void;
 }) {
+  const [selectedTab, setSelectedTab] = useState<StatusZoneId>(() => statusZoneForCard(highlightCardId) ?? "connection");
+  useEffect(() => {
+    const zone = statusZoneForCard(highlightCardId);
+    if (zone) setSelectedTab(zone);
+  }, [highlightCardId]);
+  const selectTab = (id: StatusZoneId) => { setSelectedTab(id); onClearHighlight?.(); };
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [supported, setSupported] = useState(false);
   const cards = buildStatusCards({
@@ -201,7 +213,7 @@ export function StatusPage({
       <header className="status-page-header">
         <div>
           <h1>Status</h1>
-          <span>四区总览 · USB/Agent 可刷新 · 模式条启停</span>
+          <span>分区状态总览 · 控制模式与实时日志</span>
         </div>
         <div className="status-page-meta" title="不刷写固件；Bridge 升级仍走既有 mismatch 提示">
           <span>NO FLASH</span>
@@ -222,10 +234,28 @@ export function StatusPage({
           <span>{stickyAlert.message}</span>
         </div>
       )}
-      <div className="status-zones" aria-label="状态分区">
+      <div className="status-tabs" role="tablist" aria-label="状态分区">
+        {zones.map((zone, index) => {
+          const summary = summarizeStatusZone(zone.cards);
+          return <button key={zone.id} type="button" role="tab" id={`status-tab-${zone.id}`}
+            aria-controls={`status-panel-${zone.id}`} aria-selected={selectedTab === zone.id}
+            tabIndex={selectedTab === zone.id ? 0 : -1} className={`status-tab tone-${summary.tone}`}
+            title={summary.detail} onClick={() => selectTab(zone.id)} onKeyDown={(event) => {
+              const next = event.key === "ArrowRight" ? (index + 1) % zones.length : event.key === "ArrowLeft" ? (index + zones.length - 1) % zones.length : event.key === "Home" ? 0 : event.key === "End" ? zones.length - 1 : -1;
+              if (next < 0) return;
+              event.preventDefault();
+              selectTab(zones[next].id);
+              document.getElementById(`status-tab-${zones[next].id}`)?.focus();
+            }}>
+            <span className="status-tab-name">{zone.title}</span>
+            <ToneBadge tone={summary.tone} />
+            <span className="status-tab-summary">{summary.detail}</span>
+          </button>;
+        })}
+      </div>
+      <div className="status-zones">
         {zones.map((zone) => {
           const isControl = zone.id === "control";
-          const isSensors = zone.id === "sensors";
           const zoneCards = isControl
             ? zone.cards.filter((card) => card.id === activeMode)
             : zone.cards;
@@ -291,7 +321,7 @@ export function StatusPage({
                   <StatusCard
                     key={card.id}
                     card={card}
-                    highlighted={highlightCardId === card.id}
+                    highlighted={highlightCardId === card.id && selectedTab === zone.id}
                     onAction={onCardAction}
                     compact={zone.id === "connection"}
                   />
@@ -300,25 +330,12 @@ export function StatusPage({
             </>
           );
 
-          if (isSensors) {
-            return (
-              <section key={zone.id} className={`status-zone zone-${zone.id}`} aria-label={zone.title}>
-                <details className="status-zone-details" open={false}>
-                  <summary className="status-zone-title">
-                    <span>{zone.title}</span>
-                    <span className="status-zone-hint">RealSense 等</span>
-                  </summary>
-                  {body}
-                </details>
-              </section>
-            );
-          }
-
           return (
             <section
               key={zone.id}
               className={`status-zone zone-${zone.id}${zone.primary ? " primary" : ""}`}
-              aria-label={zone.title}
+              role="tabpanel" id={`status-panel-${zone.id}`} aria-labelledby={`status-tab-${zone.id}`}
+              hidden={selectedTab !== zone.id}
               data-primary={zone.primary ? "true" : undefined}
             >
               <header className="status-zone-title">
@@ -326,6 +343,8 @@ export function StatusPage({
                 {zone.primary && <span className="status-zone-badge">主区</span>}
               </header>
               {body}
+              {isControl && <ControlLogViewer profile={profile} connected={sshOk} active={selectedTab === "control"}
+                preferredSource={activeMode === "vla" ? "controller" : activeMode === "trajectory" ? "trajectory" : "teleop"} />}
             </section>
           );
         })}

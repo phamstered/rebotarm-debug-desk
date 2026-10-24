@@ -483,3 +483,20 @@ describe("statusLogic", () => {
     expect(quick.find((item) => item.id === "teleop")?.label).toBe("Teleop");
   });
 });
+
+
+describe("status tab summaries", () => {
+  it("keeps faults above warnings and updates unselected zones", async () => {
+    const { summarizeStatusZone, statusZoneForCard } = await import("./statusLogic");
+    const card = (tone: import("./statusLogic").StatusTone) => ({ id: tone, title: tone, tone, summary: "", rows: [] });
+    expect(summarizeStatusZone([card("ok"), card("warn"), card("fail")])).toMatchObject({ tone: "fail", label: "异常" });
+    expect(summarizeStatusZone([card("warn"), card("unknown")]).tone).toBe("warn");
+    expect(summarizeStatusZone([card("ok"), card("unknown")]).tone).toBe("unknown");
+    expect(summarizeStatusZone([card("ok"), card("idle")]).tone).toBe("ok");
+    expect(summarizeStatusZone([card("idle")]).tone).toBe("idle");
+    expect(summarizeStatusZone([]).tone).toBe("unknown");
+    expect(statusZoneForCard("hardware")).toBe("hardware");
+    expect(statusZoneForCard("realsense")).toBe("sensors");
+    expect(statusZoneForCard(null)).toBeUndefined();
+  });
+});

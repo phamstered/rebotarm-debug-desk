@@ -132,6 +132,7 @@ describe("App workflow", () => {
       if (command === "switch_ros_controller") return Promise.resolve(
         `${args?.controllerName} ${args?.action} complete`,
       );
+      if (command === "read_control_log") return Promise.resolve({ source: "teleop", path: "", exists: false, content: "", truncated: false, sizeBytes: 0, revision: "" });
       if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
       if (command === "start_rosbag_recording") return Promise.resolve({ recording: true, pid: 42, outputPath: "/home/robot/robot-console-bags/run", message: "rosbag 录制已开始" });
       if (command === "stop_rosbag_recording") return Promise.resolve({ recording: false, pid: 0, outputPath: "/home/robot/robot-console-bags/run", message: "rosbag 录制已停止" });
@@ -983,6 +984,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
+    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     emitRosReady();
     for (let cycle = 0; cycle < 5; cycle += 1) {
       await user.click(screen.getByRole("button", { name: "Teleop" }));
@@ -1007,6 +1009,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
+    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     emitRosReady();
     await user.click(screen.getByRole("button", { name: "Teleop" }));
     expect(screen.getByRole("button", { name: "启动中…" })).toBeDisabled();
@@ -1021,6 +1024,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
+    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     await user.click(screen.getByRole("button", { name: "解除输出" }));
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(doubles.invoke).not.toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "disable-stop" }));
@@ -1081,6 +1085,11 @@ describe("App workflow", () => {
     const hardware = await screen.findByRole("article", { name: "Hardware" });
     expect(hardware).toHaveAttribute("data-highlighted", "true");
     expect(hardware).toHaveTextContent(/fault_code/);
+    await user.click(screen.getByRole("tab", { name: /连接/ }));
+    expect(hardware).not.toBeVisible();
+    await user.click(fault);
+    expect(hardware).toBeVisible();
+    expect(screen.getByRole("tab", { name: /硬件健康/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("shows last connect history and retries a failed step from the start", async () => {
