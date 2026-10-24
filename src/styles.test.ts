@@ -6,7 +6,7 @@ describe("connected page layout styles", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps the connected toolbar in its own grid row while preserving the Topics toolbar area", async () => {
+  it("shares the header row between Navigation and the wrapping connected toolbar", async () => {
     const { readFileSync } = await vi.importActual<{ readFileSync: (path: string, encoding: string) => string }>("node:fs");
     const styles = readFileSync("src/styles.css", "utf8");
     expect(styles).toContain(".workspace > .app-toolbar");
@@ -15,10 +15,16 @@ describe("connected page layout styles", () => {
     style.textContent = styles;
     document.head.appendChild(style);
     document.body.innerHTML = `
-      <div class="app-main-column">
-        <header class="connected-topbar"></header>
-        <div class="app-page-content">
-          <main class="status-page"><header class="status-page-header"></header></main>
+      <div class="app-shell">
+        <nav class="app-nav">
+          <div class="app-nav-brand">Navigation</div>
+          <div class="app-nav-body"></div>
+        </nav>
+        <div class="app-main-column">
+          <header class="connected-topbar"></header>
+          <div class="app-page-content">
+            <main class="status-page"><header class="status-page-header"></header></main>
+          </div>
         </div>
       </div>
       <main class="workspace"><header class="app-toolbar"></header></main>
@@ -28,6 +34,14 @@ describe("connected page layout styles", () => {
     const statusHeader = document.querySelector(".status-page-header")!;
     const topicsToolbar = document.querySelector(".app-toolbar")!;
 
+    expect(getComputedStyle(document.querySelector(".app-shell")!).gridTemplateRows).toBe("auto minmax(0, 1fr)");
+    for (const selector of [".app-nav", ".app-main-column"]) {
+      const column = getComputedStyle(document.querySelector(selector)!);
+      expect(column.gridRow).toBe("1 / -1");
+      expect(column.gridTemplateRows).toBe("subgrid");
+    }
+    expect(getComputedStyle(document.querySelector(".app-nav-brand")!).minHeight).toBe("54px");
+    expect(getComputedStyle(document.querySelector(".app-nav-body")!).overflow).toBe("auto");
     expect(getComputedStyle(connectedToolbar).gridArea).toBe("");
     expect(getComputedStyle(statusHeader).gridArea).toBe("");
     expect(getComputedStyle(topicsToolbar).gridArea).toBe("header");

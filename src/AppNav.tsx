@@ -54,43 +54,45 @@ export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: 
   return (
     <nav className={`app-nav ${expanded ? "expanded" : "collapsed"}`} aria-label="主工具栏">
       <div className="app-nav-brand"><img src={robotConsoleIcon} alt="" /><span>Navigation</span></div>
-      <div className="app-nav-items">
-        {NAV_ITEMS.map((item) => {
-          const gated = isRosGatedPage(item.page);
-          const reason = gated ? rosGatedNavReason(item.page as RosGatedPage, rosReady) : "";
-          const disabled = Boolean(reason);
-          const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.page === "gravity" ? "重力辨识" : item.label;
-          return (
-            <div key={item.page} className="app-nav-item">
-              <button
-                className={page === item.page ? "active" : ""}
-                aria-current={page === item.page ? "page" : undefined}
-                aria-label={ariaLabel}
-                aria-disabled={disabled || undefined}
-                disabled={disabled}
-                title={disabled ? reason : item.title}
-                onClick={() => {
-                  if (disabled) return;
-                  onSelect(item.page);
-                }}
-              >
-                <item.icon />
-                <span>{item.label}</span>
-              </button>
-              {disabled && reason && (
-                <p className="app-nav-disabled-hint" data-testid={`nav-disabled-${item.page}`}>
-                  {reason}
-                </p>
-              )}
-            </div>
-          );
-        })}
+      <div className="app-nav-body">
+        <div className="app-nav-items">
+          {NAV_ITEMS.map((item) => {
+            const gated = isRosGatedPage(item.page);
+            const reason = gated ? rosGatedNavReason(item.page as RosGatedPage, rosReady) : "";
+            const disabled = Boolean(reason);
+            const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.page === "gravity" ? "重力辨识" : item.label;
+            return (
+              <div key={item.page} className="app-nav-item">
+                <button
+                  className={page === item.page ? "active" : ""}
+                  aria-current={page === item.page ? "page" : undefined}
+                  aria-label={ariaLabel}
+                  aria-disabled={disabled || undefined}
+                  disabled={disabled}
+                  title={disabled ? reason : item.title}
+                  onClick={() => {
+                    if (disabled) return;
+                    onSelect(item.page);
+                  }}
+                >
+                  <item.icon />
+                  <span>{item.label}</span>
+                </button>
+                {disabled && reason && (
+                  <p className="app-nav-disabled-hint" data-testid={`nav-disabled-${item.page}`}>
+                    {reason}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {expanded && (
+          <button className="app-nav-toggle" onClick={onToggle} aria-label="完全收起主工具栏" title="收起">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg><span>收起</span>
+          </button>
+        )}
       </div>
-      {expanded && (
-        <button className="app-nav-toggle" onClick={onToggle} aria-label="完全收起主工具栏" title="收起">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg><span>收起</span>
-        </button>
-      )}
     </nav>
   );
 }
