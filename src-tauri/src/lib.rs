@@ -183,11 +183,16 @@ fn controller_action_flag(action: &str) -> Option<&'static str> {
     }
 }
 
+fn ros_transport_setup() -> &'static str {
+    include_str!("ros_transport.sh")
+}
+
 fn controller_switch_command(
     profile: &ConnectionProfile,
     controller_name: &str,
     action: &str,
 ) -> Result<String, String> {
+    let transport = ros_transport_setup();
     const MANAGER: &str = "/controller_manager";
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
@@ -197,7 +202,7 @@ fn controller_switch_command(
     }
     let flag = controller_action_flag(action).ok_or("不支持的 Controller 操作")?;
     Ok(format!(
-        "bash -lc 'source /opt/ros/humble/setup.bash; \
+        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
          if [ -f \"{}\" ]; then source \"{}\"; fi; \
          ROS_DOMAIN_ID={} timeout 10 ros2 control switch_controllers \
          {} {} --strict --spin-time 1 -c {} 2>&1'",
@@ -215,6 +220,7 @@ fn controllers_switch_command(
     activate: &[String],
     deactivate: &[String],
 ) -> Result<String, String> {
+    let transport = ros_transport_setup();
     const MANAGER: &str = "/controller_manager";
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
@@ -240,7 +246,7 @@ fn controllers_switch_command(
         flags.push_str(&deactivate.join(" "));
     }
     Ok(format!(
-        "bash -lc 'source /opt/ros/humble/setup.bash; \
+        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
          if [ -f \"{}\" ]; then source \"{}\"; fi; \
          ROS_DOMAIN_ID={} timeout 10 ros2 control switch_controllers \
          {} --strict --spin-time 1 -c {} 2>&1'",
@@ -268,12 +274,13 @@ fn joint4_calibration_service_command(
     profile: &ConnectionProfile,
     action: &str,
 ) -> Result<String, String> {
+    let transport = ros_transport_setup();
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
     let service = joint4_calibration_service(action).ok_or("不支持的 joint4 标定操作")?;
     Ok(format!(
-        "bash -lc 'source /opt/ros/humble/setup.bash; \
+        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
          if [ -f \"{}\" ]; then source \"{}\"; fi; \
          ROS_DOMAIN_ID={} timeout 10 ros2 service call {} std_srvs/srv/Trigger \"{{}}\" 2>&1'",
         profile.ros_setup_script, profile.ros_setup_script, profile.ros_domain_id, service,
@@ -339,11 +346,12 @@ fn validate_diagnostics_snapshot(path: &str, content: &str) -> Result<(), String
 }
 
 fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<String, String> {
+    let transport = ros_transport_setup();
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
     let setup = format!(
-        "source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
+        "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
         profile.ros_setup_script, profile.ros_setup_script,
     );
     let paths = "mkdir -p \"$HOME/.cache/robot-console\" \"$HOME/robot-console-bags\"; \
@@ -422,6 +430,7 @@ fn rosbag_play_remote_command(
     action: &str,
     bag_path: &str,
 ) -> Result<String, String> {
+    let transport = ros_transport_setup();
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
@@ -433,7 +442,7 @@ fn rosbag_play_remote_command(
         return Err("bag 路径包含不允许的字符".into());
     }
     let setup = format!(
-        "source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
+        "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
         profile.ros_setup_script, profile.ros_setup_script,
     );
     let paths = "mkdir -p \"$HOME/.cache/robot-console\";                  pid_file=\"$HOME/.cache/robot-console/rosbag-play.pid\";                  path_file=\"$HOME/.cache/robot-console/rosbag-play.path\"; ";
@@ -650,11 +659,12 @@ fn parse_usb_probe(output: &str) -> UsbProbeStatus {
 }
 
 fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<String, String> {
+    let transport = ros_transport_setup();
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
     let setup = format!(
-        "source /opt/ros/humble/setup.bash 2>/dev/null || true; \
+        "{transport}source /opt/ros/humble/setup.bash 2>/dev/null || true; \
          setup_script=\"{setup_script}\"; \
          case \"$setup_script\" in /*) ;; *) setup_script=\"$HOME/$setup_script\";; esac; \
          ws=\"${{LEADER_FOLLOWER_WS:-}}\"; \
@@ -922,12 +932,13 @@ async fn check_micro_ros_agent(profile: ConnectionProfile) -> Result<AgentServic
 
 #[tauri::command]
 async fn check_ros_controllers(profile: ConnectionProfile) -> Result<RosControlStatus, String> {
+    let transport = ros_transport_setup();
     const MANAGER: &str = "/controller_manager";
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
     let remote = format!(
-        "bash -lc 'source /opt/ros/humble/setup.bash; \
+        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
          if [ -f \"{}\" ]; then source \"{}\"; fi; \
          ROS_DOMAIN_ID={} timeout 5 ros2 control list_controllers \
          --spin-time 1 -c {} 2>&1'",
@@ -1168,6 +1179,7 @@ async fn start_session(
     profile: ConnectionProfile,
     state: State<'_, SessionState>,
 ) -> Result<u16, String> {
+    let transport = ros_transport_setup();
     stop_tunnel(&state).await;
 
     if !is_safe_setup_script(&profile.ros_setup_script) {
@@ -1181,7 +1193,7 @@ async fn start_session(
     }
 
     let remote = format!(
-        "bash -lc 'source /opt/ros/humble/setup.bash; \
+        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
          if [ -f \"{}\" ]; then source \"{}\"; fi; \
          source \"$HOME/easy_debug_bridge/install/setup.bash\"; \
          pkill -TERM -f \"^$HOME/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node \" \
@@ -1661,6 +1673,41 @@ mod tests {
         assert!(valid_controller_name("joint_state_broadcaster"));
         assert!(!valid_controller_name("arm-controller"));
         assert!(!valid_controller_name("arm;reboot"));
+    }
+
+    #[test]
+    fn ros_transport_default_respects_explicit_profiles_and_missing_installations() {
+        use std::fs;
+        let directory = std::env::temp_dir().join(format!("robot-console-dds-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("fastdds_udp.xml");
+        let script = ros_transport_setup().replace(
+            "$HOME/easy_debug_bridge/install/easy_debug_bridge/share/easy_debug_bridge/config/fastdds_udp.xml",
+            path.to_str().unwrap(),
+        );
+        let run = |legacy: &str, modern: &str| {
+            let output = std::process::Command::new("bash")
+                .args(["-c", &format!("{script}printf \"%s|%s\" \"${{FASTRTPS_DEFAULT_PROFILES_FILE:-}}\" \"${{FASTDDS_DEFAULT_PROFILES_FILE:-}}\"")])
+                .env("FASTRTPS_DEFAULT_PROFILES_FILE", legacy)
+                .env("FASTDDS_DEFAULT_PROFILES_FILE", modern)
+                .output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        };
+        assert_eq!(run("", ""), "|");
+        fs::write(&path, include_str!("../../bridge/easy_debug_bridge/config/fastdds_udp.xml")).unwrap();
+        assert_eq!(run("", ""), format!("{}|", path.display()));
+        assert_eq!(run("/opt/custom.xml", ""), "/opt/custom.xml|");
+        assert_eq!(run("", "/opt/modern.xml"), "|/opt/modern.xml");
+        fs::remove_dir_all(directory).unwrap();
+        for command in [
+            controller_switch_command(&profile(""), "arm_controller", "activate").unwrap(),
+            controllers_switch_command(&profile(""), &["arm_controller".into()], &[]).unwrap(),
+            arm_mode_remote_command(&profile(""), "status").unwrap(),
+        ] {
+            assert!(command.contains("FASTRTPS_DEFAULT_PROFILES_FILE"));
+            assert!(std::process::Command::new("bash").args(["-n", "-c", &command]).status().unwrap().success());
+        }
     }
 
     #[test]

@@ -229,3 +229,10 @@ npm run build
 5. `npm run test:deploy`：Bridge 部署脚本（参数、rsync、校验解析）单元测试。
 
 Jetson、Fast DDS、micro-ROS Agent 和 STM32 属于外部进程/硬件边界，不能由本机单元测试替代。涉及这些边界的变更还需执行 ROS 2 `colcon test`、隔离测试 Topic 或安全的 DISABLE 验证，但外部验证不能取代上述全量单元测试。
+
+## Teleop Graph 与 ROS 进程日志
+
+- Topic Graph 默认仅隐藏本控制台的 `easy_debug_bridge` 节点及该名称空间下的私有 Topic；STM32 的 `/stm32h723_motor_bridge`、相机 bridge 和用户自定义 bridge 均保留。勾选「显示调试 Bridge」可显示控制台自身节点，原来的显示偏好继续有效。
+- 更新 Bridge 后，桌面启动 Bridge、查询/切换控制器、rosbag 和一键 arm 模式时，若没有显式 DDS XML 配置，使用安装包 `config/fastdds_udp.xml` 的 UDPv4 profile，避开残留或已删除的 Fast DDS SHM 锁导致的发现/数据中断。`deploy:bridge --restart` 同样使用目标安装包内的 profile。显式 `FASTRTPS_DEFAULT_PROFILES_FILE` / `FASTDDS_DEFAULT_PROFILES_FILE` 优先；不修改系统服务、不删除 `/dev/shm` 文件、不降低命令新鲜度或安全停机门禁。
+- 需要同时更新 `rebotarm-ros2-stack` 的 Teleop 入口和 `joint_state_relay`：正常 SIGINT/SIGTERM 由 relay 和 leader 生命周期适配入口处理，不向已关闭的 ROS context 写错误日志；真正的串口异常、初始化失败和 STM32 JointState 超时仍报错。外部 Star Arm 驱动、串口和关节映射不由本仓改写。
+- 验证：Graph 过滤/节点选择的 Vitest、DDS 默认/显式 profile 的 Rust 与部署脚本测试、隔离 ROS Graph 发现/节点详情/节点退出测试；控制栈单独执行模拟 leader/relay 的信号测试，不连接真实串口或发送机械臂指令。

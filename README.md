@@ -148,3 +148,7 @@ node scripts/smoke-bridge.mjs 18765
 - 架构说明：[docs/architecture.md](docs/architecture.md)
 - Joint4 标定：[docs/joint4-calibration.md](docs/joint4-calibration.md)
 - 贡献 / Agent 规范：[AGENTS.md](AGENTS.md)
+
+### Teleop 的 Graph / DDS 故障
+
+Topic Graph 的「显示调试 Bridge」只控制本控制台节点，不会隐藏 STM32 或相机节点。Bridge 与一键 arm 启动使用进程级 Fast DDS UDP profile，避免损坏的 SHM 锁影响 ROS 发现；显式 DDS XML 环境变量可覆盖，详见 [架构](docs/architecture.md#console-managed-ros-transport)。升级此修复需要更新桌面、部署 Bridge，并更新/构建控制栈的 `joint_state_relay`；不需要改写外部 Star Arm 驱动。

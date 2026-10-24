@@ -23,6 +23,27 @@ describe("TopicGraph", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => vi.useRealTimers());
 
+  it("renders and inspects the STM32 bridge node when diagnostic Bridge display is off", async () => {
+    const onSelectNode = vi.fn();
+    const bridge = { getGraph: vi.fn().mockResolvedValue({
+      nodes: [
+        { id: "node:/easy_debug_bridge", label: "/easy_debug_bridge", kind: "node", types: [] },
+        { id: "node:/stm32h723_motor_bridge", label: "/stm32h723_motor_bridge", kind: "node", types: [] },
+        ...graph.nodes.slice(1),
+      ],
+      edges: [{ source: "node:/stm32h723_motor_bridge", target: "topic:/joint_states", relation: "publish" }],
+    }) } as unknown as BridgeClient;
+    const user = userEvent.setup();
+    render(<TopicGraph bridge={bridge} onSelectTopic={vi.fn()} onSelectNode={onSelectNode} />);
+    const hardware = await screen.findByRole("button", { name: "Node /stm32h723_motor_bridge" });
+    expect(screen.queryByRole("button", { name: "Node /easy_debug_bridge" })).not.toBeInTheDocument();
+    expect(screen.getByText(/1 Nodes/)).toBeVisible();
+    await user.click(hardware);
+    expect(onSelectNode).toHaveBeenCalledWith("/stm32h723_motor_bridge");
+    await user.click(screen.getByLabelText("显示调试 Bridge"));
+    expect(screen.getByRole("button", { name: "Node /easy_debug_bridge" })).toBeVisible();
+  });
+
   it("refreshes the ROS graph immediately, manually and every 30 seconds", async () => {
     vi.useFakeTimers();
     const bridge = bridgeDouble();
@@ -76,7 +97,7 @@ describe("TopicGraph", () => {
     render(<TopicGraph bridge={bridge} onSelectTopic={vi.fn()} />);
     expect(await screen.findByRole("button", { name: "Topic /joint_states" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Node /easy_debug_bridge" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("checkbox", { name: "显示 Bridge" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示调试 Bridge" }));
     expect(screen.getByRole("button", { name: "Node /easy_debug_bridge" })).toBeVisible();
     expect(localStorage.getItem("robot-console-graph-show-bridge")).toBe("true");
   });

@@ -302,3 +302,11 @@ test("parseArgs accepts --ssh-port and --identity-file", () => {
   assert.equal(config.sshPort, 2201);
   assert.equal(config.identityFile, "/tmp/key");
 });
+
+test("restart uses the installed UDP profile without replacing explicit DDS profiles", () => {
+  const script = buildRemoteRestartScript(resolveConfig({ remoteRoot: "bridge_test" }, {}));
+  assert.ok(script.includes('FASTRTPS_DEFAULT_PROFILES_FILE:-'));
+  assert.ok(script.includes('FASTDDS_DEFAULT_PROFILES_FILE:-'));
+  assert.ok(script.includes('bridge_test/install/easy_debug_bridge/share/easy_debug_bridge/config/fastdds_udp.xml'));
+  assert.ok(script.indexOf('export FASTRTPS_DEFAULT_PROFILES_FILE=') < script.indexOf('nohup ros2 run'));
+});

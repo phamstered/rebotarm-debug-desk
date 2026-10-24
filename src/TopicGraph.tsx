@@ -307,7 +307,7 @@ export function TopicGraph({
               localStorage.setItem(GRAPH_BRIDGE_VISIBILITY_KEY, String(event.target.checked));
             }}
           />
-          显示 Bridge
+          显示调试 Bridge
         </label>
         <button type="button" onClick={() => void refresh()} disabled={loading}>
           {loading ? "刷新中…" : "刷新 Graph"}
