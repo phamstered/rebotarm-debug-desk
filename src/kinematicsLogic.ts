@@ -321,14 +321,15 @@ export function chainToLink(model: KinematicModel, linkName: string): KinematicJ
 }
 
 const TCP_NAME_PATTERN = /tool0|tcp|ee_link|end[_.-]?effector|gripper|flange|suction|hand|tool/i;
+const FINGER_NAME_PATTERN = /finger|jaw/i;
 
 export function linkDepth(model: KinematicModel, linkName: string): number {
   return chainToLink(model, linkName).length;
 }
 
 /**
- * 解析 TCP（夹爪）link：配置显式指定时优先使用，否则在叶子 link 中按
- * 命名特征 + 链深度挑选最可能的末端执行器。
+ * 显式配置优先；自动选择稳定的工具坐标系（可以有手指子 link），
+ * 避免把夹爪开合自由度当作机械臂的 TCP 位置自由度。
  */
 export function resolveTcpLink(model: KinematicModel, configured?: string): string {
   const wanted = (configured ?? "").trim();
@@ -339,10 +340,13 @@ export function resolveTcpLink(model: KinematicModel, configured?: string): stri
   const parentLinks = new Set(model.joints.map((joint) => joint.parent));
   const leaves = model.links.filter((link) => !parentLinks.has(link));
   if (leaves.length === 0) throw new Error("URDF 中没有末端 link");
-  let best = leaves[0];
+  const tools = model.links.filter((link) => TCP_NAME_PATTERN.test(link) && !FINGER_NAME_PATTERN.test(link));
+  const candidates = tools.length ? tools : leaves;
+  let best = candidates[0];
   let bestScore = Number.NEGATIVE_INFINITY;
-  for (const link of leaves) {
-    const score = (TCP_NAME_PATTERN.test(link) ? 1000 : 0) + linkDepth(model, link);
+  for (const link of candidates) {
+    const explicitTool = /(^|[_/.-])(tcp|tool0|ee_link)([_/.-]|$)/i.test(link);
+    const score = (explicitTool ? 2000 : TCP_NAME_PATTERN.test(link) ? 1000 : 0) + linkDepth(model, link);
     if (score > bestScore || (score === bestScore && link < best)) {
       best = link;
       bestScore = score;

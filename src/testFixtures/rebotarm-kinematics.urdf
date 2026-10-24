@@ -1,0 +1,82 @@
+<!-- Kinematic joints from rebotarm-ros2-stack main 69120ac, meshes/inertias omitted. -->
+<robot name="reBot-DevArm_fixend">
+  <link name="base_link" />
+  <link name="link1" />
+  <joint name="joint1" type="revolute">
+    <origin xyz="-8.416E-05 0 0.08465" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="link1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.8" upper="2.8" effort="27" velocity="50" />
+  </joint>
+  <link name="link2" />
+  <joint name="joint2" type="revolute">
+    <origin xyz="0.020084 0.031625 0.05555" rpy="-1.5708 0 0" />
+    <parent link="link1" />
+    <child link="link2" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-3.14" upper="0" effort="27" velocity="50" />
+  </joint>
+  <link name="link3" />
+  <joint name="joint3" type="revolute">
+    <origin xyz="-0.264 0 0" rpy="0 0 0" />
+    <parent link="link2" />
+    <child link="link3" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.14" upper="0" effort="27" velocity="50" />
+  </joint>
+  <link name="link4" />
+  <joint name="joint4" type="revolute">
+    <origin xyz="0.2426 -0.054 -0.001625" rpy="0 0 0" />
+    <parent link="link3" />
+    <child link="link4" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.87" upper="1.57" effort="7" velocity="200" />
+  </joint>
+  <link name="link5" />
+  <joint name="joint5" type="revolute">
+    <origin xyz="0.078308 -0.0375 -0.03" rpy="-1.5708 0 0" />
+    <parent link="link4" />
+    <child link="link5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.57" upper="1.57" effort="7" velocity="200" />
+  </joint>
+  <link name="link6" />
+  <joint name="joint6" type="revolute">
+    <origin xyz="0.028008 0 0.04" rpy="0 1.5708 0" />
+    <parent link="link5" />
+    <child link="link6" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.14" upper="3.14" effort="7" velocity="200" />
+  </joint>
+  <link name="camera_link" />
+  <joint name="camera_mount_joint" type="fixed">
+    <origin xyz="0.0520 -0.0139 0.0672" rpy="0.0136 1.2829 3.1100" />
+    <parent link="link6" />
+    <child link="camera_link" />
+  </joint>
+  <link name="gripper_link" />
+  <joint name="gripper_joint" type="fixed">
+    <origin xyz="0 0 0.15971" rpy="0 -1.5708 0" />
+    <parent link="link6" />
+    <child link="gripper_link" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <link name="gripper_finger_left" />
+  <joint name="gripper_finger_left_joint" type="prismatic">
+    <origin xyz="-0.042091 2.7531E-05 -1.3031E-05" rpy="0 0 -1.5708" />
+    <parent link="gripper_link" />
+    <child link="gripper_finger_left" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="0.0715" effort="100" velocity="15" />
+  </joint>
+  <link name="gripper_finger_right" />
+  <joint name="gripper_finger_right_joint" type="prismatic">
+    <origin xyz="-0.042091 -2.7531E-05 1.3031E-05" rpy="0 0 1.5708" />
+    <parent link="gripper_link" />
+    <child link="gripper_finger_right" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="0.0715" effort="100" velocity="15" />
+    <mimic joint="gripper_finger_left_joint" multiplier="1" />
+  </joint>
+</robot>

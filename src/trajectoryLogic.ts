@@ -6,9 +6,27 @@ import {
   solvePositionIk,
 } from "./kinematicsLogic";
 import type { KinematicFrame, KinematicJoint, KinematicModel, Vec3 } from "./kinematicsLogic";
-import type { ControllerInfo, TrajectoryPoint } from "./types";
+import type { ControllerInfo, TopicInfo, TrajectoryPoint } from "./types";
 
-export type TrajectoryController = { name: string; topic: string };
+export type TrajectoryController = { name: string; topic: string; jointNames?: string[]; readinessError?: string };
+
+/** Humble exposes controller_state; older installations may expose only state. */
+export function trajectoryStateTopic(controller: TrajectoryController, topics: TopicInfo[]): string {
+  const base = controller.topic.replace(/\/joint_trajectory$/, "");
+  return [`${base}/controller_state`, `${base}/state`].find((name) => topics.some(
+    (topic) => topic.name === name && topic.types.includes("control_msgs/msg/JointTrajectoryControllerState"),
+  )) ?? `${base}/controller_state`;
+}
+
+export function trajectoryJointNames(data: unknown): string[] | null {
+  const names = (data as { joint_names?: unknown } | null)?.joint_names;
+  if (!Array.isArray(names) || names.length === 0 || names.length > 32
+    || names.some((name) => typeof name !== "string" || !name.trim())
+    || new Set(names).size !== names.length) return null;
+  return names as string[];
+}
+
+export const TRAJECTORY_FEEDBACK_MAX_AGE_MS = 1000;
 
 /** JointTrajectoryController 的输入 Topic，与 ros2_controllers 的 `~/joint_trajectory` 约定一致。 */
 export function trajectoryTopicFor(controllerName: string): string {
@@ -44,7 +62,7 @@ export function trajectoryDuration(start: number[], goal: number[], jointSpeed =
 }
 
 export type TrajectoryPlan = {
-  /** 轨迹消息携带的全部关节，顺序与 JointState 一致。 */
+  /** 轨迹消息携带的关节，顺序与控制器的 joint_names 一致。 */
   jointNames: string[];
   /** 起点关节值，取当前反馈。 */
   start: number[];
@@ -69,18 +87,21 @@ export type TrajectoryPlanResult = { plan?: TrajectoryPlan; error?: string };
 
 /**
  * 把 TCP 目标位置换算成一条可下发的 JointTrajectory。
- * 关节集合直接沿用 JointState 的 name，保证与控制器的关节列表一致。
+ * 使用控制器声明的关节集合；纯规划未指定控制器时只使用 TCP 链关节。
  */
 export function planTrajectory(options: {
   model: KinematicModel;
   tcpLink: string;
   jointState: { name?: string[]; position?: number[] } | null;
+  controllerJointNames?: string[];
   target: Vec3;
   /** 上一帧 IK 解，按运动链顺序，用于拖拽热启动。 */
   seed?: number[];
 }): TrajectoryPlanResult {
   const names = options.jointState?.name ?? [];
   if (names.length === 0) return { error: "JointState 尚未就绪，无法规划轨迹" };
+  if (new Set(names).size !== names.length) return { error: "JointState 存在重复关节名，无法规划轨迹" };
+  if (!options.target.every(Number.isFinite)) return { error: "TCP 目标位置必须为有限数值" };
 
   let chain: KinematicJoint[];
   try {
@@ -91,27 +112,33 @@ export function planTrajectory(options: {
   const joints = actuatedJoints(chain);
   if (joints.length === 0) return { error: "TCP 运动链上没有可控关节" };
 
-  const positions = names.map((_, index) => options.jointState?.position?.[index] ?? 0);
-  const chainIndices = joints.map((joint) => names.indexOf(joint.name));
-  const missing = joints.filter((_, index) => chainIndices[index] < 0).map((joint) => joint.name);
+  const commandNames = options.controllerJointNames ?? joints.map((joint) => joint.name);
+  if (!trajectoryJointNames({ joint_names: commandNames })) return { error: "轨迹控制器关节列表为空或无效" };
+  const unsupported = joints.filter((joint) => !commandNames.includes(joint.name)).map((joint) => joint.name);
+  if (unsupported.length) return { error: `TCP 运动链包含控制器不接收的关节：${unsupported.join("、")}；请检查 TCP link 配置` };
+  const missing = commandNames.filter((name) => !names.includes(name));
   if (missing.length > 0) return { error: `JointState 缺少关节：${missing.join("、")}` };
+  const positions = commandNames.map((name) => options.jointState?.position?.[names.indexOf(name)]);
+  const invalid = commandNames.filter((_, index) => !Number.isFinite(positions[index]));
+  if (invalid.length) return { error: `JointState 位置缺失或非有限数值：${invalid.join("、")}` };
+  const start = positions as number[];
+  const chainIndices = joints.map((joint) => commandNames.indexOf(joint.name));
 
-  const seed = joints.map((joint, index) => options.seed?.[index] ?? positions[chainIndices[index]]);
+  const seed = joints.map((joint, index) => options.seed?.[index] ?? start[chainIndices[index]]);
   const ik = solvePositionIk(chain, seed, options.target);
   const frame: KinematicFrame = forwardKinematics(chain, ik.positions);
 
-  const start = [...positions];
   const goal = ik.positions.reduce(
     (values, value, index) => {
       values[chainIndices[index]] = value;
       return values;
     },
-    [...positions],
+    [...start],
   );
 
   const duration = trajectoryDuration(start, goal);
   const plan: TrajectoryPlan = {
-    jointNames: [...names],
+    jointNames: [...commandNames],
     start,
     goal,
     chainJointNames: joints.map((joint) => joint.name),
@@ -160,6 +187,7 @@ export async function dispatchTrajectory(options: {
   model: KinematicModel;
   tcpLink: string;
   jointState: { name?: string[]; position?: number[] } | null;
+  controllerJointNames?: string[];
   target: Vec3;
   seed?: number[];
   send(request: { jointNames: string[]; points: TrajectoryPoint[] }): Promise<void>;

@@ -13,7 +13,7 @@ export type ConnectionProfile = {
   jointStateTopic: string;
   commandTopic: string;
   statusTopic: string;
-  /** TCP（夹爪）link 名称；留空时按命名特征和运动链深度自动挑选。 */
+  /** TCP link；留空时优先稳定工具坐标系，避免选到可动手指。 */
   tcpLink: string;
 };
 
