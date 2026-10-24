@@ -7,7 +7,7 @@ const doubles = vi.hoisted(() => ({
   save: vi.fn(),
   connect: vi.fn().mockResolvedValue({
     bridge_version: "0.1.0",
-    bridge_build_id: "60d545ebddc3",
+    bridge_build_id: "dc8f3b4c126c",
     ros_distro: "humble",
   }),
   listTopics: vi.fn().mockResolvedValue([
@@ -207,7 +207,7 @@ describe("App workflow", () => {
       })
       .mockResolvedValueOnce({
         bridge_version: "0.1.0",
-        bridge_build_id: "60d545ebddc3",
+        bridge_build_id: "dc8f3b4c126c",
         ros_distro: "humble",
       });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
@@ -543,6 +543,47 @@ describe("App workflow", () => {
       rightWidth: 342,
       leftTopRatio: 0.67,
     }));
+  });
+
+  it("keeps the same Robot View element across Graph and main navigation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const viewer = await screen.findByTestId("urdf");
+    await user.click(screen.getByRole("tab", { name: "Topic Graph" }));
+    expect(viewer).not.toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Robot View" }));
+    expect(screen.getByTestId("urdf")).toBe(viewer);
+    await user.click(screen.getByRole("button", { name: "Status" }));
+    expect(viewer).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Topics" }));
+    expect(screen.getByTestId("urdf")).toBe(viewer);
+    expect(viewer).toBeVisible();
+  });
+
+  it("leases images only while Inspector data is visible, releases and resubscribes on return", async () => {
+    doubles.listTopics.mockResolvedValueOnce([{ name: "/test/image", types: ["sensor_msgs/msg/Image"] }]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: /\/test\/image/ }));
+    const subscription = { op: "subscribe", topic: "/test/image", type: "sensor_msgs/msg/Image" };
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith(subscription));
+    await user.click(screen.getByRole("tab", { name: "详情" }));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({ op: "unsubscribe", topic: "/test/image" }));
+    doubles.request.mockClear();
+    await user.click(screen.getByRole("tab", { name: "数据" }));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith(subscription));
+    await user.click(screen.getByRole("button", { name: "Status" }));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({ op: "unsubscribe", topic: "/test/image" }));
+    // A frame already queued by an older Bridge must not repopulate a hidden preview.
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/test/image", data: { encoding: "mono8", width: 1, height: 1, data_bytes: new Uint8Array([1]) } }));
+    doubles.request.mockClear();
+    await user.click(screen.getByRole("button", { name: "Topics" }));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith(subscription));
+    expect(screen.queryByText(/1 条/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({ op: "unsubscribe", topic: "/test/image" }));
   });
 
   it("routes URDF, joint state and hardware status messages", async () => {

@@ -8,6 +8,18 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  easy_debug_bridge::ImageInterests interests;
+  interests.add("/image", 1); interests.add("/image", 1); interests.add("/image", 2);
+  assert(interests.clients("/image").size() == 2);
+  assert(!interests.remove("/image", 1));
+  assert(interests.clients("/image").count(2));
+  interests.add("/other_image", 2);
+  const auto empty = interests.disconnect(2);
+  assert(empty.size() == 2);
+  assert(interests.clients("/image").empty());
+  assert(!interests.remove("/missing", 1));
+  const auto resource = easy_debug_bridge::binary_resource_frame("{}", {1, 2, 3});
+  assert(resource.size() == 13 && resource[2] == 'R' && resource[7] == 2 && resource[10] == 1);
   CommandFields command;
   command.mode = 1;
   command.position = 0.6;

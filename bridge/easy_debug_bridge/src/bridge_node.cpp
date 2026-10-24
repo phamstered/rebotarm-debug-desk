@@ -263,6 +263,7 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
       : socket_(std::move(socket)), bridge_(std::move(bridge)) {}
 
   void run();
+  uint64_t id() const { return id_; }
 
   bool send(const std::string &payload) {
     std::lock_guard<std::mutex> lock(write_mutex_);
@@ -284,7 +285,20 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
     return !error;
   }
 
+  void image_interest(const std::string &topic, bool enabled) {
+    std::lock_guard<std::mutex> lock(image_mutex_);
+    if (enabled) image_topics_.insert(topic); else image_topics_.erase(topic);
+  }
+  bool send_image(const std::string &topic, const std::vector<uint8_t> &payload) {
+    std::lock_guard<std::mutex> lock(image_mutex_);
+    return image_topics_.count(topic) && send_binary(payload);
+  }
+
  private:
+  inline static std::atomic<uint64_t> next_id_{1};
+  const uint64_t id_ = next_id_++;
+  std::mutex image_mutex_;
+  std::set<std::string> image_topics_;
   websocket::stream<tcp::socket> socket_;
   std::shared_ptr<BridgeNode> bridge_;
   std::mutex write_mutex_;
@@ -298,6 +312,12 @@ class BridgeNode : public rclcpp::Node {
     command_topic_ = declare_parameter<std::string>("command_topic", "/stm32/joint_commands");
     status_topic_ = declare_parameter<std::string>("status_topic", "/stm32/status");
     joint_state_topic_ = declare_parameter<std::string>("joint_state_topic", "/stm32/joint_states");
+    // Humble's executor can retain its last subscription while waiting for work.
+    // A one-shot executable releases that reference even if the camera stops.
+    image_cleanup_timer_ = create_wall_timer(std::chrono::milliseconds(10), [this] {
+      image_cleanup_timer_->cancel();
+    });
+    image_cleanup_timer_->cancel();
     auto qos = rclcpp::QoS(10).best_effort().durability_volatile();
     command_publisher_ = create_publisher<microros_stm32h723_bridge::msg::JointCommand>(
         command_topic_, qos);
@@ -340,14 +360,46 @@ class BridgeNode : public rclcpp::Node {
         sessions_.end());
   }
 
-  void broadcast_binary(const std::vector<uint8_t> &payload) {
-    std::lock_guard<std::mutex> lock(session_mutex_);
-    sessions_.erase(
-        std::remove_if(sessions_.begin(), sessions_.end(), [&](auto &weak) {
-          auto session = weak.lock();
-          return !session || !session->send_binary(payload);
-        }),
-        sessions_.end());
+  void broadcast_image(const std::string &topic, const std::vector<uint8_t> &payload) {
+    std::set<uint64_t> clients;
+    { std::lock_guard<std::mutex> lock(subscription_mutex_); clients = image_interests_.clients(topic); }
+    std::vector<std::shared_ptr<WebSocketSession>> targets;
+    {
+      std::lock_guard<std::mutex> lock(session_mutex_);
+      for (auto &weak : sessions_) if (auto session = weak.lock()) {
+        if (clients.count(session->id())) targets.push_back(session);
+      }
+    }
+    for (auto &session : targets) session->send_image(topic, payload);
+  }
+
+  void remove_session(uint64_t client) {
+    std::lock_guard<std::mutex> lock(subscription_mutex_);
+    for (const auto &topic : image_interests_.disconnect(client)) {
+      subscriptions_.erase(topic); subscription_types_.erase(topic);
+      image_cleanup_timer_->reset();
+    }
+    std::lock_guard<std::mutex> sessions_lock(session_mutex_);
+    sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(), [client](auto &weak) {
+      const auto session = weak.lock(); return !session || session->id() == client;
+    }), sessions_.end());
+  }
+
+  void unsubscribe_image(const std::shared_ptr<WebSocketSession> &session, const std::string &topic, const std::string &request_id) {
+    if (!easy_debug_bridge::is_valid_graph_name(topic)) { session->send(error_message(request_id, "无效的 Topic 名称")); return; }
+    {
+      std::lock_guard<std::mutex> lock(subscription_mutex_);
+      const auto type = subscription_types_.find(topic);
+      if (type != subscription_types_.end() && type->second != "sensor_msgs/msg/Image") {
+        session->send(error_message(request_id, "unsubscribe 当前仅支持图像 Topic")); return;
+      }
+      session->image_interest(topic, false);
+      if (image_interests_.remove(topic, session->id())) {
+        subscriptions_.erase(topic); subscription_types_.erase(topic);
+        image_cleanup_timer_->reset();
+      }
+    }
+    session->send("{\"op\":\"unsubscribed\",\"request_id\":" + json_quote(request_id) + ",\"topic\":" + json_quote(topic) + "}");
   }
 
   void handle(const std::shared_ptr<WebSocketSession> &session, const std::string &payload) {
@@ -377,8 +429,10 @@ class BridgeNode : public rclcpp::Node {
       } else if (op == "subscribe") {
         subscribe(session, request.get<std::string>("topic", ""),
                   request.get<std::string>("type", ""), request_id);
+      } else if (op == "unsubscribe") {
+        unsubscribe_image(session, request.get<std::string>("topic", ""), request_id);
       } else if (op == "resource") {
-        send_resource(session, request.get<std::string>("uri", ""), request_id);
+        send_resource(session, request.get<std::string>("uri", ""), request_id, request.get<std::string>("encoding", "base64"));
       } else if (op == "joint_command") {
         publish_joint_command(session, request, request_id);
       } else if (op == "trajectory_command") {
@@ -568,6 +622,7 @@ class BridgeNode : public rclcpp::Node {
           session->send(error_message(request_id, "该 Topic 已按其他消息类型订阅：" + subscription_types_.at(topic)));
           return;
         }
+        if (type == "sensor_msgs/msg/Image") { image_interests_.add(topic, session->id()); session->image_interest(topic, true); }
         session->send("{\"op\":\"subscribed\",\"request_id\":" + json_quote(request_id) +
                       ",\"topic\":" + json_quote(topic) + "}");
         return;
@@ -606,9 +661,11 @@ class BridgeNode : public rclcpp::Node {
             topic, compatible_qos(topic), [this, topic](const sensor_msgs::msg::Image::SharedPtr message) {
               const std::string metadata = "{\"op\":\"topic_message\",\"topic\":" +
                   json_quote(topic) + ",\"data\":" + image_metadata_json(*message) + "}";
-              broadcast_binary(easy_debug_bridge::binary_image_frame(metadata, message->data));
+              broadcast_image(topic, easy_debug_bridge::binary_image_frame(metadata, message->data));
             });
         subscriptions_[topic] = subscription;
+        image_interests_.add(topic, session->id());
+        session->image_interest(topic, true);
       } else if (type == "microros_stm32h723_bridge/msg/JointCommand") {
         create_typed_subscription<microros_stm32h723_bridge::msg::JointCommand>(topic, [](const auto &m) {
           return "{\"header\":" + header_json(m.header) +
@@ -683,7 +740,8 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void send_resource(const std::shared_ptr<WebSocketSession> &session, const std::string &uri,
-                     const std::string &request_id) {
+                     const std::string &request_id, const std::string &encoding) {
+    if (encoding != "base64" && encoding != "binary") { session->send(error_message(request_id, "不支持的资源编码")); return; }
     constexpr const char *prefix = "package://";
     if (uri.rfind(prefix, 0) != 0) {
       session->send(error_message(request_id, "仅允许 package:// 资源"));
@@ -713,10 +771,19 @@ class BridgeNode : public rclcpp::Node {
         session->send(error_message(request_id, "资源文件无法读取"));
         return;
       }
-      std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), {});
-      session->send("{\"op\":\"resource\",\"request_id\":" + json_quote(request_id) +
-                    ",\"uri\":" + json_quote(uri) + ",\"mime\":" + json_quote(mime_for(*path)) +
-                    ",\"base64\":" + json_quote(easy_debug_bridge::base64_encode(bytes)) + "}");
+      const auto size = std::filesystem::file_size(*path);
+      if (size > 64 * 1024 * 1024) { session->send(error_message(request_id, "资源超过 64 MiB 上限")); return; }
+      std::vector<uint8_t> bytes(size);
+      if (size && !file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size))) {
+        session->send(error_message(request_id, "资源文件读取不完整")); return;
+      }
+      const std::string metadata = "{\"op\":\"resource\",\"request_id\":" + json_quote(request_id) +
+          ",\"uri\":" + json_quote(uri) + ",\"mime\":" + json_quote(mime_for(*path));
+      if (encoding == "binary") {
+        session->send_binary(easy_debug_bridge::binary_resource_frame(metadata + ",\"data_length\":" + std::to_string(bytes.size()) + "}", bytes));
+      } else {
+        session->send(metadata + ",\"base64\":" + json_quote(easy_debug_bridge::base64_encode(bytes)) + "}");
+      }
     } catch (const std::exception &error) {
       session->send(error_message(request_id, std::string("资源读取失败：") + error.what()));
     }
@@ -1159,6 +1226,8 @@ class BridgeNode : public rclcpp::Node {
   std::mutex session_mutex_;
   std::vector<std::weak_ptr<WebSocketSession>> sessions_;
   std::mutex subscription_mutex_;
+  rclcpp::TimerBase::SharedPtr image_cleanup_timer_;
+  easy_debug_bridge::ImageInterests image_interests_;
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   std::unordered_map<std::string, std::string> subscription_types_;
   rclcpp::Publisher<microros_stm32h723_bridge::msg::JointCommand>::SharedPtr command_publisher_;
@@ -1201,6 +1270,7 @@ void WebSocketSession::run() {
     bridge_->handle(shared_from_this(), beast::buffers_to_string(buffer.data()));
   }
   open_.store(false);
+  bridge_->remove_session(id());
 }
 
 class WebSocketServer {

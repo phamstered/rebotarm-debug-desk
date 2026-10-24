@@ -7,19 +7,13 @@ import {
   DirectionalLight,
   GridHelper,
   Group,
-  LoadingManager,
-  Mesh,
-  MeshStandardMaterial,
-  Object3D,
   PerspectiveCamera,
   Vector2,
   Vector3,
 } from "three";
-import { ColladaLoader } from "three/examples/jsm/loaders/ColladaLoader.js";
-import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
-import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import URDFLoader, { type URDFRobot } from "urdf-loader";
+import { type URDFRobot } from "urdf-loader";
+import { disposeUrdfObject, hydrateUrdfResources, loadUrdfScene } from "./urdfAssetLogic";
 import type { BridgeClient } from "./bridge";
 import {
   cameraFacingNormal,
@@ -35,11 +29,6 @@ import type { TrajectoryPoint } from "./types";
 import { ViewerHeadsUp } from "./ViewerHeadsUp";
 import {
   applyJointState,
-  applyUrdfVisualColors,
-  decodeBase64,
-  finalizeLoadedUrdfMesh,
-  loadPackageResourcesSequentially,
-  resolvePackageRelative,
 } from "./urdfLogic";
 
 type JointState = { name?: string[]; position?: number[] };
@@ -61,18 +50,13 @@ function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolea
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controlsRef.current = controls;
-    let frame = 0;
-    const tick = () => {
-      controls.update();
-      frame = requestAnimationFrame(tick);
-    };
-    tick();
     return () => {
-      cancelAnimationFrame(frame);
       controls.dispose();
       controlsRef.current = null;
     };
   }, [camera, gl]);
+
+  useFrame(() => controlsRef.current?.update());
 
   useEffect(() => {
     if (controlsRef.current) controlsRef.current.enabled = enabled;
@@ -85,6 +69,7 @@ function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolea
     const center = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3()).length();
     camera.position.set(center.x + size, center.y + size, center.z + size * 0.7);
+    controlsRef.current?.target.copy(center);
     camera.lookAt(center);
     if (camera instanceof PerspectiveCamera) {
       camera.near = Math.max(size / 1000, 0.001);
@@ -136,7 +121,7 @@ function TrajectoryHandle({
   // 捕获阶段从外到内派发，因此先于 canvas 上的 OrbitControls / R3F 监听器执行。
   useEffect(() => {
     const element: HTMLCanvasElement = gl.domElement;
-    const drag = { planeOrigin: new Vector3(), planeNormal: new Vector3(), active: false };
+    const drag = { planeOrigin: new Vector3(), planeNormal: new Vector3(), active: false, pointerId: -1 };
 
     const rayFromEvent = (event: PointerEvent) => {
       const rect = element.getBoundingClientRect();
@@ -158,6 +143,7 @@ function TrajectoryHandle({
       event.preventDefault();
       event.stopPropagation();
       element.setPointerCapture(event.pointerId);
+      drag.pointerId = event.pointerId;
       groupRef.current.getWorldPosition(drag.planeOrigin);
       drag.planeNormal.set(...cameraFacingNormal(toVec3(camera.position), toVec3(drag.planeOrigin)));
       drag.active = true;
@@ -199,6 +185,11 @@ function TrajectoryHandle({
     window.addEventListener("pointercancel", finish, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      if (drag.active) {
+        drag.active = false;
+        if (element.hasPointerCapture(drag.pointerId)) element.releasePointerCapture(drag.pointerId);
+        callbacks.current.onDragCancel();
+      }
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("pointermove", onPointerMove, true);
       window.removeEventListener("pointerup", finish, true);
@@ -237,6 +228,11 @@ function Scene({
     light.position.set(3, 4, 5);
     return light;
   }, []);
+  useEffect(() => () => {
+    grid.geometry.dispose();
+    (Array.isArray(grid.material) ? grid.material : [grid.material]).forEach((material) => material.dispose());
+    keyLight.shadow.dispose();
+  }, [grid, keyLight]);
   return (
     <>
       <ambientLight intensity={0.55} />
@@ -249,53 +245,6 @@ function Scene({
   );
 }
 
-async function hydrateResources(xml: string, bridge: BridgeClient) {
-  const urls = new Map<string, string>();
-  const formats = new Map<string, string>();
-  const dispose = () => urls.forEach((url) => URL.revokeObjectURL(url));
-  try {
-    await loadPackageResourcesSequentially(xml, async (uri) => {
-      const response = await bridge.request({ op: "resource", uri }, 30_000);
-      if (!response.base64) throw new Error("Bridge 未返回资源内容");
-      let bytes = decodeBase64(response.base64);
-      let mime = response.mime ?? "application/octet-stream";
-
-      // Collada often references textures by a path relative to the .dae file.
-      // Convert those dependencies to blob URLs before handing the document to Three.js.
-      if (mime === "model/vnd.collada+xml") {
-        let dae = new TextDecoder().decode(bytes);
-        const references = [...new Set([...dae.matchAll(/<init_from[^>]*>([^<]+)<\/init_from>/g)].map((match) => match[1].trim()))];
-        for (const reference of references) {
-          if (!reference || reference.startsWith("#") || /^(data:|https?:|blob:)/.test(reference)) continue;
-          const dependencyUri = resolvePackageRelative(uri, reference);
-          const dependency = await bridge.request({ op: "resource", uri: dependencyUri }, 30_000);
-          if (!dependency.base64) throw new Error(`Bridge 未返回依赖资源：${dependencyUri}`);
-          const dependencyUrl = URL.createObjectURL(new Blob(
-            [decodeBase64(dependency.base64)],
-            { type: dependency.mime ?? "application/octet-stream" },
-          ));
-          urls.set(dependencyUri, dependencyUrl);
-          dae = dae.split(reference).join(dependencyUrl);
-        }
-        bytes = new TextEncoder().encode(dae);
-        mime = "model/vnd.collada+xml";
-      }
-
-      const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
-      urls.set(uri, url);
-      formats.set(url, uri.split(".").pop()?.toLowerCase() ?? "");
-    });
-  } catch (reason) {
-    dispose();
-    throw reason;
-  }
-  let hydrated = xml;
-  urls.forEach((url, uri) => {
-    hydrated = hydrated.split(uri).join(url);
-  });
-  return { hydrated, formats, dispose };
-}
-
 export function UrdfViewer({
   xml,
   jointState,
@@ -303,7 +252,9 @@ export function UrdfViewer({
   tcpLink,
   trajectoryController,
   onSendTrajectory,
+  active = true,
 }: {
+  active?: boolean;
   xml: string;
   jointState: JointState | null;
   bridge: BridgeClient;
@@ -311,6 +262,10 @@ export function UrdfViewer({
   trajectoryController: TrajectoryController | null;
   onSendTrajectory(request: TrajectorySendRequest): Promise<void>;
 }) {
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const loadedScene = useRef<{ xml: string; dispose(): void } | null>(null);
+  const [loading, setLoading] = useState("");
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -344,63 +299,32 @@ export function UrdfViewer({
     }
   }, [model, tcpLink]);
 
+  useEffect(() => () => { loadedScene.current?.dispose(); loadedScene.current = null; robotRef.current = null; }, []);
   useEffect(() => {
-    if (!xml.trim()) {
-      setRobot(null);
-      return;
+    if (loadedScene.current && loadedScene.current.xml !== xml) {
+      loadedScene.current.dispose(); loadedScene.current = null; robotRef.current = null; setRobot(null);
     }
-    let disposed = false;
-    let release = () => {};
-    void hydrateResources(xml, bridge)
-      .then(({ hydrated, formats, dispose }) => {
-        release = dispose;
-        const manager = new LoadingManager();
-        manager.onError = (url) => setError((current) => current || `资源加载失败：${url}`);
-        const loader = new URDFLoader(manager);
-        loader.loadMeshCb = (path, meshManager, done) => {
-          const complete = (object: Object3D) => {
-            // URDFLoader attaches the object synchronously in done(). Applying the
-            // color afterwards is required for nested meshes loaded asynchronously.
-            done(object);
-            finalizeLoadedUrdfMesh(object);
-          };
-          const failed = (reason: unknown) => {
-            const meshError = reason instanceof Error ? reason : new Error(String(reason));
-            if (!disposed) setError(`网格解析失败：${path}（${meshError.message}）`);
-            done(null, meshError);
-          };
-          const format = formats.get(path) ?? "";
-          if (format === "stl") {
-            new STLLoader(meshManager).load(path, (geometry) => complete(new Mesh(
-              geometry,
-              new MeshStandardMaterial({ color: "#8ca8b8", roughness: 0.72, metalness: 0.08 }),
-            )), undefined, failed);
-          } else if (format === "dae") {
-            new ColladaLoader(meshManager).load(path, (collada) => complete(collada.scene), undefined, failed);
-          } else if (format === "obj") {
-            new OBJLoader(meshManager).load(path, complete, undefined, failed);
-          } else {
-            failed(new Error(`不支持的网格格式：${format || path}`));
-          }
-        };
-        const parsed = loader.parse(hydrated);
-        applyUrdfVisualColors(parsed);
-        parsed.traverse((object) => {
-          object.castShadow = true;
-          object.receiveShadow = true;
-        });
-        if (!disposed) {
-          robotRef.current = parsed;
-          setRobot(parsed);
-          setError("");
-        }
-      })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
-    return () => {
-      disposed = true;
-      release();
-    };
-  }, [bridge, xml]);
+    if (!xml.trim() || !active || loadedScene.current?.xml === xml) return;
+    const controller = new AbortController();
+    let committed = false;
+    setError(""); setLoading("正在获取模型资源…");
+    void (async () => {
+      const assets = await hydrateUrdfResources(xml, bridge, controller.signal, (done, total) => {
+        if (!controller.signal.aborted) setLoading(`正在获取模型资源 ${done}/${total}…`);
+      });
+      try {
+        if (!controller.signal.aborted) setLoading("正在解析网格…");
+        const parsed = await loadUrdfScene(assets, controller.signal);
+        if (controller.signal.aborted) { assets.dispose(); disposeUrdfObject(parsed); return; }
+        applyJointState(jointStateRef.current?.name, jointStateRef.current?.position, (name, value) => parsed.setJointValue(name, value));
+        loadedScene.current = { xml, dispose: () => { assets.dispose(); disposeUrdfObject(parsed); } };
+        robotRef.current = parsed; committed = true; setRobot(parsed); setLoading("");
+      } catch (reason) { assets.dispose(); throw reason; }
+    })().catch((reason: unknown) => {
+      if (!controller.signal.aborted) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(""); }
+    });
+    return () => { if (!committed) controller.abort(); };
+  }, [bridge, xml, active]);
 
   const applyState = useCallback(() => {
     applyJointState(jointStateRef.current?.name, jointStateRef.current?.position, (name, value) => {
@@ -411,8 +335,8 @@ export function UrdfViewer({
   useEffect(() => {
     jointStateRef.current = jointState;
     // 拖拽过程中预览位姿由 IK 驱动，不能被实时反馈覆盖。
-    if (!draggingRef.current) applyState();
-  }, [applyState, jointState]);
+    if (active && !draggingRef.current) applyState();
+  }, [applyState, jointState, active]);
 
   const solvePreview = useCallback((target: Vec3) => {
     const current = model;
@@ -452,7 +376,10 @@ export function UrdfViewer({
     setStatus({ kind: "info", text: "已取消拖拽，未下发轨迹" });
   }, [applyState]);
 
+  useEffect(() => { if (!active && draggingRef.current) handleDragCancel(); }, [active, handleDragCancel]);
+
   const handleDragEnd = useCallback(async () => {
+    if (!activeRef.current) { handleDragCancel(); return; }
     draggingRef.current = false;
     setDragging(false);
     const target = targetRef.current;
@@ -479,7 +406,10 @@ export function UrdfViewer({
       jointState: jointStateRef.current,
       target,
       seed: seedRef.current,
-      send: (request) => sendRef.current(request),
+      send: (request) => {
+        if (!activeRef.current) return Promise.reject(new Error("Robot View 已隐藏，未下发轨迹"));
+        return sendRef.current(request);
+      },
     });
     setPreview({
       target,
@@ -500,16 +430,17 @@ export function UrdfViewer({
     }
     applyState();
     setStatus({ kind: "error", text: outcome.error ?? "轨迹下发失败，未下发轨迹" });
-  }, [applyState, model, tcp.name]);
+  }, [applyState, model, tcp.name, handleDragCancel]);
 
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
-  const enabled = Boolean(trajectoryController && tcp.name && robot && !overlayError);
+  const enabled = Boolean(active && trajectoryController && tcp.name && robot && !overlayError);
 
   return (
     <div className="viewer">
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
       <ViewerHeadsUp error={overlayError}>
+        {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-overlay-row">
           <span>轨迹控制器</span>
           <strong className={trajectoryController ? "ok" : "muted"}>
@@ -540,10 +471,10 @@ export function UrdfViewer({
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
       </ViewerHeadsUp>
-      <Canvas camera={{ position: [2, 2, 2], fov: 45 }} shadows>
+      <Canvas frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
-        <Scene robot={robot} controlsEnabled={!dragging}>
-          {robot && tcp.name && (
+        <Scene robot={robot} controlsEnabled={active && !dragging}>
+          {active && robot && tcp.name && (
             <TrajectoryHandle
               robot={robot}
               linkName={tcp.name}

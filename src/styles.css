@@ -1288,3 +1288,7 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
   .status-tab-name { font-size: 11px; }
   .control-log-tools label:first-child { min-width: 0; }
 }
+
+.workspace[hidden], .robot-view-pane[hidden] { display: none; }
+.robot-view-pane { height: calc(100% - 43px); min-width: 0; min-height: 0; }
+.robot-view-pane > .viewer { height: 100%; }

@@ -390,6 +390,11 @@ export default function App() {
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>("robot");
+  const [topicsVisited, setTopicsVisited] = useState(false);
+  const [robotVisited, setRobotVisited] = useState(false);
+  const [windowVisible, setWindowVisible] = useState(!document.hidden);
+  const [inspectorDataVisible, setInspectorDataVisible] = useState(true);
+  const [imageSubscriptionRevision, setImageSubscriptionRevision] = useState(0);
   const [monitorWorkspace, setMonitorWorkspace] = useState<MonitorWorkspace>(() =>
     loadMonitorWorkspace(loadProfile().jointStateTopic),
   );
@@ -434,6 +439,36 @@ export default function App() {
     () => topics.find((topic) => topic.name === selected)?.types[0] ?? "",
     [selected, topics],
   );
+  const imageTopicNamesRef = useRef(new Set<string>());
+  imageTopicNamesRef.current = new Set(topics.filter((topic) => topic.types[0] === "sensor_msgs/msg/Image").map((topic) => topic.name));
+  const imageInterestRef = useRef("");
+  imageInterestRef.current = stage === "connected" && appPage === "dashboard" && windowVisible && liveUpdates
+    && panels.inspector && sidebars.right && inspectorDataVisible && !selectedNode && selectedTopicType === "sensor_msgs/msg/Image" ? selected : "";
+  useEffect(() => {
+    if (stage === "connected" && appPage === "dashboard") {
+      setTopicsVisited(true);
+      if (centerTab === "robot") setRobotVisited(true);
+    }
+  }, [stage, appPage, centerTab]);
+  useEffect(() => {
+    const changed = () => setWindowVisible(!document.hidden);
+    document.addEventListener("visibilitychange", changed);
+    return () => document.removeEventListener("visibilitychange", changed);
+  }, []);
+  useEffect(() => {
+    if (stage !== "connected" || appPage !== "dashboard" || !windowVisible || !liveUpdates || !panels.inspector || !sidebars.right || !inspectorDataVisible || selectedNode || selectedTopicType !== "sensor_msgs/msg/Image") return;
+    let disposed = false;
+    const generation = connectionGenerationRef.current;
+    void bridge.request({ op: "subscribe", topic: selected, type: selectedTopicType }).catch((reason: unknown) => {
+      if (!disposed && generation === connectionGenerationRef.current) setTopicSubscribeError(String(reason));
+    });
+    return () => {
+      disposed = true;
+      // A legacy Bridge may not implement unsubscribe; its build-id prompt still offers upgrade.
+      void bridge.request({ op: "unsubscribe", topic: selected }).catch(() => {});
+      setMessages((current) => { const next = { ...current }; delete next[selected]; return next; });
+    };
+  }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
   // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
   const trajectoryController = useMemo(
     () => findActiveTrajectoryController(rosControl?.controllers ?? []),
@@ -653,6 +688,8 @@ export default function App() {
     return bridge.onMessage((message: BridgeEnvelope) => {
       if (message.op === "topic_message" && message.topic) {
         if (!liveUpdatesRef.current) return;
+        const data = message.data as { data_bytes?: unknown; encoding?: unknown; width?: unknown } | null;
+        if ((imageTopicNamesRef.current.has(message.topic) || (data && typeof data === "object" && data.data_bytes != null)) && message.topic !== imageInterestRef.current) return;
         const wallNow = performance.now();
         const resolved = resolveMonitorSampleTimeMs({
           bagPlaying: bagPlayingRef.current,
@@ -971,6 +1008,8 @@ export default function App() {
 
   function clearConnectionData() {
     connectionGenerationRef.current += 1;
+    setTopicsVisited(false);
+    setRobotVisited(false);
     topicRefreshInFlightRef.current = false;
     rosControlRefreshInFlightRef.current = false;
     setSshOk(false);
@@ -1370,6 +1409,7 @@ export default function App() {
       setTopicSubscribeError("该 Topic 没有可用消息类型");
       return;
     }
+    if (topic.types[0] === "sensor_msgs/msg/Image") { setImageSubscriptionRevision((current) => current + 1); return; }
     try {
       await bridge.request({ op: "subscribe", topic: topic.name, type: topic.types[0] });
     } catch (reason) {
@@ -1630,8 +1670,9 @@ export default function App() {
           controlLocked={gravitySessionActive}
           controlLockedReason={gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
         />
-      ) : (
-      <main className={`workspace ${sidebars.right ? "" : "right-sidebar-collapsed"}`} style={layoutStyle}>
+      ) : null}
+      {(appPage === "dashboard" || topicsVisited) && (
+      <main hidden={appPage !== "dashboard"} className={`workspace ${sidebars.right ? "" : "right-sidebar-collapsed"}`} style={layoutStyle}>
       <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
         <div className="toolbar-actions" role="group" aria-label="全局操作">
         <button
@@ -1769,9 +1810,10 @@ export default function App() {
           </div>
           <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
         </div>
-        {centerTab === "robot"
-          ? (
+        <div className="robot-view-pane" hidden={centerTab !== "robot"}>
+          {(robotVisited || (appPage === "dashboard" && centerTab === "robot")) && (
             <UrdfViewer
+              active={appPage === "dashboard" && centerTab === "robot" && windowVisible}
               xml={urdf}
               jointState={jointState}
               bridge={bridge}
@@ -1779,8 +1821,9 @@ export default function App() {
               trajectoryController={trajectoryController}
               onSendTrajectory={sendTrajectory}
             />
-          )
-          : <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} onSelectNode={setSelectedNode} selectedTopic={selected} selectedNode={selectedNode} focusController={focusController} onClearControllerFocus={() => setFocusController("")} /></Suspense>}
+          )}
+        </div>
+        {centerTab === "graph" && appPage === "dashboard" && <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} onSelectNode={setSelectedNode} selectedTopic={selected} selectedNode={selectedNode} focusController={focusController} onClearControllerFocus={() => setFocusController("")} /></Suspense>}
       </section>
       <section className={`data-panel ${sidebars.right ? "" : "sidebar-collapsed"}`}>
         {!sidebars.right && <button type="button" className="sidebar-rail-toggle" aria-label="展开右侧栏" title="展开右侧栏" onClick={() => setSidebars((current) => ({ ...current, right: true }))}>‹</button>}
@@ -1793,7 +1836,7 @@ export default function App() {
             collapseSidebarLabel="收起右侧栏"
             onToggle={() => togglePanel("inspector")}
           />
-          <TopicInspector bridge={bridge} selected={selected} selectedNode={selectedNode} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} monitorPanels={monitorWorkspace.dashboards} selectedMonitorPanelId={monitorWorkspace.selectedDashboardId} onAddToDataGraph={addToMonitor} />
+          {appPage === "dashboard" && panels.inspector && sidebars.right && <TopicInspector onDataVisibilityChange={setInspectorDataVisible} bridge={bridge} selected={selected} selectedNode={selectedNode} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} monitorPanels={monitorWorkspace.dashboards} selectedMonitorPanelId={monitorWorkspace.selectedDashboardId} onAddToDataGraph={addToMonitor} />}
         </section>
       </section>
       {sidebars.left && <ResizeHandle
