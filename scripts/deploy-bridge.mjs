@@ -379,6 +379,7 @@ export function buildRemoteRestartScript(config) {
     "source /opt/ros/humble/setup.bash",
     `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
     `source ${remotePathWord(`${config.remoteRoot}/install/setup.bash`)}`,
+    `if [ -z "\${FASTRTPS_DEFAULT_PROFILES_FILE:-}\${FASTDDS_DEFAULT_PROFILES_FILE:-}" ] && [ -f ${remotePathWord(`${config.remoteRoot}/install/${config.packageName}/share/${config.packageName}/config/fastdds_udp.xml`)} ]; then export FASTRTPS_DEFAULT_PROFILES_FILE=${remotePathWord(`${config.remoteRoot}/install/${config.packageName}/share/${config.packageName}/config/fastdds_udp.xml`)}; fi`,
     `pkill -TERM -f "^${config.remoteRoot.startsWith("/") ? "" : "$HOME/"}${shellEscapeRegex(`${config.remoteRoot}/install/${config.packageName}/lib/${config.packageName}/bridge_node`)} " >/dev/null 2>&1 || true`,
     `for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! ss -ltn | grep -q ":${port} "; then break; fi; sleep 0.1; done`,
     `if ss -ltn | grep -q ":${port} "; then echo "RESTART_FAIL port ${port} still occupied" >&2; exit 1; fi`,

@@ -30,6 +30,7 @@ target_link_libraries(bridge_node Boost::system Boost::thread)
 # Without that header the binary still builds; gravity_id_* ops return a clear error.
 
 install(TARGETS bridge_node DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
 if(BUILD_TESTING)
   enable_testing()

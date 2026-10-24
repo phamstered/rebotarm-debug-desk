@@ -164,3 +164,22 @@ describe("graph camera helpers", () => {
     expect(resetCamera(viewport, [])).toEqual({ scale: 1, tx: 0, ty: 0 });
   });
 });
+
+describe("diagnostic Bridge visibility", () => {
+  it("keeps STM32, sensor and user bridge nodes, topics and endpoint edges by default", () => {
+    const names = ["/easy_debug_bridge", "/debug/easy_debug_bridge", "/stm32h723_motor_bridge", "/camera_bridge", "/bridge", "/bridge_node"];
+    const topics = ["/stm32/joint_states", "/camera_bridge/image", "/bridge/status", "/easy_debug_bridge/status"];
+    const source: RosGraph = {
+      nodes: [...names.map((label) => ({ id: `node:${label}`, label, kind: "node" as const, types: [] })), ...topics.map((label) => ({ id: `topic:${label}`, label, kind: "topic" as const, types: [] }))],
+      edges: [
+        { source: "node:/stm32h723_motor_bridge", target: "topic:/stm32/joint_states", relation: "publish" },
+        { source: "node:/camera_bridge", target: "topic:/camera_bridge/image", relation: "publish" },
+        { source: "node:/easy_debug_bridge", target: "topic:/stm32/joint_states", relation: "subscribe" },
+      ],
+    };
+    const filtered = filterBridgeGraph(source, false);
+    expect(filtered.nodes.map((node) => node.label)).toEqual([...names.slice(2), ...topics.slice(0, 3)]);
+    expect(filtered.edges).toEqual(source.edges.slice(0, 2));
+    expect(filterBridgeGraph(source, true)).toBe(source);
+  });
+});

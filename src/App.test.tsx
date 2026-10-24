@@ -7,7 +7,7 @@ const doubles = vi.hoisted(() => ({
   save: vi.fn(),
   connect: vi.fn().mockResolvedValue({
     bridge_version: "0.1.0",
-    bridge_build_id: "02e6f31f50e3",
+    bridge_build_id: "dc8f3b4c126c",
     ros_distro: "humble",
   }),
   listTopics: vi.fn().mockResolvedValue([
@@ -207,7 +207,7 @@ describe("App workflow", () => {
       })
       .mockResolvedValueOnce({
         bridge_version: "0.1.0",
-        bridge_build_id: "02e6f31f50e3",
+        bridge_build_id: "dc8f3b4c126c",
         ros_distro: "humble",
       });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {

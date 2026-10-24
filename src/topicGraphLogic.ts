@@ -32,7 +32,7 @@ export function loadBridgeVisibility(storage: Pick<Storage, "getItem"> = localSt
 export function isBridgeNode(node: RosGraphNode): boolean {
   if (node.kind !== "node") return false;
   const name = node.label.split("/").filter(Boolean).at(-1) ?? "";
-  return name === "bridge" || name === "bridge_node" || name.endsWith("_bridge") || name === "easy_debug_bridge";
+  return name === "easy_debug_bridge";
 }
 
 export function graphEdgeKey(edge: RosGraphEdge): string {
@@ -42,7 +42,7 @@ export function graphEdgeKey(edge: RosGraphEdge): string {
 export function filterBridgeGraph(graph: RosGraph, showBridge: boolean): RosGraph {
   if (showBridge) return graph;
   const hiddenNodes = new Set(graph.nodes.filter(isBridgeNode).map((node) => node.id));
-  const hiddenTopics = new Set(graph.nodes.filter((node) => node.kind === "topic" && node.label.split("/").some((segment) => /(?:^bridge$|_bridge$|^easy_debug_bridge$)/.test(segment))).map((node) => node.id));
+  const hiddenTopics = new Set(graph.nodes.filter((node) => node.kind === "topic" && node.label.split("/").some((segment) => segment === "easy_debug_bridge")).map((node) => node.id));
   const visible = new Set(graph.nodes.filter((node) => !hiddenNodes.has(node.id) && !hiddenTopics.has(node.id)).map((node) => node.id));
   return { nodes: graph.nodes.filter((node) => visible.has(node.id)), edges: graph.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target)) };
 }
