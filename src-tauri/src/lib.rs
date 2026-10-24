@@ -8,6 +8,7 @@ use tokio::process::{Child, Command};
 use tokio::time::{sleep, Duration};
 
 mod data_collection;
+mod control_logs;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1585,6 +1586,8 @@ pub fn run() {
         .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
             check_ssh,
+            control_logs::read_control_log,
+            control_logs::download_control_log,
             data_collection::data_collection_action,
             check_micro_ros_agent,
             probe_jetson_usb,

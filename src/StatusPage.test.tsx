@@ -56,7 +56,7 @@ const baseProps = {
 };
 
 describe("StatusPage", () => {
-  it("renders four-zone layout with sticky HOLD alert and exclusive mode strip", async () => {
+  it("renders four status tabs with sticky HOLD alert and exclusive mode strip", async () => {
     const user = userEvent.setup();
     const onCardAction = vi.fn();
     const onQuickAction = vi.fn();
@@ -69,15 +69,16 @@ describe("StatusPage", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Status" })).toBeVisible();
-    expect(screen.getByLabelText("状态分区")).toBeVisible();
-    expect(screen.getByLabelText("连接")).toBeVisible();
-    expect(screen.getByLabelText("硬件健康")).toBeVisible();
-    expect(screen.getByLabelText("控制模式")).toBeVisible();
-    expect(screen.getByText("传感器 / 高级")).toBeVisible();
+    expect(screen.getByRole("tablist", { name: "状态分区" })).toBeVisible();
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getByRole("tab", { name: /连接/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /传感器/ })).toBeVisible();
 
     expect(screen.getByLabelText("SSH / 隧道")).toBeVisible();
     expect(screen.getByLabelText("Bridge")).toBeVisible();
     expect(screen.getByLabelText("micro-ROS Agent")).toBeVisible();
+    expect(screen.getByLabelText("Hardware")).not.toBeVisible();
+    await user.click(screen.getByRole("tab", { name: /硬件健康/ }));
     expect(screen.getByLabelText("Hardware")).toBeVisible();
     expect(screen.getByLabelText("ROS 就绪")).toBeVisible();
     expect(screen.getByLabelText("ros2_control")).toBeVisible();
@@ -88,8 +89,9 @@ describe("StatusPage", () => {
     expect(screen.getByTestId("status-sticky-alert")).toHaveTextContent(/无重力补偿/);
     expect(screen.getByTestId("status-sticky-alert")).toHaveAttribute("data-kind", "hold");
     expect(screen.getByText("42")).toBeVisible();
-    expect(screen.getByText("localhost:18765")).toBeVisible();
+    expect(screen.getByText("localhost:18765")).not.toBeVisible();
     expect(screen.getByTestId("status-detail-hardware")).toHaveTextContent(/无重力补偿/);
+    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByTestId("status-mode-idle")).toBeVisible();
     expect(screen.queryByLabelText("Teleop")).not.toBeInTheDocument();
 
@@ -98,7 +100,7 @@ describe("StatusPage", () => {
     expect(screen.getByRole("button", { name: "VLA" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "停止" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "解除输出" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "刷新检测" })).toBeEnabled();
+
 
     await user.click(screen.getByRole("button", { name: "Teleop" }));
     expect(onQuickAction).toHaveBeenCalledWith("teleop");
@@ -112,12 +114,13 @@ describe("StatusPage", () => {
     await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
     expect(onQuickAction).toHaveBeenCalledWith("disable-stop");
     expect(screen.queryByRole("dialog", { name: "解除电机输出确认" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /硬件健康/ }));
     await user.click(screen.getByRole("button", { name: "刷新检测" }));
     expect(onCardAction).toHaveBeenCalled();
     expect(onCardAction.mock.calls[0][0].id).toBe("usb-refresh");
   });
 
-  it("shows only the active mode detail and marks the strip segment pressed", () => {
+  it("shows only the active mode detail and marks the strip segment pressed", async () => {
     render(
       <StatusPage
         {...baseProps}
@@ -139,6 +142,7 @@ describe("StatusPage", () => {
         }}
       />,
     );
+    await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.queryByTestId("status-sticky-alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Teleop")).toBeVisible();
     expect(screen.queryByLabelText("Trajectory / MoveIt")).not.toBeInTheDocument();
@@ -150,7 +154,7 @@ describe("StatusPage", () => {
     expect(screen.queryByLabelText("Teleop 操作")).not.toBeInTheDocument();
   });
 
-  it("prefers list_controllers over teleopRunning for strip selection after switch_controllers", () => {
+  it("prefers list_controllers over teleopRunning for strip selection after switch_controllers", async () => {
     render(
       <StatusPage
         {...baseProps}
@@ -172,13 +176,14 @@ describe("StatusPage", () => {
         }}
       />,
     );
+    await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByRole("button", { name: "Trajectory" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Teleop" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByLabelText("Trajectory / MoveIt")).toBeVisible();
     expect(screen.getByText("arm_trajectory_controller")).toBeVisible();
   });
 
-  it("surfaces disabledReasons as on-page hints for gated quick actions", () => {
+  it("surfaces disabledReasons as on-page hints for gated quick actions", async () => {
     render(
       <StatusPage
         stage="connected"
@@ -197,8 +202,36 @@ describe("StatusPage", () => {
         lastKnownDomainId={null}
       />,
     );
+    await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByRole("button", { name: "Teleop" })).toBeDisabled();
     expect(screen.getByTestId("status-quick-disabled-teleop")).toHaveTextContent("SSH 未就绪");
+    await userEvent.click(screen.getByRole("tab", { name: /硬件健康/ }));
     expect(screen.getByTestId("status-disabled-usb-usb-refresh")).toHaveTextContent("SSH 未就绪");
+  });
+});
+
+
+describe("Status tab navigation", () => {
+  it("updates an unselected hardware tab to red and follows a fault highlight request", async () => {
+    const { rerender } = render(<StatusPage {...baseProps} />);
+    expect(screen.getByRole("tab", { name: /连接/ })).toHaveAttribute("aria-selected", "true");
+    rerender(<StatusPage {...baseProps} hardwareStatus={{ fault_code: 11, mode: 0 }} />);
+    expect(screen.getByRole("tab", { name: /硬件健康/ })).toHaveClass("tone-fail");
+    expect(screen.getByRole("tab", { name: /连接/ })).toHaveAttribute("aria-selected", "true");
+    rerender(<StatusPage {...baseProps} highlightCardId="hardware" />);
+    expect(screen.getByRole("tab", { name: /硬件健康/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("article", { name: "Hardware" })).toHaveAttribute("data-highlighted", "true");
+  });
+  it("supports arrow keys, Home/End and shows one panel at a time", async () => {
+    const user = userEvent.setup();
+    render(<StatusPage {...baseProps} />);
+    screen.getByRole("tab", { name: /连接/ }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /硬件健康/ })).toHaveFocus();
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: /传感器/ })).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: /连接/ })).toHaveFocus();
   });
 });

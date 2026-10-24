@@ -88,7 +88,7 @@ export const STATUS_ZONE_META: Array<{
   { id: "connection", title: "连接", cardIds: ["ssh", "bridge", "agent"] },
   { id: "hardware", title: "硬件健康", primary: true, cardIds: ["usb", "hardware", "ros2-control", "ros-ready"] },
   { id: "control", title: "控制模式", cardIds: ["teleop", "trajectory", "vla"] },
-  { id: "sensors", title: "传感器 / 高级", collapsedByDefault: true, cardIds: ["realsense"] },
+  { id: "sensors", title: "传感器", cardIds: ["realsense"] },
 ];
 
 export function toneLabel(tone: StatusTone): string {
@@ -247,6 +247,20 @@ export function groupStatusZones(cards: StatusCardModel[]): StatusZoneModel[] {
     collapsedByDefault: zone.collapsedByDefault,
     cards: zone.cardIds.map((id) => byId.get(id)).filter((card): card is StatusCardModel => Boolean(card)),
   }));
+}
+
+export function statusZoneForCard(cardId: string | null): StatusZoneId | undefined {
+  return STATUS_ZONE_META.find((zone) => zone.cardIds.includes(cardId ?? ""))?.id;
+}
+
+export function summarizeStatusZone(cards: StatusCardModel[]): { tone: StatusTone; label: string; detail: string } {
+  const counts = new Map<StatusTone, number>();
+  cards.forEach((card) => counts.set(card.tone, (counts.get(card.tone) ?? 0) + 1));
+  const priority: StatusTone[] = ["fail", "warn", "unknown", "ok", "idle"];
+  const tone = priority.find((candidate) => counts.has(candidate)) ?? "unknown";
+  const detail = priority.filter((candidate) => counts.has(candidate))
+    .map((candidate) => `${counts.get(candidate)} 项${toneLabel(candidate)}`).join(" · ");
+  return { tone, label: toneLabel(tone), detail: detail || "等待状态" };
 }
 
 export function formatFaultCode(faultCode: number | undefined): string {

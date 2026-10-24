@@ -63,11 +63,11 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ### 做什么
 
-左侧导航第一项 **Status** 用卡片网格汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；禁用的一键/卡片操作旁显示短中文原因。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。VLA 卡片提示 Desk 一键 Teleop 拉起的 ros2_control 风险（见 PR #102）。可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
+左侧导航第一项 **Status** 分为「连接 / 硬件健康 / 控制模式 / 传感器」四个 Tab；每个 Tab 按分区内卡片的最高严重程度显示色标和数量，未打开的分区也会更新。卡片汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；禁用的一键/卡片操作旁显示短中文原因。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。VLA 卡片提示 Desk 一键 Teleop 拉起的 ros2_control 风险（见 PR #102）。可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
 
 ### 怎么用
 
-连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片可滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory/VLA（切换前 HOLD，互斥停旧进程）。一键 Teleop 使用 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。一键 VLA 经 `switch_controllers` 激活 `vla_position_controller`、停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`；chunk 来自 `/vla/joint_chunk`（`VlaJointChunk.positions[]`），Desk 不直写 `/stm32/joint_commands`。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
+连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片会打开硬件健康 Tab、滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory/VLA（沿用现有安全停止流程，互斥停旧进程）。一键 Teleop 使用 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。一键 VLA 经 `switch_controllers` 激活 `vla_position_controller`、停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`；chunk 来自 `/vla/joint_chunk`（`VlaJointChunk.positions[]`），Desk 不直写 `/stm32/joint_commands`。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
 
 ### 边界
 
@@ -117,6 +117,8 @@ JointState topic: /stm32/joint_states           # 内置默认
 ### 可解码消息类型
 
 Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 `control_msgs/msg/JointTrajectoryControllerState` 等嵌套结构和数组。已知基础类型保留原有展示；`sensor_msgs/msg/Image` 使用专用二进制预览路径。
+
+在「控制模式」中查看实时日志，可按当前模式自动选择来源，或手动选择 Teleop、Trajectory、ROS 控制器/VLA、RealSense。输入关键词搜索；向上滚动或取消「跟随最新」阅读历史，重新勾选回到末尾。窗口展示最近 128 KiB / 2000 行，每次读取完成后间隔 1 秒刷新；离开控制 Tab 或窗口不可见后暂停。下载保存完整文件（不受搜索过滤影响，上限 32 MiB）；ROS 控制器来源选取最新 `ros2_control_node_*.log`。
 
 ### 注意与边界
 

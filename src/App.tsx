@@ -1563,6 +1563,7 @@ export default function App() {
           rosControl={rosControl}
           lastKnownDomainId={lastKnownDomainId}
           highlightCardId={statusHighlightCardId}
+          onClearHighlight={() => setStatusHighlightCardId(null)}
           usbProbe={usbProbe}
           usbChecked={usbChecked}
           armMode={armMode}
