@@ -65,6 +65,9 @@ vi.mock("./UrdfViewer", () => ({
               { positions: [0, 0], time_from_start: 0.1 },
               { positions: [0.5, -0.2], time_from_start: 1.2 },
             ],
+          }).then(() => {
+            const node = document.querySelector<HTMLElement>("[data-testid='trajectory-error']");
+            if (node) node.textContent = "";
           }).catch((reason: unknown) => {
             const node = document.querySelector<HTMLElement>("[data-testid='trajectory-error']");
             if (node) node.textContent = `failed: ${reason instanceof Error ? reason.message : String(reason)}`;
@@ -731,6 +734,30 @@ describe("App workflow", () => {
     await screen.findByText("arm/trajectory_controller");
 
     expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("arm/trajectory_controller@/arm/trajectory_controller/joint_trajectory");
+    expect(doubles.request).toHaveBeenCalledWith({ op: "subscribe", topic: "/arm/trajectory_controller/controller_state", type: "control_msgs/msg/JointTrajectoryControllerState" });
+    await user.click(screen.getByTestId("send-trajectory"));
+    expect(screen.getByTestId("trajectory-error")).toHaveTextContent("JointState 反馈缺失或已过期");
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2"], position: [0, 0] } }));
+    await user.click(screen.getByTestId("send-trajectory"));
+    expect(screen.getByTestId("trajectory-error")).toHaveTextContent("轨迹控制器反馈缺失或已过期");
+    const feedback = (names = ["joint1", "joint2"]) => act(() => {
+      doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2", "gripper_finger_left_joint"], position: [0, 0, 0.5] } });
+      doubles.listener?.({ op: "topic_message", topic: "/arm/trajectory_controller/controller_state", data: { joint_names: names } });
+    });
+    feedback(["joint1", "joint2", "gripper_finger_left_joint"]);
+    await user.click(screen.getByTestId("send-trajectory"));
+    expect(screen.getByTestId("trajectory-error")).toHaveTextContent("轨迹关节列表与当前控制器不匹配");
+    feedback();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1500);
+    try {
+      await user.click(screen.getByTestId("send-trajectory"));
+      expect(screen.getByTestId("trajectory-error")).toHaveTextContent("JointState 反馈缺失或已过期");
+      act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2"], position: [0, 0] } }));
+      await user.click(screen.getByTestId("send-trajectory"));
+      expect(screen.getByTestId("trajectory-error")).toHaveTextContent("轨迹控制器反馈缺失或已过期");
+      expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({ op: "trajectory_command" }), expect.anything());
+    } finally { clock.mockRestore(); }
+    feedback();
     await user.click(screen.getByTestId("send-trajectory"));
     await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({
       op: "trajectory_command",

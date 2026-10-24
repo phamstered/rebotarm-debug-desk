@@ -10,8 +10,11 @@ import {
   planTrajectory,
   trajectoryDuration,
   trajectoryTopicFor,
+  trajectoryJointNames,
+  trajectoryStateTopic,
 } from "./trajectoryLogic";
 import type { ControllerInfo } from "./types";
+import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 
 const ARM_URDF = `
 <robot name="demo_arm">
@@ -50,6 +53,17 @@ function controller(overrides: Partial<ControllerInfo> = {}): ControllerInfo {
 }
 
 describe("轨迹控制器识别", () => {
+  it("读取控制器声明的关节集合并兼容两种状态 Topic", () => {
+    const controller = { name: "arm", topic: "/arm/joint_trajectory" };
+    const topic = (name: string) => ({ name, types: ["control_msgs/msg/JointTrajectoryControllerState"] });
+    expect(trajectoryStateTopic(controller, [topic("/arm/state")])).toBe("/arm/state");
+    expect(trajectoryStateTopic(controller, [topic("/arm/state"), topic("/arm/controller_state")])).toBe("/arm/controller_state");
+    expect(trajectoryStateTopic(controller, [])).toBe("/arm/controller_state");
+    expect(trajectoryJointNames({ joint_names: ["j2", "j1"] })).toEqual(["j2", "j1"]);
+    for (const data of [null, {}, { joint_names: [] }, { joint_names: ["j1", "j1"] }, { joint_names: [1] }, { joint_names: [""] }]) {
+      expect(trajectoryJointNames(data)).toBeNull();
+    }
+  });
   it("按类型或名称识别轨迹控制器", () => {
     expect(isTrajectoryController(controller())).toBe(true);
     expect(isTrajectoryController(controller({ typeName: "forward_command_controller/ForwardCommandController", name: "traj_controller" }))).toBe(true);
@@ -99,6 +113,35 @@ describe("轨迹时长", () => {
 });
 
 describe("轨迹规划", () => {
+  it("使用控制器关节顺序，反馈中多余的夹爪不进入轨迹", () => {
+    const result = planTrajectory({
+      model, tcpLink: "", controllerJointNames: ["joint3", "joint1", "joint2"],
+      jointState: { name: ["gripper", "joint1", "joint2", "joint3"], position: [0.5, 0.1, 0.2, 0.3] },
+      target: targetOf([0.5, -0.4, 0.8]),
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.plan?.jointNames).toEqual(["joint3", "joint1", "joint2"]);
+    expect(result.plan?.start).toEqual([0.3, 0.1, 0.2]);
+    expect(result.plan?.chainIndices).toEqual([1, 2, 0]);
+    expect(result.plan?.points.every((point) => point.positions.length === 3)).toBe(true);
+  });
+
+  it("控制器未就绪或不拥有 TCP 链时拒绝规划", () => {
+    const options = { model, tcpLink: "", jointState, target: targetOf([0.5, -0.4, 0.8]) };
+    expect(planTrajectory({ ...options, controllerJointNames: [] }).error).toMatch(/控制器关节列表/);
+    expect(planTrajectory({ ...options, controllerJointNames: ["joint1", "joint1"] }).error).toMatch(/控制器关节列表/);
+    expect(planTrajectory({ ...options, controllerJointNames: ["joint1", "joint2"] }).error).toMatch(/控制器不接收的关节：joint3/);
+    expect(planTrajectory({ ...options, controllerJointNames: ["joint1", "joint2", "joint3", "missing"] }).error).toMatch(/JointState 缺少关节：missing/);
+  });
+
+  it("拒绝缺失、非有限或重复的反馈，不使用零补齐", () => {
+    const options = { model, tcpLink: "", target: targetOf([0.5, -0.4, 0.8]) };
+    for (const position of [[0], [0, NaN, 0], [0, Infinity, 0]]) {
+      expect(planTrajectory({ ...options, jointState: { name: jointState.name, position } }).error).toMatch(/位置缺失或非有限/);
+    }
+    expect(planTrajectory({ ...options, jointState: { name: ["joint1", "joint1"], position: [0, 0] } }).error).toMatch(/重复关节名/);
+    expect(planTrajectory({ ...options, jointState, target: [NaN, 0, 0] }).error).toMatch(/目标位置必须为有限/);
+  });
   it("用 JointState 的关节集合并只改写 TCP 链关节", () => {
     const target = targetOf([0.5, -0.4, 0.8]);
     const result = planTrajectory({
@@ -123,7 +166,7 @@ describe("轨迹规划", () => {
     expect(solved.position[2]).toBeCloseTo(target[2], 2);
   });
 
-  it("JointState 中的非链关节保持原值", () => {
+  it("JointState 中的非链关节不进入机械臂轨迹，也不被预览改写", () => {
     const target = targetOf([0.5, -0.4, 0.8]);
     const result = planTrajectory({
       model,
@@ -132,9 +175,26 @@ describe("轨迹规划", () => {
       target,
     });
     const plan = result.plan!;
-    expect(plan.chainIndices).toEqual([1, 2, 3]);
-    expect(plan.goal[0]).toBe(0.42);
-    expect(plan.points[1].positions[0]).toBe(0.42);
+    expect(plan.jointNames).toEqual(["joint1", "joint2", "joint3"]);
+    expect(plan.chainIndices).toEqual([0, 1, 2]);
+    const write = vi.fn();
+    applyTrajectoryPlan(plan, write);
+    expect(write).not.toHaveBeenCalledWith("gripper", expect.anything());
+  });
+
+  it("实际 rebotarm URDF 自动选择夹爪基座，轨迹不携带手指关节", () => {
+    const arm = parseKinematics(rebotarmUrdf);
+    expect(resolveTcpLink(arm)).toBe("gripper_link");
+    const chain = chainToLink(arm, "gripper_link");
+    const armNames = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
+    const target = forwardKinematics(chain, [0.05, -0.03, -0.02, -0.06, -0.05, 0.06]).position;
+    const result = planTrajectory({
+      model: arm, tcpLink: "", target,
+      jointState: { name: [...armNames, "gripper_finger_left_joint"], position: [-0.02, -0.016, -0.022, -0.065, -0.053, 0.06, 0.496] },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.plan?.jointNames).toEqual(armNames);
+    expect(result.plan?.points.every((point) => point.positions.length === 6)).toBe(true);
   });
 
   it("固定关节的 TCP 偏移参与 FK 与 IK，但不进入 JointTrajectory 关节列表", () => {

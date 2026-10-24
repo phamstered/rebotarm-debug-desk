@@ -346,6 +346,7 @@ export function UrdfViewer({
       model: current,
       tcpLink: tcp.name,
       jointState: jointStateRef.current,
+      controllerJointNames: controllerRef.current?.jointNames ?? [],
       target,
       seed: seedRef.current,
     });
@@ -404,6 +405,7 @@ export function UrdfViewer({
       model: current,
       tcpLink: tcp.name,
       jointState: jointStateRef.current,
+      controllerJointNames: controller.jointNames ?? [],
       target,
       seed: seedRef.current,
       send: (request) => {
@@ -434,7 +436,7 @@ export function UrdfViewer({
 
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
-  const enabled = Boolean(active && trajectoryController && tcp.name && robot && !overlayError);
+  const enabled = Boolean(active && trajectoryController?.jointNames?.length && !trajectoryController.readinessError && tcp.name && robot && !overlayError);
 
   return (
     <div className="viewer">
@@ -458,7 +460,9 @@ export function UrdfViewer({
                 ? `拖拽中 · IK 误差 ${(preview.positionError * 1000).toFixed(1)} mm`
                 : "拖拽中…"
               : "按住青色夹爪手柄拖拽，即可规划并下发轨迹"
-            : "轨迹控制器激活后可拖拽 TCP 下发轨迹"}
+            : trajectoryController
+              ? trajectoryController.readinessError || "等待轨迹控制器关节反馈后可拖拽 TCP"
+              : "轨迹控制器激活后可拖拽 TCP 下发轨迹"}
         </div>
         {preview?.error && <div className="viewer-overlay-row error">{preview.error}</div>}
         {preview && !preview.error && dragging && (

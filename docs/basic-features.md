@@ -162,13 +162,15 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 ## 11. TCP 拖拽轨迹下发
 
-- Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先，留空时在叶子 link 中按命名特征（tool0/tcp/gripper/ee_link/flange 等）加链深度自动挑选，并在视图右上角展示实际使用的 link。
+- Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先；留空时优先选择 tool0/tcp/ee_link 等工具坐标系，其次选择 gripper/flange 等稳定 link，可以是带手指子 link 的夹爪基座，不因手指层级更深就选到 finger/jaw。无命名工具 link 时回退到最深叶子 link。视图显示实际使用的 link；rebotarm 默认选择 `gripper_link`。
 - 仅当 `/controller_manager` 存在 active 的轨迹控制器时开放拖拽；识别规则为类型 `joint_trajectory_controller/JointTrajectoryController` 优先、名称含 traj 次之。ROS Control 列表会用“轨迹”标记对应 Controller，Robot View 右上角显示其名称和 `/…/joint_trajectory` Topic。
 - 拖拽手柄跟随 TCP link 的世界位姿，并保持屏幕上的恒定尺寸；按住后鼠标移动映射到过 TCP 的正交平面（相机正对平面），拖拽期间暂停轨道相机；Esc 取消并把模型恢复到实时反馈位姿。
 - 拖拽过程按帧求位置逆解：有限差分雅可比 + 自适应阻尼最小二乘，关节限位钳制，单次下降卡住时做确定性随机重启。仅做位置求解，TCP 姿态保持不变；只有残差不超过 5 mm 才允许下发，下发成功时会把实际残差一并展示，避免暗示夹爪精确落在目标点上。
-- 正运动学和逆解保留 TCP 链上的 fixed joint 与工具偏移，避免夹爪长度被忽略；轨迹只包含可控关节，JointState 中的其他关节保持当前反馈值，因此轨迹携带的关节集合与控制器一致。拖拽期间预览位姿不被实时 JointState 覆盖。
+- 自动订阅 active 控制器的 `controller_state`（旧版本兼容 `state`）读取实际 `joint_names`，按该列表与顺序生成轨迹，不再把 JointState 中额外的手指关节发给只控制 joint1–6 的机械臂控制器。未收到有效列表时手柄不可拖拽，订阅失败显示具体错误。TCP 链含有控制器不接收的关节时拒绝规划并提示检查 TCP link。
+- 正运动学和逆解保留 TCP 链上的 fixed joint 与工具偏移；控制器负责但不在 TCP 链上的关节保持当前反馈，其他反馈关节不进入轨迹且不被预览改写。反馈位置缺失、非有限值或关节名重复时拒绝规划，不以零补齐。拖拽期间预览位姿不被实时 JointState 覆盖。
 - 松开鼠标时按最新 JointState 重算一次并下发 `trajectory_msgs/msg/JointTrajectory`：第 1 点为当前反馈位置（短暂停留），第 2 点为目标位置，执行时长按最大关节位移在 0.4–6 s 内估算。
 - 下发失败或 IK 未收敛时把模型恢复到反馈位姿并在视图内展示原因，不隐藏失败。
+- 松手下发前再次校验当前 active 控制器的关节集合与顺序；JointState 或控制器反馈超过 1 秒、尚未收到反馈或实时显示暂停时拒绝下发。Bridge ACK 表示消息已发布，不代表控制器已接受或机械臂已执行完成。
 - Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求该 Topic 已有订阅者；关节名重复、点数/长度不一致、非有限数值以及非严格递增的 `time_from_start` 都会被拒绝。
 
 ## 12. 全局工具栏、诊断与 rosbag

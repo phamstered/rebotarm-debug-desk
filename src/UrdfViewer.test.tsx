@@ -13,6 +13,16 @@ const robot = () => Object.assign(new Group(), { setJointValue: vi.fn() }) as un
 
 describe("Robot View lifecycle", () => {
   beforeEach(() => { vi.clearAllMocks(); doubles.hydrate.mockResolvedValue({ dispose: doubles.assetsDispose }); doubles.load.mockResolvedValue(robot()); });
+  it("waits for the controller joint contract and displays subscription errors", async () => {
+    const controller = { name: "arm", topic: "/arm/joint_trajectory" };
+    const view = render(<UrdfViewer {...props} trajectoryController={controller} />);
+    await waitFor(() => expect(screen.getByText("等待轨迹控制器关节反馈后可拖拽 TCP")).toBeVisible());
+    view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, readinessError: "无法读取轨迹控制器反馈：类型未安装" }} />);
+    expect(screen.getByText("无法读取轨迹控制器反馈：类型未安装")).toBeVisible();
+    view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, jointNames: ["j1"] }} />);
+    await waitFor(() => expect(screen.getByText("按住青色夹爪手柄拖拽，即可规划并下发轨迹")).toBeVisible());
+    expect(props.onSendTrajectory).not.toHaveBeenCalled();
+  });
   it("preserves the scene and canvas across navigation, pauses frames and applies fresh feedback on return", async () => {
     const parsed = robot(); doubles.load.mockResolvedValue(parsed);
     const view = render(<UrdfViewer {...props} />);

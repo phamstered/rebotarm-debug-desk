@@ -38,7 +38,7 @@ import {
 } from "./monitorLogic";
 import type { MonitorWorkspace } from "./monitorLogic";
 import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
-import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController } from "./trajectoryLogic";
+import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController, trajectoryJointNames, trajectoryStateTopic, TRAJECTORY_FEEDBACK_MAX_AGE_MS } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { TrajectorySendRequest } from "./UrdfViewer";
 import {
@@ -380,6 +380,7 @@ export default function App() {
   const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
   const [statusActionNotice, setStatusActionNotice] = useState("");
   const [rosControl, setRosControl] = useState<RosControlStatus | null>(null);
+  const [trajectoryStateError, setTrajectoryStateError] = useState("");
   const [topicRefreshing, setTopicRefreshing] = useState(false);
   const [topicRefreshError, setTopicRefreshError] = useState("");
   const [rosControlRefreshing, setRosControlRefreshing] = useState(false);
@@ -470,19 +471,46 @@ export default function App() {
     };
   }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
   // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
-  const trajectoryController = useMemo(
+  const activeTrajectoryController = useMemo(
     () => findActiveTrajectoryController(rosControl?.controllers ?? []),
     [rosControl],
   );
+  const controllerStateTopic = activeTrajectoryController ? trajectoryStateTopic(activeTrajectoryController, topics) : "";
+  const controllerStateSample = messages[controllerStateTopic];
+  const controllerJointNames = trajectoryJointNames(controllerStateSample?.data);
+  const trajectoryController = activeTrajectoryController ? {
+    ...activeTrajectoryController,
+    jointNames: controllerJointNames ?? undefined,
+    readinessError: trajectoryStateError || (controllerStateSample && !controllerJointNames ? "控制器反馈关节列表无效" : ""),
+  } : null;
+
+  useEffect(() => {
+    setTrajectoryStateError("");
+    if (stage !== "connected" || !controllerStateTopic) return;
+    let disposed = false;
+    void bridge.request({ op: "subscribe", topic: controllerStateTopic, type: "control_msgs/msg/JointTrajectoryControllerState" }).catch((reason: unknown) => {
+      if (!disposed) setTrajectoryStateError(`无法读取轨迹控制器反馈：${reason instanceof Error ? reason.message : String(reason)}`);
+    });
+    return () => { disposed = true; };
+  }, [bridge, stage, controllerStateTopic]);
 
   const sendTrajectory = useCallback(async (request: TrajectorySendRequest) => {
-    const controller = trajectoryController;
+    const controller = activeTrajectoryController;
     if (!controller) throw new Error("没有激活的轨迹控制器");
+    if (!liveUpdatesRef.current) throw new Error("实时显示已暂停，请恢复后再下发轨迹");
+    const now = performance.now();
+    const fresh = (at?: number) => at != null && now - at >= 0 && now - at < TRAJECTORY_FEEDBACK_MAX_AGE_MS;
+    if (!fresh(messages[profile.jointStateTopic]?.lastAt)) throw new Error("JointState 反馈缺失或已过期，未下发轨迹");
+    if (!fresh(controllerStateSample?.lastAt)) throw new Error("轨迹控制器反馈缺失或已过期，未下发轨迹");
+    const names = trajectoryJointNames(controllerStateSample.data);
+    if (!names || names.length !== request.jointNames.length || names.some((name, index) => name !== request.jointNames[index])) {
+      throw new Error("轨迹关节列表与当前控制器不匹配，请重新拖拽规划");
+    }
     await bridge.request({
       ...createTrajectoryPayload(request.jointNames, request.points),
       topic: controller.topic,
     }, 30_000);
-  }, [bridge, trajectoryController]);
+  }, [bridge, activeTrajectoryController, controllerStateSample, messages, profile.jointStateTopic]);
 
   const addToMonitor = useCallback((fieldPath: string, dashboardId: string, panelId: string | null) => {
     if (!selected) return;
