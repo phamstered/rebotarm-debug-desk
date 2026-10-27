@@ -160,14 +160,23 @@ describe("session / queue isolation", () => {
     expect(q.take()).toBeNull();
   });
 
-  it("marks stale on TF failure and keeps prior cloud", () => {
+  it("hides the prior cloud after a sustained TF failure", () => {
     let state = createRgbdSessionState(1);
     const cloud = buildColoredPointCloud(encodeMeta(), payload2x2());
     state = { ...state, cloud, lastFrameAt: 1000 };
     state = applyRgbdFrameToSession(state, 1, { op: "rgbd_frame", tf_ok: false, tf_error: "lookup failed", rgb: encodeMeta().rgb, depth: encodeMeta().depth, camera_info: encodeMeta().camera_info }, new Uint8Array());
     expect(state.stale).toBe(true);
     expect(state.tfOk).toBe(false);
-    expect(state.cloud).toBe(cloud);
+    expect(state.cloud).toBeNull();
+  });
+
+  it("hides a cloud when a complete RGBD frame cannot be decoded", () => {
+    let state = createRgbdSessionState(1);
+    state = applyRgbdFrameToSession(state, 1, encodeMeta(), payload2x2(), 1000);
+    expect(state.cloud?.count).toBe(2);
+    state = applyRgbdFrameToSession(state, 1, encodeMeta(), new Uint8Array(), 2000);
+    expect(state.stale).toBe(true);
+    expect(state.cloud).toBeNull();
   });
 
   it("rejects late frames from a previous session after reset", () => {

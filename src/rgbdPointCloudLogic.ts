@@ -385,8 +385,9 @@ export function createRgbdSessionState(sessionId = 1): RgbdSessionState {
 }
 
 /**
- * Apply an incoming RGBD frame to session state. TF failure marks stale and keeps
- * the last cloud. Session id mismatch (reconnect) rejects late frames.
+ * Apply an incoming RGBD frame to session state. A reported TF failure follows
+ * the Bridge's short grace period, so the old cloud is no longer safe to show
+ * against the current URDF joint pose. Session id mismatch rejects late frames.
  */
 export function applyRgbdFrameToSession(
   state: RgbdSessionState,
@@ -401,6 +402,7 @@ export function applyRgbdFrameToSession(
   if (!meta.tf_ok) {
     return {
       ...state,
+      cloud: null,
       stale: true,
       tfOk: false,
       tfError: meta.error || meta.tf_error || "TF 查询失败",
@@ -422,6 +424,7 @@ export function applyRgbdFrameToSession(
   } catch (reason) {
     return {
       ...state,
+      cloud: null,
       stale: true,
       tfOk: false,
       tfError: reason instanceof Error ? reason.message : String(reason),
