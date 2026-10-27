@@ -539,7 +539,7 @@ export function UrdfViewer({
       <Canvas frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
         <Scene robot={robot} controlsEnabled={active && !dragging}>
-          {/* Point cloud is parented under the same URDF root rotation; positions already converted via urdfToScenePoint. */}
+          {/* Cloud and robot share the scene root; cloud positions use the same ROS Z-up to scene Y-up rotation. */}
           <RgbdPointCloudLayer
             cloud={rgbdCloud}
             visible={rgbdVisible}
