@@ -15,6 +15,15 @@ export type ConnectionProfile = {
   statusTopic: string;
   /** TCP link；留空时优先稳定工具坐标系，避免选到可动手指。 */
   tcpLink: string;
+  /** Robot View RGBD 默认 Topic / TF（可覆盖）。 */
+  rgbdRgbTopic: string;
+  rgbdDepthTopic: string;
+  rgbdCameraInfoTopic: string;
+  rgbdTargetFrame: string;
+  rgbdMaxWidth: number;
+  rgbdMaxHeight: number;
+  rgbdMaxFps: number;
+  rgbdEnabled: boolean;
 };
 
 export type TopicInfo = {
@@ -186,7 +195,25 @@ export type BridgeEnvelope = {
   status?: string;
   accepted?: boolean;
   code?: number;
+  /** RGBD binary frame fields (op=rgbd_frame). */
+  rgb_topic?: string;
+  depth_topic?: string;
+  camera_info_topic?: string;
+  target_frame?: string;
+  source_frame?: string;
+  stamp_diff_ns?: number;
+  tf_ok?: boolean;
+  tf_error?: string;
+  rgb?: unknown;
+  depth?: unknown;
+  camera_info?: unknown;
+  pose?: unknown;
+  rgbd_payload?: Uint8Array;
+  max_width?: number;
+  max_height?: number;
+  max_fps?: number;
 };
+
 
 
 export type HardwareStatus = {
@@ -214,6 +241,14 @@ export const defaultProfile: ConnectionProfile = {
   commandTopic: "/stm32/joint_commands",
   statusTopic: "/stm32/status",
   tcpLink: "",
+  rgbdRgbTopic: "/camera/color/image_raw",
+  rgbdDepthTopic: "/camera/aligned_depth_to_color/image_raw",
+  rgbdCameraInfoTopic: "/camera/color/camera_info",
+  rgbdTargetFrame: "base_link",
+  rgbdMaxWidth: 320,
+  rgbdMaxHeight: 240,
+  rgbdMaxFps: 12,
+  rgbdEnabled: true,
 };
 
 export type UsbProbeStatus = {

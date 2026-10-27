@@ -283,4 +283,43 @@ Gravity ID status（推送或应答）：
 {"op":"gravity_id_status","status":"executing"}
 ```
 
+## RGBD 点云预览（RCD1）
 
+Desk Robot View 通过独立的 `subscribe_rgbd` / `unsubscribe_rgbd` 请求彩色点云预览流。该路径**不**写入 Image 兴趣集合：取消 RGBD 不会取消 Inspector 对同一 Image Topic 的订阅，反之亦然。
+
+### 订阅
+
+请求：
+
+```json
+{
+  "op": "subscribe_rgbd",
+  "request_id": "uuid",
+  "rgb_topic": "/camera/color/image_raw",
+  "depth_topic": "/camera/aligned_depth_to_color/image_raw",
+  "camera_info_topic": "/camera/color/camera_info",
+  "target_frame": "base_link",
+  "max_width": 320,
+  "max_height": 240,
+  "max_fps": 12
+}
+```
+
+成功：`{"op":"subscribed_rgbd","request_id":"uuid", ...topics...}`。同一连接重复订阅会替换该连接上的 RGBD 会话。
+
+取消：`{"op":"unsubscribe_rgbd","request_id":"uuid"}` → `{"op":"unsubscribed_rgbd","request_id":"uuid"}`。
+
+默认 Topic 与 RealSense 对齐深度配置一致，可在连接配置 / UI 中覆盖。
+
+### 二进制帧 `RCD1`
+
+| 偏移 | 内容 |
+| --- | --- |
+| 0–3 | ASCII `RCD1` |
+| 4–7 | 元数据 UTF-8 字节长度（大端 uint32） |
+| 8… | JSON 元数据 |
+| 随后 | RGB 像素紧接 Depth 像素（`data_offset` / `data_length` 指向负载） |
+
+元数据 `op` 为 `rgbd_frame`，包含 `rgb` / `depth` 图像头（含 `header.stamp`、`encoding`、`step`、`data_offset`）、缩放后的 `camera_info.k`、`source_frame` / `target_frame`、`stamp_diff_ns`、以及图像采集时刻的 `pose`（`target_frame ← source_frame`）。`tf_ok:false` 时可为文本 JSON（无像素），Desk 标记点云过期并保留上一帧。
+
+Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样并缩放内参，再按 RGB 时间戳查询 TF；只保留最新完整组。深度编码支持 `16UC1`（毫米）与 `32FC1`（米）。

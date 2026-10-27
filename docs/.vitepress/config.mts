@@ -40,6 +40,7 @@ export default defineConfig({
         items: [
           { text: '基本功能与测试覆盖', link: '/basic-features' },
           { text: 'Bridge 协议', link: '/protocol' },
+          { text: 'TODO / 待办列表', link: '/todo' },
           { text: 'Joint4 标定', link: '/joint4-calibration' },
           { text: '重力辨识', link: '/gravity-identification' },
         ],

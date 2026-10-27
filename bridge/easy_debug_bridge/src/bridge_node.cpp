@@ -17,7 +17,12 @@
 #include <rmw/types.h>
 #include <rmw/time.h>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2/exceptions.h>
+#include "easy_debug_bridge/rgbd_core.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -318,6 +323,8 @@ class BridgeNode : public rclcpp::Node {
       image_cleanup_timer_->cancel();
     });
     image_cleanup_timer_->cancel();
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     auto qos = rclcpp::QoS(10).best_effort().durability_volatile();
     command_publisher_ = create_publisher<microros_stm32h723_bridge::msg::JointCommand>(
         command_topic_, qos);
@@ -374,11 +381,14 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void remove_session(uint64_t client) {
-    std::lock_guard<std::mutex> lock(subscription_mutex_);
-    for (const auto &topic : image_interests_.disconnect(client)) {
-      subscriptions_.erase(topic); subscription_types_.erase(topic);
-      image_cleanup_timer_->reset();
+    {
+      std::lock_guard<std::mutex> lock(subscription_mutex_);
+      for (const auto &topic : image_interests_.disconnect(client)) {
+        subscriptions_.erase(topic); subscription_types_.erase(topic);
+        image_cleanup_timer_->reset();
+      }
     }
+    clear_rgbd_session(client);
     std::lock_guard<std::mutex> sessions_lock(session_mutex_);
     sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(), [client](auto &weak) {
       const auto session = weak.lock(); return !session || session->id() == client;
@@ -431,6 +441,10 @@ class BridgeNode : public rclcpp::Node {
                   request.get<std::string>("type", ""), request_id);
       } else if (op == "unsubscribe") {
         unsubscribe_image(session, request.get<std::string>("topic", ""), request_id);
+      } else if (op == "subscribe_rgbd") {
+        subscribe_rgbd(session, request, request_id);
+      } else if (op == "unsubscribe_rgbd") {
+        unsubscribe_rgbd(session, request_id);
       } else if (op == "resource") {
         send_resource(session, request.get<std::string>("uri", ""), request_id, request.get<std::string>("encoding", "base64"));
       } else if (op == "joint_command") {
@@ -1209,6 +1223,289 @@ class BridgeNode : public rclcpp::Node {
 #endif
   }
 
+
+  struct RgbdSession {
+    uint64_t client_id = 0;
+    std::string rgb_topic;
+    std::string depth_topic;
+    std::string camera_info_topic;
+    std::string target_frame{"base_link"};
+    uint32_t max_width = 320;
+    uint32_t max_height = 240;
+    double max_fps = 12.0;
+    int64_t stamp_tolerance_ns = 50000000;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr rgb_sub;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub;
+    sensor_msgs::msg::Image::SharedPtr latest_rgb;
+    sensor_msgs::msg::Image::SharedPtr latest_depth;
+    sensor_msgs::msg::CameraInfo::SharedPtr latest_info;
+    std::chrono::steady_clock::time_point last_sent{};
+    std::mutex mutex;
+  };
+
+  void clear_rgbd_session(uint64_t client) {
+    std::lock_guard<std::mutex> lock(rgbd_mutex_);
+    rgbd_sessions_.erase(client);
+  }
+
+  std::shared_ptr<WebSocketSession> find_session(uint64_t client) {
+    std::lock_guard<std::mutex> lock(session_mutex_);
+    for (auto &weak : sessions_) {
+      if (auto session = weak.lock()) {
+        if (session->id() == client) return session;
+      }
+    }
+    return nullptr;
+  }
+
+  void unsubscribe_rgbd(const std::shared_ptr<WebSocketSession> &session, const std::string &request_id) {
+    clear_rgbd_session(session->id());
+    session->send("{\"op\":\"unsubscribed_rgbd\",\"request_id\":" + json_quote(request_id) + "}");
+  }
+
+  void subscribe_rgbd(const std::shared_ptr<WebSocketSession> &session,
+                      const boost::property_tree::ptree &request,
+                      const std::string &request_id) {
+    const std::string rgb_topic = request.get<std::string>("rgb_topic", "/camera/color/image_raw");
+    const std::string depth_topic = request.get<std::string>(
+        "depth_topic", "/camera/aligned_depth_to_color/image_raw");
+    const std::string info_topic = request.get<std::string>(
+        "camera_info_topic", "/camera/color/camera_info");
+    const std::string target_frame = request.get<std::string>("target_frame", "base_link");
+    const uint32_t max_width = static_cast<uint32_t>(request.get<int>("max_width", 320));
+    const uint32_t max_height = static_cast<uint32_t>(request.get<int>("max_height", 240));
+    const double max_fps = request.get<double>("max_fps", 12.0);
+    for (const auto &name : {rgb_topic, depth_topic, info_topic, target_frame}) {
+      if (!easy_debug_bridge::is_valid_graph_name(name) && name != target_frame) {
+        // target_frame is a TF frame id, may be relative; allow non-absolute for TF names
+      }
+      if ((name == rgb_topic || name == depth_topic || name == info_topic) &&
+          !easy_debug_bridge::is_valid_graph_name(name)) {
+        session->send(error_message(request_id, "无效的 RGBD Topic 名称"));
+        return;
+      }
+    }
+    if (target_frame.empty()) {
+      session->send(error_message(request_id, "target_frame 不能为空"));
+      return;
+    }
+    if (max_width == 0 || max_height == 0 || !(max_fps > 0.0) || !std::isfinite(max_fps)) {
+      session->send(error_message(request_id, "RGBD 预览宽高或帧率无效"));
+      return;
+    }
+
+    auto rgbd = std::make_shared<RgbdSession>();
+    rgbd->client_id = session->id();
+    rgbd->rgb_topic = rgb_topic;
+    rgbd->depth_topic = depth_topic;
+    rgbd->camera_info_topic = info_topic;
+    rgbd->target_frame = target_frame;
+    rgbd->max_width = max_width;
+    rgbd->max_height = max_height;
+    rgbd->max_fps = max_fps;
+
+    // Own ROS subscriptions — never touch ImageInterests / shared image map.
+    auto qos = compatible_qos(rgb_topic);
+    const uint64_t client = session->id();
+    rgbd->rgb_sub = create_subscription<sensor_msgs::msg::Image>(
+        rgb_topic, qos,
+        [this, client](const sensor_msgs::msg::Image::SharedPtr message) {
+          on_rgbd_rgb(client, message);
+        });
+    rgbd->depth_sub = create_subscription<sensor_msgs::msg::Image>(
+        depth_topic, qos,
+        [this, client](const sensor_msgs::msg::Image::SharedPtr message) {
+          on_rgbd_depth(client, message);
+        });
+    rgbd->info_sub = create_subscription<sensor_msgs::msg::CameraInfo>(
+        info_topic, qos,
+        [this, client](const sensor_msgs::msg::CameraInfo::SharedPtr message) {
+          on_rgbd_info(client, message);
+        });
+
+    {
+      std::lock_guard<std::mutex> lock(rgbd_mutex_);
+      rgbd_sessions_[client] = rgbd;
+    }
+    session->send("{\"op\":\"subscribed_rgbd\",\"request_id\":" + json_quote(request_id) +
+                  ",\"rgb_topic\":" + json_quote(rgb_topic) +
+                  ",\"depth_topic\":" + json_quote(depth_topic) +
+                  ",\"camera_info_topic\":" + json_quote(info_topic) +
+                  ",\"target_frame\":" + json_quote(target_frame) + "}");
+  }
+
+  std::shared_ptr<RgbdSession> get_rgbd(uint64_t client) {
+    std::lock_guard<std::mutex> lock(rgbd_mutex_);
+    const auto it = rgbd_sessions_.find(client);
+    return it == rgbd_sessions_.end() ? nullptr : it->second;
+  }
+
+  void on_rgbd_rgb(uint64_t client, const sensor_msgs::msg::Image::SharedPtr &message) {
+    auto session = get_rgbd(client);
+    if (!session) return;
+    {
+      std::lock_guard<std::mutex> lock(session->mutex);
+      session->latest_rgb = message;
+    }
+    try_emit_rgbd(client);
+  }
+
+  void on_rgbd_depth(uint64_t client, const sensor_msgs::msg::Image::SharedPtr &message) {
+    auto session = get_rgbd(client);
+    if (!session) return;
+    {
+      std::lock_guard<std::mutex> lock(session->mutex);
+      session->latest_depth = message;
+    }
+    try_emit_rgbd(client);
+  }
+
+  void on_rgbd_info(uint64_t client, const sensor_msgs::msg::CameraInfo::SharedPtr &message) {
+    auto session = get_rgbd(client);
+    if (!session) return;
+    {
+      std::lock_guard<std::mutex> lock(session->mutex);
+      session->latest_info = message;
+    }
+    try_emit_rgbd(client);
+  }
+
+  static std::string image_part_json(const easy_debug_bridge::DownsampledImage &image,
+                                     const std_msgs::msg::Header &header,
+                                     size_t data_offset) {
+    return "{\"header\":" + header_json(header) +
+           ",\"height\":" + std::to_string(image.height) +
+           ",\"width\":" + std::to_string(image.width) +
+           ",\"encoding\":" + json_quote(image.encoding) +
+           ",\"is_bigendian\":" + std::to_string(image.is_bigendian) +
+           ",\"step\":" + std::to_string(image.step) +
+           ",\"data_length\":" + std::to_string(image.data.size()) +
+           ",\"data_offset\":" + std::to_string(data_offset) + "}";
+  }
+
+  void send_rgbd_tf_failure(const std::shared_ptr<WebSocketSession> &ws,
+                            const std::shared_ptr<RgbdSession> &session,
+                            const std::string &source_frame,
+                            const std::string &error) {
+    std::ostringstream out;
+    out << "{\"op\":\"rgbd_frame\",\"tf_ok\":false,\"tf_error\":" << json_quote(error)
+        << ",\"source_frame\":" << json_quote(source_frame)
+        << ",\"target_frame\":" << json_quote(session->target_frame)
+        << ",\"rgb_topic\":" << json_quote(session->rgb_topic)
+        << ",\"depth_topic\":" << json_quote(session->depth_topic)
+        << ",\"camera_info_topic\":" << json_quote(session->camera_info_topic) << "}";
+    ws->send(out.str());
+  }
+
+  void try_emit_rgbd(uint64_t client) {
+    auto session = get_rgbd(client);
+    if (!session) return;
+    sensor_msgs::msg::Image::SharedPtr rgb;
+    sensor_msgs::msg::Image::SharedPtr depth;
+    sensor_msgs::msg::CameraInfo::SharedPtr info;
+    {
+      std::lock_guard<std::mutex> lock(session->mutex);
+      rgb = session->latest_rgb;
+      depth = session->latest_depth;
+      info = session->latest_info;
+    }
+    if (!rgb || !depth || !info) return;
+    if (!easy_debug_bridge::stamps_within_tolerance(
+            rgb->header.stamp.sec, rgb->header.stamp.nanosec,
+            depth->header.stamp.sec, depth->header.stamp.nanosec,
+            session->stamp_tolerance_ns)) {
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto min_interval = std::chrono::duration<double>(1.0 / session->max_fps);
+    if (session->last_sent.time_since_epoch().count() != 0 &&
+        (now - session->last_sent) < min_interval) {
+      return;
+    }
+
+    auto ws = find_session(client);
+    if (!ws) return;
+
+    const std::string source_frame = rgb->header.frame_id;
+    geometry_msgs::msg::TransformStamped transform;
+    try {
+      transform = tf_buffer_->lookupTransform(
+          session->target_frame, source_frame, rgb->header.stamp,
+          tf2::durationFromSec(0.05));
+    } catch (const tf2::TransformException &ex) {
+      send_rgbd_tf_failure(ws, session, source_frame, ex.what());
+      return;
+    }
+
+    if (rgb->width != depth->width || rgb->height != depth->height) {
+      send_rgbd_tf_failure(ws, session, source_frame, "RGB 与 Depth 分辨率不一致");
+      return;
+    }
+
+    const auto preview = easy_debug_bridge::choose_preview_size(
+        rgb->width, rgb->height, session->max_width, session->max_height);
+    auto rgb_ds = easy_debug_bridge::downsample_image_nn(
+        rgb->data.data(), rgb->width, rgb->height, rgb->step, rgb->encoding, rgb->is_bigendian,
+        preview.width, preview.height);
+    auto depth_ds = easy_debug_bridge::downsample_image_nn(
+        depth->data.data(), depth->width, depth->height, depth->step, depth->encoding,
+        depth->is_bigendian, preview.width, preview.height);
+    if (!rgb_ds || !depth_ds) {
+      send_rgbd_tf_failure(ws, session, source_frame, "RGBD 降采样失败或不支持的编码");
+      return;
+    }
+
+    double k_src[9];
+    for (int i = 0; i < 9; ++i) k_src[i] = info->k[static_cast<size_t>(i)];
+    const auto k = easy_debug_bridge::scale_intrinsics(
+        k_src, rgb->width, rgb->height, preview.width, preview.height);
+    const int64_t diff_ns = easy_debug_bridge::stamp_diff_ns(
+        rgb->header.stamp.sec, rgb->header.stamp.nanosec,
+        depth->header.stamp.sec, depth->header.stamp.nanosec);
+
+    std::vector<uint8_t> payload;
+    payload.reserve(rgb_ds->data.size() + depth_ds->data.size());
+    payload.insert(payload.end(), rgb_ds->data.begin(), rgb_ds->data.end());
+    const size_t depth_offset = payload.size();
+    payload.insert(payload.end(), depth_ds->data.begin(), depth_ds->data.end());
+
+    std::ostringstream meta;
+    meta << "{\"op\":\"rgbd_frame\",\"tf_ok\":true"
+         << ",\"rgb_topic\":" << json_quote(session->rgb_topic)
+         << ",\"depth_topic\":" << json_quote(session->depth_topic)
+         << ",\"camera_info_topic\":" << json_quote(session->camera_info_topic)
+         << ",\"target_frame\":" << json_quote(session->target_frame)
+         << ",\"source_frame\":" << json_quote(source_frame)
+         << ",\"stamp_diff_ns\":" << diff_ns
+         << ",\"rgb\":" << image_part_json(*rgb_ds, rgb->header, 0)
+         << ",\"depth\":" << image_part_json(*depth_ds, depth->header, depth_offset)
+         << ",\"camera_info\":{\"header\":" << header_json(info->header)
+         << ",\"width\":" << preview.width
+         << ",\"height\":" << preview.height
+         << ",\"distortion_model\":" << json_quote(info->distortion_model)
+         << ",\"d\":" << number_array(info->d)
+         << ",\"k\":[" << k[0] << "," << k[1] << "," << k[2] << "," << k[3] << "," << k[4]
+         << "," << k[5] << "," << k[6] << "," << k[7] << "," << k[8] << "]}"
+         << ",\"pose\":{\"translation\":{\"x\":" << transform.transform.translation.x
+         << ",\"y\":" << transform.transform.translation.y
+         << ",\"z\":" << transform.transform.translation.z
+         << "},\"rotation\":{\"x\":" << transform.transform.rotation.x
+         << ",\"y\":" << transform.transform.rotation.y
+         << ",\"z\":" << transform.transform.rotation.z
+         << ",\"w\":" << transform.transform.rotation.w << "}}"
+         << ",\"data_length\":" << payload.size() << "}";
+
+    if (!ws->send_binary(easy_debug_bridge::binary_rgbd_frame(meta.str(), payload))) return;
+    session->last_sent = now;
+    // Drop consumed pair so a lone late frame cannot rematch with a stale sibling.
+    {
+      std::lock_guard<std::mutex> lock(session->mutex);
+      if (session->latest_rgb == rgb) session->latest_rgb.reset();
+      if (session->latest_depth == depth) session->latest_depth.reset();
+    }
+  }
+
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
   trajectory_publisher(const std::string &topic) {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
@@ -1230,6 +1527,10 @@ class BridgeNode : public rclcpp::Node {
   easy_debug_bridge::ImageInterests image_interests_;
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   std::unordered_map<std::string, std::string> subscription_types_;
+  std::mutex rgbd_mutex_;
+  std::unordered_map<uint64_t, std::shared_ptr<RgbdSession>> rgbd_sessions_;
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<microros_stm32h723_bridge::msg::JointCommand>::SharedPtr command_publisher_;
   std::mutex trajectory_mutex_;
   std::unordered_map<std::string, rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr>

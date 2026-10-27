@@ -66,6 +66,25 @@ describe("BridgeClient", () => {
     expect([...(decoded.data as { data_bytes: Uint8Array }).data_bytes]).toEqual([4, 5, 6]);
   });
 
+  it("decodes a binary RGBD envelope (RCD1)", () => {
+    const metadata = new TextEncoder().encode(JSON.stringify({
+      op: "rgbd_frame",
+      tf_ok: true,
+      data_length: 4,
+      rgb: { width: 1, height: 1 },
+      depth: { width: 1, height: 1 },
+      camera_info: { k: [1, 0, 0, 0, 1, 0, 0, 0, 1] },
+    }));
+    const frame = new Uint8Array(8 + metadata.length + 4);
+    frame.set([0x52, 0x43, 0x44, 0x31]);
+    new DataView(frame.buffer).setUint32(4, metadata.length, false);
+    frame.set(metadata, 8);
+    frame.set([1, 2, 3, 4], 8 + metadata.length);
+    const decoded = decodeBridgeEnvelope(frame.buffer);
+    expect(decoded.op).toBe("rgbd_frame");
+    expect([...(decoded.rgbd_payload as Uint8Array)]).toEqual([1, 2, 3, 4]);
+  });
+
   it("correlates request responses and lists topics", async () => {
     const bridge = new BridgeClient();
     const connected = bridge.connect(defaultProfile);
