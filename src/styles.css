@@ -1293,7 +1293,7 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .robot-view-pane { height: calc(100% - 43px); min-width: 0; min-height: 0; }
 .robot-view-pane > .viewer { height: 100%; }
 
-.viewer-overlay-rgbd { display: grid; gap: 4px; margin-top: 4px; padding-top: 6px; border-top: 1px solid #1d3444; }
+.viewer-overlay-rgbd { display: grid; gap: 4px; margin-top: 4px; padding-top: 6px; border-top: 1px solid #1d3444; pointer-events: auto; }
 .viewer-overlay-rgbd input[type="number"] { width: 56px; background: #0b1822; color: #cfe0ea; border: 1px solid #1d3444; border-radius: 4px; }
 .viewer-overlay-rgbd select { background: #0b1822; color: #cfe0ea; border: 1px solid #1d3444; border-radius: 4px; }
 .viewer-overlay-row.error { color: #ff8f8f; }

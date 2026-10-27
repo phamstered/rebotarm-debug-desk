@@ -23,6 +23,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2/exceptions.h>
 #include "easy_debug_bridge/rgbd_core.hpp"
+#include "easy_debug_bridge/rgbd_qos.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -1241,6 +1242,7 @@ class BridgeNode : public rclcpp::Node {
     sensor_msgs::msg::Image::SharedPtr latest_depth;
     sensor_msgs::msg::CameraInfo::SharedPtr latest_info;
     std::chrono::steady_clock::time_point last_sent{};
+    std::chrono::steady_clock::time_point last_success{};
     std::mutex mutex;
   };
 
@@ -1267,11 +1269,12 @@ class BridgeNode : public rclcpp::Node {
   void subscribe_rgbd(const std::shared_ptr<WebSocketSession> &session,
                       const boost::property_tree::ptree &request,
                       const std::string &request_id) {
-    const std::string rgb_topic = request.get<std::string>("rgb_topic", "/camera/color/image_raw");
+    const std::string rgb_topic = request.get<std::string>(
+        "rgb_topic", "/cameras/left_arm/wrist/color/image_raw");
     const std::string depth_topic = request.get<std::string>(
-        "depth_topic", "/camera/aligned_depth_to_color/image_raw");
+        "depth_topic", "/cameras/left_arm/wrist/aligned_depth_to_color/image_raw");
     const std::string info_topic = request.get<std::string>(
-        "camera_info_topic", "/camera/color/camera_info");
+        "camera_info_topic", "/cameras/left_arm/wrist/color/camera_info");
     const std::string target_frame = request.get<std::string>("target_frame", "base_link");
     const uint32_t max_width = static_cast<uint32_t>(request.get<int>("max_width", 320));
     const uint32_t max_height = static_cast<uint32_t>(request.get<int>("max_height", 240));
@@ -1303,20 +1306,22 @@ class BridgeNode : public rclcpp::Node {
     rgbd->max_fps = max_fps;
 
     // Own ROS subscriptions — never touch ImageInterests / shared image map.
-    auto qos = compatible_qos(rgb_topic);
+    const auto rgb_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(rgb_topic));
+    const auto depth_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(depth_topic));
+    const auto info_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(info_topic));
     const uint64_t client = session->id();
     rgbd->rgb_sub = create_subscription<sensor_msgs::msg::Image>(
-        rgb_topic, qos,
+        rgb_topic, rgb_qos,
         [this, client](const sensor_msgs::msg::Image::SharedPtr message) {
           on_rgbd_rgb(client, message);
         });
     rgbd->depth_sub = create_subscription<sensor_msgs::msg::Image>(
-        depth_topic, qos,
+        depth_topic, depth_qos,
         [this, client](const sensor_msgs::msg::Image::SharedPtr message) {
           on_rgbd_depth(client, message);
         });
     rgbd->info_sub = create_subscription<sensor_msgs::msg::CameraInfo>(
-        info_topic, qos,
+        info_topic, info_qos,
         [this, client](const sensor_msgs::msg::CameraInfo::SharedPtr message) {
           on_rgbd_info(client, message);
         });
@@ -1440,9 +1445,15 @@ class BridgeNode : public rclcpp::Node {
     try {
       transform = tf_buffer_->lookupTransform(
           session->target_frame, source_frame, rgb->header.stamp,
-          tf2::durationFromSec(0.05));
+          tf2::durationFromSec(0.15));
     } catch (const tf2::TransformException &ex) {
-      send_rgbd_frame_failure(ws, session, source_frame, ex.what(), true);
+      bool report_failure;
+      {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        report_failure = easy_debug_bridge::should_report_rgbd_tf_failure(
+            session->last_success, std::chrono::steady_clock::now());
+      }
+      if (report_failure) send_rgbd_frame_failure(ws, session, source_frame, ex.what(), true);
       return;
     }
 
@@ -1514,6 +1525,10 @@ class BridgeNode : public rclcpp::Node {
          << ",\"data_length\":" << payload.size() << "}";
 
     if (!ws->send_binary(easy_debug_bridge::binary_rgbd_frame(meta.str(), payload))) return;
+    {
+      std::lock_guard<std::mutex> lock(session->mutex);
+      session->last_success = std::chrono::steady_clock::now();
+    }
     // Drop consumed pair so a lone late frame cannot rematch with a stale sibling.
     {
       std::lock_guard<std::mutex> lock(session->mutex);

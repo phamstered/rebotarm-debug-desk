@@ -530,6 +530,9 @@ export function UrdfViewer({
             {!rgbdStatus?.tfOk && rgbdStatus?.tfError && (
               <div className="viewer-overlay-row error" role="alert">{rgbdStatus.tfError}</div>
             )}
+            {!rgbdStatus?.pointCount && !rgbdStatus?.tfError && (
+              <div className="viewer-overlay-row">等待 RGBD 帧；检查相机 Topic 和对齐深度</div>
+            )}
           </div>
         )}
       </ViewerHeadsUp>

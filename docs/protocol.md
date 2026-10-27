@@ -295,9 +295,9 @@ Desk Robot View 通过独立的 `subscribe_rgbd` / `unsubscribe_rgbd` 请求彩�
 {
   "op": "subscribe_rgbd",
   "request_id": "uuid",
-  "rgb_topic": "/camera/color/image_raw",
-  "depth_topic": "/camera/aligned_depth_to_color/image_raw",
-  "camera_info_topic": "/camera/color/camera_info",
+  "rgb_topic": "/cameras/left_arm/wrist/color/image_raw",
+  "depth_topic": "/cameras/left_arm/wrist/aligned_depth_to_color/image_raw",
+  "camera_info_topic": "/cameras/left_arm/wrist/color/camera_info",
   "target_frame": "base_link",
   "max_width": 320,
   "max_height": 240,
@@ -309,7 +309,8 @@ Desk Robot View 通过独立的 `subscribe_rgbd` / `unsubscribe_rgbd` 请求彩�
 
 取消：`{"op":"unsubscribe_rgbd","request_id":"uuid"}` → `{"op":"unsubscribed_rgbd","request_id":"uuid"}`。
 
-默认 Topic 与 RealSense 对齐深度配置一致，可在连接配置 / UI 中覆盖。
+默认 Topic 与左臂腕部 RealSense 启动入口一致：`camera_namespace=cameras/left_arm`、`camera_name=wrist`、`align_depth.enable=true`、`enable_sync=true`。已有完整旧默认 Topic 组合在加载时迁移；用户自定义组合保持原值。Bridge 不替任意 CameraInfo / 未对齐 Depth 做空间配准。
+RGB、对齐 Depth 和 CameraInfo 分别按各自发布端选择可靠性；这三个连续数据订阅均使用 `VOLATILE`。RealSense 图像可提供 `TRANSIENT_LOCAL`，而 CameraInfo 可仅提供 `VOLATILE`，因此不能复用图像的 durability。
 
 ### 二进制帧 `RCD1`
 

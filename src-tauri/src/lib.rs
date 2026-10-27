@@ -689,28 +689,32 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
                     if kill -0 \"$p\" 2>/dev/null; then \
                       if [ -z \"$marker\" ] || ps -p \"$p\" -o args= | grep -Fq \"$marker\"; then echo 1; return; fi; \
                     fi; echo 0; }; ";
+    let camera_alive_fn = "camera_alive() { p=\"$1\"; \
+                           if [ \"$(alive_pid \"$p\" \"left_wrist_camera.launch.py\")\" = 1 ] || \
+                              [ \"$(alive_pid \"$p\" \"realsense2_camera rs_launch.py\")\" = 1 ]; then echo 1; \
+                           else echo 0; fi; }; ";
     let stop_fn = include_str!("arm_mode_lifecycle.sh");
-    let camera_stop_fn = "stop_camera_pg() { file=\"$1\"; marker=\"$2\"; pid=$(cat \"$file\" 2>/dev/null || true); \
-                   if [ \"$(alive_pid \"$pid\" \"$marker\")\" = 1 ]; then \
+    let camera_stop_fn = "stop_camera_pg() { file=\"$1\"; pid=$(cat \"$file\" 2>/dev/null || true); \
+                   if [ \"$(camera_alive \"$pid\")\" = 1 ]; then \
                      kill -INT -\"$pid\" 2>/dev/null || kill -INT \"$pid\" 2>/dev/null || true; \
                      for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
-                       if [ \"$(alive_pid \"$pid\" \"$marker\")\" != 1 ]; then break; fi; sleep 0.25; \
+                       if [ \"$(camera_alive \"$pid\")\" != 1 ]; then break; fi; sleep 0.25; \
                      done; \
-                     if [ \"$(alive_pid \"$pid\" \"$marker\")\" = 1 ]; then kill -TERM -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; fi; \
+                     if [ \"$(camera_alive \"$pid\")\" = 1 ]; then kill -TERM -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; fi; \
                    fi; rm -f \"$file\"; }; ";
 
     let status_body = format!(
-        "{paths}{alive_fn}{stop_fn}\
+        "{paths}{alive_fn}{camera_alive_fn}{stop_fn}\
          tpid=$(cat \"$teleop_pid_file\" 2>/dev/null || true); \
          jpid=$(cat \"$traj_pid_file\" 2>/dev/null || true); \
          rpid=$(cat \"$rs_pid_file\" 2>/dev/null || true); \
          talive=$(alive_pid \"$tpid\" \"start_arm_teleop\"); \
          jalive=$(alive_pid \"$jpid\" \"\"); \
-         ralive=$(alive_pid \"$rpid\" \"realsense\"); \
+         ralive=$(camera_alive \"$rpid\"); \
          nodes=$(timeout 5 ros2 node list 2>/dev/null || true); \
          echo \"$nodes\" | grep -Eqi \"teleop|leader_follower\" && talive=1; \
          echo \"$nodes\" | grep -Eqi \"move_group\" && jalive=1; \
-         echo \"$nodes\" | grep -Eqi \"realsense|camera/camera\" && ralive=1; \
+         echo \"$nodes\" | grep -Eqi \"realsense|camera/camera|cameras/left_arm/wrist\" && ralive=1; \
          towns=0; jowns=0; \
          if [ \"$talive\" = 1 ]; then \
            if [ -n \"$tpid\" ] && [ \"$tpid\" != 0 ] && [ \"$(alive_pid \"$tpid\" \"start_arm_teleop\")\" = 1 ]; then \
@@ -763,12 +767,12 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              printf \"OK|%s|trajectory\\n\" \"$pid\""
         ),
         "realsense" => format!(
-            "{setup}{paths}{alive_fn}{camera_stop_fn}\
-             stop_camera_pg \"$rs_pid_file\" \"realsense\" || exit 1; \
-             setsid nohup ros2 launch realsense2_camera rs_launch.py \
+            "{setup}{paths}{alive_fn}{camera_alive_fn}{camera_stop_fn}\
+             stop_camera_pg \"$rs_pid_file\" || exit 1; \
+             setsid nohup ros2 launch rebotarm_gazebo left_wrist_camera.launch.py \
                >\"$HOME/.cache/robot-console/arm-realsense.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$rs_pid_file\"; sleep 1; \
-             if [ \"$(alive_pid \"$pid\" \"\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-realsense.log\" >&2; exit 1; fi; \
+             if [ \"$(camera_alive \"$pid\")\" != 1 ]; then cat \"$HOME/.cache/robot-console/arm-realsense.log\" >&2; exit 1; fi; \
              printf \"OK|%s|realsense\\n\" \"$pid\""
         ),
         _ => return Err("不支持的 arm mode 操作".into()),
@@ -2026,6 +2030,10 @@ __BYID_SEP__\n\
         assert!(custom_teleop.contains("/home/jialiang/Project/custom_stack/install/setup.bash"));
         let traj = arm_mode_remote_command(&profile(""), "trajectory").unwrap();
         assert!(traj.contains("trajectory") || traj.contains("move_group"));
+        let camera = arm_mode_remote_command(&profile(""), "realsense").unwrap();
+        assert!(camera.contains("ros2 launch rebotarm_gazebo left_wrist_camera.launch.py"));
+        assert!(camera.contains("camera_alive"));
+        assert!(!camera.contains("setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\""));
         let stop = arm_mode_remote_command(&profile(""), "stop").unwrap();
         assert!(stop.contains("stop_pg"));
         assert!(arm_mode_remote_command(&profile(""), "delete").is_err());

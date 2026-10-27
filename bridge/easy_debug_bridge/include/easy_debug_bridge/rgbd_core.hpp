@@ -5,6 +5,7 @@
 #include <array>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -15,6 +16,13 @@
 #include <vector>
 
 namespace easy_debug_bridge {
+
+inline bool should_report_rgbd_tf_failure(
+    std::chrono::steady_clock::time_point last_success,
+    std::chrono::steady_clock::time_point now,
+    std::chrono::milliseconds grace = std::chrono::milliseconds(500)) {
+  return last_success.time_since_epoch().count() == 0 || now - last_success >= grace;
+}
 
 inline std::vector<uint8_t> binary_rgbd_frame(const std::string &metadata, const std::vector<uint8_t> &payload) {
   return binary_payload_frame(metadata, payload, 'D');

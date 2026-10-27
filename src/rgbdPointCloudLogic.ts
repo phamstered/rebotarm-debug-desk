@@ -81,9 +81,9 @@ export type RgbdSessionState = {
 };
 
 export const DEFAULT_RGBD_TOPICS = {
-  rgbTopic: "/camera/color/image_raw",
-  depthTopic: "/camera/aligned_depth_to_color/image_raw",
-  cameraInfoTopic: "/camera/color/camera_info",
+  rgbTopic: "/cameras/left_arm/wrist/color/image_raw",
+  depthTopic: "/cameras/left_arm/wrist/aligned_depth_to_color/image_raw",
+  cameraInfoTopic: "/cameras/left_arm/wrist/color/camera_info",
   targetFrame: "base_link",
   maxWidth: 320,
   maxHeight: 240,
