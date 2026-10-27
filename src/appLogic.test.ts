@@ -59,6 +59,23 @@ describe("connection profile", () => {
     expect(migrateProfile({ rosSetupScript: "/opt/robot/install/setup.bash" }).rosSetupScript)
       .toBe("/opt/robot/install/setup.bash");
   });
+
+  it("migrates the shipped RGBD topic trio while retaining edited camera profiles", () => {
+    const old = {
+      rgbdRgbTopic: "/camera/color/image_raw",
+      rgbdDepthTopic: "/camera/aligned_depth_to_color/image_raw",
+      rgbdCameraInfoTopic: "/camera/color/camera_info",
+    };
+    expect(migrateProfile(old)).toMatchObject({
+      rgbdRgbTopic: "/cameras/left_arm/wrist/color/image_raw",
+      rgbdDepthTopic: "/cameras/left_arm/wrist/aligned_depth_to_color/image_raw",
+      rgbdCameraInfoTopic: "/cameras/left_arm/wrist/color/camera_info",
+    });
+    expect(migrateProfile({ ...old, rgbdRgbTopic: "/custom/color" })).toMatchObject({
+      ...old,
+      rgbdRgbTopic: "/custom/color",
+    });
+  });
 });
 
 describe("panel and topic state", () => {

@@ -35,6 +35,15 @@ export function migrateProfile(saved: Partial<ConnectionProfile>): ConnectionPro
   if (profile.jointStateTopic === "/joint_states") {
     profile.jointStateTopic = defaultProfile.jointStateTopic;
   }
+  // Upgrade only the complete, previously shipped RGBD default. Any edited
+  // camera profile is user-owned and must retain its Topic choices.
+  if (saved.rgbdRgbTopic === "/camera/color/image_raw" &&
+      saved.rgbdDepthTopic === "/camera/aligned_depth_to_color/image_raw" &&
+      saved.rgbdCameraInfoTopic === "/camera/color/camera_info") {
+    profile.rgbdRgbTopic = defaultProfile.rgbdRgbTopic;
+    profile.rgbdDepthTopic = defaultProfile.rgbdDepthTopic;
+    profile.rgbdCameraInfoTopic = defaultProfile.rgbdCameraInfoTopic;
+  }
   return profile;
 }
 

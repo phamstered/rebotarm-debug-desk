@@ -341,9 +341,9 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
           <label>ROS_DOMAIN_ID<input type="number" value={profile.rosDomainId} onChange={(e) => field("rosDomainId", Number(e.target.value))} /></label>
           <label>ROS 环境脚本<input value={profile.rosSetupScript} onChange={(e) => field("rosSetupScript", e.target.value)} placeholder="/path/to/install/setup.bash" /></label>
           <label>RGBD 启用<input type="checkbox" checked={profile.rgbdEnabled} onChange={(e) => field("rgbdEnabled", e.target.checked)} /></label>
-          <label>RGB Topic<input value={profile.rgbdRgbTopic} onChange={(e) => field("rgbdRgbTopic", e.target.value)} placeholder="/camera/color/image_raw" /></label>
-          <label>Depth Topic<input value={profile.rgbdDepthTopic} onChange={(e) => field("rgbdDepthTopic", e.target.value)} placeholder="/camera/aligned_depth_to_color/image_raw" /></label>
-          <label>CameraInfo Topic<input value={profile.rgbdCameraInfoTopic} onChange={(e) => field("rgbdCameraInfoTopic", e.target.value)} placeholder="/camera/color/camera_info" /></label>
+          <label>RGB Topic<input value={profile.rgbdRgbTopic} onChange={(e) => field("rgbdRgbTopic", e.target.value)} placeholder="/cameras/left_arm/wrist/color/image_raw" /></label>
+          <label>Depth Topic<input value={profile.rgbdDepthTopic} onChange={(e) => field("rgbdDepthTopic", e.target.value)} placeholder="/cameras/left_arm/wrist/aligned_depth_to_color/image_raw" /></label>
+          <label>CameraInfo Topic<input value={profile.rgbdCameraInfoTopic} onChange={(e) => field("rgbdCameraInfoTopic", e.target.value)} placeholder="/cameras/left_arm/wrist/color/camera_info" /></label>
           <label>RGBD 目标 TF<input value={profile.rgbdTargetFrame} onChange={(e) => field("rgbdTargetFrame", e.target.value)} placeholder="base_link" /></label>
           <label>RGBD 最大宽<input type="number" value={profile.rgbdMaxWidth} onChange={(e) => field("rgbdMaxWidth", Number(e.target.value))} /></label>
           <label>RGBD 最大高<input type="number" value={profile.rgbdMaxHeight} onChange={(e) => field("rgbdMaxHeight", Number(e.target.value))} /></label>
@@ -1730,7 +1730,7 @@ export default function App() {
           usbProbe={usbProbe}
           usbChecked={usbChecked}
           armMode={armMode}
-          realsenseTopicSample={messages["/camera/camera/color/image_raw"]}
+          realsenseTopicSample={messages[profile.rgbdRgbTopic]}
           vlaChunkSample={messages[VLA_CHUNK_TOPIC]}
           actionBusy={statusActionBusy}
           actionNotice={statusActionNotice}

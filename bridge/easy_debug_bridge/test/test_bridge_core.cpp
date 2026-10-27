@@ -9,6 +9,10 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  const auto now = std::chrono::steady_clock::now();
+  assert(easy_debug_bridge::should_report_rgbd_tf_failure({}, now));
+  assert(!easy_debug_bridge::should_report_rgbd_tf_failure(now - std::chrono::milliseconds(300), now));
+  assert(easy_debug_bridge::should_report_rgbd_tf_failure(now - std::chrono::milliseconds(500), now));
   easy_debug_bridge::ImageInterests interests;
   interests.add("/image", 1); interests.add("/image", 1); interests.add("/image", 2);
   assert(interests.clients("/image").size() == 2);
