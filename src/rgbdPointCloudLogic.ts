@@ -44,6 +44,8 @@ export type RgbdFrameMeta = {
   stamp_diff_ns?: number;
   tf_ok: boolean;
   tf_error?: string;
+  /** Non-TF failure (resolution/encoding). */
+  error?: string;
   rgb: RgbdImageMeta;
   depth: RgbdImageMeta;
   camera_info: RgbdCameraInfo;
@@ -401,7 +403,7 @@ export function applyRgbdFrameToSession(
       ...state,
       stale: true,
       tfOk: false,
-      tfError: meta.tf_error || "TF 查询失败",
+      tfError: meta.error || meta.tf_error || "TF 查询失败",
     };
   }
   try {

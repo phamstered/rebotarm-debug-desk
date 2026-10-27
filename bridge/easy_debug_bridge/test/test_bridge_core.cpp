@@ -238,9 +238,14 @@ int main() {
     assert(std::abs(sk[2] - 50.0) < 1e-9);
     // 2x2 rgb8 → 1x1 nearest
     const uint8_t src[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-    const auto ds = easy_debug_bridge::downsample_image_nn(src, 2, 2, 6, "rgb8", 0, 1, 1);
+    const auto ds = easy_debug_bridge::downsample_image_nn(
+        src, sizeof(src), 2, 2, 6, "rgb8", 0, 1, 1);
     assert(ds && ds->width == 1 && ds->height == 1 && ds->data.size() == 3);
     assert(ds->data[0] == 1 && ds->data[1] == 2 && ds->data[2] == 3);
+    // Truncated buffer: step ok but nbytes < h*step → reject (no OOB)
+    const auto truncated = easy_debug_bridge::downsample_image_nn(
+        src, 6, 2, 2, 6, "rgb8", 0, 1, 1);
+    assert(!truncated);
     easy_debug_bridge::LatestFrameGroupQueue<int> queue;
     queue.push(1);
     queue.push(2);

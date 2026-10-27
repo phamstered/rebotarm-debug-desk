@@ -204,6 +204,8 @@ export type BridgeEnvelope = {
   stamp_diff_ns?: number;
   tf_ok?: boolean;
   tf_error?: string;
+  /** Non-TF RGBD failure (resolution/encoding); prefer over tf_error when set. */
+  error?: string;
   rgb?: unknown;
   depth?: unknown;
   camera_info?: unknown;

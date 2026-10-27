@@ -1276,12 +1276,9 @@ class BridgeNode : public rclcpp::Node {
     const uint32_t max_width = static_cast<uint32_t>(request.get<int>("max_width", 320));
     const uint32_t max_height = static_cast<uint32_t>(request.get<int>("max_height", 240));
     const double max_fps = request.get<double>("max_fps", 12.0);
-    for (const auto &name : {rgb_topic, depth_topic, info_topic, target_frame}) {
-      if (!easy_debug_bridge::is_valid_graph_name(name) && name != target_frame) {
-        // target_frame is a TF frame id, may be relative; allow non-absolute for TF names
-      }
-      if ((name == rgb_topic || name == depth_topic || name == info_topic) &&
-          !easy_debug_bridge::is_valid_graph_name(name)) {
+    // Topics must be absolute graph names; target_frame is a TF frame id (may be relative).
+    for (const auto &name : {rgb_topic, depth_topic, info_topic}) {
+      if (!easy_debug_bridge::is_valid_graph_name(name)) {
         session->send(error_message(request_id, "无效的 RGBD Topic 名称"));
         return;
       }
@@ -1384,13 +1381,20 @@ class BridgeNode : public rclcpp::Node {
            ",\"data_offset\":" + std::to_string(data_offset) + "}";
   }
 
-  void send_rgbd_tf_failure(const std::shared_ptr<WebSocketSession> &ws,
-                            const std::shared_ptr<RgbdSession> &session,
-                            const std::string &source_frame,
-                            const std::string &error) {
+  void send_rgbd_frame_failure(const std::shared_ptr<WebSocketSession> &ws,
+                               const std::shared_ptr<RgbdSession> &session,
+                               const std::string &source_frame,
+                               const std::string &error,
+                               bool is_tf_error) {
     std::ostringstream out;
-    out << "{\"op\":\"rgbd_frame\",\"tf_ok\":false,\"tf_error\":" << json_quote(error)
-        << ",\"source_frame\":" << json_quote(source_frame)
+    out << "{\"op\":\"rgbd_frame\",\"tf_ok\":false";
+    if (is_tf_error) {
+      out << ",\"tf_error\":" << json_quote(error);
+    } else {
+      // Distinct field for resolution/encoding failures; keep tf_error for older Desk clients.
+      out << ",\"error\":" << json_quote(error) << ",\"tf_error\":" << json_quote(error);
+    }
+    out << ",\"source_frame\":" << json_quote(source_frame)
         << ",\"target_frame\":" << json_quote(session->target_frame)
         << ",\"rgb_topic\":" << json_quote(session->rgb_topic)
         << ",\"depth_topic\":" << json_quote(session->depth_topic)
@@ -1404,24 +1408,28 @@ class BridgeNode : public rclcpp::Node {
     sensor_msgs::msg::Image::SharedPtr rgb;
     sensor_msgs::msg::Image::SharedPtr depth;
     sensor_msgs::msg::CameraInfo::SharedPtr info;
+    // MultiThreadedExecutor: RGB/Depth/Info callbacks may run concurrently. Claim the
+    // emit slot (rate-limit + last_sent) under session->mutex so only one thread emits,
+    // and so TF/resolution/encoding failures are FPS-gated the same way as successes.
     {
       std::lock_guard<std::mutex> lock(session->mutex);
       rgb = session->latest_rgb;
       depth = session->latest_depth;
       info = session->latest_info;
-    }
-    if (!rgb || !depth || !info) return;
-    if (!easy_debug_bridge::stamps_within_tolerance(
-            rgb->header.stamp.sec, rgb->header.stamp.nanosec,
-            depth->header.stamp.sec, depth->header.stamp.nanosec,
-            session->stamp_tolerance_ns)) {
-      return;
-    }
-    const auto now = std::chrono::steady_clock::now();
-    const auto min_interval = std::chrono::duration<double>(1.0 / session->max_fps);
-    if (session->last_sent.time_since_epoch().count() != 0 &&
-        (now - session->last_sent) < min_interval) {
-      return;
+      if (!rgb || !depth || !info) return;
+      if (!easy_debug_bridge::stamps_within_tolerance(
+              rgb->header.stamp.sec, rgb->header.stamp.nanosec,
+              depth->header.stamp.sec, depth->header.stamp.nanosec,
+              session->stamp_tolerance_ns)) {
+        return;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      const auto min_interval = std::chrono::duration<double>(1.0 / session->max_fps);
+      if (session->last_sent.time_since_epoch().count() != 0 &&
+          (now - session->last_sent) < min_interval) {
+        return;
+      }
+      session->last_sent = now;
     }
 
     auto ws = find_session(client);
@@ -1434,25 +1442,34 @@ class BridgeNode : public rclcpp::Node {
           session->target_frame, source_frame, rgb->header.stamp,
           tf2::durationFromSec(0.05));
     } catch (const tf2::TransformException &ex) {
-      send_rgbd_tf_failure(ws, session, source_frame, ex.what());
+      send_rgbd_frame_failure(ws, session, source_frame, ex.what(), true);
       return;
     }
 
     if (rgb->width != depth->width || rgb->height != depth->height) {
-      send_rgbd_tf_failure(ws, session, source_frame, "RGB 与 Depth 分辨率不一致");
+      send_rgbd_frame_failure(ws, session, source_frame, "RGB 与 Depth 分辨率不一致", false);
+      return;
+    }
+    if (info->width != rgb->width || info->height != rgb->height) {
+      send_rgbd_frame_failure(
+          ws, session, source_frame,
+          "CameraInfo 分辨率与 RGB 不一致 (" + std::to_string(info->width) + "x" +
+              std::to_string(info->height) + " vs " + std::to_string(rgb->width) + "x" +
+              std::to_string(rgb->height) + ")",
+          false);
       return;
     }
 
     const auto preview = easy_debug_bridge::choose_preview_size(
         rgb->width, rgb->height, session->max_width, session->max_height);
     auto rgb_ds = easy_debug_bridge::downsample_image_nn(
-        rgb->data.data(), rgb->width, rgb->height, rgb->step, rgb->encoding, rgb->is_bigendian,
-        preview.width, preview.height);
+        rgb->data.data(), rgb->data.size(), rgb->width, rgb->height, rgb->step, rgb->encoding,
+        rgb->is_bigendian, preview.width, preview.height);
     auto depth_ds = easy_debug_bridge::downsample_image_nn(
-        depth->data.data(), depth->width, depth->height, depth->step, depth->encoding,
-        depth->is_bigendian, preview.width, preview.height);
+        depth->data.data(), depth->data.size(), depth->width, depth->height, depth->step,
+        depth->encoding, depth->is_bigendian, preview.width, preview.height);
     if (!rgb_ds || !depth_ds) {
-      send_rgbd_tf_failure(ws, session, source_frame, "RGBD 降采样失败或不支持的编码");
+      send_rgbd_frame_failure(ws, session, source_frame, "RGBD 降采样失败或不支持的编码", false);
       return;
     }
 
@@ -1497,7 +1514,6 @@ class BridgeNode : public rclcpp::Node {
          << ",\"data_length\":" << payload.size() << "}";
 
     if (!ws->send_binary(easy_debug_bridge::binary_rgbd_frame(meta.str(), payload))) return;
-    session->last_sent = now;
     // Drop consumed pair so a lone late frame cannot rematch with a stale sibling.
     {
       std::lock_guard<std::mutex> lock(session->mutex);

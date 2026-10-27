@@ -387,6 +387,7 @@ export default function App() {
   const [rgbdSession, setRgbdSession] = useState<RgbdSessionState>(() => createRgbdSessionState());
   const [rgbdColorMode, setRgbdColorMode] = useState<RgbdColorMode>("rgb");
   const rgbdInterestRef = useRef(false);
+  const rgbdSubscribeKeyRef = useRef("");
 
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const hardwareStatusRef = useRef<HardwareStatus | null>(null);
@@ -492,6 +493,7 @@ export default function App() {
   }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
 
   // RGBD 点云：独立 subscribe_rgbd，不与 Inspector Image 兴趣集合共享；隐藏/不可见时释放。
+  // Bridge 支持 replace-on-resubscribe：已订阅时 topic/max/target_frame 变化也要重发。
   useEffect(() => {
     const want =
       stage === "connected" &&
@@ -500,8 +502,20 @@ export default function App() {
       windowVisible &&
       liveUpdates &&
       profile.rgbdEnabled;
-    if (want === rgbdInterestRef.current) return;
+    const subscribeKey = want
+      ? [
+          profile.rgbdRgbTopic,
+          profile.rgbdDepthTopic,
+          profile.rgbdCameraInfoTopic,
+          profile.rgbdTargetFrame,
+          String(profile.rgbdMaxWidth),
+          String(profile.rgbdMaxHeight),
+          String(profile.rgbdMaxFps),
+        ].join("\0")
+      : "";
+    if (want === rgbdInterestRef.current && subscribeKey === rgbdSubscribeKeyRef.current) return;
     rgbdInterestRef.current = want;
+    rgbdSubscribeKeyRef.current = subscribeKey;
     if (want) {
       bridge.send({
         op: "subscribe_rgbd",
@@ -818,7 +832,7 @@ export default function App() {
               ...current,
               stale: true,
               tfOk: false,
-              tfError: meta.tf_error || "TF 查询失败",
+              tfError: meta.error || meta.tf_error || "TF 查询失败",
             }));
           } else {
             const payload = message.rgbd_payload ?? new Uint8Array();
@@ -837,6 +851,7 @@ export default function App() {
       }
       if (message.op === "disconnected") {
         rgbdInterestRef.current = false;
+        rgbdSubscribeKeyRef.current = "";
         setRgbdSession((current) => resetRgbdSession(current));
         setFailedStep("bridge");
         setBridgeUp(false);

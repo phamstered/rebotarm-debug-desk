@@ -81,14 +81,16 @@ struct DownsampledImage {
   std::vector<uint8_t> data;
 };
 
-/** Nearest-neighbor downsample preserving encoding / endianness. */
+/** Nearest-neighbor downsample preserving encoding / endianness.
+ *  src_nbytes must cover at least src_h * src_step bytes (truncated Image → nullopt). */
 inline std::optional<DownsampledImage> downsample_image_nn(
-    const uint8_t *src, uint32_t src_w, uint32_t src_h, uint32_t src_step,
+    const uint8_t *src, size_t src_nbytes, uint32_t src_w, uint32_t src_h, uint32_t src_step,
     const std::string &encoding, uint8_t is_bigendian,
     uint32_t dst_w, uint32_t dst_h) {
   const int bpp = bytes_per_pixel(encoding);
   if (!src || bpp <= 0 || src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0) return std::nullopt;
   if (src_step < src_w * static_cast<uint32_t>(bpp)) return std::nullopt;
+  if (src_nbytes < static_cast<size_t>(src_h) * static_cast<size_t>(src_step)) return std::nullopt;
   DownsampledImage out;
   out.width = dst_w;
   out.height = dst_h;
