@@ -29,12 +29,9 @@ jobs:
     runs-on: ubuntu-22.04
     # --user root: GHA container jobs need a writable HOME for npm/cargo caches.
     container:
-      # TODO(ci-base): pin by digest after first successful
-      #   .github/workflows/ci-base-publish.yml run on main, e.g.
-      #   image: ghcr.io/phamstered/rebotarm-debug-desk/ci-base@sha256:...
-      # Until the package exists, this job will fail to pull — publish the image
-      # first (merge publish workflow + push to main, or workflow_dispatch).
-      image: ghcr.io/phamstered/rebotarm-debug-desk/ci-base:node22
+      # Pinned digest from Publish CI base image run (tags also exist:
+      # node22, node22-20261027, node22-affea75). Bump when rebuilding the image.
+      image: ghcr.io/phamstered/rebotarm-debug-desk/ci-base@sha256:f1d0f05eeaf488f58daedb030248d68b2ebc7daa562840e565434574116e60a6
       options: --user root
     permissions:
       contents: read
