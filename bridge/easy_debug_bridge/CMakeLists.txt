@@ -12,6 +12,8 @@ find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
@@ -23,7 +25,7 @@ add_executable(bridge_node src/bridge_node.cpp)
 target_include_directories(bridge_node PRIVATE include)
 ament_target_dependencies(bridge_node
   ament_index_cpp rclcpp rclcpp_action std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
-  trajectory_msgs microros_stm32h723_bridge rosidl_typesupport_introspection_cpp)
+  trajectory_msgs tf2 tf2_ros microros_stm32h723_bridge rosidl_typesupport_introspection_cpp)
 target_link_libraries(bridge_node Boost::system Boost::thread)
 # GravityIdentification client is gated in bridge_node.cpp via __has_include on
 # microros_stm32h723_bridge/action/gravity_identification.hpp (stack PR #23).

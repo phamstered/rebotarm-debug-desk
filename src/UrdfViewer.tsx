@@ -27,6 +27,8 @@ import { applyTrajectoryPlan, dispatchTrajectory, planTrajectory } from "./traje
 import type { TrajectoryController } from "./trajectoryLogic";
 import type { TrajectoryPoint } from "./types";
 import { ViewerHeadsUp } from "./ViewerHeadsUp";
+import { RgbdPointCloudLayer, type RgbdColorMode } from "./RgbdPointCloud";
+import type { ColoredPointCloud, RgbdSessionState } from "./rgbdPointCloudLogic";
 import {
   applyJointState,
 } from "./urdfLogic";
@@ -253,6 +255,17 @@ export function UrdfViewer({
   trajectoryController,
   onSendTrajectory,
   active = true,
+  rgbdCloud = null,
+  rgbdVisible = true,
+  rgbdPointSize = 0.008,
+  rgbdColorMode = "rgb",
+  rgbdNearM = 0.05,
+  rgbdFarM = 3,
+  rgbdStatus = null,
+  onRgbdVisibleChange,
+  onRgbdPointSizeChange,
+  onRgbdColorModeChange,
+  onRgbdNearFarChange,
 }: {
   active?: boolean;
   xml: string;
@@ -261,6 +274,17 @@ export function UrdfViewer({
   tcpLink: string;
   trajectoryController: TrajectoryController | null;
   onSendTrajectory(request: TrajectorySendRequest): Promise<void>;
+  rgbdCloud?: ColoredPointCloud | null;
+  rgbdVisible?: boolean;
+  rgbdPointSize?: number;
+  rgbdColorMode?: RgbdColorMode;
+  rgbdNearM?: number;
+  rgbdFarM?: number;
+  rgbdStatus?: Pick<RgbdSessionState, "stale" | "tfOk" | "tfError" | "fps" | "enabled"> & { stampDiffNs?: number; pointCount?: number } | null;
+  onRgbdVisibleChange?(visible: boolean): void;
+  onRgbdPointSizeChange?(size: number): void;
+  onRgbdColorModeChange?(mode: RgbdColorMode): void;
+  onRgbdNearFarChange?(nearM: number, farM: number): void;
 }) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -474,10 +498,53 @@ export function UrdfViewer({
           </div>
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
+        {rgbdStatus?.enabled !== false && (
+          <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
+            <div className="viewer-overlay-row">
+              <label><input type="checkbox" checked={rgbdVisible} onChange={(e) => onRgbdVisibleChange?.(e.target.checked)} /> 点云</label>
+              <select value={rgbdColorMode} onChange={(e) => onRgbdColorModeChange?.(e.target.value as RgbdColorMode)} aria-label="点云着色">
+                <option value="rgb">RGB</option>
+                <option value="depth">深度</option>
+              </select>
+            </div>
+            <div className="viewer-overlay-row">
+              <span>点大小</span>
+              <input type="range" min={0.002} max={0.03} step={0.001} value={rgbdPointSize}
+                onChange={(e) => onRgbdPointSizeChange?.(Number(e.target.value))} />
+            </div>
+            <div className="viewer-overlay-row">
+              <span>近/远 m</span>
+              <input type="number" step={0.05} value={rgbdNearM} aria-label="近距"
+                onChange={(e) => onRgbdNearFarChange?.(Number(e.target.value), rgbdFarM)} />
+              <input type="number" step={0.1} value={rgbdFarM} aria-label="远距"
+                onChange={(e) => onRgbdNearFarChange?.(rgbdNearM, Number(e.target.value))} />
+            </div>
+            <div className="viewer-overlay-row">
+              <span>RGBD</span>
+              <strong>
+                {(rgbdStatus?.fps ?? 0).toFixed(1)} Hz · {rgbdStatus?.pointCount ?? 0} pts
+                {rgbdStatus?.stampDiffNs != null ? ` · Δ${(rgbdStatus.stampDiffNs / 1e6).toFixed(1)}ms` : ""}
+                {rgbdStatus?.stale ? " · 过期" : ""}
+              </strong>
+            </div>
+            {!rgbdStatus?.tfOk && rgbdStatus?.tfError && (
+              <div className="viewer-overlay-row error" role="alert">{rgbdStatus.tfError}</div>
+            )}
+          </div>
+        )}
       </ViewerHeadsUp>
       <Canvas frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
         <Scene robot={robot} controlsEnabled={active && !dragging}>
+          {/* Point cloud is parented under the same URDF root rotation; positions already converted via urdfToScenePoint. */}
+          <RgbdPointCloudLayer
+            cloud={rgbdCloud}
+            visible={rgbdVisible}
+            pointSize={rgbdPointSize}
+            colorMode={rgbdColorMode}
+            nearM={rgbdNearM}
+            farM={rgbdFarM}
+          />
           {active && robot && tcp.name && (
             <TrajectoryHandle
               robot={robot}

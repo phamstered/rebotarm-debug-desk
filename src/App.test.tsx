@@ -1,13 +1,14 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EXPECTED_BRIDGE_BUILD_ID } from "./bridgeVersion";
 
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
   save: vi.fn(),
   connect: vi.fn().mockResolvedValue({
     bridge_version: "0.1.0",
-    bridge_build_id: "dc8f3b4c126c",
+    bridge_build_id: "bddd7fcc6d04",
     ros_distro: "humble",
   }),
   listTopics: vi.fn().mockResolvedValue([
@@ -210,7 +211,7 @@ describe("App workflow", () => {
       })
       .mockResolvedValueOnce({
         bridge_version: "0.1.0",
-        bridge_build_id: "dc8f3b4c126c",
+        bridge_build_id: EXPECTED_BRIDGE_BUILD_ID,
         ros_distro: "humble",
       });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {

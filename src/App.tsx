@@ -40,6 +40,14 @@ import type { MonitorWorkspace } from "./monitorLogic";
 import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController, trajectoryJointNames, trajectoryStateTopic, TRAJECTORY_FEEDBACK_MAX_AGE_MS } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
+import type { RgbdColorMode } from "./RgbdPointCloud";
+import {
+  applyRgbdFrameToSession,
+  createRgbdSessionState,
+  parseRgbdFrameMeta,
+  resetRgbdSession,
+  type RgbdSessionState,
+} from "./rgbdPointCloudLogic";
 import type { TrajectorySendRequest } from "./UrdfViewer";
 import {
   applyRecentHostToProfile,
@@ -332,6 +340,14 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
         <div className="profile-grid profile-advanced-grid">
           <label>ROS_DOMAIN_ID<input type="number" value={profile.rosDomainId} onChange={(e) => field("rosDomainId", Number(e.target.value))} /></label>
           <label>ROS 环境脚本<input value={profile.rosSetupScript} onChange={(e) => field("rosSetupScript", e.target.value)} placeholder="/path/to/install/setup.bash" /></label>
+          <label>RGBD 启用<input type="checkbox" checked={profile.rgbdEnabled} onChange={(e) => field("rgbdEnabled", e.target.checked)} /></label>
+          <label>RGB Topic<input value={profile.rgbdRgbTopic} onChange={(e) => field("rgbdRgbTopic", e.target.value)} placeholder="/camera/color/image_raw" /></label>
+          <label>Depth Topic<input value={profile.rgbdDepthTopic} onChange={(e) => field("rgbdDepthTopic", e.target.value)} placeholder="/camera/aligned_depth_to_color/image_raw" /></label>
+          <label>CameraInfo Topic<input value={profile.rgbdCameraInfoTopic} onChange={(e) => field("rgbdCameraInfoTopic", e.target.value)} placeholder="/camera/color/camera_info" /></label>
+          <label>RGBD 目标 TF<input value={profile.rgbdTargetFrame} onChange={(e) => field("rgbdTargetFrame", e.target.value)} placeholder="base_link" /></label>
+          <label>RGBD 最大宽<input type="number" value={profile.rgbdMaxWidth} onChange={(e) => field("rgbdMaxWidth", Number(e.target.value))} /></label>
+          <label>RGBD 最大高<input type="number" value={profile.rgbdMaxHeight} onChange={(e) => field("rgbdMaxHeight", Number(e.target.value))} /></label>
+          <label>RGBD 最大 FPS<input type="number" value={profile.rgbdMaxFps} onChange={(e) => field("rgbdMaxFps", Number(e.target.value))} /></label>
         </div>
       </details>
     </div>
@@ -368,6 +384,11 @@ export default function App() {
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
+  const [rgbdSession, setRgbdSession] = useState<RgbdSessionState>(() => createRgbdSessionState());
+  const [rgbdColorMode, setRgbdColorMode] = useState<RgbdColorMode>("rgb");
+  const rgbdInterestRef = useRef(false);
+  const rgbdSubscribeKeyRef = useRef("");
+
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const hardwareStatusRef = useRef<HardwareStatus | null>(null);
   useEffect(() => { hardwareStatusRef.current = hardwareStatus; }, [hardwareStatus]);
@@ -470,6 +491,52 @@ export default function App() {
       setMessages((current) => { const next = { ...current }; delete next[selected]; return next; });
     };
   }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
+
+  // RGBD 点云：独立 subscribe_rgbd，不与 Inspector Image 兴趣集合共享；隐藏/不可见时释放。
+  // Bridge 支持 replace-on-resubscribe：已订阅时 topic/max/target_frame 变化也要重发。
+  useEffect(() => {
+    const want =
+      stage === "connected" &&
+      appPage === "dashboard" &&
+      centerTab === "robot" &&
+      windowVisible &&
+      liveUpdates &&
+      profile.rgbdEnabled;
+    const subscribeKey = want
+      ? [
+          profile.rgbdRgbTopic,
+          profile.rgbdDepthTopic,
+          profile.rgbdCameraInfoTopic,
+          profile.rgbdTargetFrame,
+          String(profile.rgbdMaxWidth),
+          String(profile.rgbdMaxHeight),
+          String(profile.rgbdMaxFps),
+        ].join("\0")
+      : "";
+    if (want === rgbdInterestRef.current && subscribeKey === rgbdSubscribeKeyRef.current) return;
+    rgbdInterestRef.current = want;
+    rgbdSubscribeKeyRef.current = subscribeKey;
+    if (want) {
+      bridge.send({
+        op: "subscribe_rgbd",
+        rgb_topic: profile.rgbdRgbTopic,
+        depth_topic: profile.rgbdDepthTopic,
+        camera_info_topic: profile.rgbdCameraInfoTopic,
+        target_frame: profile.rgbdTargetFrame,
+        max_width: profile.rgbdMaxWidth,
+        max_height: profile.rgbdMaxHeight,
+        max_fps: profile.rgbdMaxFps,
+      });
+    } else {
+      bridge.send({ op: "unsubscribe_rgbd" });
+    }
+  }, [
+    bridge, stage, appPage, centerTab, windowVisible, liveUpdates,
+    profile.rgbdEnabled, profile.rgbdRgbTopic, profile.rgbdDepthTopic,
+    profile.rgbdCameraInfoTopic, profile.rgbdTargetFrame,
+    profile.rgbdMaxWidth, profile.rgbdMaxHeight, profile.rgbdMaxFps,
+  ]);
+
   // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
   const activeTrajectoryController = useMemo(
     () => findActiveTrajectoryController(rosControl?.controllers ?? []),
@@ -757,7 +824,35 @@ export default function App() {
           rosDistro: message.ros_distro,
         });
       }
+      if (message.op === "rgbd_frame") {
+        try {
+          const meta = parseRgbdFrameMeta(message);
+          if (!meta.tf_ok) {
+            setRgbdSession((current) => ({
+              ...current,
+              stale: true,
+              tfOk: false,
+              tfError: meta.error || meta.tf_error || "TF 查询失败",
+            }));
+          } else {
+            const payload = message.rgbd_payload ?? new Uint8Array();
+            setRgbdSession((current) =>
+              applyRgbdFrameToSession(current, current.sessionId, meta, payload, Date.now()),
+            );
+          }
+        } catch (reason) {
+          setRgbdSession((current) => ({
+            ...current,
+            stale: true,
+            tfOk: false,
+            tfError: reason instanceof Error ? reason.message : String(reason),
+          }));
+        }
+      }
       if (message.op === "disconnected") {
+        rgbdInterestRef.current = false;
+        rgbdSubscribeKeyRef.current = "";
+        setRgbdSession((current) => resetRgbdSession(current));
         setFailedStep("bridge");
         setBridgeUp(false);
         setError(formatConnectError("Bridge WebSocket 已断开", "bridge"));
@@ -1848,6 +1943,25 @@ export default function App() {
               tcpLink={profile.tcpLink}
               trajectoryController={trajectoryController}
               onSendTrajectory={sendTrajectory}
+              rgbdCloud={rgbdSession.cloud}
+              rgbdVisible={rgbdSession.visible}
+              rgbdPointSize={rgbdSession.pointSize}
+              rgbdColorMode={rgbdColorMode}
+              rgbdNearM={rgbdSession.nearM}
+              rgbdFarM={rgbdSession.farM}
+              rgbdStatus={{
+                enabled: profile.rgbdEnabled,
+                stale: rgbdSession.stale,
+                tfOk: rgbdSession.tfOk,
+                tfError: rgbdSession.tfError,
+                fps: rgbdSession.fps,
+                stampDiffNs: rgbdSession.cloud?.stampDiffNs,
+                pointCount: rgbdSession.cloud?.count ?? 0,
+              }}
+              onRgbdVisibleChange={(visible) => setRgbdSession((c) => ({ ...c, visible }))}
+              onRgbdPointSizeChange={(pointSize) => setRgbdSession((c) => ({ ...c, pointSize }))}
+              onRgbdColorModeChange={setRgbdColorMode}
+              onRgbdNearFarChange={(nearM, farM) => setRgbdSession((c) => ({ ...c, nearM, farM }))}
             />
           )}
         </div>

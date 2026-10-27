@@ -1,4 +1,5 @@
 #include "easy_debug_bridge/bridge_core.hpp"
+#include "easy_debug_bridge/rgbd_core.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -218,6 +219,39 @@ int main() {
     goal.max_effort_nm = -0.1;
     assert(easy_debug_bridge::validate_gravity_id_goal(goal) == GravityIdGoalValidation::Negative);
     assert(!easy_debug_bridge::gravity_id_goal_validation_message(GravityIdGoalValidation::NotArmed).empty());
+  }
+
+
+  {
+    const auto frame = easy_debug_bridge::binary_rgbd_frame("{}", {9, 8, 7});
+    assert(frame.size() == 13 && frame[2] == 'D' && frame[10] == 9);
+    assert(easy_debug_bridge::bytes_per_pixel("rgb8") == 3);
+    assert(easy_debug_bridge::bytes_per_pixel("16UC1") == 2);
+    assert(easy_debug_bridge::bytes_per_pixel("32FC1") == 4);
+    assert(easy_debug_bridge::stamps_within_tolerance(1, 0, 1, 40'000'000, 50'000'000));
+    assert(!easy_debug_bridge::stamps_within_tolerance(1, 0, 1, 60'000'000, 50'000'000));
+    const auto size = easy_debug_bridge::choose_preview_size(640, 480, 320, 240);
+    assert(size.width == 320 && size.height == 240);
+    double k[9] = {200, 0, 100, 0, 200, 50, 0, 0, 1};
+    const auto sk = easy_debug_bridge::scale_intrinsics(k, 640, 480, 320, 240);
+    assert(std::abs(sk[0] - 100.0) < 1e-9);
+    assert(std::abs(sk[2] - 50.0) < 1e-9);
+    // 2x2 rgb8 → 1x1 nearest
+    const uint8_t src[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    const auto ds = easy_debug_bridge::downsample_image_nn(
+        src, sizeof(src), 2, 2, 6, "rgb8", 0, 1, 1);
+    assert(ds && ds->width == 1 && ds->height == 1 && ds->data.size() == 3);
+    assert(ds->data[0] == 1 && ds->data[1] == 2 && ds->data[2] == 3);
+    // Truncated buffer: step ok but nbytes < h*step → reject (no OOB)
+    const auto truncated = easy_debug_bridge::downsample_image_nn(
+        src, 6, 2, 2, 6, "rgb8", 0, 1, 1);
+    assert(!truncated);
+    easy_debug_bridge::LatestFrameGroupQueue<int> queue;
+    queue.push(1);
+    queue.push(2);
+    assert(queue.dropped_count() == 1);
+    const auto taken = queue.take();
+    assert(taken && *taken == 2);
   }
 
   return 0;

@@ -146,6 +146,7 @@ node scripts/smoke-bridge.mjs 18765
 
 - 用户文档站点：[https://phamstered.github.io/rebotarm-debug-desk/](https://phamstered.github.io/rebotarm-debug-desk/)
 - 基本功能与测试覆盖：[docs/basic-features.md](docs/basic-features.md)
+- TODO / 待办列表：[docs/todo.md](docs/todo.md)
 - 协议说明：[docs/protocol.md](docs/protocol.md)
 - 架构说明：[docs/architecture.md](docs/architecture.md)
 - Joint4 标定：[docs/joint4-calibration.md](docs/joint4-calibration.md)
