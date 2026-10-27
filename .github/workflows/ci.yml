@@ -8,6 +8,9 @@
 #
 # NOT covered here (needs Jetson / ROS 2 Humble; see AGENTS.md):
 #   - Bridge `colcon build` / `colcon test` / live ROS topic integration
+#
+# Toolchain (Node 22 / npm 10, Rust stable, Tauri apt deps) lives in the
+# desk CI base image — see docker/ci-base/. Stack/executor have their own images.
 name: CI
 
 on:
@@ -24,42 +27,27 @@ jobs:
   test:
     name: Frontend + Rust + Bridge core
     runs-on: ubuntu-22.04
+    # --user root: GHA container jobs need a writable HOME for npm/cargo caches.
+    container:
+      # Pinned digest from Publish CI base image run (tags also exist:
+      # node22, node22-20261027, node22-affea75). Bump when rebuilding the image.
+      image: ghcr.io/phamstered/rebotarm-debug-desk/ci-base@sha256:f1d0f05eeaf488f58daedb030248d68b2ebc7daa562840e565434574116e60a6
+      options: --user root
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Tauri 2 Linux prerequisites:
-      # https://v2.tauri.app/start/prerequisites/
-      # https://v2.tauri.app/distribute/pipelines/github/
-      - name: Install Tauri Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-
-      - name: Setup Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
+      # Node/Rust/apt already in the image — no setup-node / rust-toolchain / apt-get.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
+          # Container HOME may differ from runner; keep cache keys stable.
+          shared-key: desk-ci-base
 
       - name: Install npm dependencies
         run: npm ci
