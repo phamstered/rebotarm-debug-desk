@@ -86,3 +86,11 @@ npm run deploy:bridge -- --skip-sync --skip-build --restart
 - 修复 GitHub 仓库问题时，先创建或确认 Issue，再在独立分支实现、测试、提交和推送，PR 正文写 `Closes #<编号>`。PR 留给用户人工审核，不自行合并或启用自动合并。
 - 交付时说明改了什么、为何这样改、执行了哪些验证，以及尚未验证的硬件/环境边界。不要把“已编译”与“已安装”“Jetson 已部署”“当前进程已更新”混为一谈。
 - CI 失败要读取对应运行日志并指出实际失败步骤；本地测试通过不能替代 CI 结果。
+
+## 7. Cursor Cloud 环境
+
+- 云端代理是 Ubuntu，不是 macOS。功能验证用 `npm test` 和 `npm run build`。不要在这里跑 `npm run install:mac`。ROS 2 Humble、colcon 和 Jetson 部署不在本环境里；Bridge 只跑 `npm run test:bridge`。
+- 开发界面是 Vite，`http://127.0.0.1:1420`（Tauri `devUrl`）。环境 `start` 会执行 `npm run dev -- --host 0.0.0.0 --port 1420`。浏览器没有 Tauri IPC，点「连接 Jetson」会停在「检查 SSH」，这是预期。
+- 默认镜像的 `c++` 可能指向 clang，编不过 `npm run test:bridge`（找不到 `<cmath>`）。安装时把 `c++` 备选切到 `/usr/bin/g++`。
+- Rust 与 `docker/ci-base/Dockerfile` 的 `RUST_TOOLCHAIN` 对齐，当前是 1.99.1。Node 用镜像自带的 22。
+- Linux 上 `cargo test` 会生成未跟踪的 `src-tauri/gen/schemas/linux-schema.json`。不要把它和无关改动一起提交。
