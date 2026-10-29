@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { positionMotionBusy, type PositionMotionControls } from "./positionMotionLogic";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
 import { ARM_JOINT_NAMES, homeRow, nextCapturedPoseName, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
 
@@ -14,6 +15,7 @@ export function PositionPage({
   onDelete,
   onCapture,
   onBack,
+  motion,
 }: {
   profileKey: string;
   store: PositionStore;
@@ -24,6 +26,7 @@ export function PositionPage({
   onDelete(id: string): void;
   onCapture(): { positions: number[] } | { error: string };
   onBack?: () => void;
+  motion?: PositionMotionControls;
 }) {
   const [name, setName] = useState("");
   const [joints, setJoints] = useState<string[]>(blankJoints);
@@ -35,6 +38,9 @@ export function PositionPage({
   const [pendingDelete, setPendingDelete] = useState("");
   const home = homeRow();
   const positions = store.profiles[profileKey]?.positions ?? [];
+  const moveReason = motion?.reason || (!motion?.armed ? "请先确认工作区安全并解锁点位执行" : "");
+  const disabled = !motion || Boolean(moveReason) || motion.busy;
+  const homeReady = motion?.homePositions.length === 6;
 
   function openCreate() {
     setEditingId(null);
@@ -78,7 +84,7 @@ export function PositionPage({
       <div className="position-toolbar">
         <div>
           <h2>位置</h2>
-          <p>重力补偿下把手臂拖到目标位置后，保存当前六个关节角。只记录姿态，不会让手臂运动。</p>
+          <p>保存六个关节角；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。</p>
         </div>
         <div className="position-toolbar-actions">
           {onBack && <button type="button" className="position-quiet" onClick={onBack}>返回连接</button>}
@@ -86,16 +92,33 @@ export function PositionPage({
           <button type="button" className="position-quiet" onClick={openCreate}>手动新增</button>
         </div>
       </div>
+      <section className="position-motion" aria-label="点位执行">
+        <label><input type="checkbox" checked={motion?.armed ?? false} disabled={!motion || motion.busy}
+          onChange={(event) => motion?.setArmed(event.target.checked)} />我已确认工作区安全，允许点位运动</label>
+        {moveReason && <p>{moveReason}</p>}
+        {motion?.busy && !positionMotionBusy(motion.state.phase) && <p>其他会话的点位运动尚未结束</p>}
+        {motion && motion.state.phase !== "idle" && <div role="status" aria-live="polite">
+          <strong>{motion.state.label}</strong> · {motion.state.message}
+        </div>}
+        {motion?.busy && positionMotionBusy(motion.state.phase) && <button type="button" className="position-danger" onClick={() => void motion.cancel()}>取消运动</button>}
+      </section>
       <div className="position-workspace">
         <div className="position-list" aria-label="点位列表">
-          <article className="position-card position-card-home" aria-label="HOME">
-            <UrdfPoseThumbnail xml={urdfXml} label="HOME" />
+          <article className="position-card position-card-home" aria-label="HOME" onClick={(event) => {
+            if (!disabled && homeReady && !(event.target as HTMLElement).closest("button")) void motion?.execute("home");
+          }}>
+            <button type="button" className="position-target" aria-label="移动到 HOME"
+              disabled={disabled || !homeReady} title={homeReady ? moveReason : "HOME 尚未从 MoveIt SRDF 同步"}
+              onClick={() => void motion?.execute("home")}>
+              <UrdfPoseThumbnail xml={urdfXml} label="HOME" jointNames={[...ARM_JOINT_NAMES]} positions={homeReady ? motion?.homePositions : undefined} />
+              <span>HOME</span>
+            </button>
             <div className="position-card-body">
               <div className="position-card-head">
                 <strong>HOME</strong>
                 <span className="position-lock">锁定</span>
               </div>
-              <p className="position-sync">{home.sync === "pending" ? "待同步" : ""}</p>
+              <p className="position-sync">{homeReady ? "SRDF arm/home" : home.sync === "pending" ? "待同步" : ""}</p>
             </div>
           </article>
           {positions.map((position) => (
@@ -103,6 +126,9 @@ export function PositionPage({
               key={position.id}
               position={position}
               confirming={pendingDelete === position.id}
+              moveDisabled={disabled || (editorOpen && editingId === position.id)}
+              moveReason={editorOpen && editingId === position.id ? "正在编辑，请先保存或取消后再执行" : motion?.busy ? "已有点位运动正在执行" : moveReason}
+              onMove={() => void motion?.execute(position)}
               urdfXml={urdfXml}
               previewPositions={editorOpen && editingId === position.id ? joints.map(Number) : undefined}
               onEdit={() => {
@@ -165,6 +191,9 @@ function PositionCard({
   urdfXml,
   previewPositions,
   onEdit,
+  onMove,
+  moveDisabled,
+  moveReason,
   onAskDelete,
   onConfirmDelete,
 }: {
@@ -173,13 +202,22 @@ function PositionCard({
   urdfXml: string;
   previewPositions?: number[];
   onEdit(): void;
+  onMove(): void;
+  moveDisabled: boolean;
+  moveReason: string;
   onAskDelete(): void;
   onConfirmDelete(): void;
 }) {
   const positions = previewPositions ?? position.positions;
   return (
-    <article className="position-card" aria-label={position.name}>
-      <UrdfPoseThumbnail xml={urdfXml} label={position.name} jointNames={position.jointNames} positions={positions} />
+    <article className="position-card" aria-label={position.name} onClick={(event) => {
+      if (!moveDisabled && !(event.target as HTMLElement).closest("button")) onMove();
+    }}>
+      <button type="button" className="position-target" aria-label={`移动到 ${position.name}`} disabled={moveDisabled}
+        title={moveReason || `由 MoveIt2 规划并移动到 ${position.name}`} onClick={onMove}>
+        <UrdfPoseThumbnail xml={urdfXml} label={position.name} jointNames={position.jointNames} positions={positions} />
+        <span>移动</span>
+      </button>
       <div className="position-card-body">
         <div className="position-card-head">
           <strong>{position.name}</strong>

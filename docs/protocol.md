@@ -324,3 +324,15 @@ RGB、对齐 Depth 和 CameraInfo 分别按各自发布端选择可靠性；这�
 元数据 `op` 为 `rgbd_frame`，包含 `rgb` / `depth` 图像头（含 `header.stamp`、`encoding`、`step`、`data_offset`）、缩放后的 `camera_info.k`、`source_frame` / `target_frame`、`stamp_diff_ns`、以及图像采集时刻的 `pose`（`target_frame ← source_frame`）。`tf_ok:false` 时可为文本 JSON（无像素），Desk 标记点云过期并保留上一帧。
 
 Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样并缩放内参，再按 RGB 时间戳查询 TF；只保留最新完整组。深度编码支持 `16UC1`（毫米）与 `32FC1`（米）。
+
+## MoveIt2 保存点位执行
+
+固定组 `arm`（joint1–joint6），固定 MoveIt Action `/move_action` 和真实控制器 `arm_trajectory_controller`。其他组、任意 Action/Topic 名称不接受配置。
+
+- `{"op":"position_motion_info","request_id":"..."}` 返回 `available`、门禁失败 `message`、当前 SRDF `home_positions`（未同步为空）、全局 `busy` 和本会话拥有的 `command_id`。连接期间每秒轮询该操作续约会话心跳（5 秒超时取消）。若本会话有运动，随后发送其最新状态。
+- `{"op":"position_move","request_id":"...","command_id":"UUID","label":"取料位","confirmation":"ARMED","home":false,"positions":[0,-0.2,-0.3,0,0,0]}`。positions 固定按 joint1–joint6，目标为点击时快照。`home:true` 时在 Bridge 读取当前 SRDF HOME，忽略客户端 positions。
+- 成功受理返回 `position_move_ack` 与 `command_id`；门禁拒绝返回同一 ACK、`accepted:false` 与 `message`。Bridge 缓存最近 256 个已受理指令的 command_id，缓存内重复请求不重复执行；不同会话不能抢占运动。ACK 不代表规划成功或到达。
+- 状态推送 `{"op":"position_motion","command_id":"UUID","label":"取料位","motion_phase":"executing","message":"...","code":0,"elapsed_s":1.2}`。阶段为 validating/planning/executing/verifying/canceling/stopping/stop_failed/succeeded/failed/canceled。`code` 为 MoveIt 结果错误码（成功 1）。只有 Action 成功及终点误差/停稳验证通过才报告 succeeded。
+- `{"op":"position_cancel","request_id":"...","command_id":"UUID"}` 只允许拥有者取消，返回 `position_cancel_ack`；停止结果以状态推送为准。断线、反馈超时/故障及超时由 Jetson watchdog 取消；停止未确认保持全局锁，保留既有现场安全停机入口。
+
+MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确错误。协议不提供任意 ROS action 执行入口。

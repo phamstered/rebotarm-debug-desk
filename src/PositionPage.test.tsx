@@ -142,3 +142,20 @@ function point(id: string, positions: number[]) {
     updatedAt: 1,
   };
 }
+
+it("clicks a position to move while edit and delete remain separate", async () => {
+  const user = userEvent.setup();
+  const execute = vi.fn();
+  const store = emptyPositionStore(); store.profiles[key] = { positions: [point("pick", [0, -.2, -.2, 0, 0, 0])] };
+  render(<PositionPage profileKey={key} store={store} captureError="" urdfXml="" onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} onCapture={vi.fn()}
+    motion={{ state: { phase: "idle", commandId: "", label: "", message: "" }, homePositions: [0, -.01, -.01, 0, 0, 0], armed: true, busy: false, reason: "", setArmed: vi.fn(), execute, cancel: vi.fn() }} />);
+  await user.click(screen.getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "删除 pick" }));
+  expect(execute).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "移动到 pick" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  await user.click(screen.getByRole("button", { name: "移动到 pick" }));
+  expect(execute).toHaveBeenCalledWith(store.profiles[key].positions[0]);
+  await user.click(screen.getByRole("button", { name: "移动到 HOME" }));
+  expect(execute).toHaveBeenCalledWith("home");
+});

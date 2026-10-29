@@ -29,6 +29,7 @@ const doubles = vi.hoisted(() => ({
   request: vi.fn().mockResolvedValue({ op: "joint_command_ack", sequence: 1 }),
   close: vi.fn(),
   listener: undefined as ((message: unknown) => void) | undefined,
+  listeners: new Set<(message: unknown) => void>(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke }));
@@ -44,7 +45,11 @@ vi.mock("./bridge", () => ({
     send = doubles.send;
     request = doubles.request;
     close = doubles.close;
-    onMessage(listener: (message: unknown) => void) { doubles.listener = listener; return () => {}; }
+    onMessage(listener: (message: unknown) => void) {
+      doubles.listeners.add(listener);
+      doubles.listener = (message) => doubles.listeners.forEach((fn) => fn(message));
+      return () => { doubles.listeners.delete(listener); };
+    }
   },
 }));
 vi.mock("./UrdfViewer", () => ({
@@ -1226,6 +1231,36 @@ describe("App workflow", () => {
     await user.click(await screen.findByRole("tab", { name: "位置" }));
     expect(screen.getByRole("region", { name: "位置" })).toBeVisible();
     expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
+  });
+
+  it("dispatches saved positions through MoveIt and captures fresh monotonic feedback", async () => {
+    const baseInvoke = doubles.invoke.getMockImplementation()!;
+    doubles.invoke.mockImplementation((command, args) => {
+      if (command === "check_ros_controllers") return Promise.resolve({ manager: "/controller_manager", available: true,
+        controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });
+      return baseInvoke(command, args);
+    });
+    doubles.request.mockImplementation(async (message: { op: string; command_id?: string }) => {
+      if (message.op === "position_motion_info") return { op: message.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false };
+      if (message.op === "position_move") return { op: "position_move_ack", command_id: message.command_id };
+      return { op: "subscribed" };
+    });
+    try {
+      const user = userEvent.setup(); render(<App />);
+      await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+      await screen.findByRole("tab", { name: "位置" });
+      act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"], position: [0, -.2, -.3, 0, 0, 0] } }));
+      await user.click(screen.getByRole("tab", { name: "位置" }));
+      expect(screen.getByRole("button", { name: "保存当前姿态" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "保存当前姿态" }));
+      await user.click(screen.getByRole("button", { name: "保存点位" }));
+      await user.click(screen.getByRole("checkbox", { name: /允许点位运动/ }));
+      const move = screen.getByRole("button", { name: "移动到 姿态 1" });
+      await waitFor(() => expect(move).toBeEnabled());
+      await user.click(move);
+      expect(doubles.request).toHaveBeenCalledWith(expect.objectContaining({ op: "position_move", positions: [0, -.2, -.3, 0, 0, 0], confirmation: "ARMED" }), 5000);
+      expect(doubles.request.mock.calls.some(([m]) => m.op === "trajectory_command")).toBe(false);
+    } finally { doubles.request.mockResolvedValue({ op: "joint_command_ack", sequence: 1 }); }
   });
 
 
