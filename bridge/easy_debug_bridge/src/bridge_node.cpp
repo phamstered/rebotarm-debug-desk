@@ -36,6 +36,7 @@
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include "easy_debug_bridge/bridge_build_id.hpp"
 #include "easy_debug_bridge/bridge_core.hpp"
+#include "easy_debug_bridge/position_motion.hpp"
 #include "easy_debug_bridge/topic_json.hpp"
 
 #include <algorithm>
@@ -348,6 +349,7 @@ class BridgeNode : public rclcpp::Node {
                               !message->effort.empty();
           joint_received_at_ = std::chrono::steady_clock::now();
         });
+    position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_);
     RCLCPP_INFO(get_logger(), "Easy Debug Bridge configured on 127.0.0.1:%d", port_);
   }
 
@@ -382,6 +384,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void remove_session(uint64_t client) {
+    position_motion_->disconnected(client);
     {
       std::lock_guard<std::mutex> lock(subscription_mutex_);
       for (const auto &topic : image_interests_.disconnect(client)) {
@@ -429,6 +432,11 @@ class BridgeNode : public rclcpp::Node {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\"}");
+      } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel") {
+        const std::weak_ptr<WebSocketSession> weak = session;
+        position_motion_->request(session->id(), request, [weak](const std::string &reply) {
+          if (const auto target = weak.lock()) target->send(reply);
+        });
       } else if (op == "topics") {
         send_topics(session, request_id);
       } else if (op == "graph") {
@@ -813,6 +821,8 @@ class BridgeNode : public rclcpp::Node {
     const double kd = request.get<double>("kd", 0.0);
     const double effort = request.get<double>("effort", 0.0);
     const bool disable = mode_value == microros_stm32h723_bridge::msg::JointCommand::MODE_DISABLE;
+    if (position_motion_->busy() && !disable) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
+    if (disable) position_motion_->disconnected(0);
 
     easy_debug_bridge::CommandFields fields;
     fields.mode = mode_value;
@@ -928,6 +938,7 @@ class BridgeNode : public rclcpp::Node {
   void publish_trajectory_command(const std::shared_ptr<WebSocketSession> &session,
                                   const boost::property_tree::ptree &request,
                                   const std::string &request_id) {
+    if (position_motion_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
     easy_debug_bridge::TrajectoryCommand command;
     command.topic = request.get<std::string>("topic", "");
     if (const auto names = request.get_child_optional("joint_names")) {
@@ -1095,6 +1106,7 @@ class BridgeNode : public rclcpp::Node {
                             const boost::property_tree::ptree &request,
                             const std::string &request_id) {
     const auto fields = parse_gravity_id_goal(request);
+    if (position_motion_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
     const auto validation = easy_debug_bridge::validate_gravity_id_goal(fields);
     if (validation != easy_debug_bridge::GravityIdGoalValidation::Ok) {
       session->send(error_message(
@@ -1547,6 +1559,7 @@ class BridgeNode : public rclcpp::Node {
     return publisher;
   }
 
+  std::unique_ptr<easy_debug_bridge::PositionMotion> position_motion_;
   int port_;
   std::string command_topic_;
   std::string status_topic_;

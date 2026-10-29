@@ -78,3 +78,11 @@ The installed Bridge package includes `config/fastdds_udp.xml`. Native SSH comma
 This handles environments where long-lived participants retain deleted SHM lock inodes and no longer share the same discovered graph as new processes. Explicit deployment profiles take precedence. UDP can have different CPU/bandwidth characteristics for large camera images; deployments with repaired SHM can select their own profile. XML transport configuration follows the [Fast DDS 2.6 UDP transport documentation](https://fast-dds.docs.eprosima.com/en/v2.6.11/fastdds/transport/udp/udp.html).
 
 Graph filtering is a presentation preference: only the desktop diagnostic Bridge is hidden by default. Hardware/ROS bridge nodes and their endpoint relations remain visible.
+
+## 保存位置与 MoveIt2
+
+位置卡片通过 Bridge 的 `position_motion_info` / `position_move` / `position_cancel` 操作连接 Jetson 的固定 `arm` 组和 `/move_action`，MoveIt 使用当前 Planning Scene 规划并通过唯一允许的真实 JTC Action 执行，不经过桌面的两点 IK 路径。实现独立在 `position_motion.cpp`，无 MoveIt 消息依赖的构建保留只读/管理功能并返回 unavailable。Mac 不加入 DDS。
+
+Bridge 将 WebSocket 请求排队到 ROS executor 的互斥回调组，管理全局单运动所有权、去重、实时门禁和取消 watchdog；会话释放会取消其拥有的 goal。模型与 HOME 来自实际 `/move_group` 参数而非本机文件。端侧从 Action 结果与新鲜关节停稳反馈确认终态。管理数据保存在本机，运动使用点击时的目标快照；编辑/删除只改变后续请求。
+
+控制栈的 `real_move_group.launch.py` 只启动规划器，不创建第二个硬件/RSP/ControllerManager。现场启停与电机确认继续沿用原流程。新路径不会放宽旧 `trajectory_command` 的 Topic 白名单或 64 点上限；完整 MoveIt 轨迹留在 Jetson，由 MoveIt 执行栈管理。

@@ -162,6 +162,14 @@ export type BridgeEnvelope = {
   trajectory_points?: TrajectoryPoint[];
   joints?: number;
   points?: number;
+  /** MoveIt saved-position protocol. */
+  command_id?: string;
+  label?: string;
+  home?: boolean;
+  positions?: number[];
+  home_positions?: number[];
+  available?: boolean;
+  busy?: boolean;
   /** Present on Bridge `hello` replies. */
   bridge_version?: string;
   bridge_build_id?: string;
@@ -179,6 +187,7 @@ export type BridgeEnvelope = {
   command_timeout_ms?: number;
   lock_gripper?: boolean;
   phase?: number;
+  motion_phase?: string;
   pose_index?: number;
   pose_count?: number;
   residual_nm?: number[];

@@ -13,6 +13,7 @@ import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
+import { usePositionMotion } from "./positionMotionLogic";
 import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
@@ -631,6 +632,9 @@ export default function App() {
   }, []);
 
   const positionProfileKey = profileKeyFor(profile);
+  const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
+    !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
+      activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先激活 arm_trajectory_controller 轨迹控制" : "");
   const captureSamples = [
     {
       topic: profile.jointStateTopic,
@@ -648,12 +652,12 @@ export default function App() {
     });
   }
   const captureError = (() => {
-    const captured = captureCurrentArmPose(captureSamples, Date.now(), profile.jointStateTopic);
+    const captured = captureCurrentArmPose(captureSamples, performance.now(), profile.jointStateTopic);
     return "error" in captured ? captured.error : "";
   })();
 
   function capturePose() {
-    return captureCurrentArmPose(captureSamples, Date.now(), profile.jointStateTopic);
+    return captureCurrentArmPose(captureSamples, performance.now(), profile.jointStateTopic);
   }
 
   function persistPositions(next: PositionStore) {
@@ -1667,6 +1671,7 @@ export default function App() {
           onUpdate={editPosition}
           onDelete={removePosition}
           onCapture={capturePose}
+          motion={positionMotion}
           onBack={() => setManagePositions(false)}
         />
       </main>
@@ -2061,6 +2066,7 @@ export default function App() {
             onUpdate={editPosition}
             onDelete={removePosition}
             onCapture={capturePose}
+            motion={positionMotion}
           />
         )}
       </section>

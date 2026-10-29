@@ -61,7 +61,7 @@ Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐
 
 行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 
-待审核设计：[位置管理 Panel、固定 HOME 与 MoveIt2 规划方案（Draft）](docs/positions-moveit-design.md)。该方案尚未实现，当前轨迹行为以已实现功能文档为准。
+位置页支持保存点位及点击执行：Jetson 需启动控制栈 `real_move_group.launch.py` 并显式激活真实轨迹控制器。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置；HOME 从当前 SRDF 同步，支持取消和实际到位确认。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
 
 ## 本机开发
 

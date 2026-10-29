@@ -20,6 +20,9 @@ find_package(trajectory_msgs REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(microros_stm32h723_bridge REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system thread)
+find_package(moveit_msgs QUIET)
+find_package(control_msgs QUIET)
+find_package(controller_manager_msgs QUIET)
 
 add_executable(bridge_node src/bridge_node.cpp)
 target_include_directories(bridge_node PRIVATE include)
@@ -27,6 +30,13 @@ ament_target_dependencies(bridge_node
   ament_index_cpp rclcpp rclcpp_action std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
   trajectory_msgs tf2 tf2_ros microros_stm32h723_bridge rosidl_typesupport_introspection_cpp)
 target_link_libraries(bridge_node Boost::system Boost::thread)
+if(moveit_msgs_FOUND AND control_msgs_FOUND AND controller_manager_msgs_FOUND)
+  target_sources(bridge_node PRIVATE src/position_motion.cpp)
+  ament_target_dependencies(bridge_node moveit_msgs control_msgs controller_manager_msgs)
+else()
+  target_sources(bridge_node PRIVATE src/position_motion_unavailable.cpp)
+  message(WARNING "MoveIt2 position execution disabled: optional ROS message packages unavailable")
+endif()
 # GravityIdentification client is gated in bridge_node.cpp via __has_include on
 # microros_stm32h723_bridge/action/gravity_identification.hpp (stack PR #23).
 # Without that header the binary still builds; gravity_id_* ops return a clear error.
@@ -39,6 +49,9 @@ if(BUILD_TESTING)
   add_executable(test_bridge_core test/test_bridge_core.cpp)
   target_include_directories(test_bridge_core PRIVATE include)
   add_test(NAME bridge_core COMMAND test_bridge_core)
+  add_executable(test_position_model test/test_position_model.cpp)
+  target_include_directories(test_position_model PRIVATE include)
+  add_test(NAME position_model COMMAND test_position_model)
   add_executable(test_topic_json test/test_topic_json.cpp)
   target_include_directories(test_topic_json PRIVATE include)
   ament_target_dependencies(test_topic_json rclcpp std_msgs trajectory_msgs rosidl_typesupport_introspection_cpp)

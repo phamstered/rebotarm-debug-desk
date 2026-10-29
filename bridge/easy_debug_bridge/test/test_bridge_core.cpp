@@ -1,4 +1,5 @@
 #include "easy_debug_bridge/bridge_core.hpp"
+#include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
 
 #include <cassert>
@@ -9,6 +10,25 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    const PositionMotionModel model{{-1, -1, -1, -1, -1, -1}, {1, 1, 1, 1, 1, 1}, {0, 0, 0, 0, 0, 0}};
+    assert(arm_joint_set({"joint6", "joint5", "joint4", "joint3", "joint2", "joint1"}));
+    assert(!arm_joint_set({"joint1", "joint1", "joint3", "joint4", "joint5", "joint6"}));
+    const auto ordered = ordered_arm_values({"joint6", "joint1", "joint2", "joint3", "joint4", "joint5"}, {6, 1, 2, 3, 4, 5});
+    assert((ordered == std::vector<double>{1, 2, 3, 4, 5, 6}));
+    auto rejected = [](auto operation) { try { operation(); } catch (...) { return true; } return false; };
+    assert(rejected([] { ordered_arm_values({"joint1", "joint1"}, {0, 0}); }));
+    assert(rejected([] { ordered_arm_values({"joint1"}, {0}); }));
+    assert(rejected([&] { validate_position_target({0, 0, 0, 0, 0, 2}, model); }));
+    assert(rejected([&] { validate_position_target({0, 0, 0, 0, 0, NAN}, model); }));
+    validate_position_target(model.home, model);
+    assert(position_target_reached(model.home, model.home, model.home));
+    assert(!position_target_reached(model.home, {0, 0, 0, 0, 0, .03}, model.home));
+    assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, .1}));
+    assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, NAN}));
+  }
+
   const auto now = std::chrono::steady_clock::now();
   assert(easy_debug_bridge::should_report_rgbd_tf_failure({}, now));
   assert(!easy_debug_bridge::should_report_rgbd_tf_failure(now - std::chrono::milliseconds(300), now));
