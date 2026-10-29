@@ -1,5 +1,6 @@
 export type MotionControlInfo =
   | { state: "idle" }
+  | { state: "position"; label: string; phase: string; message: string }
   | {
     state: "settled";
     label: string;
@@ -14,7 +15,9 @@ export function MotionControlPanel({ info }: { info: MotionControlInfo }) {
   return (
     <section className="motion-control-panel" aria-label="运动控制">
       <strong>运动控制</strong>
-      {info.state === "idle" ? <p>无运动</p> : (
+      {info.state === "idle" ? <p>无运动</p> : info.state === "position" ? (
+        <><p>{info.label}</p><p>{info.message}</p></>
+      ) : (
         <>
           <p>{info.label}</p>
           <p>{info.outcome === "done" ? "完成" : "失败"}</p>
