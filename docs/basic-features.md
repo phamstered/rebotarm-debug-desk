@@ -183,6 +183,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 12. 全局工具栏、诊断与 rosbag
 
+- 点位运动抖动可使用 Jetson 独立只读脚本 `scripts/motion_diagnostics/monitor_motion.py` 采集与离线分析：保留完整遥测、规划/执行结果、发布者与源/接收时间，按动作统计误差、速度、sequence 与指令间隔。脚本不发送控制指令；Ctrl+C 仅停止采集。启动与数据边界见 [运动诊断](./motion-diagnostics)。
+
 - “暂停显示”只冻结 WebView 对 Topic、JointState 和硬件状态消息的消费，不断开 Bridge，也不停止后台 rosbag；恢复后从下一条消息继续更新。
 - “全部刷新”同时刷新 Topics 和 ROS Control 列表，并复用各自的并发保护。
 - “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。

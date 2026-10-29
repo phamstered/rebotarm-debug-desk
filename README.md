@@ -63,6 +63,8 @@ Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐
 
 位置页支持保存点位及点击执行：Jetson 需启动控制栈 `real_move_group.launch.py` 并显式激活真实轨迹控制器。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置；HOME 从当前 SRDF 同步，支持取消和实际到位确认。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
 
+运动不连贯或低速抖动时，可使用 [只读运动监控脚本](docs/motion-diagnostics.md) 在 Jetson 记录规划轨迹、JTC 参考/实际反馈与 STM32 指令，并离线分析；不改变控制器或电机状态。
+
 ## 本机开发
 
 ```bash

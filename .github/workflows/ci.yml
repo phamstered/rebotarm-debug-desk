@@ -65,3 +65,6 @@ jobs:
       # Full Bridge ROS integration stays on Jetson (AGENTS.md §5 / §4).
       - name: Bridge core C++ unit tests (no ROS)
         run: npm run test:bridge
+
+      - name: Motion recorder offline analysis tests (no ROS)
+        run: npm run test:motion
