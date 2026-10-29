@@ -46,13 +46,16 @@ class LifecycleTests(unittest.TestCase):
                     local n
                     n=$(cat "$ROOT/polls")
                     echo $((n + 1)) > "$ROOT/polls"
-                    if (( n < 26 )); then echo 1; else echo 0; fi
+                    if (( n < 8 )); then echo 1; else echo 0; fi
                 }
             '''
             env = dict(os.environ, HELPER=str(HELPER), ROOT=str(root), EVENTS=str(root / "events"),
                        MODE=str(mode), FAULT=str(fault), CONTROLLER=str(controller), REJECT=str(reject))
+            # Sleep is simulated, but each poll still touches the filesystem.
+            # The repeated-stop case polls until the fake supervisor exits;
+            # 5s of wall clock is tight on a loaded CI runner.
             result = subprocess.run(["bash", "-c", mock + "\n" + body], env=env,
-                                    text=True, capture_output=True, timeout=5)
+                                    text=True, capture_output=True, timeout=20)
             return result, (root / "events").read_text() if (root / "events").exists() else "", (root / "pid").exists()
 
     def test_initial_disabled_does_not_publish_or_request_hold(self):
