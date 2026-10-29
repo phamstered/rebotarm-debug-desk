@@ -1215,5 +1215,18 @@ describe("App workflow", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("opens saved positions from the connect page and from the center tab", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "管理位置" }));
+    expect(screen.getByRole("row", { name: "HOME" })).toBeVisible();
+    expect(screen.getByText("待同步")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "返回连接" }));
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("tab", { name: "位置" }));
+    expect(screen.getByRole("region", { name: "位置" })).toBeVisible();
+    expect(screen.getByRole("row", { name: "HOME" })).toBeVisible();
+  });
+
 
 });

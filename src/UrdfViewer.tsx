@@ -26,6 +26,7 @@ import type { KinematicModel, Vec3 } from "./kinematicsLogic";
 import { applyTrajectoryPlan, dispatchTrajectory, planTrajectory } from "./trajectoryLogic";
 import type { TrajectoryController } from "./trajectoryLogic";
 import type { TrajectoryPoint } from "./types";
+import { MotionControlPanel } from "./MotionControlPanel";
 import { ViewerHeadsUp } from "./ViewerHeadsUp";
 import { RgbdPointCloudLayer, type RgbdColorMode } from "./RgbdPointCloud";
 import type { ColoredPointCloud, RgbdSessionState } from "./rgbdPointCloudLogic";
@@ -465,7 +466,7 @@ export function UrdfViewer({
   return (
     <div className="viewer">
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
-      <ViewerHeadsUp error={overlayError}>
+      <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={{ state: "idle" }} />}>
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-overlay-row">
           <span>轨迹控制器</span>

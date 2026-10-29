@@ -9,6 +9,7 @@ use tokio::time::{sleep, Duration};
 
 mod data_collection;
 mod control_logs;
+mod positions;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1624,7 +1625,9 @@ pub fn run() {
             stop_rosbag_playback,
             start_session,
             stop_session,
-            deploy_bridge
+            deploy_bridge,
+            positions::positions_load,
+            positions::positions_save
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Robot Console");
