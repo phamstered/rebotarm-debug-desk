@@ -69,26 +69,28 @@ export function PositionPage({
 
   return (
     <section className="position-page" aria-label="位置">
-      <header className="position-page-bar">
-        <h2>位置</h2>
+      <div className="position-toolbar">
         <div>
-          {onBack && <button type="button" onClick={onBack}>返回连接</button>}
-          <button type="button" onClick={readCurrent} disabled={Boolean(captureError)} title={captureError || "把六个臂关节写入编辑区"}>读取当前位置</button>
-          <button type="button" onClick={openCreate}>新增</button>
+          <h2>位置</h2>
+          <p>保存六个臂关节。HOME 锁定，等 SRDF 同步后才有数值。</p>
         </div>
-      </header>
-      <table className="position-table">
-        <thead>
-          <tr><th>名称</th><th>关节</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          <tr aria-label="HOME">
-            <td>HOME</td>
-            <td>待同步</td>
-            <td>锁定</td>
-          </tr>
+        <div className="position-toolbar-actions">
+          {onBack && <button type="button" className="position-quiet" onClick={onBack}>返回连接</button>}
+          <button type="button" className="position-quiet" onClick={readCurrent} disabled={Boolean(captureError)} title={captureError || "把六个臂关节写入编辑区"}>读取当前位置</button>
+          <button type="button" className="position-primary" onClick={openCreate}>新增</button>
+        </div>
+      </div>
+      <div className="position-workspace">
+        <div className="position-list" aria-label="点位列表">
+          <article className="position-card position-card-home" aria-label="HOME">
+            <div className="position-card-head">
+              <strong>HOME</strong>
+              <span className="position-lock">锁定</span>
+            </div>
+            <p className="position-sync">{home.sync === "pending" ? "待同步" : ""}</p>
+          </article>
           {positions.map((position) => (
-            <PositionRow
+            <PositionCard
               key={position.id}
               position={position}
               confirming={pendingDelete === position.id}
@@ -108,35 +110,44 @@ export function PositionPage({
               }}
             />
           ))}
-        </tbody>
-      </table>
-      {editorOpen && (
-        <form className="position-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>
-          <label>点位名称<input aria-label="点位名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <div className="position-joints">
-            {ARM_JOINT_NAMES.map((jointName, index) => (
-              <label key={jointName}>{jointName}
-                <input
-                  aria-label={jointName}
-                  value={joints[index] ?? ""}
-                  onChange={(event) => {
-                    const next = [...joints];
-                    next[index] = event.target.value;
-                    setJoints(next);
-                  }}
-                />
-              </label>
-            ))}
-          </div>
-          {formError && <p className="position-error" role="alert">{formError}</p>}
-          <button type="submit">保存点位</button>
-        </form>
-      )}
+          {positions.length === 0 && <p className="position-empty">还没有自定义点位。</p>}
+        </div>
+        <aside className="position-editor-pane" aria-label="点位编辑">
+          {editorOpen ? (
+            <form className="position-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>
+              <h3>{editingId ? "编辑点位" : "新建点位"}</h3>
+              <label>点位名称<input aria-label="点位名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
+              <div className="position-joints">
+                {ARM_JOINT_NAMES.map((jointName, index) => (
+                  <label key={jointName}>{jointName}
+                    <input
+                      aria-label={jointName}
+                      value={joints[index] ?? ""}
+                      onChange={(event) => {
+                        const next = [...joints];
+                        next[index] = event.target.value;
+                        setJoints(next);
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+              {formError && <p className="position-error" role="alert">{formError}</p>}
+              <div className="position-editor-actions">
+                <button type="button" className="position-quiet" onClick={() => { setEditorOpen(false); setFormError(""); }}>取消</button>
+                <button type="submit" className="position-primary">保存点位</button>
+              </div>
+            </form>
+          ) : (
+            <p className="position-editor-hint">选一个点位进行编辑，或新增一个。</p>
+          )}
+        </aside>
+      </div>
     </section>
   );
 }
 
-function PositionRow({
+function PositionCard({
   position,
   confirming,
   onEdit,
@@ -150,15 +161,21 @@ function PositionRow({
   onConfirmDelete(): void;
 }) {
   return (
-    <tr aria-label={position.name}>
-      <td>{position.name}</td>
-      <td>{position.positions.map((value) => value.toFixed(3)).join(", ")}</td>
-      <td>
-        <button type="button" onClick={onEdit}>编辑</button>
-        {confirming
-          ? <button type="button" aria-label={`确认删除 ${position.name}`} onClick={onConfirmDelete}>确认删除</button>
-          : <button type="button" aria-label={`删除 ${position.name}`} onClick={onAskDelete}>删除</button>}
-      </td>
-    </tr>
+    <article className="position-card" aria-label={position.name}>
+      <div className="position-card-head">
+        <strong>{position.name}</strong>
+        <div className="position-card-actions">
+          <button type="button" className="position-quiet" onClick={onEdit}>编辑</button>
+          {confirming
+            ? <button type="button" className="position-danger" aria-label={`确认删除 ${position.name}`} onClick={onConfirmDelete}>确认删除</button>
+            : <button type="button" className="position-quiet" aria-label={`删除 ${position.name}`} onClick={onAskDelete}>删除</button>}
+        </div>
+      </div>
+      <ul className="position-joint-chips" aria-label={`${position.name} 关节`}>
+        {position.jointNames.map((jointName, index) => (
+          <li key={jointName}><span>{jointName}</span><b>{position.positions[index]?.toFixed(3)}</b></li>
+        ))}
+      </ul>
+    </article>
   );
 }

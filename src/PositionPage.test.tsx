@@ -22,7 +22,7 @@ describe("PositionPage", () => {
       />,
     );
 
-    expect(screen.getByRole("row", { name: /HOME/ })).toBeVisible();
+    expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
     expect(screen.getByText("待同步")).toBeVisible();
     expect(screen.queryByRole("button", { name: "删除 HOME" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "读取当前位置" })).toBeDisabled();
