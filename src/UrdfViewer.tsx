@@ -26,7 +26,7 @@ import type { KinematicModel, Vec3 } from "./kinematicsLogic";
 import { applyTrajectoryPlan, dispatchTrajectory, planTrajectory } from "./trajectoryLogic";
 import type { TrajectoryController } from "./trajectoryLogic";
 import type { TrajectoryPoint } from "./types";
-import { MotionControlPanel } from "./MotionControlPanel";
+import { MotionControlPanel, type MotionControlInfo } from "./MotionControlPanel";
 import { ViewerHeadsUp } from "./ViewerHeadsUp";
 import { RgbdPointCloudLayer, type RgbdColorMode } from "./RgbdPointCloud";
 import type { ColoredPointCloud, RgbdSessionState } from "./rgbdPointCloudLogic";
@@ -256,6 +256,7 @@ export function UrdfViewer({
   trajectoryController,
   onSendTrajectory,
   active = true,
+  motionInfo = { state: "idle" },
   rgbdCloud = null,
   rgbdVisible = true,
   rgbdPointSize = 0.008,
@@ -269,6 +270,7 @@ export function UrdfViewer({
   onRgbdNearFarChange,
 }: {
   active?: boolean;
+  motionInfo?: MotionControlInfo;
   xml: string;
   jointState: JointState | null;
   bridge: BridgeClient;
@@ -466,7 +468,7 @@ export function UrdfViewer({
   return (
     <div className="viewer">
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
-      <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={{ state: "idle" }} />}>
+      <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={motionInfo} />}>
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-overlay-row">
           <span>轨迹控制器</span>
