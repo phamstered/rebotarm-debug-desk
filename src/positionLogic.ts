@@ -154,6 +154,37 @@ export function deletePosition(store: PositionStore, profileKey: string, id: str
   return { store: withProfile(store, profileKey, positions.filter((item) => item.id !== id)), error: "" };
 }
 
+export function nextCapturedPoseName(existing: Array<{ name: string }>) {
+  const names = new Set(existing.map((item) => item.name));
+  let index = 1;
+  let name = `姿态 ${index}`;
+  while (!name.trim() || name === "HOME" || names.has(name)) {
+    index += 1;
+    name = `姿态 ${index}`;
+  }
+  return name;
+}
+
+export function captureCurrentArmPose(
+  samples: Array<{ topic: string; state: { name?: string[]; position?: number[] } | null; receivedAt: number | null }>,
+  now: number,
+  preferredTopic?: string,
+): { positions: number[]; topic: string } | { error: string } {
+  const ranked = samples.map((sample) => ({
+    topic: sample.topic,
+    receivedAt: sample.receivedAt,
+    result: captureArmJoints(sample.state, { receivedAt: sample.receivedAt, now }),
+  }));
+  const ready = ranked.filter((sample) => "positions" in sample.result);
+  const preferred = ready.find((sample) => sample.topic === preferredTopic);
+  const chosen = preferred ?? [...ready].sort((left, right) => (right.receivedAt ?? 0) - (left.receivedAt ?? 0))[0];
+  if (chosen && "positions" in chosen.result) return { positions: chosen.result.positions, topic: chosen.topic };
+  const preferredError = ranked.find((sample) => sample.topic === preferredTopic && "error" in sample.result);
+  if (preferredError && "error" in preferredError.result) return { error: preferredError.result.error };
+  const anyError = ranked.find((sample) => "error" in sample.result);
+  return { error: anyError && "error" in anyError.result ? anyError.result.error : "没有新鲜的关节反馈" };
+}
+
 export function captureArmJoints(
   jointState: { name?: string[]; position?: number[] } | null,
   timing: { receivedAt: number | null; now: number; maxAgeMs?: number },

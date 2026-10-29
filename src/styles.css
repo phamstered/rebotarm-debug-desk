@@ -1305,6 +1305,7 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .position-toolbar h2 { margin: 0; font-size: 20px; letter-spacing: -.3px; }
 .position-toolbar p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .position-toolbar-actions, .position-editor-actions, .position-card-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.position-toolbar-actions button { white-space: nowrap; }
 .position-page button.position-primary,
 .position-page button.position-quiet,
 .position-page button.position-danger { border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 700; }

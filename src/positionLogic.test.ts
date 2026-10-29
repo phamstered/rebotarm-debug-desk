@@ -3,8 +3,10 @@ import {
   HOME_POSITION_ID,
   addPosition,
   captureArmJoints,
+  captureCurrentArmPose,
   deletePosition,
   emptyPositionStore,
+  nextCapturedPoseName,
   parsePositionStore,
   profileKeyFor,
   serializePositionStore,
@@ -114,5 +116,22 @@ describe("position store", () => {
     const other = profileKeyFor({ host: "other", username: "robot", sshPort: 22 });
     expect(first.store.profiles[other]).toBeUndefined();
     expect(parsePositionStore(serializePositionStore(first.store), other).profiles[other]).toBeUndefined();
+  });
+
+  it("uses ros2 joint_states when the configured feedback is stale", () => {
+    const arm = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
+    const captured = captureCurrentArmPose([
+      { topic: "/stm32/joint_states", state: { name: arm, position: [0, 0, 0, 0, 0, 0] }, receivedAt: 1_000 },
+      { topic: "/joint_states", state: { name: arm, position: [0.2, -0.4, -0.3, 0.1, 0, 0.5] }, receivedAt: 5_000 },
+    ], 5_200, "/stm32/joint_states");
+    expect(captured).toEqual({
+      topic: "/joint_states",
+      positions: [0.2, -0.4, -0.3, 0.1, 0, 0.5],
+    });
+  });
+
+  it("suggests the next pose name", () => {
+    expect(nextCapturedPoseName([])).toBe("姿态 1");
+    expect(nextCapturedPoseName([{ name: "姿态 1" }, { name: "HOME" }])).toBe("姿态 2");
   });
 });

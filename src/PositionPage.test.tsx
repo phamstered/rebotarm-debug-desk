@@ -27,9 +27,9 @@ describe("PositionPage", () => {
     expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
     expect(screen.getByText("待同步")).toBeVisible();
     expect(screen.queryByRole("button", { name: "删除 HOME" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "读取当前位置" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存当前姿态" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "新增" }));
+    await user.click(screen.getByRole("button", { name: "手动新增" }));
     await user.type(screen.getByLabelText("点位名称"), "取料位");
     const joints = screen.getAllByLabelText(/joint/);
     for (const [index, field] of joints.entries()) {
@@ -103,6 +103,28 @@ describe("PositionPage", () => {
     const bent = screen.getByLabelText("bent 姿态");
     expect(folded.getAttribute("data-tip")).not.toBe(bent.getAttribute("data-tip"));
     expect(screen.getByLabelText("HOME 姿态未同步")).toBeVisible();
+  });
+
+  it("fills a new point from the current arm pose", async () => {
+    const user = userEvent.setup();
+    const onCapture = vi.fn(() => ({ positions: [0.1, -0.2, -0.3, 0.4, 0.5, 0.6] }));
+    render(
+      <PositionPage
+        profileKey={key}
+        store={emptyPositionStore()}
+        captureError=""
+        urdfXml={rebotarmUrdf}
+        onCreate={vi.fn()}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+        onCapture={onCapture}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "保存当前姿态" }));
+    expect(onCapture).toHaveBeenCalled();
+    expect(screen.getByLabelText("点位名称")).toHaveValue("姿态 1");
+    expect(screen.getByLabelText("joint2")).toHaveValue("-0.2");
+    expect(screen.getByLabelText("正在保存 姿态")).toBeVisible();
   });
 });
 

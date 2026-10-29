@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
-import { ARM_JOINT_NAMES, homeRow, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
+import { ARM_JOINT_NAMES, homeRow, nextCapturedPoseName, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
 
 const blankJoints = () => ["0", "0", "0", "0", "0", "0"];
 
@@ -46,14 +46,17 @@ export function PositionPage({
     setFormError("");
   }
 
-  function readCurrent() {
+  function saveCurrentPose() {
     const captured = onCapture();
     if ("error" in captured) {
       setFormError(captured.error);
       return;
     }
-    setJoints(captured.positions.map(String));
+    setEditingId(null);
+    setName(nextCapturedPoseName(positions));
+    setJoints(captured.positions.map((value) => String(value)));
     setSource("feedback");
+    setNote("");
     setEditorOpen(true);
     setFormError("");
   }
@@ -75,12 +78,12 @@ export function PositionPage({
       <div className="position-toolbar">
         <div>
           <h2>位置</h2>
-          <p>保存六个臂关节。HOME 锁定，等 SRDF 同步后才有数值。</p>
+          <p>重力补偿下把手臂拖到目标位置后，保存当前六个关节角。只记录姿态，不会让手臂运动。</p>
         </div>
         <div className="position-toolbar-actions">
           {onBack && <button type="button" className="position-quiet" onClick={onBack}>返回连接</button>}
-          <button type="button" className="position-quiet" onClick={readCurrent} disabled={Boolean(captureError)} title={captureError || "把六个臂关节写入编辑区"}>读取当前位置</button>
-          <button type="button" className="position-primary" onClick={openCreate}>新增</button>
+          <button type="button" className="position-primary" onClick={saveCurrentPose} disabled={Boolean(captureError)} title={captureError || "把当前关节角写入新点位"}>保存当前姿态</button>
+          <button type="button" className="position-quiet" onClick={openCreate}>手动新增</button>
         </div>
       </div>
       <div className="position-workspace">
@@ -124,6 +127,7 @@ export function PositionPage({
           {editorOpen ? (
             <form className="position-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>
               <h3>{editingId ? "编辑点位" : "新建点位"}</h3>
+              <UrdfPoseThumbnail xml={urdfXml} label="正在保存" jointNames={[...ARM_JOINT_NAMES]} positions={joints.map(Number)} />
               <label>点位名称<input aria-label="点位名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
               <div className="position-joints">
                 {ARM_JOINT_NAMES.map((jointName, index) => (

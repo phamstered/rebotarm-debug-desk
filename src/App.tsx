@@ -13,7 +13,7 @@ import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
-import { addPosition, captureArmJoints, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
+import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
@@ -631,11 +631,30 @@ export default function App() {
   }, []);
 
   const positionProfileKey = profileKeyFor(profile);
-  const capturedJoints = captureArmJoints(jointState, {
-    receivedAt: messages[profile.jointStateTopic]?.lastAt ?? null,
-    now: Date.now(),
-  });
-  const captureError = "error" in capturedJoints ? capturedJoints.error : "";
+  const captureSamples = [
+    {
+      topic: profile.jointStateTopic,
+      state: jointState,
+      receivedAt: messages[profile.jointStateTopic]?.lastAt ?? null,
+    },
+  ];
+  if (profile.jointStateTopic !== "/joint_states") {
+    const sample = messages["/joint_states"];
+    const data = sample?.data;
+    captureSamples.push({
+      topic: "/joint_states",
+      state: data && typeof data === "object" ? data as { name?: string[]; position?: number[] } : null,
+      receivedAt: sample?.lastAt ?? null,
+    });
+  }
+  const captureError = (() => {
+    const captured = captureCurrentArmPose(captureSamples, Date.now(), profile.jointStateTopic);
+    return "error" in captured ? captured.error : "";
+  })();
+
+  function capturePose() {
+    return captureCurrentArmPose(captureSamples, Date.now(), profile.jointStateTopic);
+  }
 
   function persistPositions(next: PositionStore) {
     setPositionStore(next);
@@ -1268,6 +1287,9 @@ export default function App() {
       setTopicRefreshError("");
       bridge.send({ op: "subscribe", topic: profile.urdfTopic, type: "std_msgs/msg/String" });
       bridge.send({ op: "subscribe", topic: profile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
+      if (profile.jointStateTopic !== "/joint_states") {
+        bridge.send({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
+      }
       bridge.send({ op: "subscribe", topic: profile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
       // VlaJointChunk (positions[]); Bridge runtime decode required for Hz/Monitor sampling.
       bridge.send({ op: "subscribe", topic: VLA_CHUNK_TOPIC, type: VLA_CHUNK_MESSAGE_TYPE });
@@ -1644,7 +1666,7 @@ export default function App() {
           onCreate={createPosition}
           onUpdate={editPosition}
           onDelete={removePosition}
-          onCapture={() => captureArmJoints(jointState, { receivedAt: messages[profile.jointStateTopic]?.lastAt ?? null, now: Date.now() })}
+          onCapture={capturePose}
           onBack={() => setManagePositions(false)}
         />
       </main>
@@ -2038,7 +2060,7 @@ export default function App() {
             onCreate={createPosition}
             onUpdate={editPosition}
             onDelete={removePosition}
-            onCapture={() => captureArmJoints(jointState, { receivedAt: messages[profile.jointStateTopic]?.lastAt ?? null, now: Date.now() })}
+            onCapture={capturePose}
           />
         )}
       </section>
