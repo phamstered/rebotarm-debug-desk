@@ -28,4 +28,10 @@ describe("MotionControlPanel", () => {
     expect(panel).toHaveTextContent("1.2 mm");
     expect(panel).toHaveTextContent("0.4°");
   });
+  it("keeps MoveIt motion visible when returning from the positions tab", () => {
+    render(<MotionControlPanel info={{ state: "position", label: "取料位", phase: "executing", message: "MoveIt 正在执行" }} />);
+    expect(screen.getByRole("region", { name: "运动控制" })).toHaveTextContent("MoveIt 正在执行");
+    expect(screen.queryByText("无运动")).not.toBeInTheDocument();
+  });
+
 });

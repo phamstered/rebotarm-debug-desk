@@ -2031,7 +2031,10 @@ export default function App() {
               jointState={jointState}
               bridge={bridge}
               tcpLink={profile.tcpLink}
-              trajectoryController={trajectoryController}
+              trajectoryController={positionMotion.busy && trajectoryController ? { ...trajectoryController, readinessError: "点位运动尚未结束，请先取消或等待完成" } : trajectoryController}
+              motionInfo={positionMotion.state.phase !== "idle" ? {
+                state: "position", label: positionMotion.state.label, phase: positionMotion.state.phase, message: positionMotion.state.message,
+              } : positionMotion.busy ? { state: "position", label: "点位运动", phase: "validating", message: "已有会话的点位任务尚未结束" } : { state: "idle" }}
               onSendTrajectory={sendTrajectory}
               rgbdCloud={rgbdSession.cloud}
               rgbdVisible={rgbdSession.visible}
