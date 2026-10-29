@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "npm run test:frontend && npm run test:rust && npm run test:bridge && npm run test:install && npm run test:deploy",
+    "test": "npm run test:frontend && npm run test:rust && npm run test:bridge && npm run test:install && npm run test:deploy && npm run test:motion",
     "test:frontend": "vitest run",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:bridge": "c++ -std=c++17 -Wall -Wextra -pedantic -Ibridge/easy_debug_bridge/include bridge/easy_debug_bridge/test/test_bridge_core.cpp -o /tmp/easy_debug_bridge_core_test && /tmp/easy_debug_bridge_core_test",
@@ -19,7 +19,8 @@
     "tauri": "tauri",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "test:motion": "python3 -m unittest discover -s scripts/motion_diagnostics -p 'test_*.py'"
   },
   "dependencies": {
     "@react-three/fiber": "^9.3.0",
