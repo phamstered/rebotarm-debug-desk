@@ -12,6 +12,10 @@ import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
+import { PositionPage } from "./PositionPage";
+import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
+import { loadStoredPositions, saveStoredPositions } from "./positionStore";
+import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
 import type { BridgeHelloInfo, StatusCardAction, StatusCardModel } from "./statusLogic";
 import { formatHardwareMode, isFault11Latched } from "./statusLogic";
@@ -97,7 +101,7 @@ import {
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "upgrading" | "connected" | "failed";
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
-type CenterTab = "robot" | "graph";
+type CenterTab = "robot" | "graph" | "positions";
 
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
@@ -382,6 +386,7 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState("");
   const [topicSubscribeError, setTopicSubscribeError] = useState("");
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
+  const [positionStore, setPositionStore] = useState<PositionStore>(() => emptyPositionStore());
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
   const [rgbdSession, setRgbdSession] = useState<RgbdSessionState>(() => createRgbdSessionState());
@@ -412,6 +417,7 @@ export default function App() {
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>("robot");
+  const [managePositions, setManagePositions] = useState(false);
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
   const [windowVisible, setWindowVisible] = useState(!document.hidden);
@@ -615,6 +621,62 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
   }, [navExpanded]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadStoredPositions().then((store) => {
+      if (!cancelled) setPositionStore(store);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const positionProfileKey = profileKeyFor(profile);
+  const captureSamples = [
+    {
+      topic: profile.jointStateTopic,
+      state: jointState,
+      receivedAt: messages[profile.jointStateTopic]?.lastAt ?? null,
+    },
+  ];
+  if (profile.jointStateTopic !== "/joint_states") {
+    const sample = messages["/joint_states"];
+    const data = sample?.data;
+    captureSamples.push({
+      topic: "/joint_states",
+      state: data && typeof data === "object" ? data as { name?: string[]; position?: number[] } : null,
+      receivedAt: sample?.lastAt ?? null,
+    });
+  }
+  const captureError = (() => {
+    const captured = captureCurrentArmPose(captureSamples, Date.now(), profile.jointStateTopic);
+    return "error" in captured ? captured.error : "";
+  })();
+
+  function capturePose() {
+    return captureCurrentArmPose(captureSamples, Date.now(), profile.jointStateTopic);
+  }
+
+  function persistPositions(next: PositionStore) {
+    setPositionStore(next);
+    void saveStoredPositions(next).catch(() => undefined);
+  }
+
+  function createPosition(draft: PositionDraft) {
+    const result = addPosition(positionStore, positionProfileKey, draft, Date.now(), crypto.randomUUID());
+    if (!result.error) persistPositions(result.store);
+    return result.error;
+  }
+
+  function editPosition(id: string, draft: PositionDraft) {
+    const result = updatePosition(positionStore, positionProfileKey, id, draft, Date.now());
+    if (!result.error) persistPositions(result.store);
+    return result.error;
+  }
+
+  function removePosition(id: string) {
+    const result = deletePosition(positionStore, positionProfileKey, id);
+    if (!result.error) persistPositions(result.store);
+  }
 
   useEffect(() => {
     saveNavigateStatusOnConnect(navigateStatusOnConnect);
@@ -1225,6 +1287,9 @@ export default function App() {
       setTopicRefreshError("");
       bridge.send({ op: "subscribe", topic: profile.urdfTopic, type: "std_msgs/msg/String" });
       bridge.send({ op: "subscribe", topic: profile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
+      if (profile.jointStateTopic !== "/joint_states") {
+        bridge.send({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
+      }
       bridge.send({ op: "subscribe", topic: profile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
       // VlaJointChunk (positions[]); Bridge runtime decode required for Hz/Monitor sampling.
       bridge.send({ op: "subscribe", topic: VLA_CHUNK_TOPIC, type: VLA_CHUNK_MESSAGE_TYPE });
@@ -1590,6 +1655,24 @@ export default function App() {
     void connect();
   }
 
+  if (stage !== "connected" && managePositions) {
+    return (
+      <main className="connect-shell">
+        <PositionPage
+          profileKey={positionProfileKey}
+          store={positionStore}
+          captureError={captureError}
+          urdfXml={urdf || previewUrdf}
+          onCreate={createPosition}
+          onUpdate={editPosition}
+          onDelete={removePosition}
+          onCapture={capturePose}
+          onBack={() => setManagePositions(false)}
+        />
+      </main>
+    );
+  }
+
   if (stage !== "connected") {
     return (
       <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
@@ -1630,6 +1713,7 @@ export default function App() {
                 </button>
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
+              <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理位置</button>
             </div>
           </div>
           {stage === "upgrading" && deployProgress && <pre className="deploy-progress" aria-live="polite">{deployProgress}</pre>}
@@ -1930,8 +2014,9 @@ export default function App() {
           <div className="center-tab-list" role="tablist" aria-label="中心视图">
             <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
             <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
+            <button type="button" role="tab" aria-selected={centerTab === "positions"} className={centerTab === "positions" ? "active" : ""} onClick={() => setCenterTab("positions")}>位置</button>
           </div>
-          <span>{centerTab === "robot" ? profile.urdfTopic : "ROS Node / Topic topology"}</span>
+          <span>{centerTab === "robot" ? profile.urdfTopic : centerTab === "graph" ? "ROS Node / Topic topology" : "保存的关节位置"}</span>
         </div>
         <div className="robot-view-pane" hidden={centerTab !== "robot"}>
           {(robotVisited || (appPage === "dashboard" && centerTab === "robot")) && (
@@ -1966,6 +2051,18 @@ export default function App() {
           )}
         </div>
         {centerTab === "graph" && appPage === "dashboard" && <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} onSelectNode={setSelectedNode} selectedTopic={selected} selectedNode={selectedNode} focusController={focusController} onClearControllerFocus={() => setFocusController("")} /></Suspense>}
+        {centerTab === "positions" && (
+          <PositionPage
+            profileKey={positionProfileKey}
+            store={positionStore}
+            captureError={captureError}
+          urdfXml={urdf || previewUrdf}
+            onCreate={createPosition}
+            onUpdate={editPosition}
+            onDelete={removePosition}
+            onCapture={capturePose}
+          />
+        )}
       </section>
       <section className={`data-panel ${sidebars.right ? "" : "sidebar-collapsed"}`}>
         {!sidebars.right && <button type="button" className="sidebar-rail-toggle" aria-label="展开右侧栏" title="展开右侧栏" onClick={() => setSidebars((current) => ({ ...current, right: true }))}>‹</button>}
