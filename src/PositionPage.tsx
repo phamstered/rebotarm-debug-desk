@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
 import { ARM_JOINT_NAMES, homeRow, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
 
 const blankJoints = () => ["0", "0", "0", "0", "0", "0"];
@@ -7,6 +8,7 @@ export function PositionPage({
   profileKey,
   store,
   captureError,
+  urdfXml,
   onCreate,
   onUpdate,
   onDelete,
@@ -16,6 +18,7 @@ export function PositionPage({
   profileKey: string;
   store: PositionStore;
   captureError: string;
+  urdfXml: string;
   onCreate(draft: PositionDraft): string;
   onUpdate(id: string, draft: PositionDraft): string;
   onDelete(id: string): void;
@@ -83,17 +86,22 @@ export function PositionPage({
       <div className="position-workspace">
         <div className="position-list" aria-label="点位列表">
           <article className="position-card position-card-home" aria-label="HOME">
-            <div className="position-card-head">
-              <strong>HOME</strong>
-              <span className="position-lock">锁定</span>
+            <UrdfPoseThumbnail xml={urdfXml} label="HOME" />
+            <div className="position-card-body">
+              <div className="position-card-head">
+                <strong>HOME</strong>
+                <span className="position-lock">锁定</span>
+              </div>
+              <p className="position-sync">{home.sync === "pending" ? "待同步" : ""}</p>
             </div>
-            <p className="position-sync">{home.sync === "pending" ? "待同步" : ""}</p>
           </article>
           {positions.map((position) => (
             <PositionCard
               key={position.id}
               position={position}
               confirming={pendingDelete === position.id}
+              urdfXml={urdfXml}
+              previewPositions={editorOpen && editingId === position.id ? joints.map(Number) : undefined}
               onEdit={() => {
                 setEditingId(position.id);
                 setName(position.name);
@@ -150,32 +158,40 @@ export function PositionPage({
 function PositionCard({
   position,
   confirming,
+  urdfXml,
+  previewPositions,
   onEdit,
   onAskDelete,
   onConfirmDelete,
 }: {
   position: CustomPosition;
   confirming: boolean;
+  urdfXml: string;
+  previewPositions?: number[];
   onEdit(): void;
   onAskDelete(): void;
   onConfirmDelete(): void;
 }) {
+  const positions = previewPositions ?? position.positions;
   return (
     <article className="position-card" aria-label={position.name}>
-      <div className="position-card-head">
-        <strong>{position.name}</strong>
-        <div className="position-card-actions">
-          <button type="button" className="position-quiet" onClick={onEdit}>编辑</button>
-          {confirming
-            ? <button type="button" className="position-danger" aria-label={`确认删除 ${position.name}`} onClick={onConfirmDelete}>确认删除</button>
-            : <button type="button" className="position-quiet" aria-label={`删除 ${position.name}`} onClick={onAskDelete}>删除</button>}
+      <UrdfPoseThumbnail xml={urdfXml} label={position.name} jointNames={position.jointNames} positions={positions} />
+      <div className="position-card-body">
+        <div className="position-card-head">
+          <strong>{position.name}</strong>
+          <div className="position-card-actions">
+            <button type="button" className="position-quiet" onClick={onEdit}>编辑</button>
+            {confirming
+              ? <button type="button" className="position-danger" aria-label={`确认删除 ${position.name}`} onClick={onConfirmDelete}>确认删除</button>
+              : <button type="button" className="position-quiet" aria-label={`删除 ${position.name}`} onClick={onAskDelete}>删除</button>}
+          </div>
         </div>
+        <ul className="position-joint-chips" aria-label={`${position.name} 关节`}>
+          {position.jointNames.map((jointName, index) => (
+            <li key={jointName}><span>{jointName}</span><b>{positions[index]?.toFixed(3)}</b></li>
+          ))}
+        </ul>
       </div>
-      <ul className="position-joint-chips" aria-label={`${position.name} 关节`}>
-        {position.jointNames.map((jointName, index) => (
-          <li key={jointName}><span>{jointName}</span><b>{position.positions[index]?.toFixed(3)}</b></li>
-        ))}
-      </ul>
     </article>
   );
 }

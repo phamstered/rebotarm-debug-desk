@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { PositionPage } from "./PositionPage";
 import { emptyPositionStore, profileKeyFor } from "./positionLogic";
 
@@ -15,6 +16,7 @@ describe("PositionPage", () => {
         profileKey={key}
         store={emptyPositionStore()}
         captureError="没有新鲜的关节反馈"
+        urdfXml=""
         onCreate={onCreate}
         onUpdate={vi.fn()}
         onDelete={vi.fn()}
@@ -64,6 +66,7 @@ describe("PositionPage", () => {
         profileKey={key}
         store={store}
         captureError=""
+        urdfXml=""
         onCreate={vi.fn()}
         onUpdate={vi.fn()}
         onDelete={onDelete}
@@ -75,4 +78,45 @@ describe("PositionPage", () => {
     await user.click(screen.getByRole("button", { name: "确认删除 取料位" }));
     expect(onDelete).toHaveBeenCalledWith("id-1");
   });
+
+  it("shows a different URDF pose thumbnail for each saved position", () => {
+    const store = emptyPositionStore();
+    store.profiles[key] = {
+      positions: [
+        point("folded", [0, 0, 0, 0, 0, 0]),
+        point("bent", [0.4, -1.2, -0.8, 0.3, 0.2, 0]),
+      ],
+    };
+    render(
+      <PositionPage
+        profileKey={key}
+        store={store}
+        captureError=""
+        urdfXml={rebotarmUrdf}
+        onCreate={vi.fn()}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+        onCapture={vi.fn()}
+      />,
+    );
+    const folded = screen.getByLabelText("folded 姿态");
+    const bent = screen.getByLabelText("bent 姿态");
+    expect(folded.getAttribute("data-tip")).not.toBe(bent.getAttribute("data-tip"));
+    expect(screen.getByLabelText("HOME 姿态未同步")).toBeVisible();
+  });
 });
+
+function point(id: string, positions: number[]) {
+  return {
+    id,
+    name: id,
+    group: "arm" as const,
+    jointNames: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+    positions,
+    source: "manual" as const,
+    note: "",
+    capturedAt: null,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}

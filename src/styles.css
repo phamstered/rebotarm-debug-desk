@@ -1314,7 +1314,16 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .position-page button:disabled { opacity: .4; cursor: not-allowed; }
 .position-workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); gap: 16px; }
 .position-list, .position-editor-pane { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 10px; }
-.position-card { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid #1b3141; border-radius: 12px; background: #0a1620; }
+.position-thumb { width: 112px; height: 84px; border-radius: 8px; overflow: hidden; background:
+  radial-gradient(circle at 50% 80%, rgba(66, 214, 199, .08), transparent 55%), #071019;
+  border: 1px solid #173044; }
+.position-thumb svg { width: 100%; height: 100%; display: block; }
+.position-thumb polyline { fill: none; stroke: #8fd0c8; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
+.position-thumb circle { fill: #d7fff8; stroke: none; }
+.position-thumb .position-thumb-tip { fill: #42d6c7; }
+.position-card { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid #1b3141; border-radius: 12px; background: #0a1620; }
+.position-card-body { display: grid; gap: 8px; min-width: 0; }
+.position-thumb-empty { display: grid; place-items: center; color: #6d8698; font-size: 11px; }
 .position-card-home { border-color: #24564f; background: #0c1c22; }
 .position-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .position-card-head strong { font-size: 14px; }

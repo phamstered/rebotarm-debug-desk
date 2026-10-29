@@ -71,7 +71,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 4. Topic Graph、Inspector 与 Monitor
 
-- Robot View 同级提供 Topic Graph 和「位置」Tab（DataGraph 已迁至 Monitor 导航页）。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「位置」保存当前连接（SSH 主机、用户、端口）下的六个臂关节点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。未连接时连接页的「管理位置」打开同一份数据。读取当前位置需要 1 秒内的完整 joint1–joint6 反馈。自定义点可以新增、编辑和删除。这里还不向机械臂下发运动。
+- Robot View 同级提供 Topic Graph 和「位置」Tab（DataGraph 已迁至 Monitor 导航页）。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「位置」保存当前连接（SSH 主机、用户、端口）下的六个臂关节点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链画一张姿态缩略图；没有实机 `robot_description` 时用内置运动学模型。未连接时连接页的「管理位置」打开同一份数据。读取当前位置需要 1 秒内的完整 joint1–joint6 反馈。自定义点可以新增、编辑和删除。这里还不向机械臂下发运动。
 - Robot View 左上角有「运动控制」面板。还没有执行结果时显示「无运动」。误差由下发关节或 TCP 目标与停稳反馈计算：关节为弧度差，TCP 位置为毫米、姿态为角度。拖拽仍按原有本地 IK 松手下发，这条结果尚未写入该面板。
 - Topic Graph 在打开时立即加载，默认每 30 秒自动刷新，也可点击“刷新 Graph”手动刷新；图变化不影响现有 Topic 数据订阅。
 - Graph 使用确定性的力导向布局：ROS Node 为圆角矩形、Topic 为椭圆，使用与界面一致的蓝青/青绿色，连线保留发布/订阅方向；图形大小反映连接数。节点之间有斥力、连接有引力，并进行碰撞消除；初始布局以可用尺寸为参考，但节点坐标不受初始布局矩形限制。默认隐藏 Bridge 节点及其私有 Topic，可用“显示 Bridge”开关恢复；共享机器人数据 Topic 保留。

@@ -15,6 +15,7 @@ import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
 import { addPosition, captureArmJoints, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
+import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
 import type { BridgeHelloInfo, StatusCardAction, StatusCardModel } from "./statusLogic";
 import { formatHardwareMode, isFault11Latched } from "./statusLogic";
@@ -1639,6 +1640,7 @@ export default function App() {
           profileKey={positionProfileKey}
           store={positionStore}
           captureError={captureError}
+          urdfXml={urdf || previewUrdf}
           onCreate={createPosition}
           onUpdate={editPosition}
           onDelete={removePosition}
@@ -2032,6 +2034,7 @@ export default function App() {
             profileKey={positionProfileKey}
             store={positionStore}
             captureError={captureError}
+          urdfXml={urdf || previewUrdf}
             onCreate={createPosition}
             onUpdate={editPosition}
             onDelete={removePosition}
