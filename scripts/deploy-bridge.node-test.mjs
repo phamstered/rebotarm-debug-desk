@@ -356,7 +356,7 @@ test("streaming preserves split UTF-8 and clears heartbeat after spawn failure",
 
 test("SSH remote script stays one quoted bash argument without leaking shell variables", async () => {
   const marker = "set -euo pipefail\nprintf '%s\\n' 'SCRIPT_OK'";
-  const result = await runCommand('bash', ['-c', ['bash', '-lc', shellQuote(marker)].join(' ')]);
+  const result = await runCommand('bash', ['-c', ['bash', '-c', shellQuote(marker)].join(' ')]);
   assert.equal(result.code, 0);
   assert.equal(result.stdout, "SCRIPT_OK\n");
   assert.equal(result.stderr, "");

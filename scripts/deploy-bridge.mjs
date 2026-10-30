@@ -568,7 +568,7 @@ export async function runSsh(config, remoteScript) {
     ...buildSshCommandArgs(config),
     config.host,
     "bash",
-    "-lc",
+    "-c",
     shellQuote(remoteScript),
   ]);
   if (result.code !== 0) {
@@ -808,7 +808,7 @@ async function runSshWith(config, remoteScript, runCommandFn) {
     ...buildSshCommandArgs(config),
     config.host,
     "bash",
-    "-lc",
+    "-c",
     shellQuote(remoteScript),
   ]);
   if (result.code !== 0) {
