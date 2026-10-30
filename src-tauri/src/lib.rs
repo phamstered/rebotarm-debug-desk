@@ -761,7 +761,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              arm_safe_stop || exit 1; arm_stop_controller || exit 1; \
              stop_pg \"$teleop_pid_file\" \"start_arm_teleop\" || exit 1; \
              stop_pg \"$traj_pid_file\" \"\" || exit 1; \
-             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory --gravity=true \
                >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; \
              wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"Controller self-check passed:\" || exit 1; \
@@ -2032,7 +2032,9 @@ __BYID_SEP__\n\
         let custom_teleop = arm_mode_remote_command(&custom, "teleop").unwrap();
         assert!(custom_teleop.contains("/home/jialiang/Project/custom_stack/install/setup.bash"));
         let traj = arm_mode_remote_command(&profile(""), "trajectory").unwrap();
-        assert!(traj.contains("trajectory") || traj.contains("move_group"));
+        assert!(traj.contains("--position-controller=trajectory --gravity=true"));
+        assert!(traj.contains("Controller self-check passed:"));
+        assert!(traj.contains("wait_arm_ready"));
         let camera = arm_mode_remote_command(&profile(""), "realsense").unwrap();
         assert!(camera.contains("ros2 launch rebotarm_gazebo left_wrist_camera.launch.py"));
         assert!(camera.contains("camera_alive"));
