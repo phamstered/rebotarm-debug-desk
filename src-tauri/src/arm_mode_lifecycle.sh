@@ -2,13 +2,15 @@
 # firmware requires an uninterrupted stream until DISABLE is acknowledged.
 arm_status() {
     local sample
-    sample=$(timeout 5 ros2 topic echo /stm32/status microros_stm32h723_bridge/msg/HardwareStatus --once --no-daemon 2>&1) || {
+    sample=$(timeout 5 ros2 topic echo /stm32/status microros_stm32h723_bridge/msg/HardwareStatus --once --no-daemon --qos-reliability best_effort --qos-durability volatile 2>&1) || {
         echo "Cannot read fresh STM32 HardwareStatus: $sample" >&2
         return 1
     }
     arm_mode=$(awk '/^mode:/ {print $2; exit}' <<<"$sample")
     arm_fault=$(awk '/^fault_code:/ {print $2; exit}' <<<"$sample")
     arm_sequence=$(awk '/^last_command_sequence:/ {print $2; exit}' <<<"$sample")
+    arm_stamp_sec=$(awk '/^    sec:/ {print $2; exit}' <<<"$sample")
+    arm_stamp_nsec=$(awk '/^    nanosec:/ {print $2; exit}' <<<"$sample")
     if [[ ! "$arm_mode" =~ ^[0-3]$ || ! "$arm_fault" =~ ^[0-9]+$ || ! "$arm_sequence" =~ ^[0-9]+$ ]]; then
         echo "Invalid STM32 HardwareStatus: $sample" >&2
         return 1
@@ -24,15 +26,61 @@ arm_status() {
     fi
 }
 
-arm_safe_stop() {
-    local response deadline service="${1:-safe_stop}"
-    arm_status || return 1
-    if pgrep -f '^/opt/ros/humble/lib/[c]ontroller_manager/ros2_control_node( |$)' >/dev/null 2>&1; then
-        # Keep ros2_control alive throughout its existing RETURN -> DISABLE flow.
-        response=$(timeout 10 ros2 service call "/microros_stm32h723_hardware/$service" std_srvs/srv/Trigger '{}') || return 1
-        if ! grep -Eq 'success=(True|true)|success:[[:space:]]*true' <<<"$response"; then
-            echo "Hardware safe-stop rejected; command processes were preserved: $response" >&2
+# No retained sample or sequence drop proves a reboot. Recovery requires three
+# newly received, progressing firmware samples; it only authorizes cleanup.
+arm_confirm_disabled() {
+    local previous_sec=-1 previous_nsec=-1 i
+    for i in 1 2 3; do
+        arm_status || return 1
+        if [[ "$arm_mode" != 3 || "$arm_fault" != 0 ||
+              ! "$arm_stamp_sec" =~ ^[0-9]{1,10}$ || ! "$arm_stamp_nsec" =~ ^[0-9]{1,9}$ ]] ||
+           (( 10#$arm_stamp_nsec >= 1000000000 )); then
+            echo "Recovery requires fresh fault-free DISABLE feedback with a valid timestamp; command processes preserved." >&2
             return 1
+        fi
+        if (( 10#$arm_stamp_sec < previous_sec ||
+              (10#$arm_stamp_sec == previous_sec && 10#$arm_stamp_nsec <= previous_nsec) )); then
+            echo "HardwareStatus timestamp did not advance; refusing stale/reset-in-progress recovery." >&2
+            return 1
+        fi
+        previous_sec=$((10#$arm_stamp_sec))
+        previous_nsec=$((10#$arm_stamp_nsec))
+        [[ "$i" == 3 ]] || sleep 0.2
+    done
+}
+
+arm_has_controller() {
+    local pid domain found=1
+    for pid in $(pgrep -f '^/opt/ros/humble/lib/[c]ontroller_manager/ros2_control_node( |$)'); do
+        domain=$(arm_controller_domain "$pid") || return 2
+        [[ "${domain:-0}" != "${ROS_DOMAIN_ID:-0}" ]] || found=0
+    done
+    return "$found"
+}
+
+arm_safe_stop() {
+    local response deadline owner service="${1:-safe_stop}"
+    arm_status || return 1
+    arm_has_controller && owner=0 || owner=$?
+    if [[ "$owner" == 2 ]]; then
+        echo "Cannot determine controller ownership; command processes preserved." >&2
+        return 1
+    fi
+    if [[ "$owner" == 0 ]]; then
+        # A physical reset can leave the old controller active above a disabled
+        # MCU. Do not ask that obsolete session to RETURN and re-enable motors.
+        if [[ "$arm_mode" == 3 && "$arm_fault" == 0 ]]; then
+            arm_confirm_disabled || return 1
+            echo "Firmware is already persistently DISABLE; cleanup will not request RETURN."
+            return 0
+        fi
+        # Keep ros2_control alive throughout its existing RETURN -> DISABLE flow.
+        if ! response=$(timeout 10 ros2 service call "/microros_stm32h723_hardware/$service" std_srvs/srv/Trigger '{}' 2>&1) ||
+           ! grep -Eq 'success=(True|true)|success:[[:space:]]*true' <<<"$response"; then
+            echo "Hardware safe-stop unavailable/rejected: $response; checking whether firmware is already safely DISABLE." >&2
+            arm_confirm_disabled || return 1
+            echo "Firmware is persistently DISABLE; reclaiming the old session without enabling outputs."
+            return 0
         fi
         deadline=$((SECONDS + 30))
         while (( SECONDS < deadline )); do
@@ -152,10 +200,72 @@ owns_ros2() {
 
 # Check only arm command owners in this ROS domain. Unknown/unreadable owners
 # block startup; do not force-kill arbitrary ROS processes to claim cleanliness.
+arm_owner_pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/controller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/robo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
+
+arm_owner_identity() {
+    local command owner started
+    command=$(ps -p "$1" -o args=) || return 1
+    [[ "$command" =~ $arm_owner_pattern ]] || return 1
+    owner=$(ps -p "$1" -o uid= | tr -d ' ') || return 1
+    [[ "$owner" == "$(id -u)" ]] || return 1
+    # /proc start ticks disambiguate reused PIDs; CPU counters are not identity.
+    started=$(awk '{sub(/^.*\) /, ""); print $20}' "/proc/$1/stat") || return 1
+    [[ "$started" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n%s\n' "$started" "$command"
+}
+
+arm_stop_orphans() {
+    local pid domain identity current deadline state signal
+    for pid in $(pgrep -f "$arm_owner_pattern"); do
+        state=$(ps -p "$pid" -o stat=)
+        [[ -n "$state" && "$state" != Z* ]] || continue
+        domain=$(arm_controller_domain "$pid") || return 1
+        [[ "${domain:-0}" == "${ROS_DOMAIN_ID:-0}" ]] || continue
+        identity=$(arm_owner_identity "$pid") || {
+            echo "Cannot verify orphan arm owner $pid; refusing cleanup." >&2
+            return 1
+        }
+        arm_confirm_disabled || return 1
+        # Status discovery takes time. Recheck ownership immediately before signal.
+        current=$(arm_owner_identity "$pid") || {
+            [[ -z "$(ps -p "$pid" -o stat=)" ]] && continue
+            echo "Arm owner $pid became unreadable; refusing cleanup." >&2
+            return 1
+        }
+        domain=$(arm_controller_domain "$pid") || return 1
+        if [[ "$current" != "$identity" || "${domain:-0}" != "${ROS_DOMAIN_ID:-0}" ]]; then
+            echo "Arm owner $pid changed identity/domain; refusing cleanup." >&2
+            return 1
+        fi
+        signal=INT
+        # Background Bash may inherit ignored SIGINT. Use its existing TERM trap.
+        [[ "$identity" != *$'\nbash '* ]] || signal=TERM
+        echo "[mode] stopping verified orphan arm owner $pid ($signal)"
+        if ! kill "-$signal" "$pid"; then
+            [[ -z "$(ps -p "$pid" -o stat=)" ]] && continue
+            return 1
+        fi
+        deadline=$((SECONDS + 90))
+        while true; do
+            state=$(ps -p "$pid" -o stat=)
+            [[ -n "$state" && "$state" != Z* ]] || break
+            current=$(arm_owner_identity "$pid") || return 1
+            [[ "$current" == "$identity" ]] || {
+                echo "Arm owner $pid changed identity while waiting; refusing further cleanup." >&2
+                return 1
+            }
+            if (( SECONDS >= deadline )); then
+                echo "Orphan arm owner $pid did not exit; no forced termination." >&2
+                return 1
+            fi
+            sleep 0.25
+        done
+    done
+}
+
 arm_verify_clean() {
     local pid domain
-    local pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/controller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/robo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
-    for pid in $(pgrep -f "$pattern"); do
+    for pid in $(pgrep -f "$arm_owner_pattern"); do
         domain=$(arm_controller_domain "$pid") || {
             echo "Cannot verify arm owner $pid; refusing new mode." >&2
             return 1
@@ -176,6 +286,7 @@ arm_clean_environment() {
     echo "[mode] cleaning previous arm supervisors"
     stop_pg "$teleop_pid_file" "start_arm_teleop" || return 1
     stop_pg "$traj_pid_file" "start_arm_teleop" || return 1
+    arm_stop_orphans || return 1
     arm_verify_clean || return 1
     echo "[mode] previous control environment verified clean"
 }

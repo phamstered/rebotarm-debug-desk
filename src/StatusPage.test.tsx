@@ -265,3 +265,23 @@ it("shows one busy notice and disables conflicting mode and stop operations", as
   expect(screen.getByRole("button", {name: "回零并退出控制"})).toBeDisabled();
   expect(screen.getAllByText("操作进行中")).toHaveLength(1);
 });
+
+it("offers explicit same-mode session rebuild after firmware DISABLE without automatic restart", async () => {
+  const user = userEvent.setup(); const action = vi.fn();
+  const controllers = { ...baseProps.rosControl,
+    controllers: [{ name: "arm_trajectory_controller", typeName: "t", state: "active" }] };
+  const props = { ...baseProps, onQuickAction: action, rosControl: controllers };
+  const { rerender } = render(<StatusPage {...props} />);
+  await user.click(screen.getByRole("tab", { name: /控制模式/ }));
+  expect(screen.getByRole("button", { name: "当前模式已启用" })).toBeDisabled();
+  rerender(<StatusPage {...props} hardwareStatus={{ mode: 3, mode_name: "DISABLE", fault_code: 0, last_command_sequence: 0 }} />);
+  expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory（输出已关闭）");
+  expect(screen.getByText("下位机输出已关闭，旧控制会话需要重建")).toBeVisible();
+  expect(action).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "重建控制会话" }));
+  expect(action).toHaveBeenCalledExactlyOnceWith("trajectory");
+  rerender(<StatusPage {...props} actionBusy="trajectory-restart" hardwareStatus={{ mode: 3, fault_code: 0 }} />);
+  expect(screen.getByRole("button", { name: "切换中…" })).toBeDisabled();
+  rerender(<StatusPage {...props} hardwareStatus={{ mode: 3, fault_code: 11 }} />);
+  expect(screen.getByRole("button", { name: "重建控制会话" })).toBeDisabled();
+});
