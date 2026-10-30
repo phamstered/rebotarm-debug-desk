@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   RSYNC_EXCLUDES,
+  runCommand,
   assertLocalPackage,
   buildRemoteBackupScript,
   buildRemoteBuildScript,
@@ -309,4 +310,62 @@ test("restart uses the installed UDP profile without replacing explicit DDS prof
   assert.ok(script.includes('FASTDDS_DEFAULT_PROFILES_FILE:-'));
   assert.ok(script.includes('bridge_test/install/easy_debug_bridge/share/easy_debug_bridge/config/fastdds_udp.xml'));
   assert.ok(script.indexOf('export FASTRTPS_DEFAULT_PROFILES_FILE=') < script.indexOf('nohup ros2 run'));
+});
+
+
+test("streams remote lines before completion, emits elapsed progress and stops heartbeat", async () => {
+  const lines = [];
+  let completed = false;
+  const result = await runCommand(process.execPath, ["-e", "process.stdout.write('start\\n'); setTimeout(()=>{process.stderr.write('warning\\n');process.stdout.write('tail');},100)"], {
+    onProgress: line => { assert.equal(completed, false); lines.push(line); }, progressIntervalMs: 20,
+  });
+  completed = true;
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "start\ntail");
+  assert.equal(result.stderr, "warning\n");
+  assert.ok(lines.some(line => line === "[remote] start"));
+  assert.ok(lines.some(line => line.includes("已耗时")));
+  assert.ok(lines.includes("[remote] warning"));
+  assert.ok(lines.includes("[remote] tail"));
+  const count = lines.length;
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(lines.length, count);
+});
+
+test("startup waits for readiness with a bounded deadline and preserves failure logs", () => {
+  const script = buildRemoteRestartScript(parseArgs([]));
+  assert.match(script, /seq 1 100/);
+  assert.match(script, /sleep 0\.1/);
+  assert.doesNotMatch(script, /sleep 0\.5/);
+  assert.match(script, /within 10 seconds/);
+  assert.match(script, /tail -n 40/);
+  assert.match(buildRemoteBuildScript(parseArgs([])), /console_direct\+/);
+});
+
+test("streaming preserves split UTF-8 and clears heartbeat after spawn failure", async () => {
+  const lines = [];
+  await runCommand(process.execPath, ["-e", "const b=Buffer.from('构建中\\n');process.stdout.write(b.subarray(0,1));setTimeout(()=>process.stdout.write(b.subarray(1)),20)"], {onProgress: line => lines.push(line)});
+  assert.deepEqual(lines, ["[remote] 构建中"]);
+  const errors = [];
+  await assert.rejects(runCommand('/nonexistent/robot-console-command', [], {onProgress: line => errors.push(line),progressIntervalMs: 10}));
+  const count = errors.length;
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(errors.length, count);
+});
+
+
+test("SSH remote script stays one quoted bash argument without leaking shell variables", async () => {
+  const marker = "set -euo pipefail\nprintf '%s\\n' 'SCRIPT_OK'";
+  const result = await runCommand('bash', ['-c', ['bash', '-lc', shellQuote(marker)].join(' ')]);
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "SCRIPT_OK\n");
+  assert.equal(result.stderr, "");
+});
+
+test("remote ROS setup tolerates Humble's unset setup variables while retaining fail-fast", () => {
+  const config = parseArgs([]);
+  for (const script of [buildRemoteBuildScript(config), buildRemoteVerifyScript(config), buildRemoteRestartScript(config)]) {
+    assert.match(script, /^set -eo pipefail/);
+    assert.doesNotMatch(script, /set -euo/);
+  }
 });
