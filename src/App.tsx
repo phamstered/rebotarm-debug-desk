@@ -89,14 +89,10 @@ import type { LayoutSizes } from "./layoutLogic";
 import { buildDiagnosticsSnapshot, loadToolbarSettings } from "./toolbarLogic";
 import type { ToolbarSettings } from "./toolbarLogic";
 import {
-  HOLD_ABORT_MESSAGE,
   VLA_CHUNK_MESSAGE_TYPE,
   VLA_CHUNK_TOPIC,
   VLA_POSITION_CONTROLLER,
   isVlaControllerActive,
-  listVlaStartActivate,
-  listVlaStartDeactivate,
-  planVlaStartArmStop,
   vlaStartVerificationFailure,
 } from "./vlaLogic";
 
@@ -993,30 +989,6 @@ export default function App() {
     };
   }, [refreshUsbAndArm, stage]);
 
-  async function ensureHoldBeforeArmSwitch() {
-    if (!bridge || stage !== "connected") {
-      throw new Error(`${HOLD_ABORT_MESSAGE}：Bridge 未连接`);
-    }
-    try {
-      const positions = Array.isArray(jointState?.position)
-        ? jointState.position.map((value) => Number(value) || 0)
-        : [];
-      const jointCount = Array.isArray(jointState?.name) ? jointState.name.length : positions.length;
-      const mask = jointCount > 0 ? (1 << Math.min(jointCount, 31)) - 1 : 0;
-      await bridge.request(createCommandPayload(0, {
-        positions,
-        velocity: 0,
-        kp: 0,
-        kd: 0,
-        effort: 0,
-        active_joint_mask: mask,
-      }));
-    } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : String(reason);
-      throw new Error(detail ? `${HOLD_ABORT_MESSAGE}：${detail}` : HOLD_ABORT_MESSAGE);
-    }
-  }
-
   async function switchVlaControllers(activate: string[], deactivate: string[]) {
     const message = await invoke<string>("switch_ros_controllers", {
       profile,
@@ -1026,31 +998,24 @@ export default function App() {
     return message;
   }
 
+  const statusActionInFlightRef = useRef(false);
+
   async function runVlaStart() {
-    if (statusActionBusy) return;
+    if (statusActionBusy || statusActionInFlightRef.current) return;
     if (isFault11Latched(hardwareStatus)) {
       setStatusActionNotice("需先安全回零/托住，再重启 STM32（无软恢复）");
       return;
     }
+    statusActionInFlightRef.current = true;
     setStatusActionBusy("vla-start");
     setStatusActionNotice("");
     try {
-      await ensureHoldBeforeArmSwitch();
-      const stopPlan = planVlaStartArmStop(armMode);
-      if (stopPlan.kind === "refuse") {
-        throw new Error(stopPlan.reason);
-      }
-      if (stopPlan.kind === "stop") {
-        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "stop" });
-        if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
-      }
-      const status = await fetchRosControllers().catch(() => rosControl);
-      const activate = listVlaStartActivate(status);
-      const deactivate = listVlaStartDeactivate(status);
-      const message = await switchVlaControllers(activate, deactivate);
+      setStatusActionNotice("正在安全回零并清理旧模式，再初始化 VLA 控制环境…");
+      const reset = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "vla" });
+      if (!reset.ok) throw new Error(`${reset.message}：${reset.detail || reset.exitCode}`);
       await refreshRosControllers();
       await refreshUsbAndArm();
-      const verified = await fetchRosControllers().catch(() => rosControl);
+      const verified = await fetchRosControllers();
       let latestHardware = hardwareStatusRef.current;
       if (latestHardware != null) {
         const deadline = Date.now() + 2000;
@@ -1063,18 +1028,20 @@ export default function App() {
       }
       const verifyFailure = vlaStartVerificationFailure(verified, latestHardware);
       if (verifyFailure) throw new Error(verifyFailure);
-      const notice = message || `已激活 ${VLA_POSITION_CONTROLLER}`;
-      setStatusActionNotice(stopPlan.kind === "skip-stop" ? `${stopPlan.reason}；${notice}` : notice);
+      const notice = reset.message || `已激活 ${VLA_POSITION_CONTROLLER}`;
+      setStatusActionNotice(`已重新初始化控制环境；${notice}`);
     } catch (reason) {
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
       try { await refreshRosControllers(); } catch { /* ignore */ }
     } finally {
+      statusActionInFlightRef.current = false;
       setStatusActionBusy(null);
     }
   }
 
   async function runVlaStop(alsoStopArm = false, disable = false) {
-    if (statusActionBusy) return;
+    if (statusActionBusy || statusActionInFlightRef.current) return;
+    statusActionInFlightRef.current = true;
     setStatusActionBusy(alsoStopArm ? "arm-stop" : "vla-stop");
     setStatusActionNotice("");
     try {
@@ -1082,7 +1049,9 @@ export default function App() {
         const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: disable ? "disable-stop" : "stop" });
         if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
       }
-      if (isVlaControllerActive(rosControl) || alsoStopArm) {
+      if (alsoStopArm) {
+        setStatusActionNotice(disable ? "输出已关闭，控制环境已退出" : "已回零并关闭输出，控制环境已退出");
+      } else if (isVlaControllerActive(rosControl)) {
         try {
           const message = await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
           setStatusActionNotice((current) => {
@@ -1104,12 +1073,14 @@ export default function App() {
     } catch (reason) {
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      statusActionInFlightRef.current = false;
       setStatusActionBusy(null);
     }
   }
 
   async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent") {
-    if (statusActionBusy) return;
+    if (statusActionBusy || statusActionInFlightRef.current) return;
+    statusActionInFlightRef.current = true;
     setStatusActionBusy(actionId);
     setStatusActionNotice("");
     try {
@@ -1130,16 +1101,17 @@ export default function App() {
           throw new Error("需先安全回零/托住，再重启 STM32（无软恢复）");
         }
         // Teleop/Trajectory use SSH safe_stop (fail closed); do not publish one-shot Bridge HOLD.
-        if (isVlaControllerActive(rosControl)) {
-          await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
-        }
+        // Native lifecycle safely stops the owning hardware before removing any controller.
+        setStatusActionNotice("安全回零 → 清理旧进程 → 启动并核验目标模式…");
       }
       const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode });
       setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
       await refreshUsbAndArm();
+      await refreshRosControllers();
     } catch (reason) {
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      statusActionInFlightRef.current = false;
       setStatusActionBusy(null);
     }
   }

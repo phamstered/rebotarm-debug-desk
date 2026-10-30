@@ -98,15 +98,19 @@ describe("StatusPage", () => {
     expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Trajectory" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "VLA" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "停止" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "解除输出" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "回零并退出控制" })).toBeEnabled();
+    await user.click(screen.getByText("直接关闭输出…"));
+    expect(screen.getByRole("button", { name: "直接解除电机输出" })).toBeEnabled();
 
 
     await user.click(screen.getByRole("button", { name: "Teleop" }));
+    expect(onQuickAction).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "启动所选模式" }));
     expect(onQuickAction).toHaveBeenCalledWith("teleop");
     await user.click(screen.getByRole("button", { name: "VLA" }));
+    await user.click(screen.getByRole("button", { name: "启动所选模式" }));
     expect(onQuickAction).toHaveBeenCalledWith("vla");
-    await user.click(screen.getByRole("button", { name: "解除输出" }));
+    await user.click(screen.getByRole("button", { name: "直接解除电机输出" }));
     expect(screen.getByRole("dialog", { name: "解除电机输出确认" })).toBeVisible();
     expect(screen.getByRole("button", { name: "确认 DISABLE 并停止" })).toBeDisabled();
     expect(onQuickAction).not.toHaveBeenCalledWith("disable-stop");
@@ -204,7 +208,7 @@ describe("StatusPage", () => {
     );
     await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByRole("button", { name: "Teleop" })).toBeDisabled();
-    expect(screen.getByTestId("status-quick-disabled-teleop")).toHaveTextContent("SSH 未就绪");
+    expect(screen.getByTestId("status-mode-disabled")).toHaveTextContent("SSH 未就绪");
     await userEvent.click(screen.getByRole("tab", { name: /硬件健康/ }));
     expect(screen.getByTestId("status-disabled-usb-usb-refresh")).toHaveTextContent("SSH 未就绪");
   });
@@ -234,4 +238,30 @@ describe("Status tab navigation", () => {
     await user.keyboard("{Home}");
     expect(screen.getByRole("tab", { name: /连接/ })).toHaveFocus();
   });
+});
+
+
+it("separates current mode from target selection and waits for explicit switch", async () => {
+  const user = userEvent.setup(); const action = vi.fn();
+  render(<StatusPage {...baseProps} onQuickAction={action} rosControl={{ ...baseProps.rosControl,
+    controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}] }} />);
+  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory");
+  expect(screen.getByRole("button", {name: "当前模式已启用"})).toBeDisabled();
+  await user.click(screen.getByRole("button", {name: "Teleop"}));
+  expect(action).not.toHaveBeenCalled();
+  expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory");
+  await user.click(screen.getByRole("button", {name: "切换模式（先回零）"}));
+  expect(action).toHaveBeenCalledTimes(1); expect(action).toHaveBeenCalledWith("teleop");
+  expect(screen.getByText(/不是暂停或保持/)).toBeVisible();
+});
+
+it("shows one busy notice and disables conflicting mode and stop operations", async () => {
+  const user = userEvent.setup();
+  render(<StatusPage {...baseProps} actionBusy="trajectory-restart" />);
+  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  expect(screen.getByRole("button", {name: "Trajectory"})).toHaveTextContent("Trajectory");
+  expect(screen.getByRole("button", {name: "切换中…"})).toBeDisabled();
+  expect(screen.getByRole("button", {name: "回零并退出控制"})).toBeDisabled();
+  expect(screen.getAllByText("操作进行中")).toHaveLength(1);
 });

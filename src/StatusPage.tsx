@@ -25,7 +25,7 @@ import {
   type StatusTone,
 } from "./statusLogic";
 import { ControlLogViewer } from "./ControlLogViewer";
-import { isVlaControllerActive } from "./vlaLogic";
+import { isArmTeleopControllerActive, isArmTrajectoryControllerActive, isVlaControllerActive } from "./vlaLogic";
 
 function ToneBadge({ tone }: { tone: StatusTone }) {
   return <span className={`status-card-tone ${tone}`}>{toneLabel(tone)}</span>;
@@ -200,6 +200,11 @@ export function StatusPage({
     () => resolveActiveControlMode({ armMode, rosControl }),
     [armMode, rosControl],
   );
+  const [targetMode, setTargetMode] = useState<"teleop" | "trajectory" | "vla">("teleop");
+  useEffect(() => { if (activeMode) setTargetMode(activeMode); }, [activeMode]);
+  const modeNames = { teleop: "Teleop", trajectory: "Trajectory", vla: "VLA" };
+  const modeConfirmed = Boolean(rosControl?.available);
+  const modeConflict = [isArmTeleopControllerActive(rosControl), isArmTrajectoryControllerActive(rosControl), isVlaControllerActive(rosControl)].filter(Boolean).length > 1;
   const quickActions = buildStatusQuickActions({
     sshOk,
     rosReady: isRosReady(jointState),
@@ -208,6 +213,7 @@ export function StatusPage({
     hardwareStatus,
   });
 
+  const targetAction = quickActions.find((action) => action.id === targetMode)!;
   return (
     <main className="status-page">
       <header className="status-page-header">
@@ -221,7 +227,7 @@ export function StatusPage({
         </div>
       </header>
       <p className="status-page-banner" role="note">
-        NO FLASH：不刷写 STM32、无一键升级全部。模式条互斥启停 Teleop / Trajectory / VLA；停止与解除输出仍走既有安全确认。
+        选择控制模式后确认启动或切换。切换前会安全回零、关闭输出并清理旧控制进程；失败时停止切换，详情见下方日志。
       </p>
       {stickyAlert && (
         <div
@@ -263,55 +269,41 @@ export function StatusPage({
             <>
               {isControl && (
                 <section className="status-mode-strip" aria-label="控制模式启停">
-                  <div className="status-mode-segment" role="group" aria-label="互斥模式">
-                    {quickActions.filter((action) => action.id === "teleop" || action.id === "trajectory" || action.id === "vla").map((action) => (
-                      <div key={action.id} className="status-quick-action-wrap">
-                        <button
-                          type="button"
-                          className={`status-quick-action ${action.id}${activeMode === action.id ? " active" : ""}`}
-                          disabled={action.disabled}
-                          aria-pressed={activeMode === action.id}
+                  <header className="status-mode-current" aria-live="polite">
+                    <span>当前模式</span>
+                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : activeMode ? modeNames[activeMode] : "未启用控制"}</strong>
+                    <span>{actionBusy ? "正在执行模式操作，等待核验结果" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
+                  </header>
+                  <div className="status-mode-selection">
+                    <span>选择目标模式</span>
+                    <div className="status-mode-segment" role="group" aria-label="选择目标模式">
+                      {quickActions.filter((action) => action.id === "teleop" || action.id === "trajectory" || action.id === "vla").map((action) => (
+                        <button key={action.id} type="button" className={`status-quick-action${targetMode === action.id ? " active" : ""}`}
+                          disabled={action.disabled} aria-pressed={targetMode === action.id}
                           title={action.disabledReason || action.label}
-                          onClick={() => onQuickAction?.(action.id)}
-                        >
-                          {action.label}
-                        </button>
-                        {action.disabled && action.disabledReason && (
-                          <p className="status-disabled-hint" data-testid={`status-quick-disabled-${action.id}`}>
-                            {action.disabledReason}
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                          onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}</button>
+                      ))}
+                    </div>
+                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || (modeConfirmed && !modeConflict && activeMode === targetMode)}
+                      onClick={() => onQuickAction?.(targetMode)}>{actionBusy ? "切换中…" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
+                    {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
-                  <div className="status-mode-stops" role="group" aria-label="停止">
-                    {quickActions.filter((action) => action.id === "stop" || action.id === "disable-stop").map((action) => (
-                      <div key={action.id} className="status-quick-action-wrap">
-                        <button
-                          type="button"
-                          className={`status-quick-action ${action.id}`}
-                          disabled={action.disabled}
-                          title={action.disabledReason || action.label}
-                          onClick={() => {
-                            if (action.id === "disable-stop") { setSupported(false); setConfirmDisable(true); }
-                            else onQuickAction?.(action.id);
-                          }}
-                        >
-                          {action.label}
-                        </button>
-                        {action.disabled && action.disabledReason && (
-                          <p className="status-disabled-hint" data-testid={`status-quick-disabled-${action.id}`}>
-                            {action.disabledReason}
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                  <p className="status-mode-explanation">目标：{modeNames[targetMode]} · 切换流程：回零并关闭输出 → 清理旧进程 → 启动并核验。大静差或故障时可能拒绝切换，请查看日志。</p>
+                  <div className="status-mode-stops">
+                    <div><button type="button" className="status-quick-action stop" disabled={quickActions.find((a) => a.id === "stop")?.disabled}
+                      onClick={() => onQuickAction?.("stop")}>回零并退出控制</button>
+                      <p>回到零位，确认输出关闭后退出。不是暂停或保持。</p></div>
+                    <details><summary>直接关闭输出…</summary>
+                      <p>不回零，机械臂与夹爪会失去电机输出；先在现场支撑。</p>
+                      <button type="button" className="status-quick-action disable-stop" disabled={quickActions.find((a) => a.id === "disable-stop")?.disabled}
+                        onClick={() => { setSupported(false); setConfirmDisable(true); }}>直接解除电机输出</button>
+                    </details>
                   </div>
-                  {actionNotice && <output className="status-action-notice">{actionNotice}</output>}
+                  {actionNotice && <output className="status-action-notice" role="status">{actionNotice}</output>}
                 </section>
               )}
               {isControl && !activeMode && (
-                <p className="status-mode-idle" data-testid="status-mode-idle">当前无运行中模式 · 使用上方模式条启动</p>
+                <p className="status-mode-idle" data-testid="status-mode-idle">当前无运行中模式 · 选择目标模式后点击启动</p>
               )}
               <div
                 className={`status-card-grid zone-${zone.id}${zone.primary ? " primary" : ""}`}
@@ -321,7 +313,7 @@ export function StatusPage({
                   <StatusCard
                     key={card.id}
                     card={card}
-                    highlighted={highlightCardId === card.id && selectedTab === zone.id}
+                    highlighted={!isControl && highlightCardId === card.id && selectedTab === zone.id}
                     onAction={onCardAction}
                     compact={zone.id === "connection"}
                   />

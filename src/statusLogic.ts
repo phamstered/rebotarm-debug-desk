@@ -645,7 +645,7 @@ export function buildStatusCards(input: {
       { label: "控制器", value: ARM_TELEOP_CONTROLLER, tone: teleopControllerActive ? "ok" : teleopActive ? "warn" : "idle" },
       gravityCompensationRow({ rosControl, modeActive: teleopActive }),
     ],
-    note: armMode?.message || "由上方模式条启动；切换前会先 HOLD；与 Trajectory/VLA 互斥。",
+    note: armMode?.message || "由上方模式区启动；切换前安全回零、关闭输出并清理旧控制进程。",
     warning: teleopGravityWarn,
   };
 
@@ -669,7 +669,7 @@ export function buildStatusCards(input: {
       { label: "互斥", value: "与 Teleop/VLA 互斥" },
       gravityCompensationRow({ rosControl, modeActive: trajActive }),
     ],
-    note: "由上方模式条启动；切换前会先 HOLD；停止上一进程组后再启动。建议并行 gravity_compensation。",
+    note: "由上方模式区启动；清理旧控制环境后重新初始化，默认启用独立重力补偿。",
     warning: trajGravityWarn,
   };
 
@@ -855,30 +855,29 @@ export function buildStatusQuickActions(input: {
       : fault11Reason;
   const busy = input.actionBusy;
   const modeBusy = busy === "teleop-restart" || busy === "trajectory-restart" || busy === "vla-start" || busy === "vla-stop" || busy === "arm-stop";
-  const vlaBlocks = Boolean(input.vlaActive);
   return [
     {
       id: "teleop",
-      label: busy === "teleop-restart" ? "启动中…" : "Teleop",
-      disabled: !gateOk || modeBusy || vlaBlocks,
-      disabledReason: reason || (vlaBlocks ? "先停止 VLA" : undefined) || (modeBusy ? "操作进行中" : undefined),
+      label: "Teleop",
+      disabled: !gateOk || modeBusy,
+      disabledReason: reason || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "trajectory",
-      label: busy === "trajectory-restart" ? "启动中…" : "Trajectory",
-      disabled: !gateOk || modeBusy || vlaBlocks,
-      disabledReason: reason || (vlaBlocks ? "先停止 VLA" : undefined) || (modeBusy ? "操作进行中" : undefined),
+      label: "Trajectory",
+      disabled: !gateOk || modeBusy,
+      disabledReason: reason || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "vla",
-      label: busy === "vla-start" ? "启动中…" : "VLA",
-      disabled: !gateOk || modeBusy || vlaBlocks,
-      disabledReason: reason || (vlaBlocks ? "VLA 已在运行" : undefined) || (modeBusy ? "操作进行中" : undefined),
+      label: "VLA",
+      disabled: !gateOk || modeBusy,
+      disabledReason: reason || (modeBusy ? "操作进行中" : undefined),
     },
     {
       id: "stop",
       label: busy === "arm-stop" || busy === "vla-stop" ? "停止中…" : "停止",
-      disabled: !input.sshOk || busy === "arm-stop" || busy === "vla-stop",
+      disabled: !input.sshOk || modeBusy,
       disabledReason: !input.sshOk ? "SSH 未就绪" : busy === "arm-stop" || busy === "vla-stop" ? "操作进行中" : undefined,
     },
     {
