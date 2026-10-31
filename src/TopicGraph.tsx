@@ -411,7 +411,7 @@ export function TopicGraph({
                 )}
                 <text textAnchor="middle" style={{ fontSize: node.radius >= 30 ? 10 : 9 }}>
                   {graphLabelLines(node.label).map((line, index, lines) => (
-                    <tspan key={index} x="0" y={lines.length === 1 ? 3 : index === 0 ? -3 : 8}>
+                    <tspan key={index} x="0" y={(index - (lines.length - 1) / 2) * 11 + 3}>
                       {line}
                     </tspan>
                   ))}

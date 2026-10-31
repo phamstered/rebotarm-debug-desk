@@ -13,9 +13,9 @@ const graph: RosGraph = {
   edges: [{ source: "node:/driver", target: "topic:/joint_states", relation: "publish" }],
 };
 
-function bridgeDouble() {
+function bridgeDouble(value: RosGraph = graph) {
   return {
-    getGraph: vi.fn().mockResolvedValue(graph),
+    getGraph: vi.fn().mockResolvedValue(value),
   } as unknown as BridgeClient;
 }
 
@@ -185,6 +185,23 @@ describe("TopicGraph", () => {
     const topic = await screen.findByRole("button", { name: "Topic /joint_states" });
     expect(Array.from(topic.querySelectorAll("tspan"), (line) => line.textContent).join("")).toBe("/joint_states");
     expect(container.querySelector(".graph-node.topic title")?.textContent).toBe("Topic: /joint_states");
+  });
+
+  it("renders complete long Node and Topic labels on distinct centered lines", async () => {
+    const labels = ["/arm/very_long_controller_node_name", "/arm/trajectory_controller/controller_state"];
+    const longGraph: RosGraph = {
+      nodes: labels.map((label, index) => ({ id: `${index}:${label}`, label, kind: index === 0 ? "node" : "topic", types: [] })),
+      edges: [],
+    };
+    render(<TopicGraph bridge={bridgeDouble(longGraph)} onSelectTopic={vi.fn()} />);
+    for (const [index, label] of labels.entries()) {
+      const node = await screen.findByRole("button", { name: `${index === 0 ? "Node" : "Topic"} ${label}` });
+      const lines = Array.from(node.querySelectorAll("tspan"));
+      expect(lines.map((line) => line.textContent).join("")).toBe(label);
+      const ys = lines.map((line) => Number(line.getAttribute("y")));
+      expect(new Set(ys).size).toBe(lines.length);
+      expect((ys[0]! + ys.at(-1)!) / 2).toBe(3);
+    }
   });
 
   it("exposes zoom controls and fits the camera", async () => {

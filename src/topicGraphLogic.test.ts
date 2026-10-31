@@ -15,10 +15,27 @@ const graph: RosGraph = {
 };
 
 describe("force-directed topic graph layout", () => {
-  it("shows up to 20 original label characters including Topic slashes", () => {
+  it("shows complete original labels including Topic slashes", () => {
     expect(graphLabelLines("/joint_states")).toEqual(["/joint_sta", "tes"]);
     expect(graphLabelLines("/123456789/123456789")).toEqual(["/123456789", "/123456789"]);
-    expect(graphLabelLines("/123456789/123456789/extra")).toEqual(["/123456789", "/123456789…"]);
+    expect(graphLabelLines("/123456789/123456789/extra")).toEqual(["/123456789", "/123456789", "/extra"]);
+  });
+
+  it.each(["", "/123456789", "/" + "a".repeat(1000), "/" + "机器人🔧".repeat(25)])("preserves all characters when wrapping %s", (label) => {
+    const lines = graphLabelLines(label);
+    expect(lines.join("")).toBe(label);
+    expect(lines.every((line) => Array.from(line).length <= 10)).toBe(true);
+  });
+
+  it.each(["node", "topic"] as const)("fits every long-label line inside a %s shape", (kind) => {
+    const label = "/arm/trajectory_controller/very_long_namespace/controller_state";
+    const lines = graphLabelLines(label);
+    const { radius } = layoutRosGraph({ nodes: [{ id: `${kind}:${label}`, label, kind, types: [] }], edges: [] }).nodes[0]!;
+    lines.forEach((line, index) => {
+      const halfWidth = Array.from(line).length * 3.1;
+      const halfHeight = Math.abs((index - (lines.length - 1) / 2) * 11) + 6;
+      expect((halfWidth / radius) ** 2 + (halfHeight / (radius * 0.65)) ** 2).toBeLessThan(1);
+    });
   });
 
   it("gives a 20-character label enough room inside its node shape", () => {
