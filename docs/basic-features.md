@@ -260,8 +260,10 @@ Jetson、Fast DDS、micro-ROS Agent 和 STM32 属于外部进程/硬件边界，
 
 ## 控制模式选择与环境清理
 
-- 控制模式区单独显示“当前模式”，以实际 active 控制器为准，状态不可用时显示“待确认”，互斥控制器同时 active 时提示冲突。选择目标 Teleop/Trajectory/VLA 不立即启动；点击“启动所选模式”或“切换模式（先回零）”才执行。当前已启用的同一模式不可重复启动。
+- 控制模式区单独显示“当前模式”，以实际 active 控制器为准，状态不可用时显示“待确认”，互斥控制器同时 active 时提示冲突。选择目标 Teleop/Trajectory/VLA 不立即启动；点击“启动所选模式”或“切换模式（先回零）”才执行。当前已启用的同一模式不可重复启动；若下位机已经 DISABLE 而控制器仍 active，则显示“输出已关闭”并提供“重建控制会话”，允许手动重建同一模式。
 - 操作期间保留模式名称，统一显示切换状态；启动、退出共享同步互斥，避免同一帧重复点击或启动中并发停机。失败文案和实时日志保留。
 - “回零并退出控制”请求既有 RETURN→DISABLE，确认输出关闭后才清理进程，不是暂停或保持。“直接关闭输出…”折叠区提供“直接解除电机输出”，跳过回零，仍需现场支撑确认；DISABLE 不清除锁存故障。
 - 每次模式切换在 SSH 互斥锁内调用统一清理：读取新鲜 HardwareStatus → 安全停止及 DISABLE 确认 → 停止同域控制器 → 通知旧模式 supervisor 清理 → 验证同域控制器/relay/leader/启动进程无残留。清理失败/超时/归属不可读时中止启动，保留必要控制进程并报错，不强杀未知节点。不会为了模式切换清理摄像头、Bridge、Agent 或其他 ROS 域。
+- STM32 可在现场物理重置。下位机已 DISABLE 而旧控制器仍在运行时，先确认持续 DISABLE，再直接清理，不请求旧会话 RETURN。安全停止服务缺失或拒绝时，同样只有连续收到三帧时间戳递增、`mode=DISABLE` 且 `fault_code=0` 的 HardwareStatus 才允许回收旧控制会话；使用 volatile/best-effort 订阅，拒绝重复/倒退时间戳、无反馈、仍在输出或未恢复的故障。不会仅凭 sequence 归零判断重启，也不会因检测到重置而自动启动模式或恢复旧轨迹。
+- PID 文件丢失后残留的已知 arm launch / supervisor / relay / leader 进程也会被检查：仅清理当前用户、同 ROS 域、命令匹配且 Linux 启动标识未变化的进程，发信号前再次确认持续 DISABLE 并复核身份。ROS 进程使用 SIGINT，脚本 supervisor 使用已有 SIGTERM 清理流程；等待退出失败时中止，不升级为 SIGKILL，最后仍核验无残留才开始新模式。
 - VLA 先重新初始化 Trajectory+gravity 控制栈，再在同一锁内切换到 VLA，确认 VLA 与 gravity active、Teleop/Trajectory inactive 以及无故障 TRACK。切换失败会保留可观测状态，不声称进入目标模式；现场需通过退出入口安全处理。此路径不启动外部 VLA 推理进程。

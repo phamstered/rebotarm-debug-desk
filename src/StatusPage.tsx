@@ -204,6 +204,7 @@ export function StatusPage({
   useEffect(() => { if (activeMode) setTargetMode(activeMode); }, [activeMode]);
   const modeNames = { teleop: "Teleop", trajectory: "Trajectory", vla: "VLA" };
   const modeConfirmed = Boolean(rosControl?.available);
+  const disabledSession = Boolean(activeMode && hardwareStatus?.mode === 3);
   const modeConflict = [isArmTeleopControllerActive(rosControl), isArmTrajectoryControllerActive(rosControl), isVlaControllerActive(rosControl)].filter(Boolean).length > 1;
   const quickActions = buildStatusQuickActions({
     sshOk,
@@ -271,8 +272,8 @@ export function StatusPage({
                 <section className="status-mode-strip" aria-label="控制模式启停">
                   <header className="status-mode-current" aria-live="polite">
                     <span>当前模式</span>
-                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : activeMode ? modeNames[activeMode] : "未启用控制"}</strong>
-                    <span>{actionBusy ? "正在执行模式操作，等待核验结果" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
+                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : ""}` : "未启用控制"}</strong>
+                    <span>{actionBusy ? "正在执行模式操作，等待核验结果" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
                   </header>
                   <div className="status-mode-selection">
                     <span>选择目标模式</span>
@@ -284,8 +285,8 @@ export function StatusPage({
                           onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}</button>
                       ))}
                     </div>
-                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || (modeConfirmed && !modeConflict && activeMode === targetMode)}
-                      onClick={() => onQuickAction?.(targetMode)}>{actionBusy ? "切换中…" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
+                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
+                      onClick={() => onQuickAction?.(targetMode)}>{actionBusy ? "切换中…" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
                   <p className="status-mode-explanation">目标：{modeNames[targetMode]} · 切换流程：回零并关闭输出 → 清理旧进程 → 启动并核验。大静差或故障时可能拒绝切换，请查看日志。</p>
