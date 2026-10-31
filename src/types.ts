@@ -168,6 +168,9 @@ export type BridgeEnvelope = {
   home?: boolean;
   positions?: number[];
   home_positions?: number[];
+  joint_rotation_supported?: boolean;
+  joint_name?: string;
+  joint_position?: number;
   available?: boolean;
   busy?: boolean;
   /** Present on Bridge `hello` replies. */

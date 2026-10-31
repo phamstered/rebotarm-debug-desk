@@ -224,7 +224,15 @@ struct PositionMotion::Impl {
     }
     if (current && !current->terminal) throw std::runtime_error("已有点位运动，等待完成或取消确认后再试");
     const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
-    auto target = r.data.get<bool>("home", false) ? model.home : read_values(r.data);
+    const auto rotation_joint = r.data.get_optional<std::string>("joint_name");
+    const auto actual = ordered_arm_values(joints.name, joints.position);
+    if (rotation_joint && (r.data.get<bool>("home", false) || r.data.get_child_optional("positions")))
+      throw std::runtime_error("单关节旋转不能与 HOME/positions 同时指定");
+    if (!rotation_joint && r.data.get_child_optional("joint_position"))
+      throw std::runtime_error("单关节旋转缺少 joint_name");
+    auto target = rotation_joint
+      ? joint_rotation_target(actual, *rotation_joint, r.data.get<double>("joint_position"), model)
+      : r.data.get<bool>("home", false) ? model.home : read_values(r.data);
     validate_position_target(target, model);
     auto m = std::make_shared<Motion>(); m->owner = r.owner; m->id = id;
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
@@ -238,12 +246,17 @@ struct PositionMotion::Impl {
     goal.request.max_velocity_scaling_factor = 0.2; goal.request.max_acceleration_scaling_factor = 0.2;
     goal.request.start_state.is_diff = true;
     goal.request.start_state.joint_state.name = arm_motion_joints();
-    goal.request.start_state.joint_state.position = ordered_arm_values(joints.name, joints.position);
+    goal.request.start_state.joint_state.position = actual;
     goal.request.start_state.joint_state.header.stamp = node.now();
     moveit_msgs::msg::Constraints constraints;
     for (size_t i = 0; i < 6; ++i) {
       moveit_msgs::msg::JointConstraint c; c.joint_name = arm_motion_joints()[i]; c.position = target[i];
       c.tolerance_above = c.tolerance_below = 0.005; c.weight = 1; constraints.joint_constraints.push_back(c);
+      if (rotation_joint && c.joint_name != *rotation_joint) {
+        c.position = actual[i];
+        c.tolerance_above = c.tolerance_below = joint_rotation_hold_tolerance;
+        goal.request.path_constraints.joint_constraints.push_back(c);
+      }
     }
     goal.request.goal_constraints.push_back(constraints);
     goal.planning_options.plan_only = false; goal.planning_options.replan = false;
@@ -283,6 +296,7 @@ struct PositionMotion::Impl {
       const bool home = fresh(model_at, 10) && model.home.size() == 6 && model_error.empty();
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
+          ",\"joint_rotation_supported\":true" +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
           ",\"home_positions\":" + (home ? numbers(model.home) : "[]") + "}");

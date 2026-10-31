@@ -33,7 +33,7 @@ class Fixture(rclpy.node.Node):
         self.group = ReentrantCallbackGroup()
         self.q = [0., -.2, -.3, 0., 0., 0.]
         self.active = True; self.fault = 0; self.publish_feedback = True; self.speed = 0.; self.state_offset = 0.
-        self.goals = []; self.canceled = 0
+        self.goals = []; self.path_constraints = []; self.canceled = 0
         self.reference_offset = 0.; self.reference_speed = 0.; self.omit_reference = False; self.velocity_claimed = True
         urdf = Path(get_package_share_directory("rebotarm_gazebo")) / "urdf/rebotarm.urdf"
         srdf = Path(get_package_share_directory("rebotarm_moveit_config")) / "config/rebotarm.srdf"
@@ -80,6 +80,7 @@ class Fixture(rclpy.node.Node):
         constraints = goal.request.goal_constraints[0].joint_constraints
         assert [c.joint_name for c in constraints] == NAMES
         target = [c.position for c in constraints]; self.goals.append(target)
+        self.path_constraints.append(goal.request.path_constraints.joint_constraints)
         fb = MoveGroup.Feedback(); fb.state = "PLANNING"; handle.publish_feedback(fb)
         result = MoveGroup.Result()
         if abs(target[0]-.5)<1e-6:
@@ -134,6 +135,7 @@ def main():
         return request("position_move", command_id=command, label=command, confirmation="ARMED", positions=[x,-.2,-.3,0.,0.,0.], **fields)
     try:
         sock = connect(); info = ready()
+        assert info["joint_rotation_supported"] is True, info
         assert info["home_positions"] == [0.,-.01,-.01,0.,0.,0.], info
         m = request("position_move", command_id="unarmed", positions=[0.]*6); assert m["accepted"] is False and not fixture.goals
         m = request("position_move", command_id="bad", confirmation="ARMED", positions=[0.,5.,0.,0.,0.,0.]); assert m["accepted"] is False
@@ -144,6 +146,27 @@ def main():
         assert request("position_move", command_id="home", label="HOME", confirmation="ARMED", home=True)["op"]=="position_move_ack"
         result,_=terminal("home");assert result["motion_phase"]=="succeeded",result
         assert fixture.goals[-1]==[0.,-.01,-.01,0.,0.,0.]
+        ready(); before = list(fixture.q); count = len(fixture.goals)
+        for extra in ({"joint_name":"bad", "joint_position":.1},
+                      {"joint_name":"joint2"}, {"joint_position":.1},
+                      {"joint_name":"joint2", "joint_position":99.},
+                      {"joint_name":"joint2", "joint_position":.1, "positions":[0.]*6},
+                      {"joint_name":"joint2", "joint_position":.1, "home":True}):
+            rejected = request("position_move", command_id="invalid-joint", confirmation="ARMED", **extra)
+            assert rejected["accepted"] is False, rejected
+        assert len(fixture.goals) == count
+        accepted = request("position_move", command_id="rotate-joint2", confirmation="ARMED",
+                           joint_name="joint2", joint_position=-.15)
+        assert accepted["op"] == "position_move_ack" and accepted.get("accepted") is not False, accepted
+        result,_ = terminal("rotate-joint2"); assert result["motion_phase"] == "succeeded", result
+        expected = list(before); expected[1] = -.15
+        assert fixture.goals[-1] == expected, fixture.goals[-1]
+        holds = fixture.path_constraints[-1]
+        assert [c.joint_name for c in holds] == [j for j in NAMES if j != "joint2"]
+        for constraint in holds:
+            assert constraint.position == before[NAMES.index(constraint.joint_name)]
+            assert constraint.tolerance_above == .001 and constraint.tolerance_below == .001
+        ready()
         ready(); move("collision", .5); result,_ = terminal("collision"); assert result["motion_phase"] == "failed" and result["code"] == -12, result
         ready(); move("not-reached", .3); result,_=terminal("not-reached"); assert result["motion_phase"]=="failed",result
         assert "未到达" in result["message"],result
@@ -170,8 +193,15 @@ def main():
         fixture.state_offset=0.;fixture.speed=.2;time.sleep(.2);assert move("moving")["accepted"] is False
         fixture.speed=0.;fixture.active=False;time.sleep(.7);assert move("inactive")["accepted"] is False
         fixture.active=True;ready()
+        for offset in (.0183, -.0183):
+            fixture.reference_offset=offset;ready()
+            command="settled-offset-"+str(int(offset*10000))
+            accepted=move(command,.2)
+            assert accepted.get("accepted") is not False,accepted
+            result,_=terminal(command);assert result["motion_phase"]=="succeeded",result
+        fixture.reference_offset=0.;ready()
         count=len(fixture.goals)
-        for offset in (.032, .0416):
+        for offset in (.020001, -.020001, .032, .0416):
             fixture.reference_offset=offset;time.sleep(.3)
             m=move("start-jump-"+str(int(offset*10000)));assert m["accepted"] is False and "joint3" in m["message"] and "启动连续性" in m["message"],m
         fixture.reference_offset=0.;fixture.reference_speed=.02;time.sleep(.3)

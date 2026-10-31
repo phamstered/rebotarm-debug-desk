@@ -1,6 +1,9 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Group } from "three";
+import userEvent from "@testing-library/user-event";
+import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
+import type { PositionMotionControls } from "./positionMotionLogic";
 import type { URDFRobot } from "urdf-loader";
 import type { BridgeClient } from "./bridge";
 const doubles = vi.hoisted(() => ({ hydrate: vi.fn(), load: vi.fn(), dispose: vi.fn(), assetsDispose: vi.fn() }));
@@ -55,5 +58,41 @@ describe("Robot View lifecycle", () => {
     view.rerender(<UrdfViewer {...props} xml={xml.replace("test", "new")} />);
     await waitFor(() => expect(doubles.load).toHaveBeenCalledTimes(3));
     expect(doubles.dispose).toHaveBeenCalledTimes(2);
+  });
+  it("previews only the selected joint, preserves editing across feedback and executes only on confirmation", async () => {
+    const user = userEvent.setup(), parsed = robot(); doubles.load.mockResolvedValue(parsed);
+    const motion: PositionMotionControls = { state: { phase: "idle", commandId: "", label: "", message: "" },
+      homePositions: [], reason: "", jointRotationReason: "", armed: true, busy: false,
+      setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), cancel: vi.fn() };
+    const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
+    const view = render(<UrdfViewer {...props} xml={rebotarmUrdf} tcpLink="" jointState={{ name: names, position: [0, 0, 0, 0, 0, 0] }} jointMotion={motion} />);
+    await waitFor(() => expect(doubles.load).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole("button", { name: "单关节" }));
+    await user.selectOptions(screen.getByLabelText("选择旋转关节"), "joint1");
+    const input = screen.getByLabelText("目标关节角度");
+    await user.clear(input); await user.type(input, "30");
+    expect(screen.getByText("姿态预览中 · 尚未执行")).toBeVisible();
+    expect(parsed.setJointValue).toHaveBeenLastCalledWith("joint1", Math.PI / 6);
+    expect(motion.executeJoint).not.toHaveBeenCalled(); expect(props.onSendTrajectory).not.toHaveBeenCalled();
+    view.rerender(<UrdfViewer {...props} xml={rebotarmUrdf} tcpLink="" jointState={{ name: names, position: [.1, .2, 0, 0, 0, 0] }} jointMotion={motion} />);
+    expect(input).toHaveValue("30");
+    expect(parsed.setJointValue).toHaveBeenCalledWith("joint2", .2);
+    expect(parsed.setJointValue).toHaveBeenLastCalledWith("joint1", Math.PI / 6);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByText("姿态预览中 · 尚未执行")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    await user.clear(input); await user.type(input, "30");
+    await user.click(screen.getByRole("button", { name: "确认执行" }));
+    expect(motion.executeJoint).toHaveBeenCalledExactlyOnceWith("joint1", Math.PI / 6);
+    expect(parsed.setJointValue).toHaveBeenLastCalledWith("joint6", 0);
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    await user.clear(input); await user.type(input, "9999");
+    expect(screen.getByRole("alert")).toHaveTextContent("限位");
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    await user.clear(input); await user.type(input, "-15");
+    view.rerender(<UrdfViewer {...props} active={false} xml={rebotarmUrdf} tcpLink="" jointState={{ name: names, position: [.1, .2, 0, 0, 0, 0] }} jointMotion={motion} />);
+    expect(screen.queryByText("姿态预览中 · 尚未执行")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    expect(motion.executeJoint).toHaveBeenCalledTimes(1);
   });
 });

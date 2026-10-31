@@ -7,7 +7,7 @@ const point: CustomPosition = { id: "p1", name: "取料", group: "arm", jointNam
 function setup() {
   let listener: (m: BridgeEnvelope) => void = () => {};
   const request = vi.fn(async (m: BridgeEnvelope): Promise<BridgeEnvelope> => {
-    if (m.op === "position_motion_info") return { op: m.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false };
+    if (m.op === "position_motion_info") return { op: m.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false, joint_rotation_supported: true };
     return { op: `${m.op}_ack`, accepted: true, command_id: m.command_id };
   });
   const bridge = { request, onMessage: vi.fn((fn: typeof listener) => { listener = fn; return () => {}; }) };
@@ -15,6 +15,45 @@ function setup() {
   return { ...hook, request, emit: (m: BridgeEnvelope) => act(() => listener(m)) };
 }
 describe("saved MoveIt motion", () => {
+  it("sends an explicit single-joint goal through the same safety, lock and cancellation lifecycle", async () => {
+    const { result, request, emit } = setup();
+    await waitFor(() => expect(result.current.jointRotationReason).toBe(""));
+    await act(async () => result.current.executeJoint("joint2", .3));
+    expect(request.mock.calls.some(([m]) => m.op === "position_move")).toBe(false);
+    act(() => result.current.setArmed(true));
+    await act(async () => result.current.executeJoint("bad", .3));
+    await act(async () => result.current.executeJoint("joint2", NaN));
+    expect(request.mock.calls.some(([m]) => m.op === "position_move")).toBe(false);
+    await act(async () => Promise.all([result.current.executeJoint("joint2", .3), result.current.execute(point)]));
+    const moves = request.mock.calls.filter(([m]) => m.op === "position_move");
+    expect(moves).toHaveLength(1);
+    expect(moves[0][0]).toMatchObject({ joint_name: "joint2", joint_position: .3, confirmation: "ARMED", home: false });
+    expect(moves[0][0].positions).toBeUndefined();
+    expect(result.current.busy).toBe(true);
+    await act(async () => result.current.cancel());
+    expect(result.current.busy).toBe(true);
+    emit({ op: "position_motion", command_id: moves[0][0].command_id, motion_phase: "canceled" });
+    expect(result.current.busy).toBe(false);
+  });
+  it("fails closed when an older Bridge does not advertise joint rotation", async () => {
+    const { result, request, rerender } = setup();
+    await waitFor(() => expect(result.current.reason).toBe(""));
+    request.mockImplementation(async (m) => ({ op: m.op, available: true }));
+    rerender({ connected: true, profile: "old-bridge", block: "" });
+    await waitFor(() => expect(result.current.jointRotationReason).toContain("更新 Bridge"));
+    act(() => result.current.setArmed(true));
+    await act(async () => result.current.executeJoint("joint2", .3));
+    expect(request.mock.calls.some(([m]) => m.op === "position_move")).toBe(false);
+  });
+  it("does not submit either kind of move while another session owns motion", async () => {
+    const { result, request, rerender } = setup();
+    request.mockImplementation(async (m) => ({ op: m.op, available: true, busy: true, joint_rotation_supported: true }));
+    rerender({ connected: true, profile: "external-motion", block: "" });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    act(() => result.current.setArmed(true));
+    await act(async () => { await result.current.executeJoint("joint2", .3); await result.current.execute(point); });
+    expect(request.mock.calls.some(([m]) => m.op === "position_move")).toBe(false);
+  });
   it("requires safety unlock and blocks unavailable trajectory control", async () => {
     const { result, request, rerender } = setup();
     await waitFor(() => expect(result.current.reason).toBe(""));

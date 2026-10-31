@@ -28,6 +28,22 @@ int main() {
     assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, .1}));
     assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, NAN}));
     validate_position_start(model.home, model.home, {0, 0, .005, 0, 0, 0});
+    for (size_t axis = 0; axis < 6; ++axis) {
+      for (double offset : {.0183, -.0183, .02, -.02}) {
+        auto actual = model.home; actual[axis] = offset;
+        validate_position_start(model.home, model.home, actual);
+      }
+      for (double offset : {.020001, -.020001, .032, .0416}) {
+        auto actual = model.home; actual[axis] = offset;
+        assert(rejected([&] { validate_position_start(model.home, model.home, actual); }));
+      }
+    }
+    try {
+      validate_position_start(model.home, model.home, {.03, 0, 0, 0, 0, 0});
+      assert(false);
+    } catch (const std::runtime_error &error) {
+      assert(std::string(error.what()).find("rad > 0.02 rad") != std::string::npos);
+    }
     assert(rejected([&] { validate_position_start(model.home, model.home, {0, 0, .032, 0, 0, 0}); }));
     assert(rejected([&] { validate_position_start(model.home, {0, 0, .011, 0, 0, 0}, model.home); }));
     assert(rejected([&] { validate_position_start(model.home, {0, 0, NAN, 0, 0, 0}, model.home); }));

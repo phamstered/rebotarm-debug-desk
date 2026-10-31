@@ -52,6 +52,7 @@ inline bool arm_position_velocity_claimed(const std::vector<std::string> &interf
 }
 // A new MoveIt trajectory starts at measured state at t=0. Do not accept it
 // while the controller still holds a substantially different reference.
+constexpr double position_start_max_error = 0.02;
 inline void validate_position_start(const std::vector<double> &reference,
                                     const std::vector<double> &reference_velocity,
                                     const std::vector<double> &actual) {
@@ -62,11 +63,12 @@ inline void validate_position_start(const std::vector<double> &reference,
       throw std::runtime_error("轨迹控制器起点参考包含非有限值");
     if (std::abs(reference_velocity[i]) > 0.01)
       throw std::runtime_error("轨迹控制器参考尚未停稳：" + arm_motion_joints()[i]);
-    if (std::abs(reference[i] - actual[i]) > 0.005) {
+    if (std::abs(reference[i] - actual[i]) > position_start_max_error) {
       std::ostringstream message;
       message << "启动连续性检查失败：" << arm_motion_joints()[i] << " 保持参考与实际位置偏差 "
               << std::fixed << std::setprecision(4) << std::abs(reference[i] - actual[i])
-              << " rad > 0.005 rad；请检查低速跟踪/重力补偿后重试";
+              << " rad > " << std::defaultfloat << position_start_max_error
+              << " rad；请检查低速跟踪/重力补偿后重试";
       throw std::runtime_error(message.str());
     }
   }
@@ -97,6 +99,23 @@ inline void validate_position_target(const std::vector<double> &values, const Po
       throw std::runtime_error("目标超过限位或不是有限值：" + arm_motion_joints()[i]);
   }
 }
+inline size_t arm_joint_index(const std::string &name) {
+  const auto &names = arm_motion_joints();
+  const auto found = std::find(names.begin(), names.end(), name);
+  if (found == names.end()) throw std::runtime_error("单关节旋转仅支持 arm 的 joint1–joint6");
+  return static_cast<size_t>(found - names.begin());
+}
+// Other joint targets come from measured state on the Bridge, never a stale
+// client snapshot. MoveIt additionally constrains those joints along the path.
+inline std::vector<double> joint_rotation_target(const std::vector<double> &actual,
+    const std::string &name, double position, const PositionMotionModel &model) {
+  validate_position_target(actual, model);
+  auto target = actual;
+  target[arm_joint_index(name)] = position;
+  validate_position_target(target, model);
+  return target;
+}
+constexpr double joint_rotation_hold_tolerance = 0.001;
 inline bool position_target_reached(const std::vector<double> &target, const std::vector<double> &actual,
                                     const std::vector<double> &velocity) {
   if (target.size() != 6 || actual.size() != 6 || velocity.size() != 6) return false;
