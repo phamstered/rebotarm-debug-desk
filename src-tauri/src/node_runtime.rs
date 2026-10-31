@@ -161,16 +161,15 @@ mod tests {
         let f = Fixture::new();
         let node = f.binary("homebrew/bin/node", true);
         let dir = node.parent().unwrap().to_path_buf();
-        let runtime = resolve(
-            None,
-            Some(OsStr::new("/usr/bin:/bin")),
-            &[dir.clone()],
-            &f.0,
-        )
-        .unwrap();
+        // The host may have /usr/bin/node (Linux CI). Model the GUI PATH with
+        // a fixture directory containing helpers but deliberately no Node.
+        let helper = f.binary("gui-bin/ssh", true);
+        let gui_dir = helper.parent().unwrap();
+        let runtime = resolve(None, Some(gui_dir.as_os_str()), &[dir.clone()], &f.0).unwrap();
         assert_eq!(runtime.program, node);
         let dirs: Vec<_> = std::env::split_paths(&runtime.path).collect();
         assert_eq!(dirs[0], dir);
+        assert!(dirs.contains(&gui_dir.to_path_buf()));
         assert!(dirs.contains(&PathBuf::from("/usr/bin")));
     }
     #[test]
