@@ -21,6 +21,7 @@ export function ControlLogViewer({ profile, active, connected, preferredSource =
   const [downloading, setDownloading] = useState(false);
   const reading = useRef(false);
   const viewport = useRef<HTMLPreElement>(null);
+  const userScrollUntil = useRef(0);
   const key = JSON.stringify([profile.host, profile.sshPort, profile.username, profile.identityFile, profile.rosDomainId, source]);
   const context = useRef({ key, connected });
   context.current = { key, connected };
@@ -90,17 +91,25 @@ export function ControlLogViewer({ profile, active, connected, preferredSource =
         {CONTROL_LOG_SOURCES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
       </select></label>
       <label className="control-log-search">搜索日志<input type="search" placeholder="输入关键词，不区分大小写" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-      <label className="control-log-follow"><input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} />跟随最新</label>
+      <label className="control-log-follow"><input type="checkbox" checked={follow} onChange={(event) => { userScrollUntil.current = 0; setFollow(event.target.checked); }} />跟随最新</label>
       <button type="button" disabled={!connected || !snapshot?.exists || downloading} onClick={() => void download()}>{downloading ? "下载中…" : "下载完整日志"}</button>
     </div>
     <div className="control-log-meta"><span title={snapshot?.path}>{snapshot?.path || "只读获取 Jetson 日志"}</span><span>{lines.length} / {totalLines} 行</span></div>
-    {source === "controller" && <p className="control-log-note">显示最新 ros2_control_node 日志；VLA 控制器输出随其宿主进程记录。</p>}
+    <p className="control-log-note">仅显示本次应用会话的新日志；重启应用后重新开始，Jetson 原始日志保留。</p>
+    {source === "controller" && <p className="control-log-note">手动查看最新 ros2_control_node 日志文件。</p>}
+    {source === "vla" && <p className="control-log-note">VLA 输出跟随本次 Trajectory+gravity 启动的控制器宿主日志。</p>}
     {snapshot?.truncated && <p className="control-log-note">窗口展示末尾 128 KiB / 2000 行；下载包含完整文件（上限 32 MiB）。</p>}
     {error && <p className="control-log-error" role="alert">{error}</p>}
     {downloadNotice && <output className="control-log-notice">{downloadNotice}</output>}
-    <pre ref={viewport} className="control-log-output" tabIndex={0} aria-label="日志输出" onScroll={() => {
+    <pre ref={viewport} className="control-log-output" tabIndex={0} aria-label="日志输出"
+      onWheel={() => { userScrollUntil.current = Date.now() + 1000; }}
+      onPointerDown={() => { userScrollUntil.current = Date.now() + 1000; }}
+      onPointerMove={(event) => { if (event.buttons) userScrollUntil.current = Date.now() + 1000; }}
+      onTouchMove={() => { userScrollUntil.current = Date.now() + 1000; }}
+      onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key)) userScrollUntil.current = Date.now() + 1000; }}
+      onScroll={() => {
       const node = viewport.current;
-      if (node && follow && node.scrollHeight - node.scrollTop - node.clientHeight > 24) setFollow(false);
+      if (node && follow && Date.now() < userScrollUntil.current && node.scrollHeight - node.scrollTop - node.clientHeight > 24) setFollow(false);
     }}>{!connected ? "SSH 未连接" : !snapshot ? "正在获取日志…" : !snapshot.exists ? "日志尚未生成，启动对应模式后自动更新" : !totalLines ? "日志为空，等待新输出…" : !lines.length ? "没有匹配的日志" : lines.map((line, index) => <span key={index} className={/\b(error|fatal)\b/i.test(line) ? "log-error" : /\bwarn(ing)?\b/i.test(line) ? "log-warn" : undefined}>{line}{"\n"}</span>)}</pre>
   </section>;
 }

@@ -3,7 +3,8 @@ import type { ControlLogSource } from "./types";
 export const CONTROL_LOG_SOURCES: Array<{ id: ControlLogSource; label: string }> = [
   { id: "teleop", label: "Teleop" },
   { id: "trajectory", label: "Trajectory" },
-  { id: "controller", label: "ROS 控制器 / VLA" },
+  { id: "vla", label: "VLA" },
+  { id: "controller", label: "ROS 控制器（最新文件）" },
   { id: "realsense", label: "RealSense" },
 ];
 

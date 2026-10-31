@@ -285,3 +285,41 @@ it("offers explicit same-mode session rebuild after firmware DISABLE without aut
   rerender(<StatusPage {...props} hardwareStatus={{ mode: 3, fault_code: 11 }} />);
   expect(screen.getByRole("button", { name: "重建控制会话" })).toBeDisabled();
 });
+
+it("shows RETURN as an unfinished stop and blocks starting either selected mode", async () => {
+  const user = userEvent.setup(); const action = vi.fn();
+  render(<StatusPage {...baseProps} hardwareStatus={{mode: 2, fault_code: 0}} onQuickAction={action}
+    rosControl={{...baseProps.rosControl, controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}]}} />);
+  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory（回零中）");
+  expect(screen.getByRole("button", {name: "等待回零完成"})).toBeDisabled();
+  await user.click(screen.getByRole("button", {name: "Teleop"}));
+  expect(screen.getByRole("button", {name: "等待回零完成"})).toBeDisabled();
+  expect(action).not.toHaveBeenCalled();
+});
+
+it("follows the starting controller and resets manual log selection when the controller changes", async () => {
+  const user = userEvent.setup();
+  const { rerender } = render(<StatusPage {...baseProps} />);
+  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  await user.selectOptions(screen.getByRole("combobox", {name: "日志来源"}), "realsense");
+  rerender(<StatusPage {...baseProps} workflow={{mode: "trajectory", stage: "startup", message: "starting", failed: false, running: true}} />);
+  expect(screen.getByRole("combobox", {name: "日志来源"})).toHaveValue("auto");
+  expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", {name: "跟随最新"})).toBeChecked();
+});
+
+it("keeps the last target/log after verified stop and treats manager shutdown as expected", async () => {
+  const user = userEvent.setup();
+  const { rerender } = render(<StatusPage {...baseProps} rosControl={{...baseProps.rosControl,
+    controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}]}} />);
+  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  rerender(<StatusPage {...baseProps} hardwareStatus={{mode: 3, fault_code: 0}} rosControl={{...baseProps.rosControl, available: false, controllers: []}}
+    armMode={{...baseProps.armMode, teleopRunning: true}} workflow={{mode: "stop", stage: "ready", message: "stopped", failed: false, running: false}} />);
+  expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
+  expect(screen.getByRole("button", {name: "Trajectory"})).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
+  expect(screen.getByRole("tab", {name: /控制模式/})).not.toHaveTextContent("异常");
+  await user.click(screen.getByRole("tab", {name: /硬件健康/}));
+  expect(screen.getByText("控制环境已退出（预期）")).toBeVisible();
+});

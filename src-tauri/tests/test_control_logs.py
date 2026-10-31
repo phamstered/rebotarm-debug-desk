@@ -81,5 +81,51 @@ class LogTests(unittest.TestCase):
             (self.cache / ('arm-' + source + '.log')).write_text(source)
             self.assertEqual(self.read(source)['content'], source)
 
+    def test_app_session_clears_all_sources_without_truncating_remote_logs(self):
+        for source in ('teleop', 'trajectory', 'realsense'):
+            (self.cache / f'arm-{source}.log').write_text('historical\n')
+        root = self.home / '.ros/log'; root.mkdir(parents=True)
+        controller = root / 'ros2_control_node_1.log'; controller.write_text('old controller\n')
+        baseline = reader.capture_baseline(self.home)
+        for source in ('teleop', 'trajectory', 'realsense', 'controller'):
+            self.assertEqual(reader.read_log(source, home=self.home, baseline=baseline)['content'], '')
+        path = self.cache / 'arm-trajectory.log'
+        with path.open('a') as stream: stream.write('new output\n')
+        for download in (False, True):
+            result = reader.read_log('trajectory', download, self.home, baseline)
+            self.assertEqual(result['content'], 'new output\n')
+            self.assertFalse(result['truncated'])
+        self.assertEqual(path.read_text(), 'historical\nnew output\n')
+        self.assertEqual(reader.read_log('vla', home=self.home, baseline=baseline)['content'], 'new output\n')
+        restarted = reader.capture_baseline(self.home)
+        self.assertEqual(reader.read_log('trajectory', home=self.home, baseline=restarted)['content'], '')
+
+    def test_new_files_replacement_and_in_place_truncation_show_new_output(self):
+        path = self.cache / 'arm-trajectory.log'; path.write_text('previous\n')
+        baseline = reader.capture_baseline(self.home)
+        path.write_text('new run with longer output\n')
+        self.assertEqual(reader.read_log('trajectory', home=self.home, baseline=baseline)['content'], path.read_text())
+        path.unlink(); path.write_text('replacement\n')
+        self.assertEqual(reader.read_log('trajectory', home=self.home, baseline=baseline)['content'], 'replacement\n')
+        root = self.home / '.ros/log'; root.mkdir(parents=True)
+        new = root / 'ros2_control_node_123.log'; new.write_text('fresh controller\n')
+        self.assertEqual(reader.read_log('controller', home=self.home, baseline=baseline)['content'], 'fresh controller\n')
+
+    def test_archived_restart_with_identical_bytes_is_not_hidden_by_old_cursor(self):
+        path = self.cache / 'arm-trajectory.log'
+        path.write_text('identical startup footer\n')
+        baseline = reader.capture_baseline(self.home)
+        path.rename(self.cache / 'previous.log')
+        path.write_text('identical startup footer\n')
+        result = reader.read_log('trajectory', home=self.home, baseline=baseline)
+        self.assertEqual(result['content'], 'identical startup footer\n')
+
+    def test_session_baseline_rejects_symlink_escape_and_fifo(self):
+        outside = self.home / 'secret'; outside.write_text('secret')
+        path = self.cache / 'arm-teleop.log'; path.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, '越过'): reader.capture_baseline(self.home)
+        path.unlink(); os.mkfifo(path)
+        with self.assertRaisesRegex(ValueError, '普通文件'): reader.capture_baseline(self.home)
+
 
 if __name__ == '__main__': unittest.main()

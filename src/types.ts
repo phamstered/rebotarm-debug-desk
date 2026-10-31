@@ -296,7 +296,7 @@ export type RemoteActionResult = {
   detail: string;
 };
 
-export type ControlLogSource = "teleop" | "trajectory" | "controller" | "realsense";
+export type ControlLogSource = "teleop" | "trajectory" | "vla" | "controller" | "realsense";
 export type ControlLogSnapshot = {
   source: ControlLogSource;
   path: string;

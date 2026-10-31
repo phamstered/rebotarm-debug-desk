@@ -18,6 +18,7 @@ import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore,
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
+import { useArmModeWorkflow } from "./armModeWorkflowLogic";
 import type { BridgeHelloInfo, StatusCardAction, StatusCardModel } from "./statusLogic";
 import { formatHardwareMode, isFault11Latched } from "./statusLogic";
 import { createCommandPayload } from "./motorLogic";
@@ -999,9 +1000,11 @@ export default function App() {
   }
 
   const statusActionInFlightRef = useRef(false);
+  const armWorkflow = useArmModeWorkflow(profile, stage === "connected");
 
   async function runVlaStart() {
     if (statusActionBusy || statusActionInFlightRef.current) return;
+    const actionGeneration = connectionGenerationRef.current;
     if (isFault11Latched(hardwareStatus)) {
       setStatusActionNotice("需先安全回零/托住，再重启 STM32（无软恢复）");
       return;
@@ -1011,11 +1014,13 @@ export default function App() {
     setStatusActionNotice("");
     try {
       setStatusActionNotice("正在安全回零并清理旧模式，再初始化 VLA 控制环境…");
-      const reset = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: "vla" });
+      const reset = await armWorkflow.run("vla");
+      if (actionGeneration !== connectionGenerationRef.current) return;
       if (!reset.ok) throw new Error(`${reset.message}：${reset.detail || reset.exitCode}`);
       await refreshRosControllers();
       await refreshUsbAndArm();
       const verified = await fetchRosControllers();
+      if (actionGeneration !== connectionGenerationRef.current) return;
       let latestHardware = hardwareStatusRef.current;
       if (latestHardware != null) {
         const deadline = Date.now() + 2000;
@@ -1027,26 +1032,32 @@ export default function App() {
         latestHardware = hardwareStatusRef.current;
       }
       const verifyFailure = vlaStartVerificationFailure(verified, latestHardware);
+      if (actionGeneration !== connectionGenerationRef.current) return;
       if (verifyFailure) throw new Error(verifyFailure);
       const notice = reset.message || `已激活 ${VLA_POSITION_CONTROLLER}`;
       setStatusActionNotice(`已重新初始化控制环境；${notice}`);
     } catch (reason) {
+      if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
       try { await refreshRosControllers(); } catch { /* ignore */ }
     } finally {
-      statusActionInFlightRef.current = false;
-      setStatusActionBusy(null);
+      if (actionGeneration === connectionGenerationRef.current) {
+        statusActionInFlightRef.current = false;
+        setStatusActionBusy(null);
+      }
     }
   }
 
   async function runVlaStop(alsoStopArm = false, disable = false) {
     if (statusActionBusy || statusActionInFlightRef.current) return;
+    const actionGeneration = connectionGenerationRef.current;
     statusActionInFlightRef.current = true;
     setStatusActionBusy(alsoStopArm ? "arm-stop" : "vla-stop");
     setStatusActionNotice("");
     try {
       if (alsoStopArm) {
-        const stopResult = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode: disable ? "disable-stop" : "stop" });
+        const stopResult = await armWorkflow.run(disable ? "disable-stop" : "stop");
+        if (actionGeneration !== connectionGenerationRef.current) return;
         if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
       }
       if (alsoStopArm) {
@@ -1054,11 +1065,13 @@ export default function App() {
       } else if (isVlaControllerActive(rosControl)) {
         try {
           const message = await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
+          if (actionGeneration !== connectionGenerationRef.current) return;
           setStatusActionNotice((current) => {
             const vlaMsg = message || `已停用 ${VLA_POSITION_CONTROLLER}`;
             return current ? `${current}；${vlaMsg}` : vlaMsg;
           });
         } catch (reason) {
+          if (actionGeneration !== connectionGenerationRef.current) return;
           // If VLA was not loaded, deactivation may fail — surface but continue.
           const err = reason instanceof Error ? reason.message : String(reason);
           setStatusActionNotice((current) => (current ? `${current}；VLA 停止：${err}` : `VLA 停止：${err}`));
@@ -1071,26 +1084,34 @@ export default function App() {
       await refreshRosControllers();
       await refreshUsbAndArm();
     } catch (reason) {
+      if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      statusActionInFlightRef.current = false;
-      setStatusActionBusy(null);
+      if (actionGeneration === connectionGenerationRef.current) {
+        statusActionInFlightRef.current = false;
+        setStatusActionBusy(null);
+      }
     }
   }
 
   async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent") {
     if (statusActionBusy || statusActionInFlightRef.current) return;
+    const actionGeneration = connectionGenerationRef.current;
     statusActionInFlightRef.current = true;
     setStatusActionBusy(actionId);
     setStatusActionNotice("");
     try {
       if (mode === "agent") {
         const result = await invoke<RemoteActionResult>("restart_micro_ros_agent", { profile });
+        if (actionGeneration !== connectionGenerationRef.current) return;
         setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
         try {
-          setAgentStatus(await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile }));
+          const agent = await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile });
+          if (actionGeneration !== connectionGenerationRef.current) return;
+          setAgentStatus(agent);
           setAgentError("");
         } catch (reason) {
+          if (actionGeneration !== connectionGenerationRef.current) return;
           setAgentStatus(null);
           setAgentError(reason instanceof Error ? reason.message : String(reason));
         }
@@ -1104,15 +1125,19 @@ export default function App() {
         // Native lifecycle safely stops the owning hardware before removing any controller.
         setStatusActionNotice("安全回零 → 清理旧进程 → 启动并核验目标模式…");
       }
-      const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode });
+      const result = await armWorkflow.run(mode);
+      if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
       await refreshUsbAndArm();
       await refreshRosControllers();
     } catch (reason) {
+      if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      statusActionInFlightRef.current = false;
-      setStatusActionBusy(null);
+      if (actionGeneration === connectionGenerationRef.current) {
+        statusActionInFlightRef.current = false;
+        setStatusActionBusy(null);
+      }
     }
   }
 
@@ -1196,6 +1221,7 @@ export default function App() {
     setUsbProbe(null);
     setUsbChecked(false);
     setArmMode(null);
+    statusActionInFlightRef.current = false;
     setStatusActionBusy(null);
     setStatusActionNotice("");
     setRosControl(null);
@@ -1772,6 +1798,7 @@ export default function App() {
       <div className="app-page-content">
       {appPage === "status" ? (
         <StatusPage
+          workflow={armWorkflow.workflow}
           stage={stage}
           sshOk={sshOk}
           bridgeUp={bridgeUp || stage === "connected"}

@@ -68,13 +68,39 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(events, "status:3\n")
 
+    def test_log_rotation_preserves_previous_bytes_and_changes_current_inode(self):
+        body = r'''
+            echo 'same text' > "$ROOT/log"
+            original=$(ls -i "$ROOT/log" | awk '{print $1}')
+            arm_rotate_log "$ROOT/log" || exit 10
+            [[ "$(cat "$ROOT/history/"*)" == 'same text' ]] || exit 11
+            echo 'same text' > "$ROOT/log"
+            current=$(ls -i "$ROOT/log" | awk '{print $1}')
+            [[ "$current" != "$original" ]] || exit 12
+            arm_rotate_log "$ROOT/missing" || exit 13
+        '''
+        result, _, _ = self.run_shell(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_process_probe_does_not_match_its_own_embedded_shell_command(self):
         result, events, _ = self.run_shell("unset -f pgrep; arm_safe_stop")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(events, "status:3\n")
 
     def test_stack_cleanup_pattern_does_not_match_embedded_ssh_command(self):
-        result, _, _ = self.run_shell("unset -f pgrep; pgrep -f '/controller_manager/'ros2_control_node >/dev/null && exit 44; arm_safe_stop")
+        result, _, _ = self.run_shell("unset -f pgrep; for pid in $(pgrep -f '/controller_manager/'ros2_control_node); do [[ $pid != $$ ]] || exit 44; done; arm_safe_stop")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_full_embedded_helper_does_not_match_stack_cleanup_process_patterns(self):
+        body = HELPER.read_text() + r'''
+            unset -f pgrep
+            for pattern in '/controller_manager/'ros2_control_node '/robot_state_publisher/'robot_state_publisher '/robo_driver/'driver 'ros2 launch microros_stm32h723_bridge 'stm32h723_arm.launch.py; do
+                for pid in $(pgrep -f "$pattern"); do
+                    [[ "$pid" != "$$" ]] || { echo "self matched: $pattern" >&2; exit 44; }
+                done
+            done
+        '''
+        result, _, _ = self.run_shell(body)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_status_read_does_not_require_daemon_type_discovery(self):
@@ -124,7 +150,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("service:/microros_stm32h723_hardware/disable", events)
 
     def test_controller_shutdown_requires_disable_and_matches_domain(self):
-        mocks = '''pgrep() { echo 123; }; arm_controller_domain() { echo 0; };
+        mocks = '''pgrep() { echo 123; }; arm_controller_domain() { echo 0; }; arm_owner_identity() { echo fixture; };
                    kill() { [[ "$1" != -0 ]] || return 1; echo "signal:$*" >> "$EVENTS"; };'''
         result, events, _ = self.run_shell(mocks + "arm_stop_controller", mode=3)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -137,7 +163,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(events, "")
 
     def test_controller_timeout_does_not_escalate(self):
-        mocks = '''pgrep() { echo 123; }; arm_controller_domain() { echo 0; };
+        mocks = '''pgrep() { echo 123; }; arm_controller_domain() { echo 0; }; arm_owner_identity() { echo fixture; };
                    ps() { echo S; };
                    kill() { [[ "$1" != -0 ]] || return 0; echo "signal:$*" >> "$EVENTS"; };'''
         result, events, _ = self.run_shell(mocks + "arm_stop_controller")
@@ -149,6 +175,12 @@ class LifecycleTests(unittest.TestCase):
         result, events, pid_exists = self.run_shell('alive_pid() { echo 1; }; stop_pg "$ROOT/pid" start_arm_teleop')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events, "signal:-TERM 123\n")
+        self.assertTrue(pid_exists)
+
+    def test_foreign_domain_supervisor_pid_file_is_preserved_without_signalling(self):
+        result, events, pid_exists = self.run_shell('arm_controller_domain() { echo 229; }; stop_pg "$ROOT/pid" start_arm_teleop')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('signal', events)
         self.assertTrue(pid_exists)
 
     def test_startup_requires_self_check_and_fresh_active_ack(self):
@@ -371,6 +403,10 @@ class LifecycleTests(unittest.TestCase):
         COMMAND='/opt/ros/humble/lib/controller_manager/ros2_control_node'; arm_owner_identity 123 || exit 13
         COMMAND='/home/jialiang/easy_debug_bridge/install/easy_debug_bridge/lib/easy_debug_bridge/bridge_node'
         arm_owner_identity 123 && exit 14
+        COMMAND='/usr/bin/python3 /opt/ros/humble/lib/controller_manager/spawner arm_trajectory_controller --controller-manager /controller_manager'
+        arm_owner_identity 123 || exit 15
+        COMMAND='/usr/bin/python3 /opt/ros/humble/lib/controller_manager/spawner unrelated_controller'
+        arm_owner_identity 123 && exit 16
         exit 0'''
         result, _, _ = self.run_shell(body)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -378,7 +414,8 @@ class LifecycleTests(unittest.TestCase):
 
     ORPHAN_MOCK = r'''
         pgrep() {
-            [[ "$*" != *"[c]ontroller_manager"* ]] || return 1
+            [[ "$1" != -P ]] || return 1
+            [[ "$2" != '^/opt/ros/humble/lib/'* ]] || return 1
             [[ -f "$ROOT/gone" ]] || echo 39930
         }
         ps() { [[ -f "$ROOT/gone" ]] || echo S; }
@@ -386,6 +423,7 @@ class LifecycleTests(unittest.TestCase):
             [[ ! -f "$ROOT/gone" ]] || return 1
             printf '123456\n/usr/bin/python3 /opt/ros/humble/bin/ros2 launch microros_stm32h723_bridge stm32h723_arm.launch.py\n'
         }
+        arm_owner_signal() { echo INT; }
         kill() {
             echo "signal:$*" >> "$EVENTS"
             [[ "${HANG:-0}" == 1 ]] || touch "$ROOT/gone"
@@ -452,6 +490,45 @@ class LifecycleTests(unittest.TestCase):
         result, events, _ = self.run_shell(body)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("signal:-TERM 39930", events)
+
+    def test_ignored_sigint_uses_term_only_after_confirmed_disable(self):
+        body = self.ORPHAN_MOCK + 'arm_owner_signal() { echo TERM; }; arm_stop_orphans'
+        result, events, _ = self.run_shell(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events.splitlines(), ["status:3"] * 3 + ["signal:-TERM 39930"])
+        for ignored, expected in (("0000000001001007", "TERM"), ("0000000001001001", "INT")):
+            result, _, _ = self.run_shell(f'awk() {{ echo {ignored}; }}; arm_owner_signal 123')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), expected)
+
+    def test_launch_only_reaps_its_verified_same_domain_rsp_before_parent(self):
+        body = self.ORPHAN_MOCK + r'''
+            pgrep() { if [[ "$1" == -P ]]; then [[ -f "$ROOT/child-gone" ]] || echo 40045; else [[ -f "$ROOT/gone" ]] || echo 39930; fi; }
+            ps() {
+                if [[ "$*" == *ppid=* ]]; then echo 39930
+                elif [[ "$*" == *40045* ]]; then [[ -f "$ROOT/child-gone" ]] || echo S
+                else [[ -f "$ROOT/gone" ]] || echo S; fi
+            }
+            arm_owner_identity() {
+                if [[ "$1" == 40045 ]]; then printf '1234\n/opt/ros/humble/lib/robot_state_publisher/robot_state_publisher --ros-args\n'
+                else printf '123456\n/usr/bin/python3 /opt/ros/humble/bin/ros2 launch microros_stm32h723_bridge stm32h723_arm.launch.py\n'; fi
+            }
+            kill() {
+                echo "signal:$*" >> "$EVENTS"
+                if [[ "$2" == 40045 ]]; then touch "$ROOT/child-gone"; else touch "$ROOT/gone"; fi
+            }
+            arm_stop_orphans
+        '''
+        result, events, _ = self.run_shell(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([s for s in events.splitlines() if s.startswith('signal')], ["signal:-TERM 40045", "signal:-INT 39930"])
+        for change in (
+            'arm_controller_domain() { if [[ "$1" == 40045 ]]; then echo 225; else echo 0; fi; }',
+            r'''arm_owner_identity() { if [[ "$1" == 40045 ]]; then echo unknown-child; else printf '123456\n/usr/bin/python3 /opt/ros/humble/bin/ros2 launch microros_stm32h723_bridge stm32h723_arm.launch.py\n'; fi; }''',
+        ):
+            result, events, _ = self.run_shell(body.rsplit('arm_stop_orphans', 1)[0] + change + '; arm_stop_orphans')
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('signal', events)
 
 
 

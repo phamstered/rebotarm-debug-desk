@@ -10,6 +10,7 @@ use tokio::time::{sleep, Duration};
 mod data_collection;
 mod control_logs;
 mod positions;
+mod arm_workflow;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -713,8 +714,6 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
          jalive=$(alive_pid \"$jpid\" \"\"); \
          ralive=$(camera_alive \"$rpid\"); \
          nodes=$(timeout 5 ros2 node list 2>/dev/null || true); \
-         echo \"$nodes\" | grep -Eqi \"teleop|leader_follower\" && talive=1; \
-         echo \"$nodes\" | grep -Eqi \"move_group\" && jalive=1; \
          echo \"$nodes\" | grep -Eqi \"realsense|camera/camera|cameras/left_arm/wrist\" && ralive=1; \
          towns=0; jowns=0; \
          if [ \"$talive\" = 1 ]; then \
@@ -745,7 +744,9 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              arm_clean_environment || exit 1; \
-             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true \
+             arm_progress startup \"启动 Teleop 与重力补偿控制器\"; \
+             arm_rotate_log \"$HOME/.cache/robot-console/arm-teleop.log\" || exit 1; \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true \
                >\"$HOME/.cache/robot-console/arm-teleop.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$teleop_pid_file\"; \
              wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-teleop.log\" \"End-to-end self-check passed:\" || exit 1; \
@@ -755,7 +756,9 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              arm_clean_environment || exit 1; \
-             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory --gravity=true --clean=true \
+             arm_progress startup \"启动 Trajectory 与重力补偿控制器\"; \
+             arm_rotate_log \"$HOME/.cache/robot-console/arm-trajectory.log\" || exit 1; \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory --gravity=true --clean=false \
                >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; \
              wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"Controller self-check passed:\" || exit 1; \
@@ -763,8 +766,9 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              printf \"OK|%s|{mode}\\n\" \"$pid\""
         ),
         "realsense" => format!(
-            "{setup}{paths}{alive_fn}{camera_alive_fn}{camera_stop_fn}\
+            "{setup}{paths}{alive_fn}{camera_alive_fn}{camera_stop_fn}{stop_fn}\
              stop_camera_pg \"$rs_pid_file\" || exit 1; \
+             arm_rotate_log \"$HOME/.cache/robot-console/arm-realsense.log\" || exit 1; \
              setsid nohup ros2 launch rebotarm_gazebo left_wrist_camera.launch.py \
                >\"$HOME/.cache/robot-console/arm-realsense.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$rs_pid_file\"; sleep 1; \
@@ -1549,20 +1553,22 @@ async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, Str
 }
 
 #[tauri::command]
-async fn start_arm_mode(profile: ConnectionProfile, mode: String) -> Result<RemoteActionResult, String> {
+async fn start_arm_mode(profile: ConnectionProfile, mode: String,
+    on_progress: tauri::ipc::Channel<arm_workflow::Progress>,
+    logs: State<'_, control_logs::LogSessions>,
+) -> Result<RemoteActionResult, String> {
     let remote = arm_mode_remote_command(&profile, &mode)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
+    // Diagnostics must never delay or block a requested stop/DISABLE.
+    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "realsense") {
+        let _ = control_logs::prepare(&profile, &logs).await;
+    }
+    let mut command = ssh_base(&profile);
+    command.arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 arm mode：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let exit_code = output.status.code().unwrap_or(1);
-    if !output.status.success() {
+        .arg(remote);
+    let (ok, exit_code, stdout, stderr) = arm_workflow::run(&mut command, Some(on_progress)).await?;
+    if !ok {
         return Ok(RemoteActionResult {
             ok: false,
             exit_code,
@@ -1595,6 +1601,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
+        .manage(control_logs::LogSessions::default())
         .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
             check_ssh,
@@ -2009,7 +2016,7 @@ __BYID_SEP__\n\
         assert!(teleop.contains("LEADER_FOLLOWER_WS"));
         assert!(teleop.contains("setup_script%/install/setup.bash"));
         assert!(teleop.contains("export LEADER_FOLLOWER_WS=\"$ws\""));
-        assert!(teleop.contains("--position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true"));
+        assert!(teleop.contains("--position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true"));
         assert!(teleop.contains("kill -TERM \"$pid\""));
         assert!(teleop.contains("arm_clean_environment || exit 1"));
         assert!(!teleop.contains("kill -INT -"));
@@ -2106,7 +2113,7 @@ __BYID_SEP__\n\
             fs::write(workspace.join("scripts/start_arm_teleop.sh"), "#!/bin/bash\n").unwrap();
             fs::write(
                 workspace.join("install/setup.bash"),
-                "printf 'WORKSPACE=%s\\n' \"$ws\"\n",
+                "printf 'WORKSPACE=%s\\n' \"$ws\"\nros2() { printf '/arm_teleop_controller\\n/move_group\\n'; }\ntimeout() { shift; \"$@\"; }\n",
             )
             .unwrap();
             workspace
@@ -2115,6 +2122,9 @@ __BYID_SEP__\n\
         let custom = make_workspace("custom_stack");
         let output = run_status("Project/custom_stack/install/setup.bash");
         assert!(output.contains(&format!("WORKSPACE={}", custom.display())));
+        let status = parse_arm_mode_status(&output).unwrap();
+        assert!(!status.teleop_running && !status.trajectory_running,
+            "Inactive controller/planner node names must not imply an active arm mode");
 
         let current = make_workspace("rebotarm-ros2-stack");
         let output = run_status("Project/missing/install/setup.bash");
