@@ -94,3 +94,9 @@ Bridge 将 WebSocket 请求排队到 ROS executor 的互斥回调组，管理全
 ## MoveIt 规划器进程
 
 `start_arm_mode` 的 `moveit` 操作通过固定原生 SSH 命令启动真实 `real_move_group.launch.py`。Trajectory 使用同一规划器管理逻辑；Mac 不加入 DDS，WebView 不提交任意 shell 命令。原生 helper 在目标域核验 Action、参数与 Planning Scene 服务，保存本应用创建的进程身份。arm 模式互斥锁覆盖规划器启动与退出，DISABLE 后才清理受管理规划器；外部规划器只读探测并复用。日志沿用本机会话游标与 SSH 路径，不改变 WebSocket 协议、Bridge 构建 ID 或运动执行白名单。
+
+## Motion audit and controller health
+
+The position-motion state machine uses its own mutually exclusive callback group for telemetry, service clients, action clients and its watchdog timer. Image decoding and graph work in the default group cannot hold that group lock. Controller-manager queries run at most once per second with one pending request and a two-second deadline. A successful active/interface validation remains usable for at most 3.1 seconds while waiting for the next response, alongside the unchanged one-second live hardware/JTC/joint feedback checks. Timeout, service loss, or an explicit invalid response revokes readiness; generation tokens discard obsolete responses.
+
+The executor appends bounded, owner-scoped audit entries and ROS logger output at each motion transition, request rejection, target/trajectory/result and health change. `position_motion_info` carries cursor-based log pages; the connection-scoped desktop hook retains them even when Robot View is hidden. A separate bottom terminal displays the audit window, with an optional existing SSH reader for raw MoveIt output. The terminal's export uses a fixed native `.log` writer, validates an absolute path and a 32 MiB limit, and never executes text as commands. It is a log viewer, without shell input.

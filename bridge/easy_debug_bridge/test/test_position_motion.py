@@ -33,6 +33,7 @@ class Fixture(rclpy.node.Node):
         super().__init__("move_group")
         self.group = ReentrantCallbackGroup()
         self.q = [0., -.2, -.3, 0., 0., 0.]
+        self.controller_delay = 0.; self.controller_calls = 0
         self.active = True; self.fault = 0; self.publish_feedback = True; self.speed = 0.; self.state_offset = 0.
         self.goals = []; self.starts = []; self.path_constraints = []; self.canceled = 0
         self.reference_offset = 0.; self.reference_speed = 0.; self.omit_reference = False; self.velocity_claimed = True
@@ -64,6 +65,8 @@ class Fixture(rclpy.node.Node):
             goal_callback=lambda _: GoalResponse.REJECT if self.reject_execution else GoalResponse.ACCEPT)
         self.create_timer(.03, self.publish, callback_group=self.group)
     def controllers(self, request, response):
+        self.controller_calls += 1
+        time.sleep(self.controller_delay)
         c = ControllerState(); c.name = "arm_trajectory_controller"; c.type = "joint_trajectory_controller/JointTrajectoryController"
         c.state = "active" if self.active else "inactive"
         c.claimed_interfaces = [j+"/position" for j in NAMES] + ([j+"/velocity" for j in NAMES] if self.velocity_claimed else [])
@@ -180,6 +183,38 @@ def main():
         assert info["joint_rotation_supported"] is True, info
         assert info["home_positions"] == [0.,-.01,-.01,0.,0.,0.], info
         assert info["joint_targets_supported"] and info["motion_duration_supported"],info
+        # A >1s service response must not invalidate fresh real-time telemetry.
+        fixture.controller_delay = 1.3
+        until = time.monotonic()+5
+        while time.monotonic() < until:
+            status=request("position_motion_info")
+            assert status["available"],status
+            time.sleep(.1)
+        # A real request timeout fails closed even while telemetry keeps publishing.
+        fixture.controller_delay = 2.6
+        until = time.monotonic()+6
+        while time.monotonic() < until:
+            status=request("position_motion_info")
+            if not status["available"]: break
+            time.sleep(.1)
+        assert not status["available"] and "超时" in status["message"],status
+        fixture.controller_delay=0.;ready()
+        fixture.active=False
+        until=time.monotonic()+3
+        while time.monotonic()<until:
+            status=request("position_motion_info")
+            if not status["available"]:break
+            time.sleep(.1)
+        assert not status["available"] and "未激活" in status["message"],status
+        fixture.active=True;ready()
+        rejected=move("audit-reject",99.)
+        assert rejected.get("accepted") is False,rejected
+        audit=request("position_motion_info")
+        assert audit["motion_log_session"] and any(e["phase"]=="rejected" and e["command_id"]=="audit-reject" for e in audit["motion_logs"]),audit
+        assert any(e["phase"]=="controller" and "超时" in e["message"] for e in audit["motion_logs"]),audit
+        cursor=audit["motion_log_cursor"]
+        delta=request("position_motion_info",motion_log_session=audit["motion_log_session"],motion_log_after=cursor)
+        assert all(e["seq"]>cursor for e in delta["motion_logs"]),delta
         all_targets=dict(zip(NAMES,[.1,-.1,-.2,.05,.03,-.02]))
         before=list(fixture.q);count=len(fixture.goals)
         accepted=request("position_move",command_id="six-timed",confirmation="ARMED",joint_targets=all_targets,motion_duration_s=5.)
@@ -349,14 +384,14 @@ def main():
         count=len(fixture.goals)
         fixture.state_offset=.1;time.sleep(.2);assert move("mismatch")["accepted"] is False
         fixture.state_offset=0.;fixture.speed=.2;time.sleep(.2);assert move("moving")["accepted"] is False
-        fixture.speed=0.;fixture.active=False;time.sleep(.7);assert move("inactive")["accepted"] is False
+        fixture.speed=0.;fixture.active=False;time.sleep(1.3);assert move("inactive")["accepted"] is False
         fixture.active=True;ready()
         for label, positions in (("nonfinite-actual", [0., 0., float("nan"), 0., 0., 0.]),
                                  ("incomplete-actual", [0.]*5)):
             fixture.joint_positions=positions;time.sleep(.2)
             assert move(label)["accepted"] is False
         fixture.joint_positions=None
-        fixture.velocity_claimed=False;time.sleep(.7)
+        fixture.velocity_claimed=False;time.sleep(1.3)
         m=move("position-only");assert m["accepted"] is False and "velocity" in m["message"],m
         assert len(fixture.goals)==count,"invalid actual feedback or controller state must not send a MoveIt goal"
         fixture.velocity_claimed=True;ready()

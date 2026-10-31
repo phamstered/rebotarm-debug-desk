@@ -168,3 +168,25 @@ describe("saved MoveIt motion", () => {
     expect(result.current.armed).toBe(false);
   });
 });
+
+it("keeps paginated server audit independently of current command and resets on reconnect", async () => {
+  const { result, request, rerender, emit } = setup();
+  await waitFor(() => expect(result.current.reason).toBe(""));
+  request.mockImplementation(async (m) => ({ op: m.op, available: true, motion_log_session: "epoch1", motion_log_cursor: 8,
+    motion_logs: m.motion_log_after === 8 ? [] : [{ seq: 8, timestamp_ms: 1234, command_id: "external", phase: "health", level: "warn", message: "service slow" }] }));
+  rerender({ connected: true, profile: "logs", block: "" });
+  await waitFor(() => expect(result.current.logs.some((e) => e.message === "service slow")).toBe(true));
+  act(() => result.current.recordLog("tcp", "local preview"));
+  emit({ op: "position_motion", command_id: "not-current", motion_phase: "failed", message: "unrelated goal" });
+  expect(result.current.state.phase).toBe("idle");
+  await waitFor(() => expect(request.mock.calls.some(([m]) => m.motion_log_after === 8 && m.motion_log_session === "epoch1")).toBe(true));
+  expect(result.current.logs.filter((e) => e.seq === 8)).toHaveLength(1);
+  expect(result.current.logs.some((e) => e.message === "local preview")).toBe(true);
+  const obsoleteRecord = result.current.recordLog;
+  rerender({ connected: false, profile: "logs", block: "" });
+  await waitFor(() => expect(result.current.logs).toEqual([]));
+  rerender({ connected: true, profile: "new-profile", block: "" });
+  await waitFor(() => expect(result.current.reason).toBe(""));
+  act(() => obsoleteRecord("tcp", "obsolete completion"));
+  expect(result.current.logs.some((e) => e.message === "obsolete completion")).toBe(false);
+});

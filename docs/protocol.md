@@ -343,3 +343,14 @@ Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样�
 - `{"op":"position_cancel","request_id":"...","command_id":"UUID"}` 只允许拥有者取消，返回 `position_cancel_ack`；停止结果以状态推送为准。断线、反馈超时/故障及超时由 Jetson watchdog 取消；停止未确认保持全局锁，保留既有现场安全停机入口。
 
 MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确错误。协议不提供任意 ROS action 执行入口。
+
+### 规划执行日志增量同步
+
+`position_motion_info` 可附带 `motion_log_session: string`、`motion_log_after: uint64`。响应新增：
+
+- `motion_log_session`：Bridge 进程日志序列标识；不匹配或未提供时从当前保留窗口开始。
+- `motion_logs`：按 `seq` 递增的最多 256 条记录，每条含 `seq`、`timestamp_ms`（UTC Unix 毫秒）、`command_id`、`phase`、`level`（`info|warn|error`）、`message`。非健康记录仅对运动所属 WebSocket 会话可见；公共健康诊断不含其他会话目标。
+- `motion_log_cursor`：下一次请求的 `motion_log_after`，跳过不属于本会话的记录；独立于运动心跳/受理/完成语义。
+- `motion_log_truncated`：非零游标落在已淘汰记录之前，表示存在同步缺口。Bridge 保留全局最近 2048 条，每条消息最多 8192 字节；完整过程同时写入 ROS logger。
+
+客户端未提供上述字段时仍可读取信息；旧 Bridge 不返回日志字段，点位协议保持兼容。日志查询只读，不创建运动、不执行轨迹。`position_motion` 保持原有状态事件格式，定期重发的状态快照不重复生成审计条目。

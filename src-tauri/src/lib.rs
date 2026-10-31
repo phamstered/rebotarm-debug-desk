@@ -1102,6 +1102,23 @@ fn save_diagnostics_snapshot(local_path: String, content: String) -> Result<(), 
     std::fs::write(&local_path, content).map_err(|error| format!("诊断快照保存失败：{error}"))
 }
 
+fn validate_motion_log(path: &str, content: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if !path.is_absolute() || path.extension().and_then(|value| value.to_str()) != Some("log") {
+        return Err("规划日志必须保存到绝对路径的 .log 文件".into());
+    }
+    if content.is_empty() || content.len() > 32 * 1_048_576 {
+        return Err("规划日志为空或超过 32 MiB".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn save_motion_log(local_path: String, content: String) -> Result<(), String> {
+    validate_motion_log(&local_path, &content)?;
+    std::fs::write(&local_path, content).map_err(|error| format!("规划日志保存失败：{error}"))
+}
+
 async fn run_rosbag_action(
     profile: ConnectionProfile,
     action: &str,
@@ -1637,6 +1654,7 @@ pub fn run() {
             call_joint4_calibration_service,
             save_joint4_calibration_report,
             save_diagnostics_snapshot,
+            save_motion_log,
             get_rosbag_status,
             start_rosbag_recording,
             stop_rosbag_recording,
@@ -1810,6 +1828,15 @@ mod tests {
         assert!(validate_calibration_report("relative.json", "{}").is_err());
         assert!(validate_calibration_report("/tmp/joint4.yaml", "x").is_err());
         assert!(validate_calibration_report("/tmp/joint4.json", "").is_err());
+    }
+
+    #[test]
+    fn validates_motion_log_export() {
+        assert!(validate_motion_log("/tmp/motion.log", "INFO ready").is_ok());
+        assert!(validate_motion_log("relative.log", "x").is_err());
+        assert!(validate_motion_log("/tmp/motion.json", "x").is_err());
+        assert!(validate_motion_log("/tmp/motion.log", "").is_err());
+        assert!(validate_motion_log("/tmp/motion.log", &"x".repeat(32 * 1_048_576 + 1)).is_err());
     }
 
     #[test]

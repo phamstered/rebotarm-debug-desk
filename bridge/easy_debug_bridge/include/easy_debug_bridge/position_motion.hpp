@@ -7,7 +7,7 @@
 
 namespace easy_debug_bridge {
 // Requests are queued onto the ROS executor. Its mutually-exclusive callback
-// group owns every motion state transition; socket threads never touch ROS goals.
+// group (separate from image/graph callbacks) owns every motion state transition; socket threads never touch ROS goals.
 class PositionMotion {
  public:
   using Send = std::function<void(const std::string &)>;

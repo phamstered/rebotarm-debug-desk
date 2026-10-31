@@ -3,6 +3,7 @@
 #include "easy_debug_bridge/motion_timing.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
 
+#include "easy_debug_bridge/motion_log.hpp"
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -11,6 +12,19 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    easy_debug_bridge::MotionLog log;
+    log.append(1, "secret", "planning", "private target", "info");
+    log.append(0, "", "health", "global warning\nwith quotes \"", "warn");
+    assert(log.page(2, 0).find("private target") == std::string::npos);
+    assert(log.page(1, 0).find("private target") != std::string::npos);
+    assert(log.page(2, 0).find("global warning\\nwith quotes \\\"") != std::string::npos);
+    assert(log.page(1, 2).find("\"motion_logs\":[]") != std::string::npos);
+    for (int i = 0; i < 2100; ++i) log.append(1, "id", "feedback", "data", "info");
+    assert(log.page(1, 1).find("\"motion_log_truncated\":true") != std::string::npos);
+    assert(log.page(1, 1).find("\"motion_log_cursor\":310") != std::string::npos);
+    assert(log.page(2, 0).find("\"motion_log_cursor\":2102") != std::string::npos);
+  }
   {
     using namespace easy_debug_bridge;
     const PositionMotionModel model{{-1, -1, -1, -1, -1, -1}, {1, 1, 1, 1, 1, 1}, {0, 0, 0, 0, 0, 0}};
