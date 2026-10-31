@@ -1,6 +1,6 @@
 import type { KinematicJoint, KinematicModel } from "./kinematicsLogic";
 
-export type JointRotationPreview = { jointName: string; position: number };
+export type JointRotationPreview = Record<string, number>;
 export const radiansToDegrees = (value: number) => value * 180 / Math.PI;
 export const degreesToRadians = (value: number) => value * Math.PI / 180;
 

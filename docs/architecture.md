@@ -44,7 +44,7 @@ The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `
 
 ## URDF assets
 
-Robot View 的单关节操作使用独立角度预览状态；模型拾取沿 mesh 的 URDF link/joint 祖先寻找最近的非 mimic 旋转关节。预览只覆盖所选关节，其他关节继续消费反馈。确认执行复用 `position_move` 的 MoveIt 会话流程，Bridge 从本机 ROS 新鲜反馈生成完整六轴目标，并对其余五轴添加路径保持约束；桌面不发送直接 MIT 命令，也不绕过 MoveIt 碰撞检查。能力标志及请求字段见协议。
+Robot View 的关节调整使用按关节名保存的角度预览；模型拾取选择独立旋转轴，切换所选关节保留其他已编辑目标。确认执行将编辑映射和运动时长发送给 Bridge，未编辑轴继续从 ROS 实测反馈取得，并添加路径保持约束。定时运动先通过 `/move_action` plan-only 碰撞规划，再在 Jetson 校验并统一伸长轨迹时间，通过 `/execute_trajectory` 执行完整路径；规划与执行共享取消、断线和运动锁。桌面不直接发布 MIT 或拆分中间点，Mac 不加入 DDS。协议能力标志防止旧 Bridge 静默忽略时长；未指定时长的既有点位请求继续使用原 MoveGroup 执行路径。
 
 The URDF XML remains a ROS Topic payload. For each `package://` URI, the desktop requests the resource from the Bridge. The Bridge resolves the package with `ament_index_cpp`, lexically checks that the requested relative path stays inside the package before following resource symlinks, and returns raw bytes in an `RCR1` WebSocket binary response when `encoding: "binary"` is requested. Requests without encoding retain the Base64 JSON response. Each file is limited to 64 MiB. This preserves traversal protection while supporting ROS 2 `--symlink-install`. The desktop creates temporary blob URLs for Three.js. Relative Collada textures are fetched and rewritten before loading.
 

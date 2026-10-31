@@ -17,6 +17,8 @@ export type PositionMotionControls = {
   execute(position: CustomPosition | "home"): Promise<void>;
   jointRotationReason: string;
   executeJoint(jointName: string, position: number): Promise<void>;
+  jointTargetsReason: string;
+  executeJoints(targets: Record<string, number>, duration: number): Promise<void>;
   cancel(): Promise<void>;
 };
 const idle: PositionMotionState = { commandId: "", label: "", phase: "idle", message: "" };
@@ -24,7 +26,7 @@ const phases: PositionMotionPhase[] = ["validating", "planning", "executing", "v
 
 export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMessage">, connected: boolean, profileKey: string, localBlock: string): PositionMotionControls {
   const [state, setState] = useState<PositionMotionState>(idle);
-  const initialInfo = { available: false, message: "等待 MoveIt 状态", home: [] as number[], busy: false, jointRotation: false };
+  const initialInfo = { available: false, message: "等待 MoveIt 状态", home: [] as number[], busy: false, jointRotation: false, jointTargets: false, duration: false, durationMessage: "" };
   const [info, setInfo] = useState(initialInfo);
   const [armed, setArmed] = useState(false);
   const generation = useRef(0);
@@ -49,7 +51,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
         if (reply.op !== "position_motion_info") throw new Error("Bridge 不支持 MoveIt 点位执行，请更新 Bridge");
         const home = Array.isArray(reply.home_positions) && reply.home_positions.length === 6 && reply.home_positions.every(Number.isFinite) ? reply.home_positions : [];
         setInfo({ available: reply.available === true, message: reply.message || "", home, busy: reply.busy === true,
-          jointRotation: reply.joint_rotation_supported === true });
+          jointRotation: reply.joint_rotation_supported === true, jointTargets: reply.joint_targets_supported === true, duration: reply.motion_duration_supported === true, durationMessage: reply.motion_duration_message || "" });
         if (active.current && reply.command_id !== active.current && reply.busy === false) {
           setState((value) => {
             if (value.phase !== "stop_failed") return value;
@@ -75,19 +77,27 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     return () => { generation.current++; abort.abort(); window.clearInterval(timer); off(); };
   }, [bridge, connected, profileKey]);
 
-  async function execute(position: CustomPosition | "home" | { kind: "joint"; jointName: string; position: number }) {
+  async function execute(position: CustomPosition | "home" | { kind: "joint"; jointName: string; position: number } | { kind: "joints"; targets: Record<string, number>; duration: number }) {
     const value = context.current;
     if (locked.current || value.info.busy) return;
-    const joint = typeof position === "object" && "kind" in position ? position : null;
+    const joint = typeof position === "object" && "kind" in position && position.kind === "joint" ? position : null;
+    const multi = typeof position === "object" && "kind" in position && position.kind === "joints" ? position : null;
     const saved = typeof position === "object" && !("kind" in position) ? position : null;
-    const label = joint ? `${joint.jointName} → ${(joint.position * 180 / Math.PI).toFixed(2)}°` : saved?.name ?? "HOME";
+    const label = joint ? `${joint.jointName} → ${(joint.position * 180 / Math.PI).toFixed(2)}°` : multi ? `关节联合调整 · ${multi.duration} s` : saved?.name ?? "HOME";
     const block = !value.connected ? "请先连接 Jetson" : value.localBlock || (!value.info.available ? value.info.message : "") ||
       (joint && !value.info.jointRotation ? "当前 Bridge 不支持单关节旋转，请更新 Bridge" : "") ||
+      (multi && (!value.info.jointTargets || !value.info.duration) ? "当前 Bridge 不支持联合关节及指定时长，请更新 Bridge" : "") ||
+      (multi ? value.info.durationMessage : "") ||
       (!value.armed ? "请先确认工作区安全并解锁点位执行" : "");
     if (block) { setState({ ...idle, label, phase: "failed", message: block }); return; }
     if (position === "home" && value.info.home.length !== 6) { setState({ ...idle, label, phase: "failed", message: "HOME 尚未从 MoveIt SRDF 同步" }); return; }
     if (joint && (!ARM_JOINT_NAMES.some((name) => name === joint.jointName) || !Number.isFinite(joint.position))) {
       setState({ ...idle, label, phase: "failed", message: "单关节目标无效" }); return;
+    }
+    if (multi && (!Number.isFinite(multi.duration) || multi.duration < .1 || multi.duration > 120 ||
+        Object.keys(multi.targets).length === 0 || Object.keys(multi.targets).length > 6 ||
+        Object.entries(multi.targets).some(([name, angle]) => !ARM_JOINT_NAMES.some((joint) => joint === name) || !Number.isFinite(angle)))) {
+      setState({ ...idle, label, phase: "failed", message: "关节目标无效或运动时长不在 0.1–120 秒内" }); return;
     }
     if (saved && (saved.positions.length !== 6 || !saved.positions.every(Number.isFinite))) {
       setState({ ...idle, label, phase: "failed", message: "点位关节数据无效" }); return;
@@ -101,6 +111,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
         op: "position_move", command_id: id, label, confirmation: "ARMED",
         home: position === "home", positions: saved ? [...saved.positions] : undefined,
         joint_name: joint?.jointName, joint_position: joint?.position,
+        joint_targets: multi ? { ...multi.targets } : undefined, motion_duration_s: multi?.duration,
       }, 5000);
       if (generation.current !== current || active.current !== id) return;
       if (reply.op === "position_move_ack" && reply.accepted === false) {
@@ -133,6 +144,9 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     reason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : ""),
     jointRotationReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") ||
       (!info.jointRotation ? "当前 Bridge 不支持单关节旋转，请更新 Bridge" : ""),
+    jointTargetsReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") ||
+      (!info.jointTargets || !info.duration ? "当前 Bridge 不支持联合关节及指定时长，请更新 Bridge" : "") || info.durationMessage,
+    executeJoints: (targets, duration) => execute({ kind: "joints", targets: { ...targets }, duration }),
     execute, executeJoint: (jointName, position) => execute({ kind: "joint", jointName, position }), cancel,
   };
 }

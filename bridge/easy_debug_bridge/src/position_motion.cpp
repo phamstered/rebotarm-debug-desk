@@ -1,9 +1,11 @@
 #include "easy_debug_bridge/position_motion.hpp"
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
+#include "easy_debug_bridge/motion_timing.hpp"
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp/parameter_client.hpp>
 #include <moveit_msgs/action/move_group.hpp>
+#include <moveit_msgs/action/execute_trajectory.hpp>
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -18,6 +20,8 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using Group = moveit_msgs::action::MoveGroup;
 using Handle = rclcpp_action::ClientGoalHandle<Group>;
+using Execute = moveit_msgs::action::ExecuteTrajectory;
+using ExecuteHandle = rclcpp_action::ClientGoalHandle<Execute>;
 using Controllers = controller_manager_msgs::srv::ListControllers;
 using Joints = sensor_msgs::msg::JointState;
 using State = control_msgs::msg::JointTrajectoryControllerState;
@@ -46,6 +50,9 @@ struct PositionMotion::Impl {
   struct Motion {
     uint64_t owner{}; std::string id, label, phase{"validating"}, message;
     std::vector<double> target; Send send; Handle::SharedPtr handle;
+    ExecuteHandle::SharedPtr execution_handle;
+    std::vector<size_t> held_axes;
+    double duration{0};
     Clock::time_point started{Clock::now()}, lease_at{Clock::now()}, result_at{}, settled_at{}, cancel_at{};
     bool cancel_requested{false}, terminal{false};
     int code{0}; bool failed_result{false};
@@ -54,6 +61,8 @@ struct PositionMotion::Impl {
   std::mutex queue_mutex; std::deque<Request> requests;
   std::atomic<bool> in_motion{false};
   rclcpp_action::Client<Group>::SharedPtr action;
+  rclcpp_action::Client<Execute>::SharedPtr execute_action;
+  double start_tolerance{.01};
   rclcpp::Client<Controllers>::SharedPtr controllers;
   std::shared_ptr<rclcpp::AsyncParametersClient> parameters;
   rclcpp::Subscription<Joints>::SharedPtr joints_sub;
@@ -73,6 +82,8 @@ struct PositionMotion::Impl {
   Impl(rclcpp::Node &n, const std::string &joint_topic, const std::string &status_topic) : node(n) {
     action = rclcpp_action::create_client<Group>(node.get_node_base_interface(), node.get_node_graph_interface(),
         node.get_node_logging_interface(), node.get_node_waitables_interface(), "/move_action");
+    execute_action = rclcpp_action::create_client<Execute>(node.get_node_base_interface(), node.get_node_graph_interface(),
+        node.get_node_logging_interface(), node.get_node_waitables_interface(), "/execute_trajectory");
     controllers = node.create_client<Controllers>("/controller_manager/list_controllers");
     parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group");
     const auto qos = rclcpp::QoS(10).best_effort();
@@ -149,8 +160,8 @@ struct PositionMotion::Impl {
         if (p.size() != 33 || p[2].as_bool()) throw std::runtime_error("MoveIt 必须配置 moveit_manage_controllers=false");
         if (p[3].as_string_array() != std::vector<std::string>{controller} || !arm_joint_set(p[4].as_string_array()))
           throw std::runtime_error("MoveIt 只能配置真实 arm_trajectory_controller 六关节");
-        const auto start_tolerance = p[5].as_double();
-        if (!std::isfinite(start_tolerance) || start_tolerance <= 0 || start_tolerance > 0.02)
+        const auto configured_start_tolerance = p[5].as_double();
+        if (!std::isfinite(configured_start_tolerance) || configured_start_tolerance <= 0 || configured_start_tolerance > 0.02)
           throw std::runtime_error("MoveIt 起点容差必须在 (0, 0.02] rad");
         if (p[6].as_string() != "moveit_simple_controller_manager/MoveItSimpleControllerManager"
             || p[7].as_string() != "FollowJointTrajectory" || p[8].as_string() != "follow_joint_trajectory")
@@ -166,6 +177,7 @@ struct PositionMotion::Impl {
         for (const auto &value : p) signature += value.value_to_string();
         if (current && !current->terminal && !model_signature.empty() && signature != model_signature)
           cancel(current, "MoveIt 模型或配置改变，已请求取消");
+        start_tolerance = configured_start_tolerance;
         model = std::move(parsed); model_signature = std::move(signature); model_error.clear(); model_at = Clock::now();
       } catch (const std::exception &e) { model_error = std::string("MoveIt 配置不可用：") + e.what(); model_at = {}; }
     });
@@ -193,8 +205,11 @@ struct PositionMotion::Impl {
   void request_cancel_handle(const std::shared_ptr<Motion> &m) {
     // rclcpp_action forgets completed goals. Canceling such a handle throws;
     // a terminal action can only be checked against fresh stop feedback.
-    if (!m->handle || m->result_at != Clock::time_point{}) return;
-    try { action->async_cancel_goal(m->handle); }
+    if (m->result_at != Clock::time_point{}) return;
+    try {
+      if (m->execution_handle) execute_action->async_cancel_goal(m->execution_handle);
+      else if (m->handle) action->async_cancel_goal(m->handle);
+    }
     catch (const std::exception &e) { update(m, "stop_failed", std::string("MoveIt 取消失败，停止未确认：") + e.what()); }
   }
   void cancel(const std::shared_ptr<Motion> &m, const std::string &message) {
@@ -218,19 +233,32 @@ struct PositionMotion::Impl {
     if (current && !current->terminal) throw std::runtime_error("已有点位运动，等待完成或取消确认后再试");
     const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
     const auto rotation_joint = r.data.get_optional<std::string>("joint_name");
+    const auto joint_targets = r.data.get_child_optional("joint_targets");
     const auto actual = ordered_arm_values(joints.name, joints.position);
+    std::vector<std::pair<std::string, double>> edits;
+    if (joint_targets) {
+      if (!joint_targets->data().empty() || rotation_joint || r.data.get_child_optional("joint_position") ||
+          r.data.get<bool>("home", false) || r.data.get_child_optional("positions"))
+        throw std::runtime_error("joint_targets 必须为关节目标对象，不能与其他目标形式混用");
+      for (const auto &entry : *joint_targets) edits.emplace_back(entry.first, entry.second.get_value<double>());
+    }
     if (rotation_joint && (r.data.get<bool>("home", false) || r.data.get_child_optional("positions")))
       throw std::runtime_error("单关节旋转不能与 HOME/positions 同时指定");
     if (!rotation_joint && r.data.get_child_optional("joint_position"))
       throw std::runtime_error("单关节旋转缺少 joint_name");
-    auto target = rotation_joint
-      ? joint_rotation_target(actual, *rotation_joint, r.data.get<double>("joint_position"), model)
+    if (rotation_joint) edits.emplace_back(*rotation_joint, r.data.get<double>("joint_position"));
+    auto target = joint_targets || rotation_joint ? combined_joint_target(actual, edits, model)
       : r.data.get<bool>("home", false) ? model.home : read_values(r.data);
+    double duration = 0;
+    if (r.data.get_child_optional("motion_duration_s")) {
+      duration = r.data.get<double>("motion_duration_s"); validate_motion_duration(duration);
+      if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
+    }
     validate_position_target(target, model);
     auto m = std::make_shared<Motion>(); m->owner = r.owner; m->id = id;
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
     if (m->label.size() > 512) throw std::runtime_error("点位名称过长");
-    m->target = target; m->send = r.send;
+    m->target = target; m->send = r.send; m->duration = duration;
     current = m; in_motion.store(true);
     seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
     Group::Goal goal;
@@ -245,14 +273,16 @@ struct PositionMotion::Impl {
     for (size_t i = 0; i < 6; ++i) {
       moveit_msgs::msg::JointConstraint c; c.joint_name = arm_motion_joints()[i]; c.position = target[i];
       c.tolerance_above = c.tolerance_below = 0.005; c.weight = 1; constraints.joint_constraints.push_back(c);
-      if (rotation_joint && c.joint_name != *rotation_joint) {
+      if ((joint_targets || rotation_joint) && std::none_of(edits.begin(), edits.end(),
+          [&](const auto &edit) { return edit.first == c.joint_name; })) {
         c.position = actual[i];
         c.tolerance_above = c.tolerance_below = joint_rotation_hold_tolerance;
         goal.request.path_constraints.joint_constraints.push_back(c);
+        m->held_axes.push_back(i);
       }
     }
     goal.request.goal_constraints.push_back(constraints);
-    goal.planning_options.plan_only = false; goal.planning_options.replan = false;
+    goal.planning_options.plan_only = duration > 0; goal.planning_options.replan = false;
     goal.planning_options.planning_scene_diff.is_diff = true;
     goal.planning_options.planning_scene_diff.robot_state.is_diff = true;
     r.send("{\"op\":\"position_move_ack\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
@@ -266,19 +296,104 @@ struct PositionMotion::Impl {
     };
     options.feedback_callback = [this, m](Handle::SharedPtr, const std::shared_ptr<const Group::Feedback> f) {
       if (m->terminal || m->cancel_requested) return;
-      const bool executing = f->state.find("MONITOR") != std::string::npos || f->state.find("EXECUT") != std::string::npos;
+      const bool executing = m->duration == 0 && (f->state.find("MONITOR") != std::string::npos || f->state.find("EXECUT") != std::string::npos);
       update(m, executing ? "executing" : "planning", "MoveIt：" + f->state);
     };
     options.result_callback = [this, m](const Handle::WrappedResult &result) {
-      m->result_at = Clock::now(); m->code = result.result ? result.result->error_code.val : 0;
-      if (m->cancel_requested) { update(m, "stopping", "MoveIt 已返回，等待关节停稳"); return; }
-      if (result.code != rclcpp_action::ResultCode::SUCCEEDED || m->code != 1) {
-        m->failed_result = true; update(m, "stopping", "MoveIt 规划/执行失败，error_code=" + std::to_string(m->code) + "；等待停稳确认"); return;
+      m->handle.reset();
+      if (m->duration > 0 && !m->cancel_requested && result.code == rclcpp_action::ResultCode::SUCCEEDED &&
+          result.result && result.result->error_code.val == 1) {
+        try { execute_plan(m, result.result->planned_trajectory); }
+        catch (const std::exception &e) { update(m, "failed", e.what(), true); }
+        return;
       }
-      update(m, "verifying", "执行 Action 成功，正在核对实际到位反馈");
+      finish_result(m, result.code, result.result ? result.result->error_code.val : 0);
     };
     try { action->async_send_goal(goal, options); }
     catch (const std::exception &e) { update(m, "failed", e.what(), true); }
+  }
+  void finish_result(const std::shared_ptr<Motion> &m, rclcpp_action::ResultCode code, int error_code) {
+      if (m->terminal) return;
+      m->result_at = Clock::now(); m->code = error_code;
+      if (m->cancel_requested) { update(m, "stopping", "MoveIt 已返回，等待关节停稳"); return; }
+      if (code != rclcpp_action::ResultCode::SUCCEEDED || m->code != 1) {
+        m->failed_result = true; update(m, "stopping", "MoveIt 规划/执行失败，error_code=" + std::to_string(m->code) + "；等待停稳确认"); return;
+      }
+      update(m, "verifying", "执行 Action 成功，正在核对实际到位反馈");
+  }
+  void execute_plan(const std::shared_ptr<Motion> &m, const moveit_msgs::msg::RobotTrajectory &plan) {
+    if (m->terminal || m->cancel_requested || current != m) return;
+    bool pending_cancel = false;
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex);
+      pending_cancel = std::any_of(requests.begin(), requests.end(), [&](const auto &request) {
+        return (request.disconnect && (request.owner == 0 || request.owner == m->owner)) ||
+            (request.owner == m->owner && request.data.template get<std::string>("op", "") == "position_cancel" &&
+             request.data.template get<std::string>("command_id", "") == m->id);
+      });
+    }
+    if (pending_cancel) {
+      cancel(m, "执行前已收到取消或断线请求");
+      finish_result(m, rclcpp_action::ResultCode::CANCELED, -7);
+      return;
+    }
+    const auto reason = readiness();
+    if (!reason.empty()) throw std::runtime_error(reason);
+    if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，未执行规划轨迹");
+    if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
+    if (!arm_joint_set(plan.joint_trajectory.joint_names) || !plan.multi_dof_joint_trajectory.points.empty() ||
+        !plan.multi_dof_joint_trajectory.joint_names.empty()) throw std::runtime_error("规划轨迹必须仅包含 arm 六关节");
+    const auto &names = plan.joint_trajectory.joint_names;
+    if (plan.joint_trajectory.points.size() < 2 || plan.joint_trajectory.points.size() > 10000)
+      throw std::runtime_error("规划轨迹点数无效");
+    std::vector<TimedMotionPoint> points;
+    for (const auto &point : plan.joint_trajectory.points) {
+      if (point.time_from_start.nanosec >= 1000000000) throw std::runtime_error("规划轨迹时间无效");
+      points.push_back({ordered_arm_values(names, point.positions),
+          point.velocities.empty() ? std::vector<double>{} : ordered_arm_values(names, point.velocities),
+          point.accelerations.empty() ? std::vector<double>{} : ordered_arm_values(names, point.accelerations),
+          point.effort.empty() ? std::vector<double>{} : ordered_arm_values(names, point.effort),
+          static_cast<int64_t>(point.time_from_start.sec) * 1000000000 + point.time_from_start.nanosec});
+    }
+    points = stretch_motion(std::move(points), m->duration, model);
+    const auto actual = ordered_arm_values(joints.name, joints.position);
+    for (size_t i = 0; i < 6; ++i) {
+      if (std::abs(points.front().positions[i] - actual[i]) > start_tolerance)
+        throw std::runtime_error("规划后实测起点已变化，请重新规划");
+      if (std::abs(points.back().positions[i] - m->target[i]) > .005 + 1e-9)
+        throw std::runtime_error("规划轨迹终点与目标不匹配");
+    }
+    for (const auto &point : points) for (const auto i : m->held_axes)
+      if (std::abs(point.positions[i] - m->target[i]) > joint_rotation_hold_tolerance + 1e-9)
+        throw std::runtime_error("规划轨迹不满足未编辑关节的保持约束");
+    Execute::Goal goal;
+    goal.trajectory.joint_trajectory.joint_names = arm_motion_joints();
+    goal.trajectory.joint_trajectory.header.frame_id = plan.joint_trajectory.header.frame_id;
+    for (const auto &point : points) {
+      trajectory_msgs::msg::JointTrajectoryPoint out;
+      out.positions = point.positions; out.velocities = point.velocities;
+      out.accelerations = point.accelerations; out.effort = point.effort;
+      out.time_from_start.sec = static_cast<int32_t>(point.time_ns / 1000000000);
+      out.time_from_start.nanosec = static_cast<uint32_t>(point.time_ns % 1000000000);
+      goal.trajectory.joint_trajectory.points.push_back(out);
+    }
+    rclcpp_action::Client<Execute>::SendGoalOptions options;
+    options.goal_response_callback = [this, m](ExecuteHandle::SharedPtr handle) {
+      m->execution_handle = handle;
+      if (!handle) { finish_result(m, rclcpp_action::ResultCode::ABORTED, 0); return; }
+      if (m->cancel_requested) request_cancel_handle(m);
+      else update(m, "executing", "按指定运动时长执行：" + std::to_string(m->duration) + " 秒");
+    };
+    options.result_callback = [this, m](const ExecuteHandle::WrappedResult &result) {
+      m->execution_handle.reset();
+      finish_result(m, result.code, result.result ? result.result->error_code.val : 0);
+    };
+    update(m, "planning", "规划完成，等待 MoveIt 执行调整后的完整轨迹");
+    try { execute_action->async_send_goal(goal, options); }
+    catch (const std::exception &e) {
+      m->cancel_requested = true; m->cancel_at = Clock::now();
+      update(m, "stop_failed", std::string("轨迹受理状态未确认，保持锁定：") + e.what());
+    }
   }
   void process(const Request &r) {
     if (r.disconnect) { if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
@@ -289,7 +404,8 @@ struct PositionMotion::Impl {
       const bool home = fresh(model_at, 10) && model.home.size() == 6 && model_error.empty();
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
-          ",\"joint_rotation_supported\":true" +
+          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true" +
+          ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
           ",\"home_positions\":" + (home ? numbers(model.home) : "[]") + "}");

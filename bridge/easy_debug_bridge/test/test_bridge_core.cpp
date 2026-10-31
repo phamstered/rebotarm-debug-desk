@@ -1,5 +1,6 @@
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
+#include "easy_debug_bridge/motion_timing.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
 
 #include <cassert>
@@ -29,6 +30,37 @@ int main() {
     assert(!position_target_reached(model.home, {0, 0, 0, 0, 0, .03}, model.home));
     assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, .1}));
     assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, NAN}));
+    const auto actual = std::vector<double>{.1, .2, .3, .4, .5, .6};
+    assert((combined_joint_target(actual, {{"joint1", -.2}, {"joint6", -.6}}, model) ==
+        std::vector<double>{-.2, .2, .3, .4, .5, -.6}));
+    assert(rejected([&] { combined_joint_target(actual, {}, model); }));
+    assert(rejected([&] { combined_joint_target(actual, {{"joint1", 0}, {"joint1", .1}}, model); }));
+    assert(rejected([&] { combined_joint_target(actual, {{"joint7", 0}}, model); }));
+    assert(rejected([&] { combined_joint_target(actual, {{"joint1", NAN}}, model); }));
+    assert(rejected([&] { combined_joint_target(actual, {{"joint1", 2}}, model); }));
+    for (double seconds : {double(NAN), double(INFINITY), -.1, 0., .099, 120.001})
+      assert(rejected([&] { validate_motion_duration(seconds); }));
+    validate_motion_duration(.1); validate_motion_duration(120);
+    const std::vector<TimedMotionPoint> path{
+        {model.home, std::vector<double>(6, .4), std::vector<double>(6, .8), {}, 0},
+        {actual, std::vector<double>(6, .4), std::vector<double>(6, .8), {}, 2000000000}};
+    const auto stretched = stretch_motion(path, 4, model);
+    assert(stretched.back().time_ns == 4000000000 && stretched.front().time_ns == 0);
+    assert(stretched.back().positions == actual);
+    assert(stretch_motion(path, 5.125, model).back().time_ns == 5125000000);
+    assert(stretched.back().velocities == std::vector<double>(6, .2));
+    assert(stretched.back().accelerations == std::vector<double>(6, .2));
+    assert(stretch_motion(path, 2, model).back().velocities == path.back().velocities);
+    assert(rejected([&] { stretch_motion(path, 1.999, model); }));
+    assert(rejected([&] { stretch_motion({}, 5, model); }));
+    auto invalid_path = path; invalid_path.back().time_ns = 0;
+    assert(rejected([&] { stretch_motion(invalid_path, 5, model); }));
+    invalid_path = path; invalid_path.back().positions[0] = NAN;
+    assert(rejected([&] { stretch_motion(invalid_path, 5, model); }));
+    invalid_path = path; invalid_path.back().accelerations[0] = NAN;
+    assert(rejected([&] { stretch_motion(invalid_path, 5, model); }));
+    invalid_path = path; invalid_path.back().velocities.pop_back();
+    assert(rejected([&] { stretch_motion(invalid_path, 5, model); }));
     std::vector<std::string> claims;
     for (const auto &joint : arm_motion_joints()) claims.push_back(joint + "/position");
     assert(!arm_position_velocity_claimed(claims));
