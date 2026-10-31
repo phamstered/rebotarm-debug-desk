@@ -630,7 +630,7 @@ export default function App() {
 
   const positionProfileKey = profileKeyFor(profile);
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
-    !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
+    statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
       activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先激活 arm_trajectory_controller 轨迹控制" : "");
   const captureSamples = [
     {
@@ -1094,7 +1094,7 @@ export default function App() {
     }
   }
 
-  async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent") {
+  async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent" | "moveit") {
     if (statusActionBusy || statusActionInFlightRef.current) return;
     const actionGeneration = connectionGenerationRef.current;
     statusActionInFlightRef.current = true;
@@ -1657,6 +1657,16 @@ export default function App() {
     void connect();
   }
 
+  const positionPlanner = {
+    busy: statusActionBusy === "moveit-start",
+    disabledReason: stage !== "connected" ? "请先连接 Jetson" : statusActionBusy ? "控制模式操作进行中" :
+      positionMotion.busy ? "请等待点位运动结束或取消" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行" :
+      activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先在 Status 启动 Trajectory 模式" : "",
+    notice: armWorkflow.workflow?.mode === "moveit" ? statusActionNotice : "",
+    workflow: ["moveit", "trajectory"].includes(armWorkflow.workflow?.mode ?? "") ? armWorkflow.workflow : null,
+    start: () => { void runStatusRestart("moveit-start", "moveit"); },
+  };
+
   if (stage !== "connected" && managePositions) {
     return (
       <main className="connect-shell">
@@ -1670,6 +1680,7 @@ export default function App() {
           onDelete={removePosition}
           onCapture={capturePose}
           motion={positionMotion}
+          planner={positionPlanner}
           onBack={() => setManagePositions(false)}
         />
       </main>
@@ -2069,6 +2080,7 @@ export default function App() {
             onDelete={removePosition}
             onCapture={capturePose}
             motion={positionMotion}
+            planner={positionPlanner}
           />
         )}
       </section>

@@ -224,7 +224,7 @@ export function StatusPage({
 
   const targetAction = quickActions.find((action) => action.id === targetMode)!;
   const logMode = workflow && (workflow.running || workflow.failed || actionBusy) && ["teleop", "trajectory", "vla"].includes(workflow.mode) ? workflow.mode : (modeConfirmed ? activeMode : null) ?? targetMode;
-  const logSource = logMode === "vla" ? "vla" : logMode === "trajectory" ? "trajectory" : "teleop";
+  const logSource = workflow?.mode === "moveit" || (workflow?.mode === "trajectory" && workflow.stage === "planner") ? "moveit" : logMode === "vla" ? "vla" : logMode === "trajectory" ? "trajectory" : "teleop";
   return (
     <main className="status-page">
       <header className="status-page-header">

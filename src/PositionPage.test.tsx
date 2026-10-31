@@ -8,6 +8,30 @@ import { emptyPositionStore, profileKeyFor } from "./positionLogic";
 const key = profileKeyFor({ host: "jetson", username: "robot", sshPort: 22 });
 
 describe("PositionPage", () => {
+  it("starts the planner explicitly without arming or moving a saved position", async () => {
+    const user = userEvent.setup();
+    const start = vi.fn();
+    const view = render(<PositionPage profileKey={key} store={emptyPositionStore()} captureError="" urdfXml=""
+      onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} onCapture={vi.fn()}
+      planner={{start, busy: false, disabledReason: "请先启动 Trajectory", notice: "", workflow: null}} />);
+    expect(screen.getByRole("button", {name: "启动 MoveIt"})).toBeDisabled();
+    view.rerender(<PositionPage profileKey={key} store={emptyPositionStore()} captureError="" urdfXml=""
+      onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} onCapture={vi.fn()}
+      planner={{start, busy: false, disabledReason: "", notice: "", workflow: null}} />);
+    await user.click(screen.getByRole("button", {name: "启动 MoveIt"}));
+    expect(start).toHaveBeenCalledOnce();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("button", {name: "移动到 HOME"})).toBeDisabled();
+  });
+
+  it("shows planner startup failure at the actual stage and blocks duplicate starts", () => {
+    render(<PositionPage profileKey={key} store={emptyPositionStore()} captureError="" urdfXml=""
+      onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} onCapture={vi.fn()}
+      planner={{start: vi.fn(), busy: true, disabledReason: "", notice: "",
+        workflow: {mode: "moveit", stage: "planner", message: "Planning Scene 超时", failed: true, running: false}}} />);
+    expect(screen.getByRole("button", {name: "MoveIt 启动中…"})).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Planning Scene 超时");
+  });
   it("shows a locked HOME row and saves a typed custom point", async () => {
     const user = userEvent.setup();
     const onCreate = vi.fn();

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { ArmModeWorkflow } from "./ArmModeWorkflow";
+import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { positionMotionBusy, type PositionMotionControls } from "./positionMotionLogic";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
 import { ARM_JOINT_NAMES, homeRow, nextCapturedPoseName, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
@@ -16,6 +18,7 @@ export function PositionPage({
   onCapture,
   onBack,
   motion,
+  planner,
 }: {
   profileKey: string;
   store: PositionStore;
@@ -27,6 +30,7 @@ export function PositionPage({
   onCapture(): { positions: number[] } | { error: string };
   onBack?: () => void;
   motion?: PositionMotionControls;
+  planner?: { busy: boolean; disabledReason: string; notice: string; workflow: ArmWorkflow | null; start(): void };
 }) {
   const [name, setName] = useState("");
   const [joints, setJoints] = useState<string[]>(blankJoints);
@@ -96,6 +100,12 @@ export function PositionPage({
         <label><input type="checkbox" checked={motion?.armed ?? false} disabled={!motion || motion.busy}
           onChange={(event) => motion?.setArmed(event.target.checked)} />我已确认工作区安全，允许点位运动</label>
         {moveReason && <p>{moveReason}</p>}
+        {planner && <button type="button" className="position-quiet" disabled={planner.busy || Boolean(planner.disabledReason)}
+          title={planner.disabledReason || "启动或复用 MoveIt 规划器，不执行点位运动"}
+          onClick={planner.start}>{planner.busy ? "MoveIt 启动中…" : "启动 MoveIt"}</button>}
+        {planner?.disabledReason && planner.disabledReason !== moveReason && <p>{planner.disabledReason}</p>}
+        {planner?.notice && <output role="status">{planner.notice}</output>}
+        {planner && <ArmModeWorkflow workflow={planner.workflow} />}
         {motion?.busy && !positionMotionBusy(motion.state.phase) && <p>其他会话的点位运动尚未结束</p>}
         {motion && motion.state.phase !== "idle" && <div role="status" aria-live="polite">
           <strong>{motion.state.label}</strong> · {motion.state.message}

@@ -1,13 +1,20 @@
 import { act, renderHook, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { defaultProfile } from "./types";
-import { useArmModeWorkflow, type ArmProgress } from "./armModeWorkflowLogic";
+import { useArmModeWorkflow, workflowSteps, type ArmProgress } from "./armModeWorkflowLogic";
 import { ArmModeWorkflow } from "./ArmModeWorkflow";
 
 const mock = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mock.invoke, Channel: class { onmessage = (_event: ArmProgress) => {}; } }));
 
 describe("arm mode workflow", () => {
+  it("shows planner startup only for Trajectory and independent MoveIt calls", () => {
+    expect(workflowSteps("trajectory").map((s) => s.id)).toContain("planner");
+    expect(workflowSteps("moveit").map((s) => s.id)).toEqual(["prepare", "planner", "ready"]);
+    for (const mode of ["teleop", "vla", "stop", "disable-stop"]) {
+      expect(workflowSteps(mode).map((s) => s.id)).not.toContain("planner");
+    }
+  });
   it("uses actual native events and freezes failures at the current step", async () => {
     let complete!: (v: unknown) => void;
     mock.invoke.mockImplementation((_name, args) => new Promise((resolve) => { complete = resolve; args.onProgress.onmessage({stage: "cleanup", message: "正在清理", failed: false}); }));

@@ -35,7 +35,7 @@ pub struct ControlLogSnapshot {
 }
 
 fn remote_command(source: &str, download: bool) -> Result<String, String> {
-    if !matches!(source, "teleop" | "trajectory" | "vla" | "controller" | "realsense") {
+    if !matches!(source, "teleop" | "trajectory" | "vla" | "moveit" | "controller" | "realsense") {
         return Err("不支持的日志来源".into());
     }
     let script = READER.replace('\'', "'\"'\"'");
@@ -128,7 +128,7 @@ mod tests {
     use super::*;
     #[test]
     fn only_allows_known_log_sources() {
-        for source in ["teleop", "trajectory", "vla", "controller", "realsense"] {
+        for source in ["teleop", "trajectory", "vla", "moveit", "controller", "realsense"] {
             let cmd = remote_command(source, false).unwrap();
             assert!(cmd.starts_with("timeout 10 python3 -c '"));
             assert!(cmd.ends_with(&format!("{source} tail")));

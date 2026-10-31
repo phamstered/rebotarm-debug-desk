@@ -695,7 +695,8 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
                            if [ \"$(alive_pid \"$p\" \"left_wrist_camera.launch.py\")\" = 1 ] || \
                               [ \"$(alive_pid \"$p\" \"realsense2_camera rs_launch.py\")\" = 1 ]; then echo 1; \
                            else echo 0; fi; }; ";
-    let stop_fn = include_str!("arm_mode_lifecycle.sh");
+    let planner = include_str!("moveit_lifecycle.py").replace('\'', "'\"'\"'");
+    let stop_fn = format!("{}\nmoveit_manage() {{ timeout 48 python3 -c '{planner}' \"$1\"; }};\n", include_str!("arm_mode_lifecycle.sh"));
     let camera_stop_fn = "stop_camera_pg() { file=\"$1\"; pid=$(cat \"$file\" 2>/dev/null || true); \
                    if [ \"$(camera_alive \"$pid\")\" = 1 ]; then \
                      kill -INT -\"$pid\" 2>/dev/null || kill -INT \"$pid\" 2>/dev/null || true; \
@@ -737,6 +738,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
         "stop" | "disable-stop" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
              arm_clean_environment {stop_service} || exit 1; \
+             moveit_manage stop || exit 1; \
              printf \"OK|0|stopped\\n\"",
             stop_service = if mode == "disable-stop" { "disable" } else { "safe_stop" },
         ),
@@ -744,6 +746,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              arm_clean_environment || exit 1; \
+             moveit_manage stop || exit 1; \
              arm_progress startup \"启动 Teleop 与重力补偿控制器\"; \
              arm_rotate_log \"$HOME/.cache/robot-console/arm-teleop.log\" || exit 1; \
              setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true \
@@ -756,14 +759,25 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              arm_clean_environment || exit 1; \
+             moveit_manage stop || exit 1; \
              arm_progress startup \"启动 Trajectory 与重力补偿控制器\"; \
              arm_rotate_log \"$HOME/.cache/robot-console/arm-trajectory.log\" || exit 1; \
              setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory --gravity=true --clean=false \
                >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; \
              wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"Controller self-check passed:\" || exit 1; \
-             if [ \"{mode}\" = \"vla\" ]; then arm_start_vla || exit 1; fi; \
+             if [ \"{mode}\" = \"vla\" ]; then arm_start_vla || exit 1; \
+             else arm_progress planner \"启动 MoveIt 并核验规划服务\"; moveit_manage start || {{ echo \"MoveIt 未就绪；轨迹控制器命令流保留，可在位置页重试规划器\" >&2; exit 1; }}; fi; \
              printf \"OK|%s|{mode}\\n\" \"$pid\""
+        ),
+        "moveit" => format!(
+            "{setup}{paths}{alive_fn}{stop_fn}\
+             arm_progress planner \"检查轨迹控制器并启动 MoveIt\"; \
+             arm_status || exit 1; \
+             [ \"$arm_mode\" = 1 ] && [ \"$arm_fault\" = 0 ] || {{ echo \"请先启动无故障的 Trajectory 控制模式\" >&2; exit 1; }}; \
+             controllers=$(timeout 10 ros2 control list_controllers) || exit 1; \
+             echo \"$controllers\" | sed -E 's/\\x1B\\[[0-9;]*[mK]//g' | awk '$1 == \"arm_trajectory_controller\" && $3 == \"active\" {{found=1}} END {{exit !found}}' || {{ echo \"请先激活 arm_trajectory_controller\" >&2; exit 1; }}; \
+             moveit_manage start || exit 1;"
         ),
         "realsense" => format!(
             "{setup}{paths}{alive_fn}{camera_alive_fn}{camera_stop_fn}{stop_fn}\
@@ -1559,7 +1573,7 @@ async fn start_arm_mode(profile: ConnectionProfile, mode: String,
 ) -> Result<RemoteActionResult, String> {
     let remote = arm_mode_remote_command(&profile, &mode)?;
     // Diagnostics must never delay or block a requested stop/DISABLE.
-    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "realsense") {
+    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "realsense" | "moveit") {
         let _ = control_logs::prepare(&profile, &logs).await;
     }
     let mut command = ssh_base(&profile);
@@ -1582,6 +1596,10 @@ async fn start_arm_mode(profile: ConnectionProfile, mode: String,
         exit_code: 0,
         message: if mode == "stop" || mode == "disable-stop" {
             "Teleop/Trajectory 已停止".into()
+        } else if mode == "moveit" {
+            label
+        } else if mode == "trajectory" {
+            format!("Trajectory + MoveIt 已就绪 (pid {pid})")
         } else {
             format!("{label} 已启动 (pid {pid})")
         },
@@ -2065,8 +2083,23 @@ __BYID_SEP__\n\
     }
 
     #[test]
+    fn moveit_lifecycle_and_mode_boundaries() {
+        let output = std::process::Command::new("python3")
+            .arg("tests/test_moveit_lifecycle.py")
+            .current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let command = arm_mode_remote_command(&profile(""), "trajectory").unwrap();
+        assert!(command.find("wait_arm_ready ").unwrap() < command.rfind("moveit_manage start").unwrap());
+        assert!(command.contains("moveit_manage stop || exit 1"));
+        let planner = arm_mode_remote_command(&profile(""), "moveit").unwrap();
+        assert!(!planner.contains("arm_clean_environment || exit 1"));
+        assert!(planner.contains("arm_trajectory_controller"));
+        assert!(planner.contains("[ \"$arm_mode\" = 1 ]"));
+    }
+
+    #[test]
     fn arm_commands_are_valid_shell_and_can_be_exported_for_smoke_testing() {
-        for mode in ["teleop", "trajectory", "vla", "stop", "disable-stop", "status", "realsense"] {
+        for mode in ["teleop", "trajectory", "vla", "stop", "disable-stop", "status", "realsense", "moveit"] {
             let command = arm_mode_remote_command(&profile(""), mode).unwrap();
             assert!(std::process::Command::new("bash").args(["-n", "-c", &command])
                 .status().unwrap().success());

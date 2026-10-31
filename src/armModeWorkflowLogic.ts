@@ -8,6 +8,7 @@ export const ARM_STEPS = [
   { id: "cleanup", label: "清理旧进程" },
   { id: "startup", label: "启动控制器" },
   { id: "verify", label: "核验反馈" },
+  { id: "planner", label: "启动 MoveIt" },
   { id: "ready", label: "完成" },
 ] as const;
 export type ArmStage = typeof ARM_STEPS[number]["id"];
@@ -15,7 +16,9 @@ export type ArmProgress = { stage: ArmStage; message: string; failed: boolean };
 export type ArmWorkflow = ArmProgress & { mode: string; running: boolean };
 
 export function workflowSteps(mode: string) {
-  return mode === "stop" || mode === "disable-stop" ? ARM_STEPS.filter((s) => s.id !== "startup" && s.id !== "verify") : ARM_STEPS;
+  if (mode === "moveit") return ARM_STEPS.filter((s) => ["prepare", "planner", "ready"].includes(s.id));
+  return ARM_STEPS.filter((s) => (mode === "trajectory" || s.id !== "planner") &&
+    (!["stop", "disable-stop"].includes(mode) || !["startup", "verify"].includes(s.id)));
 }
 
 export function useArmModeWorkflow(profile: ConnectionProfile, connected: boolean) {

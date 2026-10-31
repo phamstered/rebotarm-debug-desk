@@ -14,7 +14,7 @@ def fingerprint(stream, size):
 
 def capture_baseline(home=None):
     home = Path(home or Path.home())
-    paths = [(home / '.cache/robot-console' / f'arm-{s}.log') for s in ('teleop', 'trajectory', 'realsense')]
+    paths = [(home / '.cache/robot-console' / f'arm-{s}.log') for s in ('teleop', 'trajectory', 'realsense', 'moveit')]
     paths += list((home / '.ros/log').glob('ros2_control_node_*.log'))
     if len(paths) > 4096:
         raise ValueError('日志文件过多，请先归档')
@@ -39,7 +39,7 @@ def capture_baseline(home=None):
 def read_log(source, download=False, home=None, baseline=None):
     home = Path(home or Path.home())
     cache = home / '.cache/robot-console'
-    if source in ('teleop', 'trajectory', 'vla', 'realsense'):
+    if source in ('teleop', 'trajectory', 'vla', 'realsense', 'moveit'):
         root = cache
         path = cache / ('arm-' + ('trajectory' if source == 'vla' else source) + '.log')
     elif source == 'controller':
