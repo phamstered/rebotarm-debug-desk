@@ -1,3 +1,4 @@
+import { ControlLogViewer } from "./ControlLogViewer";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -2047,6 +2048,7 @@ export default function App() {
               } : positionMotion.busy ? { state: "position", label: "点位运动", phase: "validating", message: "已有会话的点位任务尚未结束" } : { state: "idle" }}
               onSendTrajectory={sendTrajectory}
               jointMotion={positionMotion}
+              plannerLog={<ControlLogViewer profile={profile} active={appPage === "dashboard" && centerTab === "robot" && windowVisible} connected={stage === "connected"} preferredSource="moveit" />}
               rgbdCloud={rgbdSession.cloud}
               rgbdVisible={rgbdSession.visible}
               rgbdPointSize={rgbdSession.pointSize}

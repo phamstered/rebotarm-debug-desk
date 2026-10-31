@@ -1434,3 +1434,27 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .joint-rotation-panel .joint-target-row { display: grid; grid-template-columns: minmax(68px, 1fr) minmax(60px, 88px) 18px; align-items: center; gap: 5px; padding: 4px; border: 1px solid transparent; border-radius: 5px; }
 .joint-target-row.selected { border-color: #398a80; background: #102f31; }
 .joint-target-row small { display: block; color: #8fa9b9; font-size: 10px; }
+
+/* The terminal occupies its own row; it never covers the robot canvas. */
+.viewer { display: flex; flex-direction: column; min-height: 0; }
+.viewer-layout { flex: 1 1 0; min-height: 140px; container-type: size; overflow: hidden; }
+.motion-terminal { flex: 0 1 230px; min-height: 110px; display: flex; flex-direction: column; overflow: hidden; border-top: 1px solid #284555; background: #050c13; color: #a9c4d2; }
+.motion-terminal.collapsed { flex: 0 0 34px; min-height: 34px; }
+.motion-terminal header, .motion-terminal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 5px 10px; }
+.motion-terminal header { flex: 0 0 auto; border-bottom: 1px solid #182c3a; }
+.motion-terminal header span { color: #6e8b9e; font-size: 10px; }
+.motion-terminal button, .motion-terminal select, .motion-terminal input[type="search"] { padding: 5px 8px; border: 1px solid #284555; border-radius: 5px; background: #0b1c28; color: #b9d9e7; font-size: 11px; }
+.motion-terminal input[type="search"] { flex: 1 1 160px; min-width: 80px; }
+.motion-terminal-tools label { display: flex; align-items: center; white-space: nowrap; gap: 4px; font-size: 11px; }
+.motion-terminal input[type="checkbox"] { width: 13px; height: 13px; }
+.motion-terminal pre { flex: 1 1 0; min-height: 0; overflow: auto; margin: 0; padding: 6px 10px; font: 11px/1.6 "SFMono-Regular", Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.motion-terminal .log-warn { color: #f8c779; }
+.motion-terminal .log-error { color: #ff9e99; }
+.motion-terminal output { padding: 3px 10px; font-size: 11px; }
+.motion-terminal .control-log-viewer { flex: 1 1 0; min-height: 0; overflow: auto; padding: 6px 10px; margin: 0; border: 0; }
+.motion-terminal .control-log-header { display: none; }
+.motion-terminal .control-log-output { min-height: 80px; max-height: 130px; }
+@container (max-width: 620px) {
+  .motion-terminal { flex-basis: 190px; }
+  .motion-terminal header span { display: none; }
+}

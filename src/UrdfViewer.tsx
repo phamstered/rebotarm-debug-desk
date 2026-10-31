@@ -1,3 +1,4 @@
+import { MotionTerminal } from "./MotionTerminal";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -282,6 +283,7 @@ export function UrdfViewer({
   active = true,
   motionInfo = { state: "idle" },
   jointMotion,
+  plannerLog,
   rgbdCloud = null,
   rgbdVisible = true,
   rgbdPointSize = 0.008,
@@ -297,6 +299,7 @@ export function UrdfViewer({
   active?: boolean;
   motionInfo?: MotionControlInfo;
   jointMotion?: PositionMotionControls;
+  plannerLog?: ReactNode;
   xml: string;
   jointState: JointState | null;
   bridge: BridgeClient;
@@ -440,8 +443,9 @@ export function UrdfViewer({
     seedRef.current = [];
     setDragging(true);
     setPreview(null);
+    jointMotion?.recordLog("tcp-preview", "开始 TCP 拖拽预览");
     setStatus({ kind: "info", text: "拖拽中：松开鼠标下发轨迹，Esc 取消" });
-  }, []);
+  }, [jointMotion?.recordLog]);
 
   const handleDragMove = useCallback((target: Vec3) => solvePreview(target), [solvePreview]);
 
@@ -451,8 +455,9 @@ export function UrdfViewer({
     setDragging(false);
     setPreview(null);
     applyState();
+    jointMotion?.recordLog("tcp-cancel", "已取消拖拽，未下发轨迹");
     setStatus({ kind: "info", text: "已取消拖拽，未下发轨迹" });
-  }, [applyState]);
+  }, [applyState, jointMotion?.recordLog]);
 
   useEffect(() => { if (!active && draggingRef.current) handleDragCancel(); }, [active, handleDragCancel]);
 
@@ -473,9 +478,11 @@ export function UrdfViewer({
     if (!current || current instanceof Error || !tcp.name || !controller) {
       setPreview(null);
       applyState();
+      jointMotion?.recordLog("tcp-rejected", "轨迹控制器未激活或模型不可用，未下发轨迹", "error");
       setStatus({ kind: "error", text: "轨迹控制器未激活，未下发轨迹" });
       return;
     }
+    jointMotion?.recordLog("tcp-planning", `TCP target=${JSON.stringify(target)} controller=${controller.topic}`);
     setStatus({ kind: "info", text: `正在规划并下发轨迹到 ${controller.topic}…` });
     // 松手时按最新反馈重算一次，保证轨迹起点不落后于真实关节状态。
     const outcome = await dispatchTrajectory({
@@ -497,6 +504,7 @@ export function UrdfViewer({
     });
     if (outcome.status === "sent" && outcome.plan) {
       const plan = outcome.plan;
+      jointMotion?.recordLog("tcp-dispatch", `已发布轨迹（ACK 不表示到位）：${JSON.stringify(plan)}`);
       // 残差不为零时一并展示，避免界面暗示夹爪精确落在了目标点上。
       const residual = plan.positionError > 0.0005
         ? ` / TCP 误差 ${(plan.positionError * 1000).toFixed(1)} mm`
@@ -508,8 +516,9 @@ export function UrdfViewer({
       return;
     }
     applyState();
+    jointMotion?.recordLog("tcp-failed", outcome.error ?? "轨迹下发失败", "error");
     setStatus({ kind: "error", text: outcome.error ?? "轨迹下发失败，未下发轨迹" });
-  }, [applyState, model, tcp.name, handleDragCancel]);
+  }, [applyState, model, tcp.name, handleDragCancel, jointMotion?.recordLog]);
 
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
@@ -637,6 +646,7 @@ export function UrdfViewer({
         </Scene>
       </Canvas>
       </div>
+      {jointMotion && <MotionTerminal logs={jointMotion.logs} active={active} plannerLog={plannerLog} />}
     </div>
   );
 }

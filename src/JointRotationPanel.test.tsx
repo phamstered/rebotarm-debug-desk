@@ -22,7 +22,7 @@ it("keeps six targets across selection and feedback, and submits one timed comma
   const joints: KinematicJoint[] = names.map((name) => ({ name, type: "revolute", parent: "base", child: name,
     origin: [0,0,0], rpy: [0,0,0], axis: [0,0,1], lower: -3, upper: 3 }));
   const executeJoints = vi.fn(); const preview = vi.fn();
-  const motion = { state: { phase: "idle" as const, commandId: "", label: "", message: "" }, homePositions: [],
+  const motion = { logs: [], recordLog: vi.fn(), state: { phase: "idle" as const, commandId: "", label: "", message: "" }, homePositions: [],
     reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false, setArmed: vi.fn(),
     execute: vi.fn(), executeJoint: vi.fn(), executeJoints, cancel: vi.fn() };
   const props = { joints, selected: "joint1", jointState: { name: names, position: [0,0,0,0,0,0] }, active: true,

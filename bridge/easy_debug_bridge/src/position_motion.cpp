@@ -14,6 +14,7 @@
 #include <mutex>
 #include <set>
 #include <atomic>
+#include "easy_debug_bridge/motion_log.hpp"
 
 namespace easy_debug_bridge {
 namespace {
@@ -58,6 +59,7 @@ struct PositionMotion::Impl {
     int code{0}; bool failed_result{false};
   };
   rclcpp::Node &node;
+  rclcpp::CallbackGroup::SharedPtr callback_group;
   std::mutex queue_mutex; std::deque<Request> requests;
   std::atomic<bool> in_motion{false};
   rclcpp_action::Client<Group>::SharedPtr action;
@@ -76,29 +78,40 @@ struct PositionMotion::Impl {
   int64_t controller_request_id{0}; uint64_t controller_generation{0}, model_generation{0};
   std::string model_error{"等待 MoveIt 模型"}, model_signature;
   std::string controller_error{"arm_trajectory_controller 未激活或状态已过期"};
+  MotionLog logs;
+  std::string health_reason;
+  const std::string log_session = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
   PositionMotionModel model;
   std::shared_ptr<Motion> current;
   std::deque<std::pair<std::string, uint64_t>> seen;
 
   Impl(rclcpp::Node &n, const std::string &joint_topic, const std::string &status_topic) : node(n) {
+    callback_group = node.create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     action = rclcpp_action::create_client<Group>(node.get_node_base_interface(), node.get_node_graph_interface(),
-        node.get_node_logging_interface(), node.get_node_waitables_interface(), "/move_action");
+        node.get_node_logging_interface(), node.get_node_waitables_interface(), "/move_action", callback_group);
     execute_action = rclcpp_action::create_client<Execute>(node.get_node_base_interface(), node.get_node_graph_interface(),
-        node.get_node_logging_interface(), node.get_node_waitables_interface(), "/execute_trajectory");
-    controllers = node.create_client<Controllers>("/controller_manager/list_controllers");
-    parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group");
+        node.get_node_logging_interface(), node.get_node_waitables_interface(), "/execute_trajectory", callback_group);
+    controllers = node.create_client<Controllers>("/controller_manager/list_controllers", rmw_qos_profile_services_default, callback_group);
+    parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group", rmw_qos_profile_parameters, callback_group);
     const auto qos = rclcpp::QoS(10).best_effort();
-    joints_sub = node.create_subscription<Joints>(joint_topic, qos, [this](Joints::ConstSharedPtr m) { joints = *m; joints_at = Clock::now(); });
-    hardware_sub = node.create_subscription<Hardware>(status_topic, qos, [this](Hardware::ConstSharedPtr m) { hardware = *m; hardware_at = Clock::now(); });
-    state_sub = node.create_subscription<State>("/" + controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { state = *m; state_at = Clock::now(); });
-    timer = node.create_wall_timer(std::chrono::milliseconds(100), [this] { tick(); });
+    rclcpp::SubscriptionOptions options; options.callback_group = callback_group;
+    joints_sub = node.create_subscription<Joints>(joint_topic, qos, [this](Joints::ConstSharedPtr m) { joints = *m; joints_at = Clock::now(); }, options);
+    hardware_sub = node.create_subscription<Hardware>(status_topic, qos, [this](Hardware::ConstSharedPtr m) { hardware = *m; hardware_at = Clock::now(); }, options);
+    state_sub = node.create_subscription<State>("/" + controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { state = *m; state_at = Clock::now(); }, options);
+    timer = node.create_wall_timer(std::chrono::milliseconds(100), [this] { tick(); }, callback_group);
   }
   std::string event(const Motion &m) const {
     return "{\"op\":\"position_motion\",\"command_id\":" + quote(m.id) + ",\"label\":" + quote(m.label) +
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
         ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + "}";
   }
+  void log(uint64_t owner, const std::string &id, const std::string &phase, const std::string &message, const std::string &level = "info") {
+    logs.append(owner, id, phase, message, level);
+    RCLCPP_INFO(node.get_logger(), "[motion][%s][%s][%s] %s", level.c_str(), id.c_str(), phase.c_str(), message.c_str());
+  }
   void update(const std::shared_ptr<Motion> &m, const std::string &phase, const std::string &message, bool terminal = false) {
+    if (m->phase != phase || m->message != message)
+      log(m->owner, m->id, phase, m->label + " · " + message, phase == "failed" || phase == "stop_failed" ? "error" : phase == "canceling" ? "warn" : "info");
     m->phase = phase; m->message = message; m->terminal = terminal;
     m->send(event(*m));
     if (terminal && current == m) in_motion.store(false);
@@ -110,16 +123,26 @@ struct PositionMotion::Impl {
     if (controller_pending) {
       if (fresh(controller_request_at, 2)) return;
       controllers->remove_pending_request(controller_request_id);
-      controller_pending = false; controller_active = false;
+      ++controller_generation; // Ignore a late response even if the service disappears.
+      controller_pending = false; controller_active = false; controller_at = {};
+      controller_error = "arm_trajectory_controller 状态查询超时（ListControllers >2s）";
+      log(0, "", "controller", controller_error, "warn");
     }
-    if (!controllers->service_is_ready()) return;
+    if (!controllers->service_is_ready()) {
+      controller_active = false; controller_at = {};
+      controller_error = "ControllerManager ListControllers 服务不可用";
+      controller_request_at = Clock::now();
+      return;
+    }
     controller_pending = true; controller_request_at = Clock::now();
     const auto generation = ++controller_generation;
     controller_request_id = controllers->async_send_request(std::make_shared<Controllers::Request>(), [this, generation](rclcpp::Client<Controllers>::SharedFuture future) {
       if (generation != controller_generation) return;
       controller_pending = false; controller_active = false;
+      const auto latency = std::chrono::duration<double>(Clock::now() - controller_request_at).count();
+      if (latency > .8) log(0, "", "controller", "ListControllers 响应耗时 " + std::to_string(latency) + " s", "warn");
       try {
-        controller_error = "arm_trajectory_controller 未激活或状态已过期";
+        controller_error = "arm_trajectory_controller 未激活、缺失或类型不匹配";
         for (const auto &c : future.get()->controller) if (c.name == controller && c.state == "active"
             && c.type == "joint_trajectory_controller/JointTrajectoryController") {
           if (!arm_position_velocity_claimed(c.claimed_interfaces))
@@ -127,7 +150,9 @@ struct PositionMotion::Impl {
           else { controller_active = true; controller_error.clear(); }
         }
         controller_at = Clock::now();
-      } catch (...) { controller_at = {}; }
+      } catch (const std::exception &e) {
+        controller_at = {}; controller_error = std::string("ControllerManager 查询失败：") + e.what();
+      }
     }).request_id;
   }
   std::vector<std::string> model_keys() {
@@ -148,7 +173,7 @@ struct PositionMotion::Impl {
     if (model_pending) {
       if (fresh(model_request_at, 3)) return;
       model_pending = false; model_error = "MoveIt 模型查询超时"; model_at = {};
-      parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group");
+      parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group", rmw_qos_profile_parameters, callback_group);
     }
     if (!parameters->service_is_ready()) return;
     model_pending = true; model_request_at = Clock::now();
@@ -188,8 +213,10 @@ struct PositionMotion::Impl {
   std::string readiness(bool starting = true) {
     if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
     if (!fresh(model_at, 10) || !model_error.empty()) return model_error.empty() ? "MoveIt 模型信息已过期" : model_error;
-    if (!fresh(controller_at)) return "arm_trajectory_controller 状态已过期";
     if (!controller_active) return controller_error;
+    // One-second polling + a two-second in-flight response budget. Actual JTC,
+    // MCU and joint feedback below must STILL be fresh within one second.
+    if (!fresh(controller_at, 3.1)) return "arm_trajectory_controller 状态已过期（ListControllers >3.1s）";
     if (!fresh(joints_at) || !fresh(state_at) || !fresh(hardware_at)) return "JointState、控制器或硬件反馈缺失/已过期";
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || (hardware.active_joint_mask & 0x3f) != 0x3f) return "硬件未处于 TRACK、存在故障或六关节未全部使能";
     if (!arm_joint_set(state.joint_names)) return "轨迹控制器关节集合与 arm 不匹配";
@@ -284,6 +311,8 @@ struct PositionMotion::Impl {
         m->held_axes.push_back(i);
       }
     }
+    log(m->owner, m->id, "validating", m->label + " · start=" + numbers(actual) + " target=" + numbers(target) +
+        " duration_s=" + std::to_string(duration) + " scaling=1/1");
     goal.request.goal_constraints.push_back(constraints);
     goal.planning_options.plan_only = duration > 0; goal.planning_options.replan = false;
     goal.planning_options.planning_scene_diff.is_diff = true;
@@ -295,6 +324,7 @@ struct PositionMotion::Impl {
     options.goal_response_callback = [this, m](Handle::SharedPtr handle) {
       m->handle = handle;
       if (!handle) { update(m, "failed", "MoveIt 拒绝目标", true); return; }
+      log(m->owner, m->id, "planning", "MoveGroup 已受理目标");
       if (m->cancel_requested) request_cancel_handle(m);
     };
     options.feedback_callback = [this, m](Handle::SharedPtr, const std::shared_ptr<const Group::Feedback> f) {
@@ -304,6 +334,9 @@ struct PositionMotion::Impl {
     };
     options.result_callback = [this, m](const Handle::WrappedResult &result) {
       m->handle.reset();
+      log(m->owner, m->id, "result", "MoveGroup result=" + std::to_string(static_cast<int>(result.code)) +
+          " error_code=" + std::to_string(result.result ? result.result->error_code.val : 0) +
+          " points=" + std::to_string(result.result ? result.result->planned_trajectory.joint_trajectory.points.size() : 0));
       if (m->duration > 0 && !m->cancel_requested && result.code == rclcpp_action::ResultCode::SUCCEEDED &&
           result.result && result.result->error_code.val == 1) {
         try { execute_plan(m, result.result->planned_trajectory); }
@@ -317,6 +350,8 @@ struct PositionMotion::Impl {
   }
   void finish_result(const std::shared_ptr<Motion> &m, rclcpp_action::ResultCode code, int error_code) {
       if (m->terminal) return;
+      log(m->owner, m->id, "result", "Action result=" + std::to_string(static_cast<int>(code)) + " error_code=" + std::to_string(error_code),
+          code == rclcpp_action::ResultCode::SUCCEEDED && error_code == 1 ? "info" : "warn");
       m->result_at = Clock::now(); m->code = error_code;
       if (m->cancel_requested) { update(m, "stopping", "MoveIt 已返回，等待关节停稳"); return; }
       if (code != rclcpp_action::ResultCode::SUCCEEDED || m->code != 1) {
@@ -392,6 +427,7 @@ struct PositionMotion::Impl {
       m->execution_handle.reset();
       finish_result(m, result.code, result.result ? result.result->error_code.val : 0);
     };
+    log(m->owner, m->id, "dispatch", "ExecuteTrajectory points=" + std::to_string(points.size()) + " duration_s=" + std::to_string(m->duration));
     update(m, "planning", "规划完成，等待 MoveIt 执行调整后的完整轨迹");
     try { execute_action->async_send_goal(goal, options); }
     catch (const std::exception &e) {
@@ -406,13 +442,15 @@ struct PositionMotion::Impl {
       if (current && current->owner == r.owner && !current->terminal) current->lease_at = Clock::now();
       const auto reason = readiness();
       const bool home = fresh(model_at, 10) && model.home.size() == 6 && model_error.empty();
+      const auto after = r.data.get<std::string>("motion_log_session", "") == log_session ? r.data.get<uint64_t>("motion_log_after", 0) : 0;
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
           ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true" +
           ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
-          ",\"home_positions\":" + (home ? numbers(model.home) : "[]") + "}");
+          ",\"home_positions\":" + (home ? numbers(model.home) : "[]") +
+          ",\"motion_log_session\":" + quote(log_session) + "," + logs.page(r.owner, after) + "}");
       if (current && current->owner == r.owner) r.send(event(*current));
     } else if (op == "position_move") move(r);
     else if (op == "position_cancel") {
@@ -423,11 +461,17 @@ struct PositionMotion::Impl {
     }
   }
   void tick() {
-    if (!fresh(controller_request_at, 0.4)) poll_controllers();
+    if (!fresh(controller_request_at, 1.0)) poll_controllers();
     if (!fresh(model_request_at, 3)) poll_model();
+    const auto health = readiness(false);
+    if (health != health_reason) {
+      log(0, "", "health", health.empty() ? "规划执行条件已就绪" : health, health.empty() ? "info" : "warn");
+      health_reason = health;
+    }
     std::deque<Request> pending;
     { std::lock_guard<std::mutex> lock(queue_mutex); pending.swap(requests); }
     for (const auto &r : pending) try { process(r); } catch (const std::exception &e) {
+      log(r.owner, r.data.get<std::string>("command_id", ""), "rejected", e.what(), "error");
       if (r.data.get<std::string>("op", "") == "position_move")
         r.send("{\"op\":\"position_move_ack\",\"accepted\":false,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"command_id\":" + quote(r.data.get<std::string>("command_id", "")) + ",\"message\":" + quote(e.what()) + "}");
@@ -450,8 +494,11 @@ struct PositionMotion::Impl {
       const bool reached = position_target_reached(m->target, actual, velocity);
       if (((m->cancel_requested || m->failed_result) && stopped) || (m->phase == "verifying" && reached)) {
         if (m->settled_at == Clock::time_point{}) m->settled_at = Clock::now();
-        if (!fresh(m->settled_at, 0.2)) update(m, m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
+        if (!fresh(m->settled_at, 0.2)) {
+          log(m->owner, m->id, "feedback", "target=" + numbers(m->target) + " actual=" + numbers(actual) + " velocity=" + numbers(velocity));
+          update(m, m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
             m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）", true);
+        }
       } else {
         m->settled_at = {};
         if (!m->cancel_requested && !fresh(m->result_at, 3)) {

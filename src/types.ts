@@ -173,6 +173,11 @@ export type BridgeEnvelope = {
   motion_duration_supported?: boolean;
   motion_duration_message?: string;
   joint_targets?: Record<string, number>;
+  motion_log_session?: string;
+  motion_log_after?: number;
+  motion_log_cursor?: number;
+  motion_log_truncated?: boolean;
+  motion_logs?: MotionLogEntry[];
   motion_duration_s?: number;
   recommended_duration_s?: number;
   joint_name?: string;
@@ -314,4 +319,10 @@ export type ControlLogSnapshot = {
   truncated: boolean;
   sizeBytes: number;
   revision: string;
+};
+
+/** Bridge audit entries use wall-clock milliseconds and per-process monotonic IDs. */
+export type MotionLogEntry = {
+  seq: number; timestamp_ms: number; command_id: string; phase: string;
+  level: "info" | "warn" | "error"; message: string;
 };

@@ -61,7 +61,7 @@ describe("Robot View lifecycle", () => {
   });
   it("previews only the selected joint, preserves editing across feedback and executes only on confirmation", async () => {
     const user = userEvent.setup(), parsed = robot(); doubles.load.mockResolvedValue(parsed);
-    const motion: PositionMotionControls = { state: { phase: "idle", commandId: "", label: "", message: "" },
+    const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
       homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false,
       setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn() };
     const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
