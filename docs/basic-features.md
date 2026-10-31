@@ -253,3 +253,7 @@ Jetson、Fast DDS、micro-ROS Agent 和 STM32 属于外部进程/硬件边界，
 - 更新 Bridge 后，桌面启动 Bridge、查询/切换控制器、rosbag 和一键 arm 模式时，若没有显式 DDS XML 配置，使用安装包 `config/fastdds_udp.xml` 的 UDPv4 profile，避开残留或已删除的 Fast DDS SHM 锁导致的发现/数据中断。`deploy:bridge --restart` 同样使用目标安装包内的 profile。显式 `FASTRTPS_DEFAULT_PROFILES_FILE` / `FASTDDS_DEFAULT_PROFILES_FILE` 优先；不修改系统服务、不删除 `/dev/shm` 文件、不降低命令新鲜度或安全停机门禁。
 - 需要同时更新 `rebotarm-ros2-stack` 的 Teleop 入口和 `joint_state_relay`：正常 SIGINT/SIGTERM 由 relay 和 leader 生命周期适配入口处理，不向已关闭的 ROS context 写错误日志；真正的串口异常、初始化失败和 STM32 JointState 超时仍报错。外部 Star Arm 驱动、串口和关节映射不由本仓改写。
 - 验证：Graph 过滤/节点选择的 Vitest、DDS 默认/显式 profile 的 Rust 与部署脚本测试、隔离 ROS Graph 发现/节点详情/节点退出测试；控制栈单独执行模拟 leader/relay 的信号测试，不连接真实串口或发送机械臂指令。
+
+## Bridge 升级进度
+
+连接页升级 Bridge 时实时显示远端构建/校验日志；远端任务仍运行时每 10 秒显示该阶段任务耗时，避免长时间编译看起来卡住。耗时提示表示任务仍在等待，不是整体百分比或完成保证。构建使用 colcon `console_direct+` 输出，stdout/stderr 均保留到升级结果；任务退出后停止提示。重启 Bridge 后最多约 10 秒等待 loopback 监听，仍未就绪则返回日志和具体失败阶段。该流程不启动或切换机械臂控制器。

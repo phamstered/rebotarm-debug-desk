@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { access, constants as fsConstants, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -304,7 +305,7 @@ export function buildRsyncArgs({
 export function buildRemoteBackupScript(config) {
   const stamp = "$(date +%Y%m%d-%H%M%S)";
   return [
-    "set -euo pipefail",
+    "set -eo pipefail",
     `ROOT=${remotePathWord(config.remoteRoot)}`,
     `PKG=${remotePathWord(config.remotePackage)}`,
     `NAME=${shellQuote(config.packageName)}`,
@@ -320,12 +321,12 @@ export function buildRemoteBackupScript(config) {
 /** @param {{ remoteRoot: string, rosSetup: string, packageName: string }} config */
 export function buildRemoteBuildScript(config) {
   return [
-    "set -euo pipefail",
+    "set -eo pipefail",
     "source /opt/ros/humble/setup.bash",
     `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
     `cd ${remotePathWord(config.remoteRoot)}`,
     "mkdir -p src",
-    `colcon build --symlink-install --packages-select ${shellQuote(config.packageName)}`,
+    `colcon build --symlink-install --packages-select ${shellQuote(config.packageName)} --event-handlers console_direct+`,
     'echo "BUILD_OK"',
   ].join("\n");
 }
@@ -334,7 +335,7 @@ export function buildRemoteBuildScript(config) {
 export function buildRemoteVerifyScript(config) {
   const port = String(config.remotePort);
   return [
-    "set -euo pipefail",
+    "set -eo pipefail",
     "source /opt/ros/humble/setup.bash",
     `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
     `source ${remotePathWord(`${config.remoteRoot}/install/setup.bash`)}`,
@@ -375,7 +376,7 @@ export function buildRemoteVerifyScript(config) {
 export function buildRemoteRestartScript(config) {
   const port = String(config.remotePort);
   return [
-    "set -euo pipefail",
+    "set -eo pipefail",
     "source /opt/ros/humble/setup.bash",
     `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
     `source ${remotePathWord(`${config.remoteRoot}/install/setup.bash`)}`,
@@ -384,9 +385,13 @@ export function buildRemoteRestartScript(config) {
     `for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! ss -ltn | grep -q ":${port} "; then break; fi; sleep 0.1; done`,
     `if ss -ltn | grep -q ":${port} "; then echo "RESTART_FAIL port ${port} still occupied" >&2; exit 1; fi`,
     `ROS_DOMAIN_ID=${config.rosDomainId} nohup ros2 run ${shellQuote(config.packageName)} bridge_node --ros-args -p port:=${port} -p joint_state_topic:=${shellQuote(config.jointStateTopic)} -p command_topic:=${shellQuote(config.commandTopic)} -p status_topic:=${shellQuote(config.statusTopic)} >/tmp/easy_debug_bridge.log 2>&1 </dev/null &`,
-    "sleep 0.5",
-    `if ! ss -ltn | grep -q "127.0.0.1:${port}"; then echo "RESTART_FAIL bridge did not listen on 127.0.0.1:${port}" >&2; tail -n 40 /tmp/easy_debug_bridge.log >&2 || true; exit 1; fi`,
-    'echo "RESTART_OK"',
+    'for attempt in $(seq 1 100); do',
+    `  if ss -ltn | grep -q "127.0.0.1:${port}"; then echo "RESTART_OK"; exit 0; fi`,
+    '  sleep 0.1',
+    'done',
+    `echo "RESTART_FAIL bridge did not listen on 127.0.0.1:${port} within 10 seconds" >&2`,
+    'tail -n 40 /tmp/easy_debug_bridge.log >&2 || true',
+    'exit 1',
   ].join("\n");
 }
 
@@ -523,12 +528,31 @@ export function runCommand(command, args, options = {}) {
     const stdoutChunks = [];
     /** @type {Buffer[]} */
     const stderrChunks = [];
-    child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
-    child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+    const started = Date.now();
+    const heartbeat = options.onProgress ? setInterval(() => {
+      options.onProgress(`[progress] 远端任务仍在执行，已耗时 ${Math.floor((Date.now() - started) / 1000)} 秒；等待下一条构建/校验输出`);
+    }, options.progressIntervalMs ?? 10000) : null;
+    const buffers = { stdout: "", stderr: "" };
+    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
+    const stream = (name, chunks, chunk) => {
+      chunks.push(chunk);
+      if (!options.onProgress) return;
+      buffers[name] += decoders[name].write(chunk);
+      const lines = buffers[name].split(/\r?\n/);
+      buffers[name] = lines.pop();
+      for (const line of lines) if (line) options.onProgress(`[remote] ${line}`);
+    };
+    child.stdout.on("data", (chunk) => stream("stdout", stdoutChunks, chunk));
+    child.stderr.on("data", (chunk) => stream("stderr", stderrChunks, chunk));
     if (options.input) child.stdin.end(options.input);
     else child.stdin.end();
-    child.on("error", (error) => reject(error));
+    child.on("error", (error) => { clearInterval(heartbeat); reject(error); });
     child.on("close", (code) => {
+      clearInterval(heartbeat);
+      if (options.onProgress) for (const name of Object.keys(buffers)) {
+        const tail = buffers[name] + decoders[name].end();
+        if (tail) options.onProgress(`[remote] ${tail}`);
+      }
       resolvePromise({
         code: code ?? 1,
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
@@ -544,8 +568,8 @@ export async function runSsh(config, remoteScript) {
     ...buildSshCommandArgs(config),
     config.host,
     "bash",
-    "-lc",
-    remoteScript,
+    "-c",
+    shellQuote(remoteScript),
   ]);
   if (result.code !== 0) {
     throw new DeployStageError(
@@ -590,8 +614,9 @@ export async function assertLocalPackage(localPackage) {
  */
 export async function deployBridge(config, deps = {}) {
   const runCommandFn = deps.runCommandFn ?? runCommand;
-  const runSshFn = deps.runSshFn ?? ((cfg, script) => runSshWith(cfg, script, runCommandFn));
   const log = deps.log ?? console.log;
+  const runSshFn = deps.runSshFn ?? ((cfg, script) => runSshWith(cfg, script,
+    (command, args) => runCommandFn(command, args, { onProgress: log })));
 
   if (config.help) {
     log(usageText());
@@ -677,7 +702,7 @@ export async function deployBridge(config, deps = {}) {
       await runSshFn(
         config,
         [
-          "set -euo pipefail",
+          "set -eo pipefail",
           `mkdir -p ${remotePathWord(config.remotePackage)}`,
         ].join("\n"),
       );
@@ -783,8 +808,8 @@ async function runSshWith(config, remoteScript, runCommandFn) {
     ...buildSshCommandArgs(config),
     config.host,
     "bash",
-    "-lc",
-    remoteScript,
+    "-c",
+    shellQuote(remoteScript),
   ]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim();
