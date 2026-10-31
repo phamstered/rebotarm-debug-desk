@@ -75,6 +75,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - 点位执行使用 Jetson MoveIt2：连接后显式激活 `arm_trajectory_controller`，运行控制栈的 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`，勾选会话内安全确认后点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
 - MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。只允许 `arm` 六关节；不控制夹爪，不自动切换控制器。速度与加速度缩放固定为 0.2；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤1 rad/s 与加速度 ≤2 rad/s²（真实入口采用 0.5/0.5、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
 - Bridge 在规划前及执行期间校验控制器 active、三类反馈 <1 秒、TRACK/故障/使能掩码、反馈一致性、完整有限关节值和模型限位。跨连接只允许一个点位运动，`command_id` 去重；规划/执行超过 180 秒、故障、反馈丢失、配置变化、连接断开或会话心跳超过 5 秒会请求取消。手动 MIT（DISABLE 除外）、旧拖拽轨迹及重力辨识不能覆盖正在运行的点位运动。
+- 启动点位前还核对 active JTC 实际认领六关节 `position+velocity` 接口；保持参考必须完整且有限、参考速度 ≤0.01 rad/s、与实测位置偏差 ≤0.005 rad，并连续就绪 200 ms。偏差过大时显示具体关节和弧度差，拒绝发起 MoveIt 请求，保留真实规划起点及碰撞检查；不会放宽起点容差或用旧目标冒充实测状态。该门禁防止已观测到的大幅起点跃变，不代表已消除机械静摩擦/静差，偏差大的现场仍需校准跟踪。需同时更新控制栈的速度接口配置，旧 position-only JTC 将不可执行点位。
 - 界面显示校验、规划、执行、到位检查和取消阶段；只有 MoveIt Action 成功且新鲜六关节误差 ≤0.02 rad、速度 ≤0.03 rad/s 持续 200 ms 才显示到达。取消 ACK 不代表停止；确认新鲜反馈停稳后才显示取消完成，5 秒未确认则显示“停止未确认”并保持锁定。断线不会自动重发运动。
 - 碰撞检查覆盖 URDF 自碰撞与 MoveIt Planning Scene 中的已知障碍物。Robot View 显示的 RGBD 点云目前不自动写入 Planning Scene，不能据此声称已检查现场所有物体。
 - Robot View 左上角有「运动控制」面板。还没有执行结果时显示「无运动」。误差由下发关节或 TCP 目标与停稳反馈计算：关节为弧度差，TCP 位置为毫米、姿态为角度。切回 Robot View 后该面板持续展示点位运动状态，点位运动期间锁定 TCP 拖拽；拖拽本身仍按原有本地 IK 松手下发，其误差结果尚未写入该面板。

@@ -62,9 +62,11 @@ struct PositionMotion::Impl {
   rclcpp::TimerBase::SharedPtr timer;
   Joints joints; State state; Hardware hardware;
   Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, controller_request_at{}, model_at{}, model_request_at{};
+  Clock::time_point start_ready_since{};
   bool controller_pending{false}, controller_active{false}, model_pending{false};
   int64_t controller_request_id{0}; uint64_t controller_generation{0}, model_generation{0};
   std::string model_error{"等待 MoveIt 模型"}, model_signature;
+  std::string controller_error{"arm_trajectory_controller 未激活或状态已过期"};
   PositionMotionModel model;
   std::shared_ptr<Motion> current;
   std::deque<std::pair<std::string, uint64_t>> seen;
@@ -106,8 +108,13 @@ struct PositionMotion::Impl {
       if (generation != controller_generation) return;
       controller_pending = false; controller_active = false;
       try {
+        controller_error = "arm_trajectory_controller 未激活或状态已过期";
         for (const auto &c : future.get()->controller) if (c.name == controller && c.state == "active"
-            && c.type == "joint_trajectory_controller/JointTrajectoryController") controller_active = true;
+            && c.type == "joint_trajectory_controller/JointTrajectoryController") {
+          if (!arm_position_velocity_claimed(c.claimed_interfaces))
+            controller_error = "轨迹控制器必须认领六关节 position+velocity 接口，请更新控制栈并重新启用轨迹控制";
+          else { controller_active = true; controller_error.clear(); }
+        }
         controller_at = Clock::now();
       } catch (...) { controller_at = {}; }
     }).request_id;
@@ -167,7 +174,8 @@ struct PositionMotion::Impl {
   std::string readiness(bool starting = true) {
     if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
     if (!fresh(model_at, 10) || !model_error.empty()) return model_error.empty() ? "MoveIt 模型信息已过期" : model_error;
-    if (!fresh(controller_at) || !controller_active) return "arm_trajectory_controller 未激活或状态已过期";
+    if (!fresh(controller_at)) return "arm_trajectory_controller 状态已过期";
+    if (!controller_active) return controller_error;
     if (!fresh(joints_at) || !fresh(state_at) || !fresh(hardware_at)) return "JointState、控制器或硬件反馈缺失/已过期";
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || (hardware.active_joint_mask & 0x3f) != 0x3f) return "硬件未处于 TRACK、存在故障或六关节未全部使能";
     if (!arm_joint_set(state.joint_names)) return "轨迹控制器关节集合与 arm 不匹配";
@@ -179,6 +187,12 @@ struct PositionMotion::Impl {
       for (size_t i = 0; i < 6; ++i) {
         if (std::abs(actual[i] - control[i]) > 0.02) return "控制器反馈与 STM32 不一致";
         if (starting && std::abs(velocity[i]) > 0.05) return "机械臂尚未停稳";
+      }
+      if (starting) {
+        validate_position_start(ordered_arm_values(state.joint_names, state.desired.positions),
+                                ordered_arm_values(state.joint_names, state.desired.velocities), actual);
+        if (start_ready_since == Clock::time_point{} || fresh(start_ready_since, 0.2))
+          return "等待起点参考与实际位置连续稳定 200 ms";
       }
     } catch (const std::exception &e) { return e.what(); }
     return "";
@@ -216,7 +230,8 @@ struct PositionMotion::Impl {
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
     if (m->label.size() > 512) throw std::runtime_error("点位名称过长");
     m->target = target; m->send = r.send;
-    current = m; in_motion.store(true); seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
+    current = m; in_motion.store(true); start_ready_since = {};
+    seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
     Group::Goal goal;
     goal.request.group_name = "arm"; goal.request.pipeline_id = "ompl";
     goal.request.allowed_planning_time = 5; goal.request.num_planning_attempts = 1;
@@ -283,6 +298,18 @@ struct PositionMotion::Impl {
   void tick() {
     if (!fresh(controller_request_at, 0.4)) poll_controllers();
     if (!fresh(model_request_at, 3)) poll_model();
+    if (!in_motion.load()) {
+      try {
+        if (!readiness(false).empty()) throw std::runtime_error("not ready");
+        const auto actual = ordered_arm_values(joints.name, joints.position);
+        const auto velocity = ordered_arm_values(joints.name, joints.velocity);
+        validate_position_start(ordered_arm_values(state.joint_names, state.desired.positions),
+                                ordered_arm_values(state.joint_names, state.desired.velocities), actual);
+        if (std::any_of(velocity.begin(), velocity.end(), [](double v) { return std::abs(v) > 0.05; }))
+          throw std::runtime_error("moving");
+        if (start_ready_since == Clock::time_point{}) start_ready_since = Clock::now();
+      } catch (...) { start_ready_since = {}; }
+    }
     std::deque<Request> pending;
     { std::lock_guard<std::mutex> lock(queue_mutex); pending.swap(requests); }
     for (const auto &r : pending) try { process(r); } catch (const std::exception &e) {

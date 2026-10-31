@@ -27,6 +27,17 @@ int main() {
     assert(!position_target_reached(model.home, {0, 0, 0, 0, 0, .03}, model.home));
     assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, .1}));
     assert(!position_target_reached(model.home, model.home, {0, 0, 0, 0, 0, NAN}));
+    validate_position_start(model.home, model.home, {0, 0, .005, 0, 0, 0});
+    assert(rejected([&] { validate_position_start(model.home, model.home, {0, 0, .032, 0, 0, 0}); }));
+    assert(rejected([&] { validate_position_start(model.home, {0, 0, .011, 0, 0, 0}, model.home); }));
+    assert(rejected([&] { validate_position_start(model.home, {0, 0, NAN, 0, 0, 0}, model.home); }));
+    assert(rejected([&] { validate_position_start({}, model.home, model.home); }));
+    std::vector<std::string> claims;
+    for (const auto &joint : arm_motion_joints()) claims.push_back(joint + "/position");
+    assert(!arm_position_velocity_claimed(claims));
+    for (const auto &joint : arm_motion_joints()) claims.push_back(joint + "/velocity");
+    assert(arm_position_velocity_claimed(claims));
+    claims.pop_back(); assert(!arm_position_velocity_claimed(claims));
   }
 
   const auto now = std::chrono::steady_clock::now();

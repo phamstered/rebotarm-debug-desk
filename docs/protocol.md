@@ -331,6 +331,7 @@ Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样�
 
 - `{"op":"position_motion_info","request_id":"..."}` 返回 `available`、门禁失败 `message`、当前 SRDF `home_positions`（未同步为空）、全局 `busy` 和本会话拥有的 `command_id`。连接期间每秒轮询该操作续约会话心跳（5 秒超时取消）。若本会话有运动，随后发送其最新状态。
 - `{"op":"position_move","request_id":"...","command_id":"UUID","label":"取料位","confirmation":"ARMED","home":false,"positions":[0,-0.2,-0.3,0,0,0]}`。positions 固定按 joint1–joint6，目标为点击时快照。`home:true` 时在 Bridge 读取当前 SRDF HOME，忽略客户端 positions。
+- 执行前要求 active JTC 认领六关节 `position+velocity`，控制器保持参考与实测误差 ≤0.005 rad、参考速度 ≤0.01 rad/s、完整且有限，连续就绪 200 ms；不满足时 `available:false` / `accepted:false` 的 `message` 说明原因。大静差需要检查跟踪/重力补偿，客户端不能请求放宽该阈值。既有真实 MoveIt 起点、限位与碰撞检查保持有效。
 - 成功受理返回 `position_move_ack` 与 `command_id`；门禁拒绝返回同一 ACK、`accepted:false` 与 `message`。Bridge 缓存最近 256 个已受理指令的 command_id，缓存内重复请求不重复执行；不同会话不能抢占运动。ACK 不代表规划成功或到达。
 - 状态推送 `{"op":"position_motion","command_id":"UUID","label":"取料位","motion_phase":"executing","message":"...","code":0,"elapsed_s":1.2}`。阶段为 validating/planning/executing/verifying/canceling/stopping/stop_failed/succeeded/failed/canceled。`code` 为 MoveIt 结果错误码（成功 1）。只有 Action 成功及终点误差/停稳验证通过才报告 succeeded。
 - `{"op":"position_cancel","request_id":"...","command_id":"UUID"}` 只允许拥有者取消，返回 `position_cancel_ack`；停止结果以状态推送为准。断线、反馈超时/故障及超时由 Jetson watchdog 取消；停止未确认保持全局锁，保留既有现场安全停机入口。

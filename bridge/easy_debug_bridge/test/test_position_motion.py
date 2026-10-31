@@ -34,6 +34,7 @@ class Fixture(rclpy.node.Node):
         self.q = [0., -.2, -.3, 0., 0., 0.]
         self.active = True; self.fault = 0; self.publish_feedback = True; self.speed = 0.; self.state_offset = 0.
         self.goals = []; self.canceled = 0
+        self.reference_offset = 0.; self.reference_speed = 0.; self.omit_reference = False; self.velocity_claimed = True
         urdf = Path(get_package_share_directory("rebotarm_gazebo")) / "urdf/rebotarm.urdf"
         srdf = Path(get_package_share_directory("rebotarm_moveit_config")) / "config/rebotarm.srdf"
         params = {"robot_description": urdf.read_text(), "robot_description_semantic": srdf.read_text(),
@@ -57,12 +58,18 @@ class Fixture(rclpy.node.Node):
         self.create_timer(.03, self.publish, callback_group=self.group)
     def controllers(self, request, response):
         c = ControllerState(); c.name = "arm_trajectory_controller"; c.type = "joint_trajectory_controller/JointTrajectoryController"
-        c.state = "active" if self.active else "inactive"; response.controller = [c]; return response
+        c.state = "active" if self.active else "inactive"
+        c.claimed_interfaces = [j+"/position" for j in NAMES] + ([j+"/velocity" for j in NAMES] if self.velocity_claimed else [])
+        response.controller = [c]; return response
     def publish(self):
         if not self.publish_feedback: return
         q = list(self.q)
         j = JointState(); j.header.stamp = self.get_clock().now().to_msg(); j.name = NAMES; j.position = q; j.velocity = [self.speed]*6; j.effort = [0.]*6; self.pub_joint.publish(j)
-        s = JointTrajectoryControllerState(); s.joint_names = NAMES; s.actual.positions = [q[0]+self.state_offset]+q[1:]; s.actual.velocities = [0.]*6; self.pub_state.publish(s)
+        s = JointTrajectoryControllerState(); s.joint_names = NAMES; s.actual.positions = [q[0]+self.state_offset]+q[1:]; s.actual.velocities = [0.]*6
+        if not self.omit_reference:
+            s.desired.positions = q[:2]+[q[2]+self.reference_offset]+q[3:]
+            s.desired.velocities = [self.reference_speed]*6
+        self.pub_state.publish(s)
         h = HardwareStatus(); h.mode = HardwareStatus.MODE_TRACK; h.fault_code = self.fault; h.active_joint_mask = 0x3f; self.pub_hw.publish(h)
     def execute(self, handle):
         goal = handle.request
@@ -133,17 +140,17 @@ def main():
         assert move("arrive")["op"] == "position_move_ack"
         result, phases = terminal("arrive"); assert result["motion_phase"] == "succeeded", result
         assert "verifying" in phases, phases
-        count = len(fixture.goals); move("arrive"); time.sleep(.1); assert len(fixture.goals) == count
+        ready(); count = len(fixture.goals); move("arrive"); time.sleep(.1); assert len(fixture.goals) == count
         assert request("position_move", command_id="home", label="HOME", confirmation="ARMED", home=True)["op"]=="position_move_ack"
         result,_=terminal("home");assert result["motion_phase"]=="succeeded",result
         assert fixture.goals[-1]==[0.,-.01,-.01,0.,0.,0.]
-        move("collision", .5); result,_ = terminal("collision"); assert result["motion_phase"] == "failed" and result["code"] == -12, result
-        move("not-reached", .3); result,_=terminal("not-reached"); assert result["motion_phase"]=="failed",result
+        ready(); move("collision", .5); result,_ = terminal("collision"); assert result["motion_phase"] == "failed" and result["code"] == -12, result
+        ready(); move("not-reached", .3); result,_=terminal("not-reached"); assert result["motion_phase"]=="failed",result
         assert "未到达" in result["message"],result
-        move("cancel", .4); fixture.speed=.2; request("position_cancel", command_id="cancel");time.sleep(.5)
+        ready(); move("cancel", .4); fixture.speed=.2; request("position_cancel", command_id="cancel");time.sleep(.5)
         assert request("position_motion_info")["busy"], "cancel ACK must not mean stopped"
         fixture.speed=0.;result,_=terminal("cancel"); assert result["motion_phase"] == "canceled",result
-        move("fault", .4); fixture.fault=11; result,_=terminal("fault"); assert result["motion_phase"] == "canceled",result
+        ready(); move("fault", .4); fixture.fault=11; result,_=terminal("fault"); assert result["motion_phase"] == "canceled",result
         fixture.fault=0; ready()
         move("stale", .4); fixture.publish_feedback=False; time.sleep(1.5); fixture.publish_feedback=True
         result,_=terminal("stale"); assert result["motion_phase"] == "canceled",result
@@ -156,13 +163,25 @@ def main():
             if not m["busy"]:break
             time.sleep(.1)
         assert not m["busy"] and fixture.canceled>=4,m
-        assert move("rejected", .6)["op"]=="position_move_ack"
+        ready(); assert move("rejected", .6)["op"]=="position_move_ack"
         result,_=terminal("rejected");assert result["motion_phase"]=="failed",result
         ready();move("lease", .7);result,_=terminal("lease");assert result["motion_phase"]=="canceled" and "停稳" in result["message"],result
         fixture.state_offset=.1;time.sleep(.2);assert move("mismatch")["accepted"] is False
         fixture.state_offset=0.;fixture.speed=.2;time.sleep(.2);assert move("moving")["accepted"] is False
         fixture.speed=0.;fixture.active=False;time.sleep(.7);assert move("inactive")["accepted"] is False
         fixture.active=True;ready()
+        count=len(fixture.goals)
+        for offset in (.032, .0416):
+            fixture.reference_offset=offset;time.sleep(.3)
+            m=move("start-jump-"+str(int(offset*10000)));assert m["accepted"] is False and "joint3" in m["message"] and "启动连续性" in m["message"],m
+        fixture.reference_offset=0.;fixture.reference_speed=.02;time.sleep(.3)
+        m=move("reference-moving");assert m["accepted"] is False and "参考尚未停稳" in m["message"],m
+        fixture.reference_speed=0.;fixture.omit_reference=True;time.sleep(.3)
+        assert move("missing-reference")["accepted"] is False
+        fixture.omit_reference=False;fixture.velocity_claimed=False;time.sleep(.7)
+        m=move("position-only");assert m["accepted"] is False and "velocity" in m["message"],m
+        assert len(fixture.goals)==count,"start rejection must not send a MoveIt goal"
+        fixture.velocity_claimed=True;ready()
         fixture.set_parameters([Parameter("robot_description_planning.joint_limits.joint1.has_acceleration_limits",value=False)])
         time.sleep(3.5);assert move("noaccel")["accepted"] is False
         print("PASS MoveIt routing, live SRDF HOME, safety/limits, arrival, deduplication, collision/rejection, cancel, fault/stale/disconnect watchdog and cross-client exclusion; isolated domain",domain)
