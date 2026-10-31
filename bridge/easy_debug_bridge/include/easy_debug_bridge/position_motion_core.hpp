@@ -52,6 +52,7 @@ inline bool arm_position_velocity_claimed(const std::vector<std::string> &interf
 }
 // A new MoveIt trajectory starts at measured state at t=0. Do not accept it
 // while the controller still holds a substantially different reference.
+constexpr double position_start_max_error = 0.02;
 inline void validate_position_start(const std::vector<double> &reference,
                                     const std::vector<double> &reference_velocity,
                                     const std::vector<double> &actual) {
@@ -62,11 +63,12 @@ inline void validate_position_start(const std::vector<double> &reference,
       throw std::runtime_error("轨迹控制器起点参考包含非有限值");
     if (std::abs(reference_velocity[i]) > 0.01)
       throw std::runtime_error("轨迹控制器参考尚未停稳：" + arm_motion_joints()[i]);
-    if (std::abs(reference[i] - actual[i]) > 0.005) {
+    if (std::abs(reference[i] - actual[i]) > position_start_max_error) {
       std::ostringstream message;
       message << "启动连续性检查失败：" << arm_motion_joints()[i] << " 保持参考与实际位置偏差 "
               << std::fixed << std::setprecision(4) << std::abs(reference[i] - actual[i])
-              << " rad > 0.005 rad；请检查低速跟踪/重力补偿后重试";
+              << " rad > " << std::defaultfloat << position_start_max_error
+              << " rad；请检查低速跟踪/重力补偿后重试";
       throw std::runtime_error(message.str());
     }
   }

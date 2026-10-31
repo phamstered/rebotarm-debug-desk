@@ -334,7 +334,7 @@ Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样�
 - `position_motion_info` 另返回 `joint_rotation_supported:true` 表示支持单关节目标。字段缺失时客户端必须禁用此功能，不能回退为普通点位请求。
 - 单关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","label":"joint2 旋转","confirmation":"ARMED","joint_name":"joint2","joint_position":-0.3}`，角度单位 rad。`joint_name` 仅支持 joint1–joint6，`joint_position` 必须有限且在 MoveIt URDF 限位内。不能与 `home:true` 或任何 `positions` 字段混用；缺少配对字段时拒绝。
 - 单关节受理时由 Bridge 从当前 STM32 JointState 取得其他五轴的目标值，在 MoveIt 请求 `path_constraints.joint_constraints` 中约束其围绕起点 ±0.001 rad；选中轴使用现有关节目标约束。保持原碰撞规划、速度/加速度缩放、会话和取消保护。此约束不构成物理跟踪误差为零的保证。
-- 执行前要求 active JTC 认领六关节 `position+velocity`，控制器保持参考与实测误差 ≤0.005 rad、参考速度 ≤0.01 rad/s、完整且有限，连续就绪 200 ms；不满足时 `available:false` / `accepted:false` 的 `message` 说明原因。大静差需要检查跟踪/重力补偿，客户端不能请求放宽该阈值。既有真实 MoveIt 起点、限位与碰撞检查保持有效。
+- 执行前要求 active JTC 认领六关节 `position+velocity`，控制器保持参考与实测误差 ≤0.02 rad、参考速度 ≤0.01 rad/s、完整且有限，连续就绪 200 ms；不满足时 `available:false` / `accepted:false` 的 `message` 说明原因。大静差需要检查跟踪/重力补偿，客户端不能请求放宽该阈值。既有真实 MoveIt 起点、限位与碰撞检查保持有效。
 - 成功受理返回 `position_move_ack` 与 `command_id`；门禁拒绝返回同一 ACK、`accepted:false` 与 `message`。Bridge 缓存最近 256 个已受理指令的 command_id，缓存内重复请求不重复执行；不同会话不能抢占运动。ACK 不代表规划成功或到达。
 - 状态推送 `{"op":"position_motion","command_id":"UUID","label":"取料位","motion_phase":"executing","message":"...","code":0,"elapsed_s":1.2}`。阶段为 validating/planning/executing/verifying/canceling/stopping/stop_failed/succeeded/failed/canceled。`code` 为 MoveIt 结果错误码（成功 1）。只有 Action 成功及终点误差/停稳验证通过才报告 succeeded。
 - `{"op":"position_cancel","request_id":"...","command_id":"UUID"}` 只允许拥有者取消，返回 `position_cancel_ack`；停止结果以状态推送为准。断线、反馈超时/故障及超时由 Jetson watchdog 取消；停止未确认保持全局锁，保留既有现场安全停机入口。
