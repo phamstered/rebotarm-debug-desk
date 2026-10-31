@@ -33,8 +33,9 @@ class Fixture(rclpy.node.Node):
         self.group = ReentrantCallbackGroup()
         self.q = [0., -.2, -.3, 0., 0., 0.]
         self.active = True; self.fault = 0; self.publish_feedback = True; self.speed = 0.; self.state_offset = 0.
-        self.goals = []; self.path_constraints = []; self.canceled = 0
+        self.goals = []; self.starts = []; self.path_constraints = []; self.canceled = 0
         self.reference_offset = 0.; self.reference_speed = 0.; self.omit_reference = False; self.velocity_claimed = True
+        self.joint_positions = None
         urdf = Path(get_package_share_directory("rebotarm_gazebo")) / "urdf/rebotarm.urdf"
         srdf = Path(get_package_share_directory("rebotarm_moveit_config")) / "config/rebotarm.srdf"
         params = {"robot_description": urdf.read_text(), "robot_description_semantic": srdf.read_text(),
@@ -64,7 +65,7 @@ class Fixture(rclpy.node.Node):
     def publish(self):
         if not self.publish_feedback: return
         q = list(self.q)
-        j = JointState(); j.header.stamp = self.get_clock().now().to_msg(); j.name = NAMES; j.position = q; j.velocity = [self.speed]*6; j.effort = [0.]*6; self.pub_joint.publish(j)
+        j = JointState(); j.header.stamp = self.get_clock().now().to_msg(); j.name = NAMES; j.position = q if self.joint_positions is None else self.joint_positions; j.velocity = [self.speed]*6; j.effort = [0.]*6; self.pub_joint.publish(j)
         s = JointTrajectoryControllerState(); s.joint_names = NAMES; s.actual.positions = [q[0]+self.state_offset]+q[1:]; s.actual.velocities = [0.]*6
         if not self.omit_reference:
             s.desired.positions = q[:2]+[q[2]+self.reference_offset]+q[3:]
@@ -77,6 +78,7 @@ class Fixture(rclpy.node.Node):
         assert not goal.planning_options.plan_only and not goal.planning_options.replan
         assert goal.request.max_velocity_scaling_factor <= .2
         assert goal.request.start_state.joint_state.name == NAMES
+        self.starts.append(list(goal.request.start_state.joint_state.position))
         constraints = goal.request.goal_constraints[0].joint_constraints
         assert [c.joint_name for c in constraints] == NAMES
         target = [c.position for c in constraints]; self.goals.append(target)
@@ -137,7 +139,30 @@ def main():
         sock = connect(); info = ready()
         assert info["joint_rotation_supported"] is True, info
         assert info["home_positions"] == [0.,-.01,-.01,0.,0.,0.], info
-        m = request("position_move", command_id="unarmed", positions=[0.]*6); assert m["accepted"] is False and not fixture.goals
+        # JTC desired is not a startup condition. MoveIt starts from measured joints.
+        for label, offset, speed, omitted in (
+                ("positive-reference-error", .0416, 0., False),
+                ("negative-reference-error", -.032, 0., False),
+                ("reference-moving", 0., .2, False),
+                ("missing-reference", 0., 0., True),
+                ("nonfinite-reference", float("nan"), float("nan"), False)):
+            fixture.reference_offset=offset;fixture.reference_speed=speed;fixture.omit_reference=omitted
+            time.sleep(.15);ready();before=list(fixture.q);count=len(fixture.goals)
+            accepted=move(label)
+            assert accepted.get("accepted") is not False,accepted
+            result,_=terminal(label);assert result["motion_phase"]=="succeeded",result
+            assert len(fixture.goals)==count+1
+            assert fixture.starts[-1]==before,fixture.starts[-1]
+        # The single-joint path uses the same readiness check and measured start.
+        fixture.omit_reference=True;time.sleep(.15);ready();before=list(fixture.q)
+        accepted=request("position_move",command_id="joint-without-reference",confirmation="ARMED",
+                         joint_name="joint2",joint_position=-.15)
+        assert accepted.get("accepted") is not False,accepted
+        result,_=terminal("joint-without-reference");assert result["motion_phase"]=="succeeded",result
+        assert fixture.starts[-1]==before
+        fixture.reference_offset=0.;fixture.reference_speed=0.;fixture.omit_reference=False;ready()
+        count=len(fixture.goals)
+        m = request("position_move", command_id="unarmed", positions=[0.]*6); assert m["accepted"] is False and len(fixture.goals)==count
         m = request("position_move", command_id="bad", confirmation="ARMED", positions=[0.,5.,0.,0.,0.,0.]); assert m["accepted"] is False
         assert move("arrive")["op"] == "position_move_ack"
         result, phases = terminal("arrive"); assert result["motion_phase"] == "succeeded", result
@@ -189,32 +214,23 @@ def main():
         ready(); assert move("rejected", .6)["op"]=="position_move_ack"
         result,_=terminal("rejected");assert result["motion_phase"]=="failed",result
         ready();move("lease", .7);result,_=terminal("lease");assert result["motion_phase"]=="canceled" and "停稳" in result["message"],result
+        count=len(fixture.goals)
         fixture.state_offset=.1;time.sleep(.2);assert move("mismatch")["accepted"] is False
         fixture.state_offset=0.;fixture.speed=.2;time.sleep(.2);assert move("moving")["accepted"] is False
         fixture.speed=0.;fixture.active=False;time.sleep(.7);assert move("inactive")["accepted"] is False
         fixture.active=True;ready()
-        for offset in (.0183, -.0183):
-            fixture.reference_offset=offset;ready()
-            command="settled-offset-"+str(int(offset*10000))
-            accepted=move(command,.2)
-            assert accepted.get("accepted") is not False,accepted
-            result,_=terminal(command);assert result["motion_phase"]=="succeeded",result
-        fixture.reference_offset=0.;ready()
-        count=len(fixture.goals)
-        for offset in (.020001, -.020001, .032, .0416):
-            fixture.reference_offset=offset;time.sleep(.3)
-            m=move("start-jump-"+str(int(offset*10000)));assert m["accepted"] is False and "joint3" in m["message"] and "启动连续性" in m["message"],m
-        fixture.reference_offset=0.;fixture.reference_speed=.02;time.sleep(.3)
-        m=move("reference-moving");assert m["accepted"] is False and "参考尚未停稳" in m["message"],m
-        fixture.reference_speed=0.;fixture.omit_reference=True;time.sleep(.3)
-        assert move("missing-reference")["accepted"] is False
-        fixture.omit_reference=False;fixture.velocity_claimed=False;time.sleep(.7)
+        for label, positions in (("nonfinite-actual", [0., 0., float("nan"), 0., 0., 0.]),
+                                 ("incomplete-actual", [0.]*5)):
+            fixture.joint_positions=positions;time.sleep(.2)
+            assert move(label)["accepted"] is False
+        fixture.joint_positions=None
+        fixture.velocity_claimed=False;time.sleep(.7)
         m=move("position-only");assert m["accepted"] is False and "velocity" in m["message"],m
-        assert len(fixture.goals)==count,"start rejection must not send a MoveIt goal"
+        assert len(fixture.goals)==count,"invalid actual feedback or controller state must not send a MoveIt goal"
         fixture.velocity_claimed=True;ready()
         fixture.set_parameters([Parameter("robot_description_planning.joint_limits.joint1.has_acceleration_limits",value=False)])
         time.sleep(3.5);assert move("noaccel")["accepted"] is False
-        print("PASS MoveIt routing, live SRDF HOME, safety/limits, arrival, deduplication, collision/rejection, cancel, fault/stale/disconnect watchdog and cross-client exclusion; isolated domain",domain)
+        print("PASS measured MoveIt starts independent of desired references, point/single-joint routing, live SRDF HOME, safety/limits, arrival, deduplication, collision/rejection, cancel, fault/stale/disconnect watchdog and cross-client exclusion; isolated domain",domain)
     finally:
         if sock:sock.close()
         if other:other.close()

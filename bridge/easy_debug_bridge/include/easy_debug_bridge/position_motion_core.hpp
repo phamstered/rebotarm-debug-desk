@@ -50,29 +50,6 @@ inline bool arm_position_velocity_claimed(const std::vector<std::string> &interf
       if (std::find(interfaces.begin(), interfaces.end(), joint + "/" + type) == interfaces.end()) return false;
   return true;
 }
-// A new MoveIt trajectory starts at measured state at t=0. Do not accept it
-// while the controller still holds a substantially different reference.
-constexpr double position_start_max_error = 0.02;
-inline void validate_position_start(const std::vector<double> &reference,
-                                    const std::vector<double> &reference_velocity,
-                                    const std::vector<double> &actual) {
-  if (reference.size() != 6 || reference_velocity.size() != 6 || actual.size() != 6)
-    throw std::runtime_error("轨迹控制器起点参考不完整");
-  for (size_t i = 0; i < 6; ++i) {
-    if (!std::isfinite(reference[i]) || !std::isfinite(reference_velocity[i]) || !std::isfinite(actual[i]))
-      throw std::runtime_error("轨迹控制器起点参考包含非有限值");
-    if (std::abs(reference_velocity[i]) > 0.01)
-      throw std::runtime_error("轨迹控制器参考尚未停稳：" + arm_motion_joints()[i]);
-    if (std::abs(reference[i] - actual[i]) > position_start_max_error) {
-      std::ostringstream message;
-      message << "启动连续性检查失败：" << arm_motion_joints()[i] << " 保持参考与实际位置偏差 "
-              << std::fixed << std::setprecision(4) << std::abs(reference[i] - actual[i])
-              << " rad > " << std::defaultfloat << position_start_max_error
-              << " rad；请检查低速跟踪/重力补偿后重试";
-      throw std::runtime_error(message.str());
-    }
-  }
-}
 inline std::vector<double> ordered_arm_values(const std::vector<std::string> &names,
                                              const std::vector<double> &values) {
   if (names.size() != values.size()) throw std::runtime_error("关节反馈数组长度不匹配");

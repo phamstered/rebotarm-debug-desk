@@ -62,7 +62,6 @@ struct PositionMotion::Impl {
   rclcpp::TimerBase::SharedPtr timer;
   Joints joints; State state; Hardware hardware;
   Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, controller_request_at{}, model_at{}, model_request_at{};
-  Clock::time_point start_ready_since{};
   bool controller_pending{false}, controller_active{false}, model_pending{false};
   int64_t controller_request_id{0}; uint64_t controller_generation{0}, model_generation{0};
   std::string model_error{"等待 MoveIt 模型"}, model_signature;
@@ -188,12 +187,6 @@ struct PositionMotion::Impl {
         if (std::abs(actual[i] - control[i]) > 0.02) return "控制器反馈与 STM32 不一致";
         if (starting && std::abs(velocity[i]) > 0.05) return "机械臂尚未停稳";
       }
-      if (starting) {
-        validate_position_start(ordered_arm_values(state.joint_names, state.desired.positions),
-                                ordered_arm_values(state.joint_names, state.desired.velocities), actual);
-        if (start_ready_since == Clock::time_point{} || fresh(start_ready_since, 0.2))
-          return "等待起点参考与实际位置连续稳定 200 ms";
-      }
     } catch (const std::exception &e) { return e.what(); }
     return "";
   }
@@ -238,7 +231,7 @@ struct PositionMotion::Impl {
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
     if (m->label.size() > 512) throw std::runtime_error("点位名称过长");
     m->target = target; m->send = r.send;
-    current = m; in_motion.store(true); start_ready_since = {};
+    current = m; in_motion.store(true);
     seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
     Group::Goal goal;
     goal.request.group_name = "arm"; goal.request.pipeline_id = "ompl";
@@ -312,18 +305,6 @@ struct PositionMotion::Impl {
   void tick() {
     if (!fresh(controller_request_at, 0.4)) poll_controllers();
     if (!fresh(model_request_at, 3)) poll_model();
-    if (!in_motion.load()) {
-      try {
-        if (!readiness(false).empty()) throw std::runtime_error("not ready");
-        const auto actual = ordered_arm_values(joints.name, joints.position);
-        const auto velocity = ordered_arm_values(joints.name, joints.velocity);
-        validate_position_start(ordered_arm_values(state.joint_names, state.desired.positions),
-                                ordered_arm_values(state.joint_names, state.desired.velocities), actual);
-        if (std::any_of(velocity.begin(), velocity.end(), [](double v) { return std::abs(v) > 0.05; }))
-          throw std::runtime_error("moving");
-        if (start_ready_since == Clock::time_point{}) start_ready_since = Clock::now();
-      } catch (...) { start_ready_since = {}; }
-    }
     std::deque<Request> pending;
     { std::lock_guard<std::mutex> lock(queue_mutex); pending.swap(requests); }
     for (const auto &r : pending) try { process(r); } catch (const std::exception &e) {
