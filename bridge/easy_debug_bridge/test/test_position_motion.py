@@ -21,7 +21,8 @@ from control_msgs.msg import JointTrajectoryControllerState
 from controller_manager_msgs.msg import ControllerState
 from controller_manager_msgs.srv import ListControllers
 from microros_stm32h723_bridge.msg import HardwareStatus
-from moveit_msgs.action import MoveGroup
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from test_image_topic import websocket_connect, send_json, receive_message
 
@@ -36,6 +37,8 @@ class Fixture(rclpy.node.Node):
         self.goals = []; self.starts = []; self.path_constraints = []; self.canceled = 0
         self.reference_offset = 0.; self.reference_speed = 0.; self.omit_reference = False; self.velocity_claimed = True
         self.joint_positions = None
+        self.executions = []; self.plan_delay = 0.; self.plan_kind = "normal"
+        self.slow_execution = False; self.reject_execution = False; self.fail_execution = False
         urdf = Path(get_package_share_directory("rebotarm_gazebo")) / "urdf/rebotarm.urdf"
         srdf = Path(get_package_share_directory("rebotarm_moveit_config")) / "config/rebotarm.srdf"
         params = {"robot_description": urdf.read_text(), "robot_description_semantic": srdf.read_text(),
@@ -56,6 +59,9 @@ class Fixture(rclpy.node.Node):
         self.server = ActionServer(self, MoveGroup, "/move_action", self.execute, callback_group=self.group,
                                    cancel_callback=lambda _: CancelResponse.ACCEPT,
                                    goal_callback=lambda goal: GoalResponse.REJECT if abs(goal.request.goal_constraints[0].joint_constraints[0].position-.6)<1e-6 else GoalResponse.ACCEPT)
+        self.execution_server = ActionServer(self, ExecuteTrajectory, "/execute_trajectory", self.execute_trajectory,
+            callback_group=self.group, cancel_callback=lambda _: CancelResponse.ACCEPT,
+            goal_callback=lambda _: GoalResponse.REJECT if self.reject_execution else GoalResponse.ACCEPT)
         self.create_timer(.03, self.publish, callback_group=self.group)
     def controllers(self, request, response):
         c = ControllerState(); c.name = "arm_trajectory_controller"; c.type = "joint_trajectory_controller/JointTrajectoryController"
@@ -75,7 +81,7 @@ class Fixture(rclpy.node.Node):
     def execute(self, handle):
         goal = handle.request
         assert goal.request.group_name == "arm" and goal.request.pipeline_id == "ompl"
-        assert not goal.planning_options.plan_only and not goal.planning_options.replan
+        assert not goal.planning_options.replan
         assert goal.request.max_velocity_scaling_factor <= .2
         assert goal.request.start_state.joint_state.name == NAMES
         self.starts.append(list(goal.request.start_state.joint_state.position))
@@ -87,6 +93,25 @@ class Fixture(rclpy.node.Node):
         result = MoveGroup.Result()
         if abs(target[0]-.5)<1e-6:
             result.error_code.val = -12; handle.abort(); return result
+        if goal.planning_options.plan_only:
+            until=time.monotonic()+self.plan_delay
+            while time.monotonic()<until:
+                if handle.is_cancel_requested:
+                    self.canceled+=1;result.error_code.val=-7;handle.canceled();return result
+                time.sleep(.02)
+            trajectory=result.planned_trajectory.joint_trajectory
+            trajectory.joint_names=NAMES
+            for seconds, positions in ((0,goal.request.start_state.joint_state.position),(2,target)):
+                point=JointTrajectoryPoint();point.positions=list(positions)
+                held={c.joint_name for c in goal.request.path_constraints.joint_constraints}
+                point.velocities=[0. if name in held else .1 for name in NAMES]
+                point.accelerations=[0. if name in held else .2 for name in NAMES];point.time_from_start.sec=seconds
+                trajectory.points.append(point)
+            if self.plan_kind=="empty":trajectory.points=[]
+            if self.plan_kind=="bad-start":trajectory.points[0].positions[0]+=.05
+            if self.plan_kind=="bad-end":trajectory.points[-1].positions[0]+=.05
+            if self.plan_kind=="bad-time":trajectory.points[-1].time_from_start.sec=0
+            result.error_code.val=1;handle.succeed();return result
         fb.state = "MONITOR"; handle.publish_feedback(fb)
         for _ in range(200 if abs(target[0]-.7)<1e-6 else 50 if abs(target[0]-.4)<1e-6 else 8):
             if handle.is_cancel_requested:
@@ -94,6 +119,21 @@ class Fixture(rclpy.node.Node):
             time.sleep(.05)
         if abs(target[0]-.3)>1e-6:self.q = target
         result.error_code.val = 1; handle.succeed(); return result
+
+
+    def execute_trajectory(self, handle):
+        trajectory=handle.request.trajectory.joint_trajectory
+        assert trajectory.joint_names==NAMES
+        self.executions.append(trajectory)
+        result=ExecuteTrajectory.Result()
+        for _ in range(200 if self.slow_execution else 8):
+            if handle.is_cancel_requested:
+                self.canceled+=1;result.error_code.val=-7;handle.canceled();return result
+            time.sleep(.05)
+        if self.fail_execution:
+            result.error_code.val=-4;handle.abort();return result
+        self.q=list(trajectory.points[-1].positions)
+        result.error_code.val=1;handle.succeed();return result
 
 def main():
     domain = int(os.environ.get("ROS_DOMAIN_ID", "0"))
@@ -139,6 +179,89 @@ def main():
         sock = connect(); info = ready()
         assert info["joint_rotation_supported"] is True, info
         assert info["home_positions"] == [0.,-.01,-.01,0.,0.,0.], info
+        assert info["joint_targets_supported"] and info["motion_duration_supported"],info
+        all_targets=dict(zip(NAMES,[.1,-.1,-.2,.05,.03,-.02]))
+        before=list(fixture.q);count=len(fixture.goals)
+        accepted=request("position_move",command_id="six-timed",confirmation="ARMED",joint_targets=all_targets,motion_duration_s=5.)
+        assert accepted.get("accepted") is not False,accepted
+        result,phases=terminal("six-timed");assert result["motion_phase"]=="succeeded",result
+        assert "executing" in phases and "verifying" in phases,phases
+        assert len(fixture.goals)==count+1 and len(fixture.executions)==1
+        trajectory=fixture.executions[-1]
+        assert list(trajectory.points[0].positions)==before and list(trajectory.points[-1].positions)==list(all_targets.values()),trajectory
+        assert trajectory.points[-1].time_from_start.sec==5 and trajectory.points[-1].time_from_start.nanosec==0
+        assert abs(trajectory.points[-1].velocities[0]-.04)<1e-9
+        assert abs(trajectory.points[-1].accelerations[0]-.032)<1e-9
+        assert not fixture.path_constraints[-1]
+        ready();before=list(fixture.q)
+        accepted=request("position_move",command_id="partial-timed",confirmation="ARMED",joint_targets={"joint2":-.15,"joint4":.12},motion_duration_s=2.)
+        assert accepted.get("accepted") is not False,accepted
+        result,_=terminal("partial-timed");assert result["motion_phase"]=="succeeded",result
+        expected=before[:];expected[1]=-.15;expected[3]=.12
+        assert list(fixture.executions[-1].points[-1].positions)==expected
+        assert [c.joint_name for c in fixture.path_constraints[-1]]==["joint1","joint3","joint5","joint6"]
+        count=len(fixture.executions)
+        for label,seconds,kind in (("too-short",1.,"normal"),("empty-plan",5.,"empty"),
+                                   ("bad-plan-start",5.,"bad-start"),("bad-plan-end",5.,"bad-end"),
+                                   ("bad-plan-time",5.,"bad-time")):
+            fixture.plan_kind=kind;ready()
+            accepted=request("position_move",command_id=label,confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=seconds)
+            assert accepted.get("accepted") is not False,accepted
+            result,_=terminal(label);assert result["motion_phase"]=="failed",result
+            assert len(fixture.executions)==count,"invalid or too-short plan must never execute"
+        fixture.plan_kind="normal";ready();count=len(fixture.goals)
+        for extra in ({"joint_targets":{}},{"joint_targets":{"joint7":0.}},
+                      {"joint_targets":{"joint1":99.}},{"joint_targets":{"joint1":.1},"positions":[0.]*6},
+                      {"joint_targets":{"joint1":.1},"joint_name":"joint2","joint_position":.1},
+                      {"joint_targets":{"joint1":.1},"motion_duration_s":0.},
+                      {"joint_targets":{"joint1":.1},"motion_duration_s":121.}):
+            rejected=request("position_move",command_id="invalid-timed",confirmation="ARMED",**extra)
+            assert rejected.get("accepted") is False,rejected
+        assert len(fixture.goals)==count
+        # Cancel in planning: it must not leak a second ExecuteTrajectory goal.
+        fixture.plan_delay=.8;ready();count=len(fixture.executions)
+        request("position_move",command_id="cancel-plan",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        time.sleep(.2);request("position_cancel",command_id="cancel-plan")
+        result,_=terminal("cancel-plan");assert result["motion_phase"]=="canceled",result
+        assert len(fixture.executions)==count
+        fixture.plan_delay=0.;fixture.slow_execution=True;ready()
+        request("position_move",command_id="cancel-timed-execution",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        until=time.monotonic()+5
+        while len(fixture.executions)==count and time.monotonic()<until:time.sleep(.05)
+        assert len(fixture.executions)==count+1
+        request("position_cancel",command_id="cancel-timed-execution")
+        result,_=terminal("cancel-timed-execution");assert result["motion_phase"]=="canceled",result
+        fixture.slow_execution=False;fixture.reject_execution=True;ready()
+        request("position_move",command_id="reject-timed-execution",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        result,_=terminal("reject-timed-execution");assert result["motion_phase"]=="failed",result
+        fixture.reject_execution=False;fixture.fail_execution=True;ready()
+        request("position_move",command_id="fail-timed-execution",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        result,_=terminal("fail-timed-execution");assert result["motion_phase"]=="failed",result
+        fixture.fail_execution=False;ready()
+        fixture.plan_delay=.8;ready();count=len(fixture.executions)
+        request("position_move",command_id="changed-plan-start",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        time.sleep(.2);fixture.q=[fixture.q[0]+.05]+fixture.q[1:]
+        result,_=terminal("changed-plan-start");assert result["motion_phase"]=="failed" and "起点" in result["message"],result
+        assert len(fixture.executions)==count
+        fixture.plan_delay=.8;ready()
+        request("position_move",command_id="disconnect-plan",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        other=connect();sock.close();sock=other;other=None
+        until=time.monotonic()+5
+        while time.monotonic()<until:
+            status=request("position_motion_info")
+            if not status["busy"]:break
+            time.sleep(.1)
+        assert not status["busy"] and len(fixture.executions)==count,status
+        fixture.plan_delay=0.;fixture.slow_execution=True;ready()
+        request("position_move",command_id="fault-timed-execution",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)
+        until=time.monotonic()+5
+        while len(fixture.executions)==count and time.monotonic()<until:time.sleep(.05)
+        assert len(fixture.executions)==count+1
+        fixture.fault=11
+        result,_=terminal("fault-timed-execution");assert result["motion_phase"]=="canceled",result
+        fixture.fault=0;fixture.slow_execution=False;ready()
+
+        legacy_canceled=fixture.canceled
         # JTC desired is not a startup condition. MoveIt starts from measured joints.
         for label, offset, speed, omitted in (
                 ("positive-reference-error", .0416, 0., False),
@@ -210,7 +333,7 @@ def main():
             m=request("position_motion_info")
             if not m["busy"]:break
             time.sleep(.1)
-        assert not m["busy"] and fixture.canceled>=4,m
+        assert not m["busy"] and fixture.canceled-legacy_canceled>=4,m
         ready(); assert move("rejected", .6)["op"]=="position_move_ack"
         result,_=terminal("rejected");assert result["motion_phase"]=="failed",result
         ready();move("lease", .7);result,_=terminal("lease");assert result["motion_phase"]=="canceled" and "停稳" in result["message"],result
@@ -228,9 +351,19 @@ def main():
         m=move("position-only");assert m["accepted"] is False and "velocity" in m["message"],m
         assert len(fixture.goals)==count,"invalid actual feedback or controller state must not send a MoveIt goal"
         fixture.velocity_claimed=True;ready()
+        fixture.execution_server.destroy()
+        until=time.monotonic()+5
+        while time.monotonic()<until:
+            info=request("position_motion_info")
+            if info.get("motion_duration_message"):break
+            time.sleep(.1)
+        assert "execute_trajectory" in info.get("motion_duration_message",""),info
+        assert info["available"],"legacy MoveGroup execution remains available without ExecuteTrajectory"
+        rejected=request("position_move",command_id="no-execution-server",confirmation="ARMED",joint_targets={"joint1":.1},motion_duration_s=5.)
+        assert rejected.get("accepted") is False and "execute_trajectory" in rejected["message"],rejected
         fixture.set_parameters([Parameter("robot_description_planning.joint_limits.joint1.has_acceleration_limits",value=False)])
         time.sleep(3.5);assert move("noaccel")["accepted"] is False
-        print("PASS measured MoveIt starts independent of desired references, point/single-joint routing, live SRDF HOME, safety/limits, arrival, deduplication, collision/rejection, cancel, fault/stale/disconnect watchdog and cross-client exclusion; isolated domain",domain)
+        print("PASS six-joint timed planning/execution, safe retiming and rejection, cancellation in both stages, disconnect/fault/start drift, measured starts independent of desired references, point/single-joint routing, live SRDF HOME, safety/limits, arrival, deduplication, collision/rejection, cancel, fault/stale/disconnect watchdog and cross-client exclusion; isolated domain",domain)
     finally:
         if sock:sock.close()
         if other:other.close()

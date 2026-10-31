@@ -333,6 +333,7 @@ export function UrdfViewer({
   const sendRef = useRef(onSendTrajectory);
   const [interaction, setInteraction] = useState<"tcp" | "joint">("tcp");
   const [selectedJoint, setSelectedJoint] = useState("");
+  const [jointPreviewReset, setJointPreviewReset] = useState(0);
   const [jointPreview, setJointPreview] = useState<JointRotationPreview | null>(null);
   const jointPreviewRef = useRef<JointRotationPreview | null>(null);
   controllerRef.current = trajectoryController;
@@ -388,7 +389,7 @@ export function UrdfViewer({
       robotRef.current?.setJointValue(name, value);
     });
     const value = jointPreviewRef.current;
-    if (activeRef.current && value) robotRef.current?.setJointValue(value.jointName, value.position);
+    if (activeRef.current && value) for (const [name, position] of Object.entries(value)) robotRef.current?.setJointValue(name, position);
   }, []);
 
   const previewJoint = useCallback((value: JointRotationPreview | null) => {
@@ -397,13 +398,13 @@ export function UrdfViewer({
     applyState();
   }, [applyState]);
   const selectJoint = useCallback((name: string) => {
-    previewJoint(null); setSelectedJoint(name);
+    setSelectedJoint(name);
   }, [previewJoint]);
-  useEffect(() => { previewJoint(null); setSelectedJoint(""); }, [xml, bridge, previewJoint]);
+  useEffect(() => { previewJoint(null); setJointPreviewReset((value) => value + 1); setSelectedJoint(""); }, [xml, bridge, previewJoint]);
   useEffect(() => { if (!active || jointMotion?.busy) previewJoint(null); }, [active, jointMotion?.busy, previewJoint]);
   useEffect(() => {
     if (!jointPreview) return;
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") previewJoint(null); };
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") { previewJoint(null); setJointPreviewReset((value) => value + 1); } };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [jointPreview, previewJoint]);
@@ -513,7 +514,7 @@ export function UrdfViewer({
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
   const enabled = Boolean(active && interaction === "tcp" && trajectoryController?.jointNames?.length && !trajectoryController.readinessError && tcp.name && robot && !overlayError);
-  const rotationJoints = rotationalJoints(model instanceof Error ? null : model);
+  const rotationJoints = useMemo(() => rotationalJoints(model instanceof Error ? null : model), [model]);
   const rotationJoint = rotationJoints.find((joint) => joint.name === selectedJoint);
   const pickJoint = (event: ThreeEvent<MouseEvent>) => {
     if (!active || interaction !== "joint" || jointMotion?.busy || !model || model instanceof Error || event.delta > 4) return;
@@ -532,10 +533,10 @@ export function UrdfViewer({
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-interaction" aria-label="Robot View 操作方式">
           <button type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("tcp"); }}>TCP 拖拽</button>
-          <button type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("joint"); }}>单关节</button>
+          <button type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("joint"); }}>关节调整</button>
         </div>
         {interaction === "joint" && <JointRotationPanel joints={rotationJoints} selected={selectedJoint}
-          jointState={jointState} active={active && Boolean(robot) && !overlayError} motion={jointMotion} hasPreview={Boolean(jointPreview)}
+          jointState={jointState} active={active && Boolean(robot) && !overlayError} motion={jointMotion} hasPreview={Boolean(jointPreview)} resetKey={jointPreviewReset}
           onSelect={selectJoint} onPreview={previewJoint} />}
         {interaction === "tcp" && <>
         <div className="viewer-overlay-row">

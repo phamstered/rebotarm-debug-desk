@@ -1429,3 +1429,8 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
   .status-mode-selection > span { flex-basis: 100%; }
   .status-mode-selection .primary { width: 100%; }
 }
+
+.joint-target-rows { display: grid; gap: 4px; }
+.joint-rotation-panel .joint-target-row { display: grid; grid-template-columns: minmax(68px, 1fr) minmax(60px, 88px) 18px; align-items: center; gap: 5px; padding: 4px; border: 1px solid transparent; border-radius: 5px; }
+.joint-target-row.selected { border-color: #398a80; background: #102f31; }
+.joint-target-row small { display: block; color: #8fa9b9; font-size: 10px; }

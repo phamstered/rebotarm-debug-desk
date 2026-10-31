@@ -7,7 +7,7 @@ const point: CustomPosition = { id: "p1", name: "取料", group: "arm", jointNam
 function setup() {
   let listener: (m: BridgeEnvelope) => void = () => {};
   const request = vi.fn(async (m: BridgeEnvelope): Promise<BridgeEnvelope> => {
-    if (m.op === "position_motion_info") return { op: m.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false, joint_rotation_supported: true };
+    if (m.op === "position_motion_info") return { op: m.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false, joint_rotation_supported: true, joint_targets_supported: true, motion_duration_supported: true };
     return { op: `${m.op}_ack`, accepted: true, command_id: m.command_id };
   });
   const bridge = { request, onMessage: vi.fn((fn: typeof listener) => { listener = fn; return () => {}; }) };
@@ -15,6 +15,43 @@ function setup() {
   return { ...hook, request, emit: (m: BridgeEnvelope) => act(() => listener(m)) };
 }
 describe("saved MoveIt motion", () => {
+  it("submits six staged joints and duration once, with safety and shared locking", async () => {
+    const { result, request, emit } = setup();
+    await waitFor(() => expect(result.current.jointTargetsReason).toBe(""));
+    const targets = { joint1: .1, joint2: -.2, joint3: -.3, joint4: .2, joint5: .1, joint6: -.1 };
+    await act(async () => result.current.executeJoints(targets, 5));
+    expect(request.mock.calls.filter(([m]) => m.op === "position_move")).toHaveLength(0);
+    act(() => result.current.setArmed(true));
+    await act(async () => Promise.all([result.current.executeJoints(targets, 5), result.current.execute(point)]));
+    targets.joint1 = 99;
+    const moves = request.mock.calls.filter(([m]) => m.op === "position_move");
+    expect(moves).toHaveLength(1);
+    expect(moves[0][0]).toMatchObject({ joint_targets: { joint1: .1, joint2: -.2, joint3: -.3, joint4: .2, joint5: .1, joint6: -.1 }, motion_duration_s: 5, confirmation: "ARMED" });
+    expect(moves[0][0].positions).toBeUndefined();
+    expect(moves[0][0].joint_name).toBeUndefined();
+    expect(result.current.busy).toBe(true);
+    await act(async () => result.current.cancel());
+    expect(result.current.busy).toBe(true);
+    emit({ op: "position_motion", command_id: moves[0][0].command_id, motion_phase: "canceled" });
+    expect(result.current.busy).toBe(false);
+  });
+  it("rejects invalid joint/time inputs and never drops duration on an old Bridge", async () => {
+    const { result, request, rerender } = setup();
+    await waitFor(() => expect(result.current.jointTargetsReason).toBe(""));
+    act(() => result.current.setArmed(true));
+    for (const duration of [NaN, Infinity, 0, .09, 121])
+      await act(async () => result.current.executeJoints({ joint1: .1 }, duration));
+    for (const targets of [{}, { bad: .1 }, { joint1: NaN }] as Record<string, number>[])
+      await act(async () => result.current.executeJoints(targets, 5));
+    expect(request.mock.calls.filter(([m]) => m.op === "position_move")).toHaveLength(0);
+    request.mockImplementation(async (m) => ({ op: m.op, available: true, joint_rotation_supported: true }));
+    rerender({ connected: true, profile: "legacy", block: "" });
+    await waitFor(() => expect(result.current.jointTargetsReason).toContain("更新 Bridge"));
+    act(() => result.current.setArmed(true));
+    await act(async () => result.current.executeJoints({ joint1: .1 }, 5));
+    expect(request.mock.calls.filter(([m]) => m.op === "position_move")).toHaveLength(0);
+  });
+
   it("sends an explicit single-joint goal through the same safety, lock and cancellation lifecycle", async () => {
     const { result, request, emit } = setup();
     await waitFor(() => expect(result.current.jointRotationReason).toBe(""));
