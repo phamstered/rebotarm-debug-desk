@@ -36,7 +36,8 @@ export function JointRotationPanel({ joints, selected, jointState, active, motio
     const parsed = rotationInput(joint, text);
     onPreview(parsed.position === undefined ? null : { jointName: joint.name, position: parsed.position });
   }
-  const targetDeg = Number(angle) || 0;
+  const numericAngle = Number(angle);
+  const targetDeg = Number.isFinite(numericAngle) ? numericAngle : 0;
   const min = joint && Number.isFinite(joint.lower) ? radiansToDegrees(joint.lower) : Math.min(-180, targetDeg, actual === null ? 0 : radiansToDegrees(actual));
   const max = joint && Number.isFinite(joint.upper) ? radiansToDegrees(joint.upper) : Math.max(180, targetDeg, actual === null ? 0 : radiansToDegrees(actual));
   return <section className="joint-rotation-panel" aria-label="单关节旋转">
