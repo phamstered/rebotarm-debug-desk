@@ -1373,6 +1373,16 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .status-mode-strip { display: grid; gap: 14px; width: 100%; min-width: 0; padding: 16px; border: 1px solid #244451; border-radius: 12px; background: #0b1922; }
 .status-mode-current { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; color: #8da9b7; }
 .status-mode-current strong { color: #96eee0; font-size: 20px; }
+.arm-workflow { min-width: 0; }
+.arm-workflow ol { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 4px 0; list-style: none; }
+.arm-workflow li { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #7894a3; }
+.arm-workflow li:not(:last-child)::after { content: "→"; margin-left: 2px; }
+.arm-workflow li > span { display: inline-grid; place-items: center; border: 1px solid #36505f; border-radius: 50%; width: 22px; height: 22px; }
+.arm-workflow li[data-state="done"] { color: #8cd7c8; }
+.arm-workflow li[data-state="current"] { color: #d4fff7; font-weight: 700; }
+.arm-workflow li[data-state="current"] > span { background: #19564f; border-color: #3fd7c3; }
+.arm-workflow li[data-state="failed"] { color: #ff9a8f; font-weight: 700; }
+.arm-workflow p { color: #9ab5c2; font-size: 13px; overflow-wrap: anywhere; margin: 8px 0 0; max-height: 100px; overflow: auto; white-space: pre-wrap; }
 .status-mode-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .status-mode-selection .status-disabled-hint { flex-basis: 100%; margin: 0; }
 .status-mode-explanation, .status-mode-stops p { margin: 0; font-size: 12px; line-height: 1.6; color: #92aebc; overflow-wrap: anywhere; }

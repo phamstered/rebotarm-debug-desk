@@ -1,5 +1,18 @@
 # Sourced by the fixed arm-mode SSH command. Never publish a one-shot HOLD:
 # firmware requires an uninterrupted stream until DISABLE is acknowledged.
+arm_progress() { printf 'ARM_STAGE|%s|%s\n' "$1" "$2"; }
+
+arm_rotate_log() {
+    local file="$1" directory archive
+    [[ -e "$file" || -L "$file" ]] || return 0
+    directory="${file%/*}/history"
+    mkdir -p "$directory" || return 1
+    archive=$(mktemp "$directory/$(basename "$file").XXXXXXXX") || return 1
+    # Preserve the previous inode so a same-size restart cannot look like an
+    # append to the session's old byte cursor, even with identical log text.
+    mv -- "$file" "$archive" || return 1
+}
+
 arm_status() {
     local sample
     sample=$(timeout 5 ros2 topic echo /stm32/status microros_stm32h723_bridge/msg/HardwareStatus --once --no-daemon --qos-reliability best_effort --qos-durability volatile 2>&1) || {
@@ -91,7 +104,7 @@ arm_safe_stop() {
             fi
             sleep 0.2
         done
-        echo "STM32 did not confirm DISABLE; command processes were preserved." >&2
+        echo "STM32 did not confirm DISABLE (mode=$arm_mode fault=$arm_fault sequence=$arm_sequence); command processes were preserved. RETURN must finish before switching; explicit supported-arm DISABLE remains available." >&2
         return 1
     fi
     if [[ "$arm_mode" != 3 ]]; then
@@ -107,15 +120,19 @@ arm_controller_domain() {
 }
 
 arm_stop_controller() {
-    local pid domain deadline state
+    local pid domain deadline state identity
     for pid in $(pgrep -f '^/opt/ros/humble/lib/[c]ontroller_manager/ros2_control_node( |$)'); do
         domain=$(arm_controller_domain "$pid") || return 1
         [[ "${domain:-0}" == "${ROS_DOMAIN_ID:-0}" ]] || continue
+        identity=$(arm_owner_identity "$pid") || return 1
         arm_status || return 1
         if [[ "$arm_mode" != 3 || "$arm_fault" != 0 ]]; then
             echo "Refusing to stop controller $pid without fault-free DISABLE acknowledgement." >&2
             return 1
         fi
+        [[ "$(arm_owner_identity "$pid")" == "$identity" ]] || return 1
+        domain=$(arm_controller_domain "$pid") || return 1
+        [[ "${domain:-0}" == "${ROS_DOMAIN_ID:-0}" ]] || return 1
         # The script can exit while its separately grouped controller survives.
         # Stop this domain confirmed-disabled publisher before the supervisor.
         kill -INT "$pid" || return 1
@@ -133,9 +150,14 @@ arm_stop_controller() {
 }
 
 stop_pg() {
-    local file="$1" marker="$2" pid deadline
+    local file="$1" marker="$2" pid deadline domain
     pid=$(cat "$file" 2>/dev/null || true)
     if [[ "$(alive_pid "$pid" "$marker")" == 1 ]]; then
+        domain=$(arm_controller_domain "$pid") || return 1
+        if [[ "${domain:-0}" != "${ROS_DOMAIN_ID:-0}" ]]; then
+            echo "Arm supervisor PID file belongs to ROS_DOMAIN_ID=$domain; preserved, refusing cross-domain cleanup." >&2
+            return 1
+        fi
         # Signal only the supervisor. Its children have separate process groups;
         # a group signal or short escalation can interrupt its cleanup trap.
         kill -TERM "$pid" || return 1
@@ -152,7 +174,7 @@ stop_pg() {
 }
 
 wait_arm_ready() {
-    local pid="$1" log="$2" marker="$3" deadline
+    local pid="$1" log="$2" marker="$3" deadline stage previous_stage=""
     deadline=$((SECONDS + 180))
     while (( SECONDS < deadline )); do
         if [[ "$(alive_pid "$pid" "start_arm_teleop")" != 1 ]]; then
@@ -160,7 +182,13 @@ wait_arm_ready() {
             echo "Arm startup exited before its end-to-end self-check passed." >&2
             return 1
         fi
+        stage=$(grep -E '^\[[1-9]/9\]' "$log" | tail -n 1)
+        if [[ -n "$stage" && "$stage" != "$previous_stage" ]]; then
+            arm_progress startup "$stage"
+            previous_stage="$stage"
+        fi
         if grep -Fq "$marker" "$log"; then
+            arm_progress verify "启动脚本自检通过，核验下位机命令回执"
             arm_status || return 1
             if [[ "$arm_fault" != 0 || "$arm_mode" == 3 || "$arm_sequence" == 0 ]]; then
                 echo "Arm self-check completed but STM32 is not accepting active commands (mode=$arm_mode fault=$arm_fault sequence=$arm_sequence)." >&2
@@ -200,18 +228,64 @@ owns_ros2() {
 
 # Check only arm command owners in this ROS domain. Unknown/unreadable owners
 # block startup; do not force-kill arbitrary ROS processes to claim cleanliness.
-arm_owner_pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/controller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/robo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
+arm_owner_pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/[c]ontroller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/[r]obo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
+arm_launch_child_pattern='^(/opt/ros/humble/lib/[r]obot_state_publisher/robot_state_publisher|(/usr/bin/python3 )?/opt/ros/humble/lib/[c]ontroller_manager/spawner (joint_state_broadcaster|gravity_compensation_controller|joint4_calibration_controller|arm_trajectory_controller|arm_teleop_controller|gripper_teleop_controller|vla_position_controller))( |$)'
 
 arm_owner_identity() {
     local command owner started
     command=$(ps -p "$1" -o args=) || return 1
-    [[ "$command" =~ $arm_owner_pattern ]] || return 1
+    [[ "$command" =~ $arm_owner_pattern || "$command" =~ $arm_launch_child_pattern ]] || return 1
     owner=$(ps -p "$1" -o uid= | tr -d ' ') || return 1
     [[ "$owner" == "$(id -u)" ]] || return 1
     # /proc start ticks disambiguate reused PIDs; CPU counters are not identity.
     started=$(awk '{sub(/^.*\) /, ""); print $20}' "/proc/$1/stat") || return 1
     [[ "$started" =~ ^[0-9]+$ ]] || return 1
     printf '%s\n%s\n' "$started" "$command"
+}
+
+arm_owner_signal() {
+    local ignored
+    ignored=$(awk '/^SigIgn:/ {print $2}' "/proc/$1/status") || return 1
+    [[ "$ignored" =~ ^[0-9a-fA-F]+$ ]] || return 1
+    # Detached background Python launchers can inherit ignored SIGINT. TERM is
+    # allowed only after DISABLE + identity checks; never escalate to SIGKILL.
+    if (( (16#$ignored & 2) != 0 )); then echo TERM; else echo INT; fi
+}
+
+arm_stop_launch_children() {
+    local parent="$1" parent_identity="$2" child identity current domain state deadline command
+    for child in $(pgrep -P "$parent"); do
+        state=$(ps -p "$child" -o stat=)
+        [[ -n "$state" && "$state" != Z* ]] || continue
+        identity=$(arm_owner_identity "$child") || return 1
+        # ros2_control is stopped separately first. Reap only this launcher's
+        # RSP, arm spawners and recognized arm command nodes, never arbitrary descendants.
+        command=$(tail -n 1 <<<"$identity")
+        if [[ ! "$command" =~ $arm_launch_child_pattern && ! "$command" =~ $arm_owner_pattern ]]; then
+            echo "Unknown live child $child of arm launch $parent; refusing cleanup." >&2
+            return 1
+        fi
+        domain=$(arm_controller_domain "$child") || return 1
+        [[ "${domain:-0}" == "${ROS_DOMAIN_ID:-0}" ]] || return 1
+        arm_confirm_disabled || return 1
+        current=$(arm_owner_identity "$child") || return 1
+        [[ "$current" == "$identity" && "$(arm_owner_identity "$parent")" == "$parent_identity" &&
+           "$(ps -p "$child" -o ppid= | tr -d ' ')" == "$parent" ]] || return 1
+        domain=$(arm_controller_domain "$child") || return 1
+        [[ "${domain:-0}" == "${ROS_DOMAIN_ID:-0}" ]] || return 1
+        kill -TERM "$child" || return 1
+        deadline=$((SECONDS + 15))
+        while true; do
+            state=$(ps -p "$child" -o stat=)
+            [[ -n "$state" && "$state" != Z* ]] || break
+            [[ "$(arm_owner_identity "$child")" == "$identity" ]] || return 1
+            if (( SECONDS >= deadline )); then
+                echo "Arm launch child $child did not exit; no forced termination." >&2
+                return 1
+            fi
+            sleep 0.25
+        done
+    done
 }
 
 arm_stop_orphans() {
@@ -225,6 +299,9 @@ arm_stop_orphans() {
             echo "Cannot verify orphan arm owner $pid; refusing cleanup." >&2
             return 1
         }
+        if [[ "$identity" == *'/opt/ros/humble/bin/ros2 launch '* ]]; then
+            arm_stop_launch_children "$pid" "$identity" || return 1
+        fi
         arm_confirm_disabled || return 1
         # Status discovery takes time. Recheck ownership immediately before signal.
         current=$(arm_owner_identity "$pid") || {
@@ -237,7 +314,7 @@ arm_stop_orphans() {
             echo "Arm owner $pid changed identity/domain; refusing cleanup." >&2
             return 1
         fi
-        signal=INT
+        signal=$(arm_owner_signal "$pid") || return 1
         # Background Bash may inherit ignored SIGINT. Use its existing TERM trap.
         [[ "$identity" != *$'\nbash '* ]] || signal=TERM
         echo "[mode] stopping verified orphan arm owner $pid ($signal)"
@@ -280,8 +357,10 @@ arm_verify_clean() {
 
 arm_clean_environment() {
     local service="${1:-safe_stop}"
+    arm_progress safe-stop "安全回零或确认下位机已关闭输出"
     echo "[mode] safe stop and confirm DISABLE"
     arm_safe_stop "$service" || return 1
+    arm_progress cleanup "停止已确认 DISABLE 的旧控制器"
     arm_stop_controller || return 1
     echo "[mode] cleaning previous arm supervisors"
     stop_pg "$teleop_pid_file" "start_arm_teleop" || return 1
@@ -294,6 +373,7 @@ arm_clean_environment() {
 # Called under the same native mode-switch lock after fresh trajectory bring-up.
 arm_start_vla() {
     local state
+    arm_progress verify "切换到 VLA，核验互斥控制器与重力补偿状态"
     timeout 10 ros2 control switch_controllers --strict --activate vla_position_controller --deactivate arm_trajectory_controller || return 1
     state=$(timeout 10 ros2 control list_controllers | sed -E 's/\x1B\[[0-9;]*[mK]//g') || return 1
     for controller in vla_position_controller gravity_compensation_controller; do

@@ -25,6 +25,8 @@ import {
   type StatusTone,
 } from "./statusLogic";
 import { ControlLogViewer } from "./ControlLogViewer";
+import { ArmModeWorkflow } from "./ArmModeWorkflow";
+import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { isArmTeleopControllerActive, isArmTrajectoryControllerActive, isVlaControllerActive } from "./vlaLogic";
 
 function ToneBadge({ tone }: { tone: StatusTone }) {
@@ -132,6 +134,7 @@ export function StatusPage({
   vlaChunkSample,
   actionBusy = null,
   actionNotice = "",
+  workflow = null,
   onCardAction,
   onQuickAction,
   onClearHighlight,
@@ -158,6 +161,7 @@ export function StatusPage({
   vlaChunkSample?: TopicSample | undefined;
   actionBusy?: string | null;
   actionNotice?: string;
+  workflow?: ArmWorkflow | null;
   onClearHighlight?: () => void;
   onCardAction?: (action: StatusCardAction, card: StatusCardModel) => void;
   onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop") => void;
@@ -170,7 +174,9 @@ export function StatusPage({
   const selectTab = (id: StatusZoneId) => { setSelectedTab(id); onClearHighlight?.(); };
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [supported, setSupported] = useState(false);
+  const controlStopped = Boolean(workflow && ["stop", "disable-stop"].includes(workflow.mode) && workflow.stage === "ready" && !workflow.failed && hardwareStatus?.mode === 3 && hardwareStatus?.fault_code === 0);
   const cards = buildStatusCards({
+    controlStopped,
     stage,
     sshOk,
     bridgeUp,
@@ -196,16 +202,18 @@ export function StatusPage({
   });
   const zones = useMemo(() => groupStatusZones(cards), [cards]);
   const stickyAlert = useMemo(() => buildHardwareStickyAlert(hardwareStatus), [hardwareStatus]);
-  const activeMode = useMemo(
+  const observedMode = useMemo(
     () => resolveActiveControlMode({ armMode, rosControl }),
     [armMode, rosControl],
   );
+  const activeMode = controlStopped ? null : observedMode;
+  const modeConfirmed = Boolean(rosControl?.available) || controlStopped;
   const [targetMode, setTargetMode] = useState<"teleop" | "trajectory" | "vla">("teleop");
-  useEffect(() => { if (activeMode) setTargetMode(activeMode); }, [activeMode]);
+  useEffect(() => { if (modeConfirmed && activeMode) setTargetMode(activeMode); }, [activeMode, modeConfirmed]);
   const modeNames = { teleop: "Teleop", trajectory: "Trajectory", vla: "VLA" };
-  const modeConfirmed = Boolean(rosControl?.available);
   const disabledSession = Boolean(activeMode && hardwareStatus?.mode === 3);
-  const modeConflict = [isArmTeleopControllerActive(rosControl), isArmTrajectoryControllerActive(rosControl), isVlaControllerActive(rosControl)].filter(Boolean).length > 1;
+  const returningSession = Boolean(activeMode && hardwareStatus?.mode === 2);
+  const modeConflict = !controlStopped && [isArmTeleopControllerActive(rosControl), isArmTrajectoryControllerActive(rosControl), isVlaControllerActive(rosControl)].filter(Boolean).length > 1;
   const quickActions = buildStatusQuickActions({
     sshOk,
     rosReady: isRosReady(jointState),
@@ -215,6 +223,8 @@ export function StatusPage({
   });
 
   const targetAction = quickActions.find((action) => action.id === targetMode)!;
+  const logMode = workflow && (workflow.running || workflow.failed || actionBusy) && ["teleop", "trajectory", "vla"].includes(workflow.mode) ? workflow.mode : (modeConfirmed ? activeMode : null) ?? targetMode;
+  const logSource = logMode === "vla" ? "vla" : logMode === "trajectory" ? "trajectory" : "teleop";
   return (
     <main className="status-page">
       <header className="status-page-header">
@@ -272,8 +282,8 @@ export function StatusPage({
                 <section className="status-mode-strip" aria-label="控制模式启停">
                   <header className="status-mode-current" aria-live="polite">
                     <span>当前模式</span>
-                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : ""}` : "未启用控制"}</strong>
-                    <span>{actionBusy ? "正在执行模式操作，等待核验结果" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
+                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
+                    <span>{actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认，尚不能启用目标模式" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
                   </header>
                   <div className="status-mode-selection">
                     <span>选择目标模式</span>
@@ -285,8 +295,8 @@ export function StatusPage({
                           onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}</button>
                       ))}
                     </div>
-                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
-                      onClick={() => onQuickAction?.(targetMode)}>{actionBusy ? "切换中…" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
+                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || returningSession || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
+                      onClick={() => onQuickAction?.(targetMode)}>{actionBusy ? "切换中…" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
                   <p className="status-mode-explanation">目标：{modeNames[targetMode]} · 切换流程：回零并关闭输出 → 清理旧进程 → 启动并核验。大静差或故障时可能拒绝切换，请查看日志。</p>
@@ -301,6 +311,7 @@ export function StatusPage({
                     </details>
                   </div>
                   {actionNotice && <output className="status-action-notice" role="status">{actionNotice}</output>}
+                  <ArmModeWorkflow workflow={workflow} />
                 </section>
               )}
               {isControl && !activeMode && (
@@ -336,8 +347,8 @@ export function StatusPage({
                 {zone.primary && <span className="status-zone-badge">主区</span>}
               </header>
               {body}
-              {isControl && <ControlLogViewer profile={profile} connected={sshOk} active={selectedTab === "control"}
-                preferredSource={activeMode === "vla" ? "controller" : activeMode === "trajectory" ? "trajectory" : "teleop"} />}
+              {isControl && <ControlLogViewer key={logSource} profile={profile} connected={sshOk} active={selectedTab === "control"}
+                preferredSource={logSource} />}
             </section>
           );
         })}

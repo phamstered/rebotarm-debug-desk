@@ -401,6 +401,7 @@ export function buildStatusCards(input: {
   realsenseTopicSample?: TopicSample | undefined;
   vlaChunkSample?: TopicSample | undefined;
   actionBusy?: string | null;
+  controlStopped?: boolean;
 }): StatusCardModel[] {
   const {
     stage,
@@ -425,6 +426,7 @@ export function buildStatusCards(input: {
     realsenseTopicSample,
     vlaChunkSample,
     actionBusy = null,
+    controlStopped = false,
   } = input;
 
   const sessionUp = stage === "connected" || sshOk;
@@ -592,8 +594,8 @@ export function buildStatusCards(input: {
     ],
   };
 
-  const actives = activeControllers(rosControl);
-  const rosControlTone: StatusTone = !rosControl
+  const actives = controlStopped ? [] : activeControllers(rosControl);
+  const rosControlTone: StatusTone = controlStopped || !rosControl
     ? "idle"
     : !rosControl.available
       ? "fail"
@@ -604,7 +606,7 @@ export function buildStatusCards(input: {
     id: "ros2-control",
     title: "ros2_control",
     tone: rosControlTone,
-    summary: !rosControl
+    summary: controlStopped ? "控制环境已退出（预期）" : !rosControl
       ? "检查中…"
       : !rosControl.available
         ? "Controller Manager 离线"
@@ -612,21 +614,21 @@ export function buildStatusCards(input: {
           ? `${actives.length} 个 active`
           : "无 active Controller",
     detail: actives.length > 0 ? actives.join(", ") : undefined,
-    failureReason: rosControl && !rosControl.available ? rosControl.message || "Controller Manager 不可用" : undefined,
+    failureReason: !controlStopped && rosControl && !rosControl.available ? rosControl.message || "Controller Manager 不可用" : undefined,
     rows: [
       { label: "Manager", value: rosControl?.manager ?? "/controller_manager" },
-      { label: "可用", value: rosControl ? (rosControl.available ? "是" : "否") : "—", tone: rosControl?.available ? "ok" : rosControl ? "fail" : "idle" },
+      { label: "可用", value: controlStopped ? "否（已按请求退出）" : rosControl ? (rosControl.available ? "是" : "否") : "—", tone: controlStopped ? "idle" : rosControl?.available ? "ok" : rosControl ? "fail" : "idle" },
       { label: "Active", value: actives.length > 0 ? actives.join(", ") : "—", tone: actives.length > 0 ? "ok" : "idle" },
       { label: "全部", value: rosControl?.available ? String(rosControl.controllers.length) : "—" },
     ],
-    note: rosControl?.message || undefined,
+    note: controlStopped ? "输出关闭、旧控制环境清理均已核验；Controller Manager 此时离线属预期。" : rosControl?.message || undefined,
   };
 
   const usbCard = buildUsbCard({ sshOk, usbProbe, usbChecked });
 
   const teleopScriptRunning = Boolean(armMode?.teleopRunning);
   const teleopControllerActive = isArmTeleopControllerActive(rosControl);
-  const teleopActive = rosControl?.available ? teleopControllerActive : teleopScriptRunning;
+  const teleopActive = !controlStopped && (rosControl?.available ? teleopControllerActive : teleopScriptRunning);
   const teleopGravityWarn = gravityInactiveWarning(teleopActive, rosControl);
   const teleopCard: StatusCardModel = {
     id: "teleop",
@@ -651,7 +653,7 @@ export function buildStatusCards(input: {
 
   const trajScriptRunning = Boolean(armMode?.trajectoryRunning);
   const trajControllerActive = isArmTrajectoryControllerActive(rosControl);
-  const trajActive = rosControl?.available ? trajControllerActive : trajScriptRunning;
+  const trajActive = !controlStopped && (rosControl?.available ? trajControllerActive : trajScriptRunning);
   const trajGravityWarn = gravityInactiveWarning(trajActive, rosControl);
   const trajectoryCard: StatusCardModel = {
     id: "trajectory",
@@ -738,7 +740,11 @@ export function buildStatusCards(input: {
   let vlaDetail: string | undefined;
   let vlaFailure: string | undefined;
   let vlaWarning: string | undefined = VLA_ONE_CLICK_RISK_WARNING;
-  if (!sshOk) {
+  if (controlStopped) {
+    vlaTone = "idle";
+    vlaSummary = "未运行";
+    vlaWarning = undefined;
+  } else if (!sshOk) {
     vlaTone = "idle";
     vlaSummary = "SSH 未就绪";
   } else if (!rosControl) {

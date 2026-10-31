@@ -57,6 +57,9 @@ describe("ControlLogViewer", () => {
     const output = screen.getByLabelText("日志输出");
     Object.defineProperties(output, { scrollHeight: { configurable: true, value: 900 }, clientHeight: { configurable: true, value: 300 } });
     fireEvent.scroll(output, { target: { scrollTop: 100 } });
+    expect(screen.getByRole("checkbox")).toBeChecked();
+    fireEvent.wheel(output, { deltaY: -100 });
+    fireEvent.scroll(output, { target: { scrollTop: 100 } });
     expect(screen.getByRole("checkbox")).not.toBeChecked();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "INFO" } });
     mocks.invoke.mockResolvedValue(snapshot("[INFO] ready\n[INFO] next\n"));

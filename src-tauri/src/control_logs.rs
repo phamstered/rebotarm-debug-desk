@@ -1,8 +1,26 @@
 use super::{ssh_base, ssh_target, ConnectionProfile};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use std::collections::HashMap;
+use tokio::sync::Mutex;
 
 const READER: &str = include_str!("control_logs.py");
+
+#[derive(Default)]
+pub struct LogSessions(Mutex<HashMap<String, serde_json::Value>>);
+
+// Process memory is deliberately not persisted: restarting the app hides all
+// earlier log bytes. Capture every source together, before a new mode starts.
+pub async fn prepare(profile: &ConnectionProfile, sessions: &LogSessions) -> Result<serde_json::Value, String> {
+    let key = serde_json::json!([profile.host, profile.ssh_port, profile.username, profile.identity_file, profile.ros_domain_id]).to_string();
+    let mut entries = sessions.0.lock().await;
+    if let Some(baseline) = entries.get(&key) { return Ok(baseline.clone()); }
+    let script = READER.replace('\'', "'\"'\"'");
+    let command = format!("timeout 10 python3 -c '{script}' session baseline");
+    let baseline = execute(profile, command).await?;
+    entries.insert(key, baseline.clone());
+    Ok(baseline)
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,7 +35,7 @@ pub struct ControlLogSnapshot {
 }
 
 fn remote_command(source: &str, download: bool) -> Result<String, String> {
-    if !matches!(source, "teleop" | "trajectory" | "controller" | "realsense") {
+    if !matches!(source, "teleop" | "trajectory" | "vla" | "controller" | "realsense") {
         return Err("不支持的日志来源".into());
     }
     let script = READER.replace('\'', "'\"'\"'");
@@ -31,8 +49,15 @@ async fn read(
     profile: &ConnectionProfile,
     source: &str,
     download: bool,
+    sessions: &LogSessions,
 ) -> Result<ControlLogSnapshot, String> {
-    let remote = remote_command(source, download)?;
+    let mut remote = remote_command(source, download)?;
+    let baseline = prepare(profile, sessions).await?;
+    remote.push_str(&format!(" '{}'", baseline.to_string().replace('\'', "'\"'\"'")));
+    serde_json::from_value(execute(profile, remote).await?).map_err(|e| format!("日志响应无效：{e}"))
+}
+
+async fn execute(profile: &ConnectionProfile, remote: String) -> Result<serde_json::Value, String> {
     let mut command = ssh_base(profile);
     command
         .kill_on_drop(true)
@@ -69,8 +94,9 @@ fn read_error(code: Option<i32>, stderr: &str) -> String {
 pub async fn read_control_log(
     profile: ConnectionProfile,
     source: String,
+    sessions: tauri::State<'_, LogSessions>,
 ) -> Result<ControlLogSnapshot, String> {
-    read(&profile, &source, false).await
+    read(&profile, &source, false, &sessions).await
 }
 
 fn validate_download_path(path: &str) -> Result<(), String> {
@@ -86,10 +112,11 @@ pub async fn download_control_log(
     profile: ConnectionProfile,
     source: String,
     local_path: String,
+    sessions: tauri::State<'_, LogSessions>,
 ) -> Result<(), String> {
     validate_download_path(&local_path)?;
     let path = std::path::Path::new(&local_path);
-    let snapshot = read(&profile, &source, true).await?;
+    let snapshot = read(&profile, &source, true, &sessions).await?;
     if !snapshot.exists {
         return Err("日志尚未生成".into());
     }
@@ -101,7 +128,7 @@ mod tests {
     use super::*;
     #[test]
     fn only_allows_known_log_sources() {
-        for source in ["teleop", "trajectory", "controller", "realsense"] {
+        for source in ["teleop", "trajectory", "vla", "controller", "realsense"] {
             let cmd = remote_command(source, false).unwrap();
             assert!(cmd.starts_with("timeout 10 python3 -c '"));
             assert!(cmd.ends_with(&format!("{source} tail")));

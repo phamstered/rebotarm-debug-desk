@@ -32,7 +32,7 @@ const doubles = vi.hoisted(() => ({
   listeners: new Set<(message: unknown) => void>(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke, Channel: class { onmessage = (_event: unknown) => {}; } }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: doubles.save }));
 vi.mock("./bridge", () => ({
@@ -1128,6 +1128,31 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
     await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "disable-stop" })));
     expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({ op: "joint_command" }));
+  });
+
+  it("discards arm workflow events and errors after reconnect", async () => {
+    localStorage.removeItem("easy-debug-navigate-status-on-connect");
+    const implementation = doubles.invoke.getMockImplementation()!;
+    let finish!: (value: unknown) => void;
+    let channel!: { onmessage: (event: unknown) => void };
+    doubles.invoke.mockImplementation((command: string, args: unknown) => command === "start_arm_mode"
+      ? new Promise((resolve) => { finish = resolve; channel = (args as {onProgress: typeof channel}).onProgress; }) : implementation(command, args));
+    const user = userEvent.setup(); render(<App />);
+    await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
+    await screen.findByRole("heading", {name: "Status"});
+    await user.click(screen.getByRole("tab", {name: /控制模式/})); emitRosReady();
+    await user.click(screen.getByRole("button", {name: /启动所选模式|切换模式（先回零）/}));
+    await user.click(screen.getByRole("button", {name: /断开并重连…/}));
+    await screen.findByRole("button", {name: "连接 Jetson"});
+    await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
+    await screen.findByRole("heading", {name: "Status"});
+    await act(async () => {
+      channel.onmessage({stage: "cleanup", message: "old progress", failed: true});
+      finish({ok: false, message: "old session failure", detail: "old failure"});
+    });
+    await user.click(screen.getByRole("tab", {name: /控制模式/}));
+    expect(screen.queryByText(/old session failure|old progress/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("控制器启动流程")).not.toBeInTheDocument();
   });
 
   it("gates Monitor and Motor until JointState smoke is green", async () => {
