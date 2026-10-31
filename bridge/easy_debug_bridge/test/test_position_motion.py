@@ -49,7 +49,7 @@ class Fixture(rclpy.node.Node):
                   "moveit_simple_controller_manager.arm_trajectory_controller.action_ns": "follow_joint_trajectory",
                   "trajectory_execution.allowed_start_tolerance": .01}
         for name in NAMES:
-            for field, value in [("max_velocity", .5), ("max_acceleration", .5), ("has_velocity_limits", True), ("has_acceleration_limits", True)]:
+            for field, value in [("max_velocity", 1.), ("max_acceleration", 1.), ("has_velocity_limits", True), ("has_acceleration_limits", True)]:
                 params[f"robot_description_planning.joint_limits.{name}.{field}"] = value
         for key, value in params.items(): self.declare_parameter(key, value)
         self.pub_joint = self.create_publisher(JointState, "/stm32/joint_states", 10)
@@ -82,7 +82,7 @@ class Fixture(rclpy.node.Node):
         goal = handle.request
         assert goal.request.group_name == "arm" and goal.request.pipeline_id == "ompl"
         assert not goal.planning_options.replan
-        assert goal.request.max_velocity_scaling_factor <= .2
+        assert goal.request.max_velocity_scaling_factor == 1.
         assert goal.request.start_state.joint_state.name == NAMES
         self.starts.append(list(goal.request.start_state.joint_state.position))
         constraints = goal.request.goal_constraints[0].joint_constraints
@@ -201,7 +201,7 @@ def main():
         assert list(fixture.executions[-1].points[-1].positions)==expected
         assert [c.joint_name for c in fixture.path_constraints[-1]]==["joint1","joint3","joint5","joint6"]
         count=len(fixture.executions)
-        for label,seconds,kind in (("too-short",1.,"normal"),("empty-plan",5.,"empty"),
+        for label,seconds,kind in (("over-speed",.1,"normal"),("empty-plan",5.,"empty"),
                                    ("bad-plan-start",5.,"bad-start"),("bad-plan-end",5.,"bad-end"),
                                    ("bad-plan-time",5.,"bad-time")):
             fixture.plan_kind=kind;ready()
@@ -214,10 +214,19 @@ def main():
                       {"joint_targets":{"joint1":99.}},{"joint_targets":{"joint1":.1},"positions":[0.]*6},
                       {"joint_targets":{"joint1":.1},"joint_name":"joint2","joint_position":.1},
                       {"joint_targets":{"joint1":.1},"motion_duration_s":0.},
-                      {"joint_targets":{"joint1":.1},"motion_duration_s":121.}):
+                      {"joint_targets":{"joint1":.1},"motion_duration_s":2147483648.}):
             rejected=request("position_move",command_id="invalid-timed",confirmation="ARMED",**extra)
             assert rejected.get("accepted") is False,rejected
         assert len(fixture.goals)==count
+        for label,seconds,angle,sec,nanosec in (("faster-than-recommended",1.2,-.12,1,200000000),
+                                               ("longer-than-old-cap",121.,-.11,121,0)):
+            ready()
+            accepted=request("position_move",command_id=label,confirmation="ARMED",joint_targets={"joint2":angle},motion_duration_s=seconds)
+            assert accepted.get("accepted") is not False,accepted
+            result,_=terminal(label);assert result["motion_phase"]=="succeeded",result
+            assert result["recommended_duration_s"]==2.,result
+            assert fixture.executions[-1].points[-1].time_from_start.sec==sec
+            assert fixture.executions[-1].points[-1].time_from_start.nanosec==nanosec
         # Cancel in planning: it must not leak a second ExecuteTrajectory goal.
         fixture.plan_delay=.8;ready();count=len(fixture.executions)
         request("position_move",command_id="cancel-plan",confirmation="ARMED",joint_targets={"joint2":-.12},motion_duration_s=5.)

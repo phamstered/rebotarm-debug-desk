@@ -39,7 +39,7 @@ describe("saved MoveIt motion", () => {
     const { result, request, rerender } = setup();
     await waitFor(() => expect(result.current.jointTargetsReason).toBe(""));
     act(() => result.current.setArmed(true));
-    for (const duration of [NaN, Infinity, 0, .09, 121])
+    for (const duration of [NaN, Infinity, 0, -1, 2147483648])
       await act(async () => result.current.executeJoints({ joint1: .1 }, duration));
     for (const targets of [{}, { bad: .1 }, { joint1: NaN }] as Record<string, number>[])
       await act(async () => result.current.executeJoints(targets, 5));
@@ -115,8 +115,9 @@ describe("saved MoveIt motion", () => {
     const command_id = moves[0][0].command_id;
     emit({ op: "position_motion", command_id: "other", motion_phase: "succeeded" });
     expect(result.current.busy).toBe(true);
-    emit({ op: "position_motion", command_id, motion_phase: "executing", label: "取料", message: "执行中" });
+    emit({ op: "position_motion", command_id, motion_phase: "executing", label: "取料", message: "执行中", recommended_duration_s: 2.5 });
     expect(result.current.state.phase).toBe("executing");
+    expect(result.current.state.recommendedDuration).toBe(2.5);
     emit({ op: "position_motion", command_id, motion_phase: "succeeded", message: "实际到位" });
     expect(result.current.busy).toBe(false);
     expect(result.current.state.message).toBe("实际到位");

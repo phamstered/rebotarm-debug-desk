@@ -34,6 +34,10 @@ it("keeps six targets across selection and feedback, and submits one timed comma
   expect(executeJoints).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("运动时长（秒）"), { target: { value: "0" } });
   expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("运动时长（秒）"), { target: { value: ".05" } });
+  expect(screen.getByRole("button", { name: "确认执行" })).not.toBeDisabled();
+  view.rerender(<JointRotationPanel {...props} motion={{ ...motion, state: { ...motion.state, recommendedDuration: 2.5 } }} />);
+  expect(screen.getByText(/最近规划推荐时长 2.500 秒/)).toBeVisible();
   fireEvent.change(screen.getByLabelText("运动时长（秒）"), { target: { value: "5" } });
   fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
   expect(executeJoints).toHaveBeenCalledTimes(1);

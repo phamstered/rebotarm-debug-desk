@@ -52,7 +52,7 @@ struct PositionMotion::Impl {
     std::vector<double> target; Send send; Handle::SharedPtr handle;
     ExecuteHandle::SharedPtr execution_handle;
     std::vector<size_t> held_axes;
-    double duration{0};
+    double duration{0}, recommended_duration{0};
     Clock::time_point started{Clock::now()}, lease_at{Clock::now()}, result_at{}, settled_at{}, cancel_at{};
     bool cancel_requested{false}, terminal{false};
     int code{0}; bool failed_result{false};
@@ -63,6 +63,7 @@ struct PositionMotion::Impl {
   rclcpp_action::Client<Group>::SharedPtr action;
   rclcpp_action::Client<Execute>::SharedPtr execute_action;
   double start_tolerance{.01};
+  std::vector<double> velocity_limits, acceleration_limits;
   rclcpp::Client<Controllers>::SharedPtr controllers;
   std::shared_ptr<rclcpp::AsyncParametersClient> parameters;
   rclcpp::Subscription<Joints>::SharedPtr joints_sub;
@@ -95,7 +96,7 @@ struct PositionMotion::Impl {
   std::string event(const Motion &m) const {
     return "{\"op\":\"position_motion\",\"command_id\":" + quote(m.id) + ",\"label\":" + quote(m.label) +
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
-        ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + "}";
+        ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + "}";
   }
   void update(const std::shared_ptr<Motion> &m, const std::string &phase, const std::string &message, bool terminal = false) {
     m->phase = phase; m->message = message; m->terminal = terminal;
@@ -169,9 +170,11 @@ struct PositionMotion::Impl {
         for (size_t i = 9; i < p.size(); i += 4) {
           const double velocity = p[i].as_double(), acceleration = p[i+1].as_double();
           if (!std::isfinite(velocity) || velocity <= 0 || velocity > 1 || !std::isfinite(acceleration)
-              || acceleration <= 0 || acceleration > 2 || !p[i+2].as_bool() || !p[i+3].as_bool())
-            throw std::runtime_error("MoveIt 必须配置保守速度/加速度限幅，请使用 real_move_group.launch.py");
+              || acceleration <= 0 || acceleration > 1 || !p[i+2].as_bool() || !p[i+3].as_bool())
+            throw std::runtime_error("MoveIt 必须启用不超过 1 rad/s、1 rad/s² 的速度/加速度限幅，请使用 real_move_group.launch.py");
         }
+        velocity_limits.clear(); acceleration_limits.clear();
+        for (size_t i=9;i<p.size();i+=4) { velocity_limits.push_back(p[i].as_double()); acceleration_limits.push_back(p[i+1].as_double()); }
         auto parsed = position_motion_model(p[0].as_string(), p[1].as_string());
         std::string signature;
         for (const auto &value : p) signature += value.value_to_string();
@@ -264,7 +267,7 @@ struct PositionMotion::Impl {
     Group::Goal goal;
     goal.request.group_name = "arm"; goal.request.pipeline_id = "ompl";
     goal.request.allowed_planning_time = 5; goal.request.num_planning_attempts = 1;
-    goal.request.max_velocity_scaling_factor = 0.2; goal.request.max_acceleration_scaling_factor = 0.2;
+    goal.request.max_velocity_scaling_factor = 1.0; goal.request.max_acceleration_scaling_factor = 1.0;
     goal.request.start_state.is_diff = true;
     goal.request.start_state.joint_state.name = arm_motion_joints();
     goal.request.start_state.joint_state.position = actual;
@@ -355,7 +358,8 @@ struct PositionMotion::Impl {
           point.effort.empty() ? std::vector<double>{} : ordered_arm_values(names, point.effort),
           static_cast<int64_t>(point.time_from_start.sec) * 1000000000 + point.time_from_start.nanosec});
     }
-    points = stretch_motion(std::move(points), m->duration, model);
+    if (!points.empty()) { m->recommended_duration=points.back().time_ns/1e9; update(m,"planning","MoveIt 推荐运动时长："+std::to_string(m->recommended_duration)+" 秒（仅供参考）"); }
+    points = stretch_motion(std::move(points), m->duration, model, velocity_limits, acceleration_limits);
     const auto actual = ordered_arm_values(joints.name, joints.position);
     for (size_t i = 0; i < 6; ++i) {
       if (std::abs(points.front().positions[i] - actual[i]) > start_tolerance)
@@ -434,7 +438,7 @@ struct PositionMotion::Impl {
     if (!m->cancel_requested) {
       const auto reason = readiness(false);
       if (!reason.empty()) cancel(m, reason + "，已请求取消");
-      if (!fresh(m->started, 180)) cancel(m, "运动超过 180 秒，已请求取消");
+      if (!fresh(m->started, std::max(180.,m->duration+60.))) cancel(m, "运动超时，已请求取消");
       if (!fresh(m->lease_at, 5)) cancel(m, "会话心跳超过 5 秒，已请求取消");
     }
     if (m->cancel_requested && !fresh(m->cancel_at, 5) && m->phase != "stop_failed")

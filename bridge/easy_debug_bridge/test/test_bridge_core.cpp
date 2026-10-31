@@ -38,9 +38,9 @@ int main() {
     assert(rejected([&] { combined_joint_target(actual, {{"joint7", 0}}, model); }));
     assert(rejected([&] { combined_joint_target(actual, {{"joint1", NAN}}, model); }));
     assert(rejected([&] { combined_joint_target(actual, {{"joint1", 2}}, model); }));
-    for (double seconds : {double(NAN), double(INFINITY), -.1, 0., .099, 120.001})
+    for (double seconds : {double(NAN), double(INFINITY), -.1, 0., 2147483648.})
       assert(rejected([&] { validate_motion_duration(seconds); }));
-    validate_motion_duration(.1); validate_motion_duration(120);
+    validate_motion_duration(.001); validate_motion_duration(121);
     const std::vector<TimedMotionPoint> path{
         {model.home, std::vector<double>(6, .4), std::vector<double>(6, .8), {}, 0},
         {actual, std::vector<double>(6, .4), std::vector<double>(6, .8), {}, 2000000000}};
@@ -50,8 +50,15 @@ int main() {
     assert(stretch_motion(path, 5.125, model).back().time_ns == 5125000000);
     assert(stretched.back().velocities == std::vector<double>(6, .2));
     assert(stretched.back().accelerations == std::vector<double>(6, .2));
-    assert(stretch_motion(path, 2, model).back().velocities == path.back().velocities);
-    assert(rejected([&] { stretch_motion(path, 1.999, model); }));
+    // Endpoint derivatives alone are insufficient: this spline exceeds the
+    // limit inside the segment at its original duration.
+    assert(rejected([&] { stretch_motion(path, 2, model); }));
+    const std::vector<TimedMotionPoint> safe_path{
+        {model.home, model.home, model.home, {}, 0},
+        {std::vector<double>(6,.1), model.home, model.home, {}, 2000000000}};
+    assert(stretch_motion(safe_path, 1., model).back().time_ns == 1000000000);
+    assert(rejected([&] { stretch_motion(safe_path, .05, model); }));
+    assert(rejected([&] { stretch_motion(path, .2, model); }));
     assert(rejected([&] { stretch_motion({}, 5, model); }));
     auto invalid_path = path; invalid_path.back().time_ns = 0;
     assert(rejected([&] { stretch_motion(invalid_path, 5, model); }));
