@@ -4,6 +4,7 @@ export const CONTROL_LOG_SOURCES: Array<{ id: ControlLogSource; label: string }>
   { id: "teleop", label: "Teleop" },
   { id: "trajectory", label: "Trajectory" },
   { id: "vla", label: "VLA" },
+  { id: "moveit", label: "MoveIt 规划器" },
   { id: "controller", label: "ROS 控制器（最新文件）" },
   { id: "realsense", label: "RealSense" },
 ];

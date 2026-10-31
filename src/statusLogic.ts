@@ -666,7 +666,7 @@ export function buildStatusCards(input: {
     rows: [
       { label: "状态", value: trajActive ? "运行中" : "未运行", tone: trajActive ? "ok" : "idle" },
       { label: "PID", value: armMode?.trajectoryPid ? String(armMode.trajectoryPid) : "—" },
-      { label: "启动", value: "move_group.launch.py 或 teleop --position-controller=trajectory" },
+      { label: "启动", value: "Trajectory 一键启动：JTC + gravity + MoveIt" },
       { label: "控制器", value: ARM_TRAJECTORY_CONTROLLER, tone: trajControllerActive ? "ok" : trajActive ? "warn" : "idle" },
       { label: "互斥", value: "与 Teleop/VLA 互斥" },
       gravityCompensationRow({ rosControl, modeActive: trajActive }),

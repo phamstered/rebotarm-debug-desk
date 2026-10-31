@@ -72,7 +72,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 ## 4. Topic Graph、Inspector 与 Monitor
 
 - Robot View 同级提供 Topic Graph 和「位置」Tab（DataGraph 已迁至 Monitor 导航页）。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「位置」保存当前连接（SSH 主机、用户、端口）下的六个臂关节点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链画一张姿态缩略图；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理位置」打开同一份数据。自定义点可以新增、编辑和删除。
-- 点位执行使用 Jetson MoveIt2：连接后显式激活 `arm_trajectory_controller`，运行控制栈的 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`，勾选会话内安全确认后点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
+- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。若轨迹控制器已运行但规划器未启动，可在位置页点击“启动 MoveIt”；随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
 - MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。只允许 `arm` 六关节；不控制夹爪，不自动切换控制器。速度与加速度缩放固定为 0.2；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤1 rad/s 与加速度 ≤2 rad/s²（真实入口采用 0.5/0.5、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
 - Bridge 在规划前及执行期间校验控制器 active、三类反馈 <1 秒、TRACK/故障/使能掩码、反馈一致性、完整有限关节值和模型限位。跨连接只允许一个点位运动，`command_id` 去重；规划/执行超过 180 秒、故障、反馈丢失、配置变化、连接断开或会话心跳超过 5 秒会请求取消。手动 MIT（DISABLE 除外）、旧拖拽轨迹及重力辨识不能覆盖正在运行的点位运动。
 - 启动点位前还核对 active JTC 实际认领六关节 `position+velocity` 接口；保持参考必须完整且有限、参考速度 ≤0.01 rad/s、与实测位置偏差 ≤0.005 rad，并连续就绪 200 ms。偏差过大时显示具体关节和弧度差，拒绝发起 MoveIt 请求，保留真实规划起点及碰撞检查；不会放宽起点容差或用旧目标冒充实测状态。该门禁防止已观测到的大幅起点跃变，不代表已消除机械静摩擦/静差，偏差大的现场仍需校准跟踪。需同时更新控制栈的速度接口配置，旧 position-only JTC 将不可执行点位。
@@ -270,3 +270,12 @@ Jetson、Fast DDS、micro-ROS Agent 和 STM32 属于外部进程/硬件边界，
 - 启停时显示“连接检查 → 安全停止 → 清理旧进程 → 启动控制器 → 核验反馈 → 完成”的步骤图；退出操作只显示停止所需步骤。高亮节点来自本次原生调用的 SSH 实时输出，自检阶段同步显示脚本 `[n/9]` 步骤；失败停在真实失败节点。切换连接或结束调用后丢弃旧进度，不用计时器推算进度。
 - 实时日志默认跟随当前控制器；切换过程中跟随目标控制器，尚无运行模式时跟随选中的目标。VLA 跟随本次 Trajectory+gravity 宿主日志，避免自动选中另一控制器的最新文件。更换来源时重新启用“跟随最新”；仅用户滚动行为会暂停跟随，内容增加和布局变化不会自动取消。应用重启后，为首次访问的主机建立所有允许日志来源的字节基线，默认不再显示此前内容；新模式启动前同样建立基线，避免丢失本次启动日志。只重置展示窗口，不截断 Jetson 原始文件；每次启动前将旧的固定日志文件原样移动到同目录 `history/`，新建文件接收本次输出，避免相同长度或相同内容的重启日志被旧字节游标隐藏。完整下载只包含本次应用会话的新内容。日志轮转、原地截断后显示新文件内容；日志读取失败不会阻止安全退出或 DISABLE。
 - VLA 先重新初始化 Trajectory+gravity 控制栈，再在同一锁内切换到 VLA，确认 VLA 与 gravity active、Teleop/Trajectory inactive 以及无故障 TRACK。切换失败会保留可观测状态，不声称进入目标模式；现场需通过退出入口安全处理。此路径不启动外部 VLA 推理进程。
+
+
+## MoveIt 一键启动
+
+- Trajectory 自检通过后启动真实 MoveIt，流程图增加“启动 MoveIt”阶段；Teleop/VLA 不启动规划器。仅启动规划器不会执行点位，不会自动勾选安全解锁，也不会创建或切换硬件控制器。
+- 位置页的“启动 MoveIt”复用同一个原生入口。需要连接 Jetson、已有 active `arm_trajectory_controller`、无其他操作或点位运动；原生再次读取新鲜无故障 TRACK 并查询真实控制器状态。未启动轨迹控制时提示先在 Status 启动 Trajectory。
+- 在配置的 ROS 域内等待 `/move_action`、`/move_group/get_parameters`、`/get_planning_scene` 就绪。已有就绪规划器直接复用；已有但未就绪的节点只等待，不重复启动。重复的 Action 服务端、启动器提前退出或超时均报错；MoveIt 自身的同名内部节点不会被误判为多套规划器。点位是否可执行继续由 Bridge 的模型、碰撞、起点和硬件安全门判断。
+- 本应用启动的规划器保存 Linux PID、启动标识、用户与 ROS 域；切换或退出在 DISABLE 和旧 arm 清理通过后向已核验的启动器发送一次退出信号并等待其进程组退出，避免向启动器与子节点重复广播信号。归属不可读、PID 复用、未知残留或退出超时会阻止后续步骤，不强杀、不接管外部启动的规划器。失败时保留必要进程与日志；重试不会中断机械臂命令流。
+- MoveIt 输出记录在 Jetson `~/.cache/robot-console/arm-moveit.log`，Status 日志来源可选“MoveIt 规划器”，支持既有搜索、下载与跟随。旧日志保留在 `history/`。手动兼容启动仍可执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`。

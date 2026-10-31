@@ -14,7 +14,7 @@ pub struct Progress {
 pub fn stage_line(line: &str) -> Option<Progress> {
     let rest = line.strip_prefix("ARM_STAGE|")?;
     let (stage, message) = rest.split_once('|')?;
-    if !["prepare", "safe-stop", "cleanup", "startup", "verify", "ready"].contains(&stage) { return None; }
+    if !["prepare", "safe-stop", "cleanup", "startup", "verify", "planner", "ready"].contains(&stage) { return None; }
     Some(Progress { stage: stage.into(), message: message.chars().take(512).collect(), failed: false })
 }
 
