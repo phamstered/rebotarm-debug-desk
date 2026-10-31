@@ -149,3 +149,55 @@ owns_ros2() {
     fi
     echo 0
 }
+
+# Check only arm command owners in this ROS domain. Unknown/unreadable owners
+# block startup; do not force-kill arbitrary ROS processes to claim cleanliness.
+arm_verify_clean() {
+    local pid domain
+    local pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/controller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/robo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
+    for pid in $(pgrep -f "$pattern"); do
+        domain=$(arm_controller_domain "$pid") || {
+            echo "Cannot verify arm owner $pid; refusing new mode." >&2
+            return 1
+        }
+        [[ "${domain:-0}" == "${ROS_DOMAIN_ID:-0}" ]] || continue
+        # Zombie processes cannot own a publisher or hardware interface.
+        [[ "$(ps -p "$pid" -o stat=)" == Z* ]] && continue
+        echo "Previous arm owner $pid still exists in ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}; refusing dirty mode startup." >&2
+        return 1
+    done
+}
+
+arm_clean_environment() {
+    local service="${1:-safe_stop}"
+    echo "[mode] safe stop and confirm DISABLE"
+    arm_safe_stop "$service" || return 1
+    arm_stop_controller || return 1
+    echo "[mode] cleaning previous arm supervisors"
+    stop_pg "$teleop_pid_file" "start_arm_teleop" || return 1
+    stop_pg "$traj_pid_file" "start_arm_teleop" || return 1
+    arm_verify_clean || return 1
+    echo "[mode] previous control environment verified clean"
+}
+
+# Called under the same native mode-switch lock after fresh trajectory bring-up.
+arm_start_vla() {
+    local state
+    timeout 10 ros2 control switch_controllers --strict --activate vla_position_controller --deactivate arm_trajectory_controller || return 1
+    state=$(timeout 10 ros2 control list_controllers | sed -E 's/\x1B\[[0-9;]*[mK]//g') || return 1
+    for controller in vla_position_controller gravity_compensation_controller; do
+        if ! awk -v name="$controller" '$1 == name && $3 == "active" {found=1} END {exit !found}' <<<"$state"; then
+            echo "VLA startup verification failed: $controller is not active." >&2
+            return 1
+        fi
+    done
+    if awk '$1 ~ /^(arm_teleop_controller|arm_trajectory_controller)$/ && $3 == "active" {found=1} END {exit !found}' <<<"$state"; then
+        echo "VLA startup left a conflicting position controller active." >&2
+        return 1
+    fi
+    arm_status || return 1
+    [[ "$arm_mode" == 1 && "$arm_fault" == 0 ]] || {
+        echo "VLA startup requires fault-free TRACK feedback." >&2
+        return 1
+    }
+}

@@ -211,6 +211,67 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("owns=0", result.stdout)
 
+    def test_mode_cleanup_orders_safe_stop_before_process_cleanup_and_verification(self):
+        body = r'''teleop_pid_file=teleop; traj_pid_file=trajectory
+        arm_safe_stop() { echo "safe:$1" >> "$EVENTS"; }
+        arm_stop_controller() { echo controller >> "$EVENTS"; }
+        stop_pg() { echo "stop:$1:$2" >> "$EVENTS"; }
+        arm_verify_clean() { echo verify >> "$EVENTS"; }
+        arm_clean_environment disable'''
+        result, events, _ = self.run_shell(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events.splitlines(), ["safe:disable", "controller", "stop:teleop:start_arm_teleop", "stop:trajectory:start_arm_teleop", "verify"])
+
+    def test_mode_cleanup_failure_never_advances_to_next_stage(self):
+        for failure in ("safe", "controller", "supervisor", "verify"):
+            body = r'''teleop_pid_file=teleop; traj_pid_file=trajectory
+            arm_safe_stop() { echo safe >> "$EVENTS"; [[ "$FAILURE" != safe ]]; }
+            arm_stop_controller() { echo controller >> "$EVENTS"; [[ "$FAILURE" != controller ]]; }
+            stop_pg() { echo supervisor >> "$EVENTS"; [[ "$FAILURE" != supervisor ]]; }
+            arm_verify_clean() { echo verify >> "$EVENTS"; [[ "$FAILURE" != verify ]]; }
+            FAILURE=FAIL_VALUE
+            arm_clean_environment || exit 17
+            echo started >> "$EVENTS"'''.replace("FAIL_VALUE", failure)
+            result, events, _ = self.run_shell(body)
+            self.assertEqual(result.returncode, 17, (failure, result.stderr))
+            self.assertNotIn("started", events)
+            self.assertEqual(events.splitlines()[-1], failure)
+
+    def test_orphan_command_owner_blocks_same_domain_but_not_other_domains(self):
+        for domain, expected in (("0", 1), ("225", 0)):
+            body = r'''pgrep() { echo 123; }
+            arm_controller_domain() { echo DOMAIN_VALUE; }
+            ps() { echo S; }
+            arm_verify_clean'''.replace("DOMAIN_VALUE", domain)
+            result, _, _ = self.run_shell(body)
+            self.assertEqual(result.returncode, expected, result.stderr)
+            if expected:
+                self.assertIn("refusing dirty mode startup", result.stderr)
+
+    def test_unreadable_owner_blocks_clean_verification(self):
+        result, _, _ = self.run_shell('pgrep() { echo 123; }; arm_controller_domain() { return 1; }; arm_verify_clean')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cannot verify arm owner", result.stderr)
+
+    def test_vla_switch_requires_gravity_exclusivity_and_fault_free_track(self):
+        for state, expected in (("valid", 0), ("missing_gravity", 1), ("conflict", 1), ("hold", 1), ("fault", 1)):
+            body = r'''ros2() {
+                if [[ "$1" == topic ]]; then printf 'mode: %s\nfault_code: %s\nlast_command_sequence: 50\n' "$MODE" "$FAULT"; return 0; fi
+                if [[ "$2" == switch_controllers ]]; then echo switched >> "$EVENTS"; return 0; fi
+                printf 'vla_position_controller type active\narm_trajectory_controller type inactive\n'
+                [[ "$CASE" == missing_gravity ]] || echo 'gravity_compensation_controller type active'
+                [[ "$CASE" != conflict ]] || echo 'arm_teleop_controller type active'
+            }
+            CASE=CASE_VALUE
+            arm_start_vla'''.replace("CASE_VALUE", state)
+            result, events, _ = self.run_shell(body, mode=0 if state == "hold" else 1, fault=6 if state == "fault" else 0)
+            self.assertEqual(result.returncode, expected, result.stderr)
+            self.assertIn("switched", events)
+
+    def test_vla_rejected_switch_never_reports_ready(self):
+        result, _, _ = self.run_shell('ros2() { return 1; }; arm_start_vla')
+        self.assertNotEqual(result.returncode, 0)
+
 
 
 if __name__ == "__main__":

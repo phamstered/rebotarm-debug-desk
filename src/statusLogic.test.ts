@@ -439,8 +439,8 @@ describe("statusLogic", () => {
     expect(holdLatch.rows.find((row) => row.label === "固件闩锁")?.value).toContain("HOLD");
 
     const quick = buildStatusQuickActions({ sshOk: true, rosReady: true, vlaActive: true });
-    expect(quick.find((item) => item.id === "vla")?.disabled).toBe(true);
-    expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(true);
+    expect(quick.find((item) => item.id === "vla")?.disabled).toBe(false);
+    expect(quick.find((item) => item.id === "teleop")?.disabled).toBe(false);
     expect(quick.find((item) => item.id === "stop")?.label).toBe("停止");
   });
 
