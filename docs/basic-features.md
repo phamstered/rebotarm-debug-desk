@@ -81,7 +81,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Robot View 左上角有「运动控制」面板。还没有执行结果时显示「无运动」。误差由下发关节或 TCP 目标与停稳反馈计算：关节为弧度差，TCP 位置为毫米、姿态为角度。切回 Robot View 后该面板持续展示点位运动状态，点位运动期间锁定 TCP 拖拽；拖拽本身仍按原有本地 IK 松手下发，其误差结果尚未写入该面板。
 - Topic Graph 在打开时立即加载，默认每 30 秒自动刷新，也可点击“刷新 Graph”手动刷新；图变化不影响现有 Topic 数据订阅。
 - Graph 使用确定性的力导向布局：ROS Node 为圆角矩形、Topic 为椭圆，使用与界面一致的蓝青/青绿色，连线保留发布/订阅方向；图形大小反映连接数。节点之间有斥力、连接有引力，并进行碰撞消除；初始布局以可用尺寸为参考，但节点坐标不受初始布局矩形限制。默认隐藏 Bridge 节点及其私有 Topic，可用“显示 Bridge”开关恢复；共享机器人数据 Topic 保留。
-- 无限画布初始以 100% 缩放居中节点，支持滚轮/按钮缩放、空白处拖拽平移；可将节点拖到初始布局之外，刷新后仍保留手动位置（节点仍存在时）。Fit 根据所有节点的实际位置缩放取景，Reset 以 100% 缩放将现有节点居中；选中节点后仍可自由平移，松手不会重新居中。节点标签保留 Topic 名称中的 `/`，最多显示原名称前 20 个字符，超出时用省略号提示，完整名称可从悬停提示和辅助标签读取。连接线上用粒子动画示意数据流向与快慢（当前为占位流速：publish 快于 subscribe，尚未接真实 Hz）。
+- 无限画布初始以 100% 缩放居中节点，支持滚轮/按钮缩放、空白处拖拽平移；可将节点拖到初始布局之外，刷新后仍保留手动位置（节点仍存在时）。Fit 根据所有节点的实际位置缩放取景，Reset 以 100% 缩放将现有节点居中；选中节点后仍可自由平移，松手不会重新居中。节点标签完整显示 Node 与 Topic 的原始名称，保留 `/`，不截断或附加省略号；每行最多 10 个 Unicode 字符，图形随行数增大以容纳全部文字。完整名称也可从悬停提示和辅助标签读取。连接线上用粒子动画示意数据流向与快慢（当前为占位流速：publish 快于 subscribe，尚未接真实 Hz）。
 - 点击任意图形会高亮其一跳关联节点和连线、弱化其他拓扑；点击左侧 Topic 列表也会切到 Graph、滚动到对应 Topic 并聚焦。点击 Topic 图形创建只读订阅，点击 Node 图形显示其详情。
 - 右侧 **Inspector** 以“数据 / 详情”Tab 区分：Topic 数据显示完整名称和原始 JSON，Image 显示 Canvas 预览与紧凑元数据；Topic 详情按需从 Bridge 获取发布者、订阅者、GID 和 QoS。选中 Node 时自动显示其发布、订阅、服务和客户端列表。订阅失败单独提示，不会中断 Graph 刷新。
 - 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，先选择 Monitor **仪表盘（Dashboard）**，再选择已有 **Panel** 或「新建 Panel」；数组字段展开为 `field[0..n]` 多条序列，加入同一个 Panel。已有 Panel 会保留原序列并去重。菜单支持方向键、Esc 和返回上一级。
@@ -217,7 +217,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | SSH 输入 | 用户名目标、setup 路径和 Topic 格式校验 | `src-tauri/src/lib.rs` |
 | 本地端口 | 首选端口及占用时自动回退 | `src-tauri/src/lib.rs` |
 | Topic | 发现、选择订阅、消息路由、计数和频率、手动/30 秒自动刷新 | `src/App.test.tsx`、`src/appLogic.test.ts` |
-| Topic Graph | ROS 图请求、无边界力导向布局、保留斜杠的 20 字符标签、选中后的画布平移、边界外节点拖动及刷新保留位置、Fit/Reset、占位粒子流速、Bridge 过滤、Controller 聚焦、节点订阅和刷新 | `src/bridge.test.ts`、`src/topicGraphLogic.test.ts`、`src/TopicGraph.test.tsx`、`src/App.test.tsx` |
+| Topic Graph | ROS 图请求、无边界力导向布局、保留斜杠与 Unicode 的完整多行标签及自适应图形、选中后的画布平移、边界外节点拖动及刷新保留位置、Fit/Reset、占位粒子流速、Bridge 过滤、Controller 聚焦、节点订阅和刷新 | `src/bridge.test.ts`、`src/topicGraphLogic.test.ts`、`src/TopicGraph.test.tsx`、`src/App.test.tsx` |
 | Inspector | Topic/Node 详情、完整 Topic 名称、JSON 右键字段、图像预览、订阅失败提示 | `src/TopicInspector.test.tsx`、`src/App.test.tsx` |
 | 数据采集 | Navigation 入口、配置校验与持久化、Episode 启动/保存/丢弃/结束、并发与旧响应、SSH 参数安全、进程身份、续录检查、正常 finalize | `src/DataCollectionPage.test.tsx`、`src/dataCollectionLogic.test.ts`、`src/AppNav.test.tsx`、`src/App.test.tsx`、`src-tauri/src/data_collection.rs`、`src-tauri/tests/test_collection_remote.py` |
 | Monitor / DataGraph | Dashboard/Panel CRUD、Inspector 两级加入、Panel 多序列与四类图表、布局预设（localStorage + JSON 导入导出）、网格拖拽、共享准星、bag `/clock`/stamp 时间轴、播放条（暂停/1x/进度估算）、暂停跟随/冻结窗口、最大化、重置/锁定/紧凑、v1→v2 迁移、转矩 7 Panel、30s 窗口、Jetson bag play | `src/TopicInspector.test.tsx`、`src/monitorLogic.test.ts`、`src/monitorChartLogic.test.ts`、`src/MonitorChart.test.tsx`、`src/monitorTimeline.test.ts`、`src/MonitorPage.test.tsx`、`src/dataGraphLogic.test.ts`、`src/DataGraph.test.tsx`、`src/App.test.tsx`、`src-tauri` rosbag play 测试 |
