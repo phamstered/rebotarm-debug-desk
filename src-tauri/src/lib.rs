@@ -11,6 +11,7 @@ mod data_collection;
 mod control_logs;
 mod positions;
 mod arm_workflow;
+mod node_runtime;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1367,10 +1368,6 @@ fn looks_like_project_root(path: &Path) -> bool {
             .is_file()
 }
 
-fn node_binary() -> String {
-    std::env::var("NODE_BINARY").unwrap_or_else(|_| "node".into())
-}
-
 fn deploy_bridge_args(profile: &ConnectionProfile) -> Result<Vec<String>, String> {
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
@@ -1425,15 +1422,21 @@ async fn deploy_bridge(
         format!("开始升级 Bridge（host={}）…", ssh_target(&profile)),
     );
 
-    let mut child = Command::new(node_binary())
+    let runtime = node_runtime::deployment_node(&root)?;
+    let _ = app.emit(
+        "bridge-deploy-progress",
+        format!("[runtime] Node: {}", runtime.program.display()),
+    );
+    let mut child = runtime
+        .command(&root)
         .args(&args)
-        .current_dir(&root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| {
             format!(
-                "无法启动 node 部署脚本（确认 PATH 中有 node，或设置 NODE_BINARY）：{error}"
+                "无法启动 Node 部署脚本（{}）：{error}",
+                runtime.program.display()
             )
         })?;
 
