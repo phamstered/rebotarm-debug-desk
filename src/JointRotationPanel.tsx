@@ -28,7 +28,7 @@ export function JointRotationPanel({ joints, selected, jointState, active, motio
     else inputError ||= `${name}：${result.error}`;
   }
   const seconds = duration.trim() ? Number(duration) : NaN;
-  const durationError = !Number.isFinite(seconds) || seconds < .1 || seconds > 120 ? "运动时长须为 0.1–120 秒" : "";
+  const durationError = !Number.isFinite(seconds) || seconds < 1e-9 || seconds > 2147483647 ? "运动时长须为正数且能用 ROS 时间表示" : "";
   const unsupported = Object.keys(edits).some((name) => !ARM_JOINT_NAMES.some((axis) => axis === name));
   const block = !active ? "Robot View 已隐藏" : !motion ? "请连接 Jetson 并启动轨迹控制与 MoveIt" :
     unsupported ? "此关节可预览；真机执行仅支持 arm 的 joint1–joint6" :
@@ -79,7 +79,8 @@ export function JointRotationPanel({ joints, selected, jointState, active, motio
     </>}
     <label>运动时长（秒）<input aria-label="运动时长（秒）" type="text" inputMode="decimal" value={duration}
       disabled={!active || motion?.busy} onChange={(event) => setDuration(event.target.value)} /></label>
-    <p>不含规划耗时；短于安全规划时长会提示增加时间。</p>
+    <p>不含规划耗时；推荐时长仅供参考，仍须满足速度与加速度上限。</p>
+    {motion?.state.recommendedDuration !== undefined && motion.state.recommendedDuration > 0 && <p className="joint-duration-recommendation">最近规划推荐时长 {motion.state.recommendedDuration.toFixed(3)} 秒（仅供参考）</p>}
     {(inputError || durationError) && <p role="alert" className="error">{inputError || durationError}</p>}
     <p className="joint-preview-state">{hasPreview ? `${Object.keys(targets).length} 轴姿态预览中 · 尚未执行` : "实时姿态"}</p>
     <label className="joint-safety"><input type="checkbox" checked={motion?.armed ?? false} disabled={!motion || motion.busy}

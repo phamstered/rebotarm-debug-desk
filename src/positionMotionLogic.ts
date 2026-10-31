@@ -5,7 +5,7 @@ import type { CustomPosition } from "./positionLogic";
 import { ARM_JOINT_NAMES } from "./positionLogic";
 
 export type PositionMotionPhase = "idle" | "validating" | "planning" | "executing" | "verifying" | "canceling" | "stopping" | "stop_failed" | "succeeded" | "failed" | "canceled";
-export type PositionMotionState = { commandId: string; label: string; phase: PositionMotionPhase; message: string; code?: number };
+export type PositionMotionState = { commandId: string; label: string; phase: PositionMotionPhase; message: string; code?: number; recommendedDuration?: number };
 export const positionMotionBusy = (phase: PositionMotionPhase) => !["idle", "succeeded", "failed", "canceled"].includes(phase);
 export type PositionMotionControls = {
   state: PositionMotionState;
@@ -68,7 +68,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
       if (generation.current !== current || message.op !== "position_motion" || message.command_id !== active.current) return;
       const phase = message.motion_phase as PositionMotionPhase;
       if (!phases.includes(phase)) return;
-      setState({ commandId: active.current, label: message.label || "位置", phase, message: message.message || "", code: message.code });
+      setState({ commandId: active.current, label: message.label || "位置", phase, message: message.message || "", code: message.code, recommendedDuration: message.recommended_duration_s });
       locked.current = positionMotionBusy(phase);
       if (!locked.current) void poll();
     });
@@ -94,10 +94,10 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     if (joint && (!ARM_JOINT_NAMES.some((name) => name === joint.jointName) || !Number.isFinite(joint.position))) {
       setState({ ...idle, label, phase: "failed", message: "单关节目标无效" }); return;
     }
-    if (multi && (!Number.isFinite(multi.duration) || multi.duration < .1 || multi.duration > 120 ||
+    if (multi && (!Number.isFinite(multi.duration) || multi.duration < 1e-9 || multi.duration > 2147483647 ||
         Object.keys(multi.targets).length === 0 || Object.keys(multi.targets).length > 6 ||
         Object.entries(multi.targets).some(([name, angle]) => !ARM_JOINT_NAMES.some((joint) => joint === name) || !Number.isFinite(angle)))) {
-      setState({ ...idle, label, phase: "failed", message: "关节目标无效或运动时长不在 0.1–120 秒内" }); return;
+      setState({ ...idle, label, phase: "failed", message: "关节目标无效或运动时长不是可表示的正数" }); return;
     }
     if (saved && (saved.positions.length !== 6 || !saved.positions.every(Number.isFinite))) {
       setState({ ...idle, label, phase: "failed", message: "点位关节数据无效" }); return;

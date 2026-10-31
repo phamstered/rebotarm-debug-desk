@@ -174,6 +174,7 @@ export type BridgeEnvelope = {
   motion_duration_message?: string;
   joint_targets?: Record<string, number>;
   motion_duration_s?: number;
+  recommended_duration_s?: number;
   joint_name?: string;
   joint_position?: number;
   available?: boolean;
