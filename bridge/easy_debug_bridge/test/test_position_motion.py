@@ -193,8 +193,15 @@ def main():
         fixture.state_offset=0.;fixture.speed=.2;time.sleep(.2);assert move("moving")["accepted"] is False
         fixture.speed=0.;fixture.active=False;time.sleep(.7);assert move("inactive")["accepted"] is False
         fixture.active=True;ready()
+        for offset in (.0183, -.0183):
+            fixture.reference_offset=offset;ready()
+            command="settled-offset-"+str(int(offset*10000))
+            accepted=move(command,.2)
+            assert accepted.get("accepted") is not False,accepted
+            result,_=terminal(command);assert result["motion_phase"]=="succeeded",result
+        fixture.reference_offset=0.;ready()
         count=len(fixture.goals)
-        for offset in (.032, .0416):
+        for offset in (.020001, -.020001, .032, .0416):
             fixture.reference_offset=offset;time.sleep(.3)
             m=move("start-jump-"+str(int(offset*10000)));assert m["accepted"] is False and "joint3" in m["message"] and "启动连续性" in m["message"],m
         fixture.reference_offset=0.;fixture.reference_speed=.02;time.sleep(.3)
