@@ -21,6 +21,7 @@ export type KinematicJoint = {
   axis: Vec3;
   lower: number;
   upper: number;
+  mimic?: string;
 };
 
 export type KinematicModel = {
@@ -289,6 +290,7 @@ export function parseKinematics(xml: string): KinematicModel {
       axis: parseTuple(axisNode?.getAttribute("xyz") ?? null, [1, 0, 0]),
       lower: Number.isFinite(lower) ? lower : Number.NEGATIVE_INFINITY,
       upper: Number.isFinite(upper) ? upper : Number.POSITIVE_INFINITY,
+      mimic: node.querySelector("mimic")?.getAttribute("joint") || undefined,
     });
   }
 

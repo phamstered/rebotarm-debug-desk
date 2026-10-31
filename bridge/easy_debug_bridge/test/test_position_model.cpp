@@ -1,5 +1,6 @@
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include <cassert>
+#include <limits>
 using namespace easy_debug_bridge;
 int main() {
   std::string urdf="<robot name='real'>", srdf="<robot name='real'><group name='arm'>";
@@ -18,4 +19,20 @@ int main() {
   auto invalid=srdf; invalid.replace(invalid.find("value='0.600000'"),16,"value='9.000000'");
   assert(rejects(urdf,invalid));
   assert(rejects("<robot/>",srdf));
+  const std::vector<double> measured{.1,.2,.3,.4,.5,.6};
+  const auto rotated = joint_rotation_target(measured, "joint3", -.25, model);
+  assert((rotated == std::vector<double>{.1,.2,-.25,.4,.5,.6}));
+  for (const auto &name : {"", "joint0", "joint7", "gripper"}) {
+    bool rejected = false;
+    try { joint_rotation_target(measured, name, 0, model); } catch (...) { rejected = true; }
+    assert(rejected);
+  }
+  for (double value : {2., std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+    bool rejected = false;
+    try { joint_rotation_target(measured, "joint1", value, model); } catch (...) { rejected = true; }
+    assert(rejected);
+  }
+  bool incomplete = false;
+  try { joint_rotation_target({0}, "joint1", 0, model); } catch (...) { incomplete = true; }
+  assert(incomplete);
 }

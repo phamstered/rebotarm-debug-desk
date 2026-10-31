@@ -2046,6 +2046,7 @@ export default function App() {
                 state: "position", label: positionMotion.state.label, phase: positionMotion.state.phase, message: positionMotion.state.message,
               } : positionMotion.busy ? { state: "position", label: "点位运动", phase: "validating", message: "已有会话的点位任务尚未结束" } : { state: "idle" }}
               onSendTrajectory={sendTrajectory}
+              jointMotion={positionMotion}
               rgbdCloud={rgbdSession.cloud}
               rgbdVisible={rgbdSession.visible}
               rgbdPointSize={rgbdSession.pointSize}

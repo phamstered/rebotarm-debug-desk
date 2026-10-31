@@ -1,4 +1,4 @@
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -22,7 +22,10 @@ import {
   resolveTcpLink,
   sceneToUrdfPoint,
 } from "./kinematicsLogic";
-import type { KinematicModel, Vec3 } from "./kinematicsLogic";
+import type { KinematicJoint, KinematicModel, Vec3 } from "./kinematicsLogic";
+import { JointRotationPanel } from "./JointRotationPanel";
+import { pickedRotationJoint, rotationalJoints, type JointRotationPreview } from "./jointRotationLogic";
+import type { PositionMotionControls } from "./positionMotionLogic";
 import { applyTrajectoryPlan, dispatchTrajectory, planTrajectory } from "./trajectoryLogic";
 import type { TrajectoryController } from "./trajectoryLogic";
 import type { TrajectoryPoint } from "./types";
@@ -220,10 +223,12 @@ function Scene({
   robot,
   controlsEnabled,
   children,
+  onPick,
 }: {
   robot: URDFRobot | null;
   controlsEnabled: boolean;
   children?: ReactNode;
+  onPick?(event: ThreeEvent<MouseEvent>): void;
 }) {
   const grid = useMemo(() => new GridHelper(10, 20, 0x45637d, 0x24384a), []);
   const keyLight = useMemo(() => {
@@ -241,13 +246,32 @@ function Scene({
       <ambientLight intensity={0.55} />
       <primitive object={keyLight} />
       <primitive object={grid} />
-      {robot && <primitive object={robot} rotation={[-Math.PI / 2, 0, 0]} />}
+      {robot && <primitive object={robot} rotation={[-Math.PI / 2, 0, 0]} onClick={onPick} />}
       {children}
       <Controls robot={robot} enabled={controlsEnabled} />
     </>
   );
 }
 
+function JointAxisMarker({ robot, joint }: { robot: URDFRobot; joint: KinematicJoint }) {
+  const group = useRef<Group>(null);
+  const { camera } = useThree();
+  const axis = useMemo(() => new Vector3(...joint.axis).normalize(), [joint]);
+  useFrame(() => {
+    const marker = group.current, link = robot.links?.[joint.child];
+    if (!marker) return;
+    marker.visible = Boolean(link);
+    if (!link) return;
+    link.getWorldPosition(marker.position);
+    const direction = axis.clone().applyQuaternion(link.getWorldQuaternion(marker.quaternion));
+    marker.quaternion.setFromUnitVectors(new Vector3(0, 0, 1), direction);
+    marker.scale.setScalar(Math.max(camera.position.distanceTo(marker.position) * 0.035, 1e-4));
+  });
+  return <group ref={group} visible={false}>
+    <mesh><torusGeometry args={[1, .045, 8, 64]} /><meshBasicMaterial color="#fbbf24" depthTest={false} transparent opacity={.9} /></mesh>
+    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[.025, .025, 3, 8]} /><meshBasicMaterial color="#fbbf24" depthTest={false} transparent opacity={.8} /></mesh>
+  </group>;
+}
 export function UrdfViewer({
   xml,
   jointState,
@@ -257,6 +281,7 @@ export function UrdfViewer({
   onSendTrajectory,
   active = true,
   motionInfo = { state: "idle" },
+  jointMotion,
   rgbdCloud = null,
   rgbdVisible = true,
   rgbdPointSize = 0.008,
@@ -271,6 +296,7 @@ export function UrdfViewer({
 }: {
   active?: boolean;
   motionInfo?: MotionControlInfo;
+  jointMotion?: PositionMotionControls;
   xml: string;
   jointState: JointState | null;
   bridge: BridgeClient;
@@ -305,6 +331,10 @@ export function UrdfViewer({
   const jointStateRef = useRef<JointState | null>(jointState);
   const controllerRef = useRef<TrajectoryController | null>(trajectoryController);
   const sendRef = useRef(onSendTrajectory);
+  const [interaction, setInteraction] = useState<"tcp" | "joint">("tcp");
+  const [selectedJoint, setSelectedJoint] = useState("");
+  const [jointPreview, setJointPreview] = useState<JointRotationPreview | null>(null);
+  const jointPreviewRef = useRef<JointRotationPreview | null>(null);
   controllerRef.current = trajectoryController;
   sendRef.current = onSendTrajectory;
 
@@ -357,7 +387,26 @@ export function UrdfViewer({
     applyJointState(jointStateRef.current?.name, jointStateRef.current?.position, (name, value) => {
       robotRef.current?.setJointValue(name, value);
     });
+    const value = jointPreviewRef.current;
+    if (activeRef.current && value) robotRef.current?.setJointValue(value.jointName, value.position);
   }, []);
+
+  const previewJoint = useCallback((value: JointRotationPreview | null) => {
+    jointPreviewRef.current = value;
+    setJointPreview(value);
+    applyState();
+  }, [applyState]);
+  const selectJoint = useCallback((name: string) => {
+    previewJoint(null); setSelectedJoint(name);
+  }, [previewJoint]);
+  useEffect(() => { previewJoint(null); setSelectedJoint(""); }, [xml, bridge, previewJoint]);
+  useEffect(() => { if (!active || jointMotion?.busy) previewJoint(null); }, [active, jointMotion?.busy, previewJoint]);
+  useEffect(() => {
+    if (!jointPreview) return;
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") previewJoint(null); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [jointPreview, previewJoint]);
 
   useEffect(() => {
     jointStateRef.current = jointState;
@@ -463,13 +512,32 @@ export function UrdfViewer({
 
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
-  const enabled = Boolean(active && trajectoryController?.jointNames?.length && !trajectoryController.readinessError && tcp.name && robot && !overlayError);
+  const enabled = Boolean(active && interaction === "tcp" && trajectoryController?.jointNames?.length && !trajectoryController.readinessError && tcp.name && robot && !overlayError);
+  const rotationJoints = rotationalJoints(model instanceof Error ? null : model);
+  const rotationJoint = rotationJoints.find((joint) => joint.name === selectedJoint);
+  const pickJoint = (event: ThreeEvent<MouseEvent>) => {
+    if (!active || interaction !== "joint" || jointMotion?.busy || !model || model instanceof Error || event.delta > 4) return;
+    const names: string[] = [];
+    let object = event.object;
+    while (object) { names.push(object.name); if (!object.parent) break; object = object.parent; }
+    const name = pickedRotationJoint(model, names);
+    if (name) { event.stopPropagation(); selectJoint(name); }
+  };
 
   return (
-    <div className="viewer">
+    <div className={`viewer${interaction === "joint" ? " joint-mode" : ""}`}>
+      <div className="viewer-layout">
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
       <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={motionInfo} />}>
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
+        <div className="viewer-interaction" aria-label="Robot View 操作方式">
+          <button type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("tcp"); }}>TCP 拖拽</button>
+          <button type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("joint"); }}>单关节</button>
+        </div>
+        {interaction === "joint" && <JointRotationPanel joints={rotationJoints} selected={selectedJoint}
+          jointState={jointState} active={active && Boolean(robot) && !overlayError} motion={jointMotion} hasPreview={Boolean(jointPreview)}
+          onSelect={selectJoint} onPreview={previewJoint} />}
+        {interaction === "tcp" && <>
         <div className="viewer-overlay-row">
           <span>轨迹控制器</span>
           <strong className={trajectoryController ? "ok" : "muted"}>
@@ -501,6 +569,7 @@ export function UrdfViewer({
           </div>
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
+        </>}
         {rgbdStatus?.enabled !== false && (
           <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
             <div className="viewer-overlay-row">
@@ -539,9 +608,9 @@ export function UrdfViewer({
           </div>
         )}
       </ViewerHeadsUp>
-      <Canvas frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
+      <Canvas className="viewer-canvas" frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
-        <Scene robot={robot} controlsEnabled={active && !dragging}>
+        <Scene robot={robot} controlsEnabled={active && !dragging} onPick={pickJoint}>
           {/* Cloud and robot share the scene root; cloud positions use the same ROS Z-up to scene Y-up rotation. */}
           <RgbdPointCloudLayer
             cloud={rgbdCloud}
@@ -551,7 +620,8 @@ export function UrdfViewer({
             nearM={rgbdNearM}
             farM={rgbdFarM}
           />
-          {active && robot && tcp.name && (
+          {active && interaction === "joint" && robot && rotationJoint && <JointAxisMarker robot={robot} joint={rotationJoint} />}
+          {active && interaction === "tcp" && robot && tcp.name && (
             <TrajectoryHandle
               robot={robot}
               linkName={tcp.name}
@@ -565,6 +635,7 @@ export function UrdfViewer({
           )}
         </Scene>
       </Canvas>
+      </div>
     </div>
   );
 }

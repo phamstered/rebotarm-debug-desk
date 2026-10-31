@@ -97,6 +97,23 @@ inline void validate_position_target(const std::vector<double> &values, const Po
       throw std::runtime_error("目标超过限位或不是有限值：" + arm_motion_joints()[i]);
   }
 }
+inline size_t arm_joint_index(const std::string &name) {
+  const auto &names = arm_motion_joints();
+  const auto found = std::find(names.begin(), names.end(), name);
+  if (found == names.end()) throw std::runtime_error("单关节旋转仅支持 arm 的 joint1–joint6");
+  return static_cast<size_t>(found - names.begin());
+}
+// Other joint targets come from measured state on the Bridge, never a stale
+// client snapshot. MoveIt additionally constrains those joints along the path.
+inline std::vector<double> joint_rotation_target(const std::vector<double> &actual,
+    const std::string &name, double position, const PositionMotionModel &model) {
+  validate_position_target(actual, model);
+  auto target = actual;
+  target[arm_joint_index(name)] = position;
+  validate_position_target(target, model);
+  return target;
+}
+constexpr double joint_rotation_hold_tolerance = 0.001;
 inline bool position_target_reached(const std::vector<double> &target, const std::vector<double> &actual,
                                     const std::vector<double> &velocity) {
   if (target.size() != 6 || actual.size() != 6 || velocity.size() != 6) return false;

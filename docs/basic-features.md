@@ -171,6 +171,16 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 11. TCP 拖拽轨迹下发
 
+### Robot View 单关节旋转
+
+- 在 Robot View 选择「单关节」，点击机械臂 link 或用下拉列表选择 URDF 的 revolute/continuous 关节。fixed、prismatic 与 mimic 关节不提供独立旋转操作；选中关节显示黄色旋转轴和圆环。
+- 显示实际角度、目标角度（度）和 URDF 限位，支持滑块与数值输入；连续关节数值不强制回绕。调整仅预览模型，实时反馈继续更新其他关节，不覆盖已编辑的目标。点击「恢复实时」、Esc、切换操作方式、隐藏视图或模型/连接变化会退出预览。
+- 勾选工作区安全确认并点击「确认执行」后，通过 MoveIt2 执行 joint1–joint6 中所选关节的绝对角度。其余五轴的目标由 Bridge 在受理时从新鲜反馈取得，并添加 ±0.001 rad 的 MoveIt 路径保持约束；无法在约束内避碰时规划失败。该约束是规划约束，不是硬件零误差保持保证。
+- 沿用点位运动的 active 轨迹控制器、position+velocity 接口、TRACK/故障/新鲜反馈、0.005 rad 起点参考连续性、200 ms 稳定、互斥、心跳、取消和到位验证。实际运动状态显示在运动控制面板，ACK 不表示到达。其他 URDF 旋转关节可预览，真机执行范围仍固定为 arm 六轴。
+- 需要更新 Bridge 支持 `joint_rotation_supported`；旧版本缺少该能力时禁用确认执行并提示升级。单关节与保存点位共享运动锁和本连接的安全解锁；新连接会重新锁定。
+
+### TCP 拖拽
+
 - Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先；留空时优先选择 tool0/tcp/ee_link 等工具坐标系，其次选择 gripper/flange 等稳定 link，可以是带手指子 link 的夹爪基座，不因手指层级更深就选到 finger/jaw。无命名工具 link 时回退到最深叶子 link。视图显示实际使用的 link；rebotarm 默认选择 `gripper_link`。
 - 仅当 `/controller_manager` 存在 active 的轨迹控制器时开放拖拽；识别规则为类型 `joint_trajectory_controller/JointTrajectoryController` 优先、名称含 traj 次之。ROS Control 列表会用“轨迹”标记对应 Controller，Robot View 右上角显示其名称和 `/…/joint_trajectory` Topic。
 - 拖拽手柄跟随 TCP link 的世界位姿，并保持屏幕上的恒定尺寸；按住后鼠标移动映射到过 TCP 的正交平面（相机正对平面），拖拽期间暂停轨道相机；Esc 取消并把模型恢复到实时反馈位姿。
