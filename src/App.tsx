@@ -51,13 +51,7 @@ import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
 import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController, trajectoryJointNames, trajectoryStateTopic, TRAJECTORY_FEEDBACK_MAX_AGE_MS } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { RgbdColorMode } from "./RgbdPointCloud";
-import {
-  applyRgbdFrameToSession,
-  createRgbdSessionState,
-  parseRgbdFrameMeta,
-  resetRgbdSession,
-  type RgbdSessionState,
-} from "./rgbdPointCloudLogic";
+import { useRgbdStream } from "./rgbdStreamLogic";
 import type { TrajectorySendRequest } from "./UrdfViewer";
 import {
   applyRecentHostToProfile,
@@ -391,10 +385,7 @@ export default function App() {
   const [positionStore, setPositionStore] = useState<PositionStore>(() => emptyPositionStore());
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
-  const [rgbdSession, setRgbdSession] = useState<RgbdSessionState>(() => createRgbdSessionState());
   const [rgbdColorMode, setRgbdColorMode] = useState<RgbdColorMode>("rgb");
-  const rgbdInterestRef = useRef(false);
-  const rgbdSubscribeKeyRef = useRef("");
 
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const hardwareStatusRef = useRef<HardwareStatus | null>(null);
@@ -500,50 +491,10 @@ export default function App() {
     };
   }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
 
-  // RGBD 点云：独立 subscribe_rgbd，不与 Inspector Image 兴趣集合共享；隐藏/不可见时释放。
-  // Bridge 支持 replace-on-resubscribe：已订阅时 topic/max/target_frame 变化也要重发。
-  useEffect(() => {
-    const want =
-      stage === "connected" &&
-      appPage === "dashboard" &&
-      centerTab === "robot" &&
-      windowVisible &&
-      liveUpdates &&
-      profile.rgbdEnabled;
-    const subscribeKey = want
-      ? [
-          profile.rgbdRgbTopic,
-          profile.rgbdDepthTopic,
-          profile.rgbdCameraInfoTopic,
-          profile.rgbdTargetFrame,
-          String(profile.rgbdMaxWidth),
-          String(profile.rgbdMaxHeight),
-          String(profile.rgbdMaxFps),
-        ].join("\0")
-      : "";
-    if (want === rgbdInterestRef.current && subscribeKey === rgbdSubscribeKeyRef.current) return;
-    rgbdInterestRef.current = want;
-    rgbdSubscribeKeyRef.current = subscribeKey;
-    if (want) {
-      bridge.send({
-        op: "subscribe_rgbd",
-        rgb_topic: profile.rgbdRgbTopic,
-        depth_topic: profile.rgbdDepthTopic,
-        camera_info_topic: profile.rgbdCameraInfoTopic,
-        target_frame: profile.rgbdTargetFrame,
-        max_width: profile.rgbdMaxWidth,
-        max_height: profile.rgbdMaxHeight,
-        max_fps: profile.rgbdMaxFps,
-      });
-    } else {
-      bridge.send({ op: "unsubscribe_rgbd" });
-    }
-  }, [
-    bridge, stage, appPage, centerTab, windowVisible, liveUpdates,
-    profile.rgbdEnabled, profile.rgbdRgbTopic, profile.rgbdDepthTopic,
-    profile.rgbdCameraInfoTopic, profile.rgbdTargetFrame,
-    profile.rgbdMaxWidth, profile.rgbdMaxHeight, profile.rgbdMaxFps,
-  ]);
+  const [rgbdSession, setRgbdSession] = useRgbdStream(bridge,
+    appPage === "dashboard" && centerTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
+    stage === "connected", profile, bridgeHello?.rgbdSubscriptionIdSupported === true,
+    JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, effectiveLocalPort, profile.remotePort, profile.rosDomainId]));
 
   // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
   const activeTrajectoryController = useMemo(
@@ -890,37 +841,10 @@ export default function App() {
           bridgeVersion: message.bridge_version,
           bridgeBuildId: message.bridge_build_id,
           rosDistro: message.ros_distro,
+          rgbdSubscriptionIdSupported: message.rgbd_subscription_id_supported,
         });
       }
-      if (message.op === "rgbd_frame") {
-        try {
-          const meta = parseRgbdFrameMeta(message);
-          if (!meta.tf_ok) {
-            setRgbdSession((current) => ({
-              ...current,
-              stale: true,
-              tfOk: false,
-              tfError: meta.error || meta.tf_error || "TF 查询失败",
-            }));
-          } else {
-            const payload = message.rgbd_payload ?? new Uint8Array();
-            setRgbdSession((current) =>
-              applyRgbdFrameToSession(current, current.sessionId, meta, payload, Date.now()),
-            );
-          }
-        } catch (reason) {
-          setRgbdSession((current) => ({
-            ...current,
-            stale: true,
-            tfOk: false,
-            tfError: reason instanceof Error ? reason.message : String(reason),
-          }));
-        }
-      }
       if (message.op === "disconnected") {
-        rgbdInterestRef.current = false;
-        rgbdSubscribeKeyRef.current = "";
-        setRgbdSession((current) => resetRgbdSession(current));
         setFailedStep("bridge");
         setBridgeUp(false);
         setError(formatConnectError("Bridge WebSocket 已断开", "bridge"));

@@ -305,12 +305,14 @@ Desk Robot View 通过独立的 `subscribe_rgbd` / `unsubscribe_rgbd` 请求彩�
 }
 ```
 
+订阅可带可选 `subscription_id`（非空字符串，最长 128 字符），新 Bridge 在 ACK、每个二进制成功帧及文本失败帧回显。`hello.rgbd_subscription_id_supported:true` 表示支持该隔离能力。桌面每次订阅生成新令牌；已发现能力时拒绝缺少令牌或令牌不匹配的帧，隐藏视图、重连及改配置会取消旧帧处理。旧 Bridge 无该能力时仍按兴趣与 Topic/目标坐标系过滤；相同配置的旧网络帧无法获得强代次保证，升级后重连可启用。
+
 成功：`{"op":"subscribed_rgbd","request_id":"uuid", ...topics...}`。同一连接重复订阅会替换该连接上的 RGBD 会话。
 
 取消：`{"op":"unsubscribe_rgbd","request_id":"uuid"}` → `{"op":"unsubscribed_rgbd","request_id":"uuid"}`。
 
 默认 Topic 与左臂腕部 RealSense 启动入口一致：`camera_namespace=cameras/left_arm`、`camera_name=wrist`、`align_depth.enable=true`、`enable_sync=true`。已有完整旧默认 Topic 组合在加载时迁移；用户自定义组合保持原值。Bridge 不替任意 CameraInfo / 未对齐 Depth 做空间配准。
-RGB、对齐 Depth 和 CameraInfo 分别按各自发布端选择可靠性；这三个连续数据订阅均使用 `VOLATILE`。RealSense 图像可提供 `TRANSIENT_LOCAL`，而 CameraInfo 可仅提供 `VOLATILE`，因此不能复用图像的 durability。
+RGB、对齐 Depth 和 CameraInfo 的实时预览订阅均使用 `BEST_EFFORT + VOLATILE + KeepLast(3)`，兼容可靠及尽力发布端，并避免预览积压历史帧。RealSense 图像可提供 `TRANSIENT_LOCAL`，而 CameraInfo 可仅提供 `VOLATILE`，因此不能复用图像的 durability。
 
 ### 二进制帧 `RCD1`
 
@@ -321,9 +323,9 @@ RGB、对齐 Depth 和 CameraInfo 分别按各自发布端选择可靠性；这�
 | 8… | JSON 元数据 |
 | 随后 | RGB 像素紧接 Depth 像素（`data_offset` / `data_length` 指向负载） |
 
-元数据 `op` 为 `rgbd_frame`，包含 `rgb` / `depth` 图像头（含 `header.stamp`、`encoding`、`step`、`data_offset`）、缩放后的 `camera_info.k`、`source_frame` / `target_frame`、`stamp_diff_ns`、以及图像采集时刻的 `pose`（`target_frame ← source_frame`）。`tf_ok:false` 时可为文本 JSON（无像素），Desk 标记点云过期并保留上一帧。
+元数据 `op` 为 `rgbd_frame`，包含 `rgb` / `depth` 图像头（含 `header.stamp`、`encoding`、`step`、`data_offset`）、缩放后的 `camera_info.k`、`source_frame` / `target_frame`、`stamp_diff_ns`、以及图像采集时刻的 `pose`（`target_frame ← source_frame`）。`tf_ok:false` 时可为文本 JSON（无像素），Desk 立即隐藏旧点云并保留错误原因。完整 RGB/Depth/内参/采集时刻 Pose 按动画帧整体取最新组；错误会取消尚未绘制的旧成功组，后续有效完整组可恢复显示。最近有效完整帧到达后使用单调时间隐藏过期点云，最长有效期为 500 ms。成功帧可含 `frame_age_ms`（Jetson 打包时 RGB/Depth 中较老源图像的帧龄）；桌面按 `500 - frame_age_ms` 缩短接收后的显示期限，负值/非有限值及 ≥500 ms 拒绝显示。旧 Bridge 缺少帧龄时保留接收后 500 ms 上限，不能由重新绘制或坏帧延长有效期。这是源处理帧龄与本地接收 TTL 的组合，不包含无法测量的 SSH 网络传输时间，不能宣称端到端硬 500 ms。
 
-Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样并缩放内参，再按 RGB 时间戳查询 TF；只保留最新完整组。深度编码支持 `16UC1`（毫米）与 `32FC1`（米）。
+Jetson 侧从各最多三帧的队列按时间戳配对 RGB/Depth（默认容差 50ms），优先差值最小且较新的组合，每组只消费一次。接收线程仅更新队列；每会话工作线程以零等待查询采集时刻 TF，最多重试 150ms，成功后预览降采样、缩放内参并发送。源帧达到 500ms 即丢弃，持续缺少有效帧超过 500ms 才报告不可用；真实时钟异常立即报告。RGBD 写入期限取源帧剩余有效期与 250ms 较小值，阻塞超时关闭该客户端连接。深度编码支持 `16UC1`（毫米）与 `32FC1`（米）。
 
 ## MoveIt2 保存点位执行
 

@@ -4,11 +4,11 @@
 
 namespace easy_debug_bridge {
 
-// RGBD streams need the publisher's reliability, but must not request retained
-// samples: RealSense image publishers may be transient-local while CameraInfo
-// is volatile, and a transient-local CameraInfo subscriber will never match.
+// Preview readers accept both reliable and best-effort publishers. A small,
+// volatile best-effort history favours recent frames instead of retransmitting
+// obsolete megapixel images while an exact-time TF is being awaited.
 inline rclcpp::QoS rgbd_stream_qos(rclcpp::QoS qos) {
-  qos.durability_volatile();
+  qos.keep_last(3).best_effort().durability_volatile();
   return qos;
 }
 

@@ -17,6 +17,22 @@
 
 namespace easy_debug_bridge {
 
+inline std::optional<std::pair<size_t, size_t>> closest_rgbd_pair(
+    const std::vector<int64_t> &rgb, const std::vector<int64_t> &depth,
+    int64_t tolerance_ns = 50000000) {
+  std::optional<std::pair<size_t, size_t>> best;
+  int64_t difference = tolerance_ns + 1, newest = 0;
+  for (size_t r = 0; r < rgb.size(); ++r) for (size_t d = 0; d < depth.size(); ++d) {
+    if (rgb[r] <= 0 || depth[d] <= 0) continue;
+    const auto delta = rgb[r] > depth[d] ? rgb[r] - depth[d] : depth[d] - rgb[r];
+    const auto stamp = std::max(rgb[r], depth[d]);
+    if (delta <= tolerance_ns && (delta < difference || (delta == difference && stamp > newest))) {
+      best = {r, d}; difference = delta; newest = stamp;
+    }
+  }
+  return best;
+}
+
 inline bool should_report_rgbd_tf_failure(
     std::chrono::steady_clock::time_point last_success,
     std::chrono::steady_clock::time_point now,

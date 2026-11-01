@@ -24,7 +24,8 @@ int main() {
   const auto rgbd_info_qos = easy_debug_bridge::rgbd_stream_qos(info_qos);
   assert(image_qos.get_rmw_qos_profile().durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
   assert(rgbd_image_qos.get_rmw_qos_profile().durability == RMW_QOS_POLICY_DURABILITY_VOLATILE);
-  assert(rgbd_image_qos.get_rmw_qos_profile().reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+  assert(rgbd_image_qos.get_rmw_qos_profile().reliability == RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
+  assert(rgbd_image_qos.get_rmw_qos_profile().depth == 3);
   assert(rgbd_info_qos.get_rmw_qos_profile().durability == RMW_QOS_POLICY_DURABILITY_VOLATILE);
   assert(rgbd_info_qos.get_rmw_qos_profile().reliability == RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
 

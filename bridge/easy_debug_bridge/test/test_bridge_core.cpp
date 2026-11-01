@@ -15,6 +15,19 @@ using easy_debug_bridge::CommandValidation;
 
 int main() {
   {
+    using easy_debug_bridge::closest_rgbd_pair;
+    // Prefer the synchronized older pair over a 33ms cross-frame match; when
+    // equally close, choose the most recent pair and keep input storage bounded.
+    const auto exact = closest_rgbd_pair({1000000000, 1033000000}, {1000000000});
+    assert(exact && exact->first == 0 && exact->second == 0);
+    const auto newest = closest_rgbd_pair({1000000000, 1033000000}, {1000000000, 1033000000});
+    assert(newest && newest->first == 1 && newest->second == 1);
+    assert(!closest_rgbd_pair({0, -1}, {1000000000}));
+    assert(!closest_rgbd_pair({1000000000}, {1050000001}));
+    assert(closest_rgbd_pair({1000000000}, {1050000000}));
+    assert(!closest_rgbd_pair({}, {1000000000}));
+  }
+  {
     using easy_debug_bridge::ControllerHealthPoll;
     using namespace std::chrono_literals;
     ControllerHealthPoll poll;

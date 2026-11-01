@@ -36,6 +36,9 @@ export type RgbdPose = {
 
 export type RgbdFrameMeta = {
   op: "rgbd_frame";
+  subscription_id?: string;
+  /** Source image age measured on Jetson immediately before sending. */
+  frame_age_ms?: number;
   rgb_topic?: string;
   depth_topic?: string;
   camera_info_topic?: string;
@@ -74,6 +77,8 @@ export type RgbdSessionState = {
   visible: boolean;
   fps: number;
   lastFrameAt: number;
+  /** Monotonic display deadline shortened by the Jetson-measured source age. */
+  expiresAt?: number;
   pointSize: number;
   nearM: number;
   farM: number;
@@ -448,6 +453,10 @@ export function parseRgbdFrameMeta(value: unknown): RgbdFrameMeta {
   const meta = value as RgbdFrameMeta;
   if (meta.op !== "rgbd_frame") throw new Error("非 RGBD 帧");
   if (meta.tf_ok === false) return meta;
+  if (meta.frame_age_ms !== undefined) {
+    if (!Number.isFinite(meta.frame_age_ms) || meta.frame_age_ms < 0) throw new Error("RGBD 帧龄无效");
+    if (meta.frame_age_ms >= 500) throw new Error("RGBD 帧已过期（采集帧龄达到 500 ms）");
+  }
   if (!meta.rgb || !meta.depth || !meta.camera_info) throw new Error("RGBD 帧缺少图像或内参");
   return meta;
 }

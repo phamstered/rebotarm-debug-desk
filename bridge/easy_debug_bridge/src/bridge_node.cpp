@@ -60,6 +60,10 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <deque>
+#include <condition_variable>
+#include <future>
+#include <sys/socket.h>
 
 namespace asio = boost::asio;
 namespace beast = boost::beast;
@@ -270,6 +274,11 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
  public:
   WebSocketSession(tcp::socket socket, std::shared_ptr<BridgeNode> bridge)
       : socket_(std::move(socket)), bridge_(std::move(bridge)) {}
+  ~WebSocketSession() {
+    { std::lock_guard<std::mutex> lock(deadline_mutex_); watchdog_stop_ = true; }
+    deadline_cv_.notify_all();
+    if (watchdog_.joinable()) watchdog_.join();
+  }
 
   void run();
   uint64_t id() const { return id_; }
@@ -277,21 +286,39 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
   bool send(const std::string &payload) {
     std::lock_guard<std::mutex> lock(write_mutex_);
     if (!open_.load()) return false;
+    WriteDeadline lease(*this, std::chrono::steady_clock::now() + std::chrono::seconds(5));
     beast::error_code error;
     socket_.text(true);
     socket_.write(asio::buffer(payload), error);
-    if (error) open_.store(false);
-    return !error;
+    if (error) { open_.store(false); ::shutdown(socket_.next_layer().native_handle(), SHUT_RDWR); }
+    return !error && open_.load();
   }
 
-  bool send_binary(const std::vector<uint8_t> &payload) {
+  bool send_binary(const std::vector<uint8_t> &payload,
+                   std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max()) {
     std::lock_guard<std::mutex> lock(write_mutex_);
-    if (!open_.load()) return false;
+    if (!open_.load() || std::chrono::steady_clock::now() >= deadline) return false;
+    const bool preview = deadline != std::chrono::steady_clock::time_point::max();
+    deadline = std::min(deadline, std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(preview ? 250 : 5000));
+    WriteDeadline lease(*this, deadline);
     beast::error_code error;
     socket_.binary(true);
-    socket_.write(asio::buffer(payload), error);
-    if (error) open_.store(false);
-    return !error;
+    // Bound an entire frame, including a trickling peer: SO_SNDTIMEO alone
+    // restarts after every partial write. Check the deadline between fragments.
+    size_t offset = 0;
+    while (offset < payload.size()) {
+      const auto steady = std::chrono::steady_clock::now();
+      if (steady >= deadline) { error = asio::error::timed_out; break; }
+      const auto count = std::min<size_t>(16384, payload.size() - offset);
+      const auto written = socket_.write_some(offset + count == payload.size(),
+          asio::buffer(payload.data() + offset, count), error);
+      if (error) break;
+      if (!written) { error = asio::error::fault; break; }
+      offset += written;
+    }
+    if (error) { open_.store(false); ::shutdown(socket_.next_layer().native_handle(), SHUT_RDWR); }
+    return !error && open_.load();
   }
 
   void image_interest(const std::string &topic, bool enabled) {
@@ -304,6 +331,19 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
   }
 
  private:
+  struct WriteDeadline {
+    WebSocketSession &owner;
+    WriteDeadline(WebSocketSession &session, std::chrono::steady_clock::time_point at) : owner(session) {
+      { std::lock_guard<std::mutex> lock(owner.deadline_mutex_);
+        owner.deadline_ = at; owner.deadline_armed_ = true; ++owner.deadline_generation_; }
+      owner.deadline_cv_.notify_all();
+    }
+    ~WriteDeadline() {
+      { std::lock_guard<std::mutex> lock(owner.deadline_mutex_);
+        owner.deadline_armed_ = false; ++owner.deadline_generation_; }
+      owner.deadline_cv_.notify_all();
+    }
+  };
   inline static std::atomic<uint64_t> next_id_{1};
   const uint64_t id_ = next_id_++;
   std::mutex image_mutex_;
@@ -312,6 +352,12 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
   std::shared_ptr<BridgeNode> bridge_;
   std::mutex write_mutex_;
   std::atomic<bool> open_{false};
+  std::thread watchdog_;
+  std::mutex deadline_mutex_;
+  std::condition_variable deadline_cv_;
+  bool watchdog_stop_{false}, deadline_armed_{false};
+  uint64_t deadline_generation_{0};
+  std::chrono::steady_clock::time_point deadline_{};
 };
 
 class BridgeNode : public rclcpp::Node {
@@ -328,6 +374,11 @@ class BridgeNode : public rclcpp::Node {
     });
     image_cleanup_timer_->cancel();
     tf_context_ = make_tf_context(0);
+    // Humble Fast DDS waitsets must not race subscription destruction. Only
+    // this private executor sees RGBD subscriptions; it also owns their updates.
+    rgbd_receive_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+    rgbd_receiver_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+    rgbd_receiver_executor_->add_callback_group(rgbd_receive_group_, get_node_base_interface());
     clock_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions safety_options;
     safety_options.callback_group = clock_callback_group_;
@@ -367,7 +418,30 @@ class BridgeNode : public rclcpp::Node {
             clock_monitor_.new_epoch();
         }, safety_options);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_);
+    rgbd_receiver_ = std::thread([this] {
+      while (rclcpp::ok() && !rgbd_receiver_stop_.load()) {
+        rgbd_receiver_executor_->spin_some(std::chrono::milliseconds(5));
+        std::deque<std::function<void()>> jobs;
+        std::vector<std::shared_ptr<RgbdSession>> retired;
+        { std::lock_guard<std::mutex> lock(rgbd_jobs_mutex_);
+          jobs.swap(rgbd_jobs_); retired.swap(retired_rgbd_); }
+        for (auto &job : jobs) job();
+        retired.clear(); // No rmw_wait or callback is active on this executor.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      rgbd_receiver_stop_.store(true);
+      std::lock_guard<std::mutex> lock(rgbd_jobs_mutex_);
+      rgbd_jobs_.clear(); // Break promises so waiting socket handlers can exit.
+    });
     RCLCPP_INFO(get_logger(), "Easy Debug Bridge configured on 127.0.0.1:%d", port_);
+  }
+  ~BridgeNode() override {
+    std::vector<uint64_t> clients;
+    { std::lock_guard<std::mutex> lock(rgbd_mutex_); for (const auto &item : rgbd_sessions_) clients.push_back(item.first); }
+    for (const auto client : clients) clear_rgbd_session(client);
+    rgbd_receiver_stop_.store(true);
+    if (rgbd_receiver_.joinable()) rgbd_receiver_.join();
+    retired_rgbd_.clear();
   }
 
   int port() const { return port_; }
@@ -448,7 +522,7 @@ class BridgeNode : public rclcpp::Node {
       if (op == "hello") {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
-                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\"}");
+                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true}");
       } else if (op == "clock_sync_info") {
         send_clock_sync_info(session, request_id);
       } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel") {
@@ -1302,11 +1376,17 @@ class BridgeNode : public rclcpp::Node {
 
 
   struct RgbdSession {
+    struct Pair {
+      sensor_msgs::msg::Image::SharedPtr rgb, depth;
+      sensor_msgs::msg::CameraInfo::SharedPtr info;
+      std::chrono::steady_clock::time_point claimed;
+    };
     uint64_t client_id = 0;
     std::string rgb_topic;
     std::string depth_topic;
     std::string camera_info_topic;
     std::string target_frame{"base_link"};
+    std::string subscription_id;
     uint32_t max_width = 320;
     uint32_t max_height = 240;
     double max_fps = 12.0;
@@ -1314,17 +1394,49 @@ class BridgeNode : public rclcpp::Node {
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr rgb_sub;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub;
-    sensor_msgs::msg::Image::SharedPtr latest_rgb;
-    sensor_msgs::msg::Image::SharedPtr latest_depth;
+    std::deque<sensor_msgs::msg::Image::SharedPtr> rgb_queue, depth_queue;
     sensor_msgs::msg::CameraInfo::SharedPtr latest_info;
+    std::optional<Pair> pending;
+    int64_t consumed_rgb{0}, consumed_depth{0};
+    std::chrono::steady_clock::time_point started{std::chrono::steady_clock::now()};
+    std::string last_error;
+    bool last_error_immediate{false};
+    std::chrono::steady_clock::time_point last_error_at{};
+    uint64_t clock_generation{UINT64_MAX};
+    std::atomic<bool> active{true};
+    std::mutex publish_mutex;
+    std::thread worker;
     std::chrono::steady_clock::time_point last_sent{};
     std::chrono::steady_clock::time_point last_success{};
     std::mutex mutex;
   };
 
   void clear_rgbd_session(uint64_t client) {
-    std::lock_guard<std::mutex> lock(rgbd_mutex_);
-    rgbd_sessions_.erase(client);
+    std::shared_ptr<RgbdSession> previous;
+    {
+      std::lock_guard<std::mutex> lock(rgbd_mutex_);
+      const auto it = rgbd_sessions_.find(client);
+      if (it != rgbd_sessions_.end()) { previous = it->second; rgbd_sessions_.erase(it); }
+    }
+    if (previous) {
+      previous->active.store(false);
+      if (previous->worker.joinable()) previous->worker.join();
+      // Fence any in-flight frame before the unsubscribe/replacement ACK.
+      { std::lock_guard<std::mutex> lock(previous->publish_mutex); }
+      std::lock_guard<std::mutex> lock(rgbd_jobs_mutex_);
+      retired_rgbd_.push_back(std::move(previous));
+    }
+  }
+
+  void on_rgbd_receiver(std::function<void()> action) {
+    auto job = std::make_shared<std::packaged_task<void()>>(std::move(action));
+    auto result = job->get_future();
+    { std::lock_guard<std::mutex> lock(rgbd_jobs_mutex_);
+      if (rgbd_receiver_stop_.load()) throw std::runtime_error("RGBD 接收器已停止");
+      rgbd_jobs_.push_back([job] { (*job)(); }); }
+    if (result.wait_for(std::chrono::seconds(2)) != std::future_status::ready)
+      throw std::runtime_error("RGBD 订阅创建超时，请重试");
+    result.get();
   }
 
   std::shared_ptr<WebSocketSession> find_session(uint64_t client) {
@@ -1352,9 +1464,14 @@ class BridgeNode : public rclcpp::Node {
     const std::string info_topic = request.get<std::string>(
         "camera_info_topic", "/cameras/left_arm/wrist/color/camera_info");
     const std::string target_frame = request.get<std::string>("target_frame", "base_link");
-    const uint32_t max_width = static_cast<uint32_t>(request.get<int>("max_width", 320));
-    const uint32_t max_height = static_cast<uint32_t>(request.get<int>("max_height", 240));
+    const int max_width = request.get<int>("max_width", 320);
+    const int max_height = request.get<int>("max_height", 240);
     const double max_fps = request.get<double>("max_fps", 12.0);
+    const auto subscription_id = request.get<std::string>("subscription_id", "");
+    if (const auto token = request.get_child_optional("subscription_id"); token && !token->empty()) {
+      session->send(error_message(request_id, "RGBD subscription_id 必须为字符串")); return;
+    }
+    if (subscription_id.size() > 128) { session->send(error_message(request_id, "RGBD subscription_id 过长")); return; }
     // Topics must be absolute graph names; target_frame is a TF frame id (may be relative).
     for (const auto &name : {rgb_topic, depth_topic, info_topic}) {
       if (!easy_debug_bridge::is_valid_graph_name(name)) {
@@ -1366,11 +1483,12 @@ class BridgeNode : public rclcpp::Node {
       session->send(error_message(request_id, "target_frame 不能为空"));
       return;
     }
-    if (max_width == 0 || max_height == 0 || !(max_fps > 0.0) || !std::isfinite(max_fps)) {
+    if (max_width <= 0 || max_height <= 0 || !(max_fps > 0.0) || !std::isfinite(max_fps)) {
       session->send(error_message(request_id, "RGBD 预览宽高或帧率无效"));
       return;
     }
 
+    clear_rgbd_session(session->id());
     auto rgbd = std::make_shared<RgbdSession>();
     rgbd->client_id = session->id();
     rgbd->rgb_topic = rgb_topic;
@@ -1380,73 +1498,76 @@ class BridgeNode : public rclcpp::Node {
     rgbd->max_width = max_width;
     rgbd->max_height = max_height;
     rgbd->max_fps = max_fps;
+    rgbd->subscription_id = subscription_id;
 
     // Own ROS subscriptions — never touch ImageInterests / shared image map.
     const auto rgb_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(rgb_topic));
     const auto depth_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(depth_topic));
     const auto info_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(info_topic));
     const uint64_t client = session->id();
-    rgbd->rgb_sub = create_subscription<sensor_msgs::msg::Image>(
-        rgb_topic, rgb_qos,
-        [this, client](const sensor_msgs::msg::Image::SharedPtr message) {
-          on_rgbd_rgb(client, message);
-        });
-    rgbd->depth_sub = create_subscription<sensor_msgs::msg::Image>(
-        depth_topic, depth_qos,
-        [this, client](const sensor_msgs::msg::Image::SharedPtr message) {
-          on_rgbd_depth(client, message);
-        });
-    rgbd->info_sub = create_subscription<sensor_msgs::msg::CameraInfo>(
-        info_topic, info_qos,
-        [this, client](const sensor_msgs::msg::CameraInfo::SharedPtr message) {
-          on_rgbd_info(client, message);
-        });
+    const std::weak_ptr<RgbdSession> weak = rgbd;
+    rclcpp::SubscriptionOptions receive_options;
+    receive_options.callback_group = rgbd_receive_group_;
+    try {
+      on_rgbd_receiver([this, rgbd, weak, rgb_topic, depth_topic, info_topic, rgb_qos, depth_qos, info_qos, receive_options] {
+        rgbd->rgb_sub = create_subscription<sensor_msgs::msg::Image>(
+            rgb_topic, rgb_qos,
+            [this, weak](const sensor_msgs::msg::Image::SharedPtr message) {
+              if (const auto current = weak.lock()) on_rgbd_image(current, message, true);
+            }, receive_options);
+        rgbd->depth_sub = create_subscription<sensor_msgs::msg::Image>(
+            depth_topic, depth_qos,
+            [this, weak](const sensor_msgs::msg::Image::SharedPtr message) {
+              if (const auto current = weak.lock()) on_rgbd_image(current, message, false);
+            }, receive_options);
+        rgbd->info_sub = create_subscription<sensor_msgs::msg::CameraInfo>(
+            info_topic, info_qos,
+            [weak](const sensor_msgs::msg::CameraInfo::SharedPtr message) {
+              if (const auto current = weak.lock()) {
+                std::lock_guard<std::mutex> lock(current->mutex);
+                if (current->active.load()) current->latest_info = message;
+              }
+            }, receive_options);
+      });
+    } catch (...) {
+      rgbd->active.store(false);
+      std::lock_guard<std::mutex> lock(rgbd_jobs_mutex_);
+      retired_rgbd_.push_back(std::move(rgbd));
+      throw;
+    }
 
     {
       std::lock_guard<std::mutex> lock(rgbd_mutex_);
       rgbd_sessions_[client] = rgbd;
     }
+    rgbd->worker = std::thread([this, weak] {
+      while (rclcpp::ok()) {
+        const auto current = weak.lock();
+        if (!current || !current->active.load()) break;
+        try_emit_rgbd(current);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    });
     session->send("{\"op\":\"subscribed_rgbd\",\"request_id\":" + json_quote(request_id) +
                   ",\"rgb_topic\":" + json_quote(rgb_topic) +
                   ",\"depth_topic\":" + json_quote(depth_topic) +
                   ",\"camera_info_topic\":" + json_quote(info_topic) +
+                  (subscription_id.empty() ? "" : ",\"subscription_id\":" + json_quote(subscription_id)) +
                   ",\"target_frame\":" + json_quote(target_frame) + "}");
   }
 
-  std::shared_ptr<RgbdSession> get_rgbd(uint64_t client) {
-    std::lock_guard<std::mutex> lock(rgbd_mutex_);
-    const auto it = rgbd_sessions_.find(client);
-    return it == rgbd_sessions_.end() ? nullptr : it->second;
+  static int64_t image_stamp(const sensor_msgs::msg::Image &message) {
+    return static_cast<int64_t>(message.header.stamp.sec) * 1000000000LL + message.header.stamp.nanosec;
   }
-
-  void on_rgbd_rgb(uint64_t client, const sensor_msgs::msg::Image::SharedPtr &message) {
-    auto session = get_rgbd(client);
-    if (!session) return;
-    {
-      std::lock_guard<std::mutex> lock(session->mutex);
-      session->latest_rgb = message;
-    }
-    try_emit_rgbd(client);
-  }
-
-  void on_rgbd_depth(uint64_t client, const sensor_msgs::msg::Image::SharedPtr &message) {
-    auto session = get_rgbd(client);
-    if (!session) return;
-    {
-      std::lock_guard<std::mutex> lock(session->mutex);
-      session->latest_depth = message;
-    }
-    try_emit_rgbd(client);
-  }
-
-  void on_rgbd_info(uint64_t client, const sensor_msgs::msg::CameraInfo::SharedPtr &message) {
-    auto session = get_rgbd(client);
-    if (!session) return;
-    {
-      std::lock_guard<std::mutex> lock(session->mutex);
-      session->latest_info = message;
-    }
-    try_emit_rgbd(client);
+  void on_rgbd_image(const std::shared_ptr<RgbdSession> &session,
+                     const sensor_msgs::msg::Image::SharedPtr &message, bool rgb) {
+    std::lock_guard<std::mutex> lock(session->mutex);
+    if (!session->active.load()) return;
+    const auto stamp = image_stamp(*message);
+    if (stamp <= (rgb ? session->consumed_rgb : session->consumed_depth)) return;
+    auto &queue = rgb ? session->rgb_queue : session->depth_queue;
+    queue.push_back(message);
+    if (queue.size() > 3) queue.pop_front();
   }
 
   static std::string image_part_json(const easy_debug_bridge::DownsampledImage &image,
@@ -1466,7 +1587,12 @@ class BridgeNode : public rclcpp::Node {
                                const std::shared_ptr<RgbdSession> &session,
                                const std::string &source_frame,
                                const std::string &error,
-                               bool is_tf_error) {
+                               bool is_tf_error, bool immediate = false) {
+    const auto steady = std::chrono::steady_clock::now();
+    const auto last_good = session->last_success.time_since_epoch().count() ? session->last_success : session->started;
+    if (!immediate && steady - last_good < std::chrono::milliseconds(500)) return;
+    if (!session->last_error.empty() && immediate == session->last_error_immediate &&
+        (error == session->last_error || steady - session->last_error_at < std::chrono::seconds(1))) return;
     std::ostringstream out;
     out << "{\"op\":\"rgbd_frame\",\"tf_ok\":false";
     if (is_tf_error) {
@@ -1475,54 +1601,71 @@ class BridgeNode : public rclcpp::Node {
       // Distinct field for resolution/encoding failures; keep tf_error for older Desk clients.
       out << ",\"error\":" << json_quote(error) << ",\"tf_error\":" << json_quote(error);
     }
+    if (!session->subscription_id.empty()) out << ",\"subscription_id\":" << json_quote(session->subscription_id);
     out << ",\"source_frame\":" << json_quote(source_frame)
         << ",\"target_frame\":" << json_quote(session->target_frame)
         << ",\"rgb_topic\":" << json_quote(session->rgb_topic)
         << ",\"depth_topic\":" << json_quote(session->depth_topic)
         << ",\"camera_info_topic\":" << json_quote(session->camera_info_topic) << "}";
-    ws->send(out.str());
+    std::lock_guard<std::mutex> publish(session->publish_mutex);
+    if (session->active.load() && ws->send(out.str())) {
+      session->last_error = error; session->last_error_at = steady;
+      session->last_error_immediate = immediate;
+    }
   }
 
-  void try_emit_rgbd(uint64_t client) {
-    auto session = get_rgbd(client);
-    if (!session) return;
+  void try_emit_rgbd(const std::shared_ptr<RgbdSession> &session) {
+    const auto steady = std::chrono::steady_clock::now();
+    if (!session->active.load()) return;
+    auto ws = find_session(session->client_id);
+    if (!ws) return;
+    const auto sync = clock_snapshot();
+    if (!sync.healthy()) {
+      session->pending.reset();
+      send_rgbd_frame_failure(ws, session, "", sync.message, true, true);
+      return;
+    }
+    if (session->clock_generation != sync.generation) {
+      session->pending.reset();
+      std::lock_guard<std::mutex> lock(session->mutex);
+      session->clock_generation = sync.generation;
+      session->rgb_queue.clear(); session->depth_queue.clear();
+      session->consumed_rgb = session->consumed_depth = 0;
+    }
     sensor_msgs::msg::Image::SharedPtr rgb;
     sensor_msgs::msg::Image::SharedPtr depth;
     sensor_msgs::msg::CameraInfo::SharedPtr info;
-    // MultiThreadedExecutor: RGB/Depth/Info callbacks may run concurrently. Claim the
-    // emit slot (rate-limit + last_sent) under session->mutex so only one thread emits,
-    // and so TF/resolution/encoding failures are FPS-gated the same way as successes.
-    {
+    if (!session->pending) {
       std::lock_guard<std::mutex> lock(session->mutex);
-      rgb = session->latest_rgb;
-      depth = session->latest_depth;
       info = session->latest_info;
-      if (!rgb || !depth || !info) return;
-      if (!easy_debug_bridge::stamps_within_tolerance(
-              rgb->header.stamp.sec, rgb->header.stamp.nanosec,
-              depth->header.stamp.sec, depth->header.stamp.nanosec,
-              session->stamp_tolerance_ns)) {
-        return;
-      }
-      const auto now = std::chrono::steady_clock::now();
       const auto min_interval = std::chrono::duration<double>(1.0 / session->max_fps);
       if (session->last_sent.time_since_epoch().count() != 0 &&
-          (now - session->last_sent) < min_interval) {
-        return;
+          (steady - session->last_sent) < min_interval) return;
+      std::vector<int64_t> rgbs, depths;
+      for (const auto &frame : session->rgb_queue) rgbs.push_back(image_stamp(*frame));
+      for (const auto &frame : session->depth_queue) depths.push_back(image_stamp(*frame));
+      const auto pair = easy_debug_bridge::closest_rgbd_pair(rgbs, depths, session->stamp_tolerance_ns);
+      if (pair && info) {
+        rgb = session->rgb_queue[pair->first]; depth = session->depth_queue[pair->second];
+        session->consumed_rgb = image_stamp(*rgb); session->consumed_depth = image_stamp(*depth);
+        session->rgb_queue.erase(session->rgb_queue.begin(), session->rgb_queue.begin() + pair->first + 1);
+        session->depth_queue.erase(session->depth_queue.begin(), session->depth_queue.begin() + pair->second + 1);
+        session->pending = RgbdSession::Pair{rgb, depth, info, steady};
+        session->last_sent = steady;
       }
-      session->last_sent = now;
     }
-
-    auto ws = find_session(client);
-    if (!ws) return;
-
+    if (!session->pending) {
+      send_rgbd_frame_failure(ws, session, "", "RGBD 图像流缺失、配对失败或已过期", true);
+      return;
+    }
+    const auto candidate = *session->pending;
+    rgb = candidate.rgb; depth = candidate.depth; info = candidate.info;
     const std::string source_frame = rgb->header.frame_id;
-    const auto sync = clock_snapshot();
-    if (!sync.healthy()) {
-      send_rgbd_frame_failure(ws, session, source_frame, sync.message, true);
-      std::lock_guard<std::mutex> lock(session->mutex);
-      if (session->latest_rgb == rgb) session->latest_rgb.reset();
-      if (session->latest_depth == depth) session->latest_depth.reset();
+    const auto oldest_stamp = std::min(image_stamp(*rgb), image_stamp(*depth));
+    const auto age_ns = now().nanoseconds() - oldest_stamp;
+    if (rgb->header.stamp.sec <= 0 || age_ns < -50000000LL || age_ns >= 500000000LL) {
+      session->pending.reset();
+      send_rgbd_frame_failure(ws, session, source_frame, "RGBD 相机时间戳无效或帧已过期", true);
       return;
     }
     std::shared_ptr<TfContext> tf;
@@ -1537,17 +1680,14 @@ class BridgeNode : public rclcpp::Node {
     try {
       transform = tf->buffer->lookupTransform(
           session->target_frame, source_frame, rgb->header.stamp,
-          tf2::durationFromSec(0.15));
+          tf2::durationFromSec(0));
     } catch (const tf2::TransformException &ex) {
-      bool report_failure;
-      {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        report_failure = easy_debug_bridge::should_report_rgbd_tf_failure(
-            session->last_success, std::chrono::steady_clock::now());
-      }
-      if (report_failure) send_rgbd_frame_failure(ws, session, source_frame, ex.what(), true);
+      if (steady - candidate.claimed < std::chrono::milliseconds(150)) return;
+      session->pending.reset();
+      send_rgbd_frame_failure(ws, session, source_frame, ex.what(), true);
       return;
     }
+    session->pending.reset();
     const auto after_sync = clock_snapshot();
     if (!after_sync.healthy() || after_sync.generation != sync.generation) return;
 
@@ -1594,6 +1734,8 @@ class BridgeNode : public rclcpp::Node {
 
     std::ostringstream meta;
     meta << "{\"op\":\"rgbd_frame\",\"tf_ok\":true"
+         << (session->subscription_id.empty() ? "" : ",\"subscription_id\":" + json_quote(session->subscription_id))
+         << ",\"frame_age_ms\":" << std::max(0., static_cast<double>(now().nanoseconds() - oldest_stamp) / 1000000.)
          << ",\"rgb_topic\":" << json_quote(session->rgb_topic)
          << ",\"depth_topic\":" << json_quote(session->depth_topic)
          << ",\"camera_info_topic\":" << json_quote(session->camera_info_topic)
@@ -1618,17 +1760,16 @@ class BridgeNode : public rclcpp::Node {
          << ",\"w\":" << transform.transform.rotation.w << "}}"
          << ",\"data_length\":" << payload.size() << "}";
 
-    if (!ws->send_binary(easy_debug_bridge::binary_rgbd_frame(meta.str(), payload))) return;
-    {
-      std::lock_guard<std::mutex> lock(session->mutex);
-      session->last_success = std::chrono::steady_clock::now();
-    }
-    // Drop consumed pair so a lone late frame cannot rematch with a stale sibling.
-    {
-      std::lock_guard<std::mutex> lock(session->mutex);
-      if (session->latest_rgb == rgb) session->latest_rgb.reset();
-      if (session->latest_depth == depth) session->latest_depth.reset();
-    }
+    const auto left_ns = 500000000LL - (now().nanoseconds() - oldest_stamp);
+    if (left_ns <= 0) return;
+    std::lock_guard<std::mutex> publish(session->publish_mutex);
+    if (!session->active.load()) return;
+    const auto send_sync = clock_snapshot();
+    if (!send_sync.healthy() || send_sync.generation != sync.generation) return;
+    if (!ws->send_binary(easy_debug_bridge::binary_rgbd_frame(meta.str(), payload),
+                        std::chrono::steady_clock::now() + std::chrono::nanoseconds(left_ns))) return;
+    session->last_success = std::chrono::steady_clock::now();
+    session->last_error.clear();
   }
 
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
@@ -1654,6 +1795,13 @@ class BridgeNode : public rclcpp::Node {
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   std::unordered_map<std::string, std::string> subscription_types_;
   std::mutex rgbd_mutex_;
+  rclcpp::CallbackGroup::SharedPtr rgbd_receive_group_;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> rgbd_receiver_executor_;
+  std::thread rgbd_receiver_;
+  std::atomic<bool> rgbd_receiver_stop_{false};
+  std::mutex rgbd_jobs_mutex_;
+  std::deque<std::function<void()>> rgbd_jobs_;
+  std::vector<std::shared_ptr<RgbdSession>> retired_rgbd_;
   std::unordered_map<uint64_t, std::shared_ptr<RgbdSession>> rgbd_sessions_;
   std::mutex tf_mutex_;
   std::shared_ptr<TfContext> tf_context_;
@@ -1693,7 +1841,32 @@ void WebSocketSession::run() {
   socket_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
   socket_.accept(error);
   if (error) return;
+  // Synchronous Beast writes must not pin an executor worker indefinitely when
+  // one preview client stops reading. Other RGBD clients have separate workers.
+  const int send_buffer = 262144;
+  if (::setsockopt(socket_.next_layer().native_handle(), SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof(send_buffer)) != 0) return;
   open_.store(true);
+  const auto descriptor = socket_.next_layer().native_handle();
+  watchdog_ = std::thread([this, descriptor] {
+    std::unique_lock<std::mutex> lock(deadline_mutex_);
+    while (!watchdog_stop_) {
+      if (!deadline_armed_) {
+        deadline_cv_.wait(lock, [this] { return watchdog_stop_ || deadline_armed_; });
+        continue;
+      }
+      const auto generation = deadline_generation_;
+      const auto at = deadline_;
+      if (!deadline_cv_.wait_until(lock, at, [this, generation] {
+            return watchdog_stop_ || !deadline_armed_ || deadline_generation_ != generation;
+          })) {
+        deadline_armed_ = false;
+        open_.store(false);
+        // shutdown interrupts Asio's internal synchronous poll without mutating
+        // Beast/socket object state from this thread. The fd closes after join.
+        ::shutdown(descriptor, SHUT_RDWR);
+      }
+    }
+  });
   bridge_->add_session(shared_from_this());
   while (open_.load() && rclcpp::ok()) {
     beast::flat_buffer buffer;
