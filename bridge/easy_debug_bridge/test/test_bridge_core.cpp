@@ -3,6 +3,7 @@
 #include "easy_debug_bridge/motion_timing.hpp"
 #include "easy_debug_bridge/gripper_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
+#include "easy_debug_bridge/controller_health.hpp"
 
 #include "easy_debug_bridge/motion_log.hpp"
 #include <cassert>
@@ -13,6 +14,41 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using easy_debug_bridge::ControllerHealthPoll;
+    using namespace std::chrono_literals;
+    ControllerHealthPoll poll;
+    auto now = ControllerHealthPoll::Time{};
+    assert(poll.due(now));
+    const auto first = poll.start(now);
+    assert(poll.pending() && !poll.due(now + 10s));
+    assert(!poll.expired(now + 1999ms) && poll.expired(now + 2s));
+    bool duplicate_rejected = false;
+    try { poll.start(now + 100ms); } catch (const std::logic_error &) { duplicate_rejected = true; }
+    assert(duplicate_rejected);
+    assert(poll.matches(first));
+    assert(std::abs(poll.latency(now + 1300ms) - 1.3) < 1e-9);
+    poll.succeeded(now + 1300ms);
+    assert(!poll.matches(first));
+    assert(!poll.due(now + 2299ms) && poll.due(now + 2300ms));
+    now += 2300ms;
+    // Persistent failures back off 1/2/4/8 seconds, without accumulating requests.
+    for (const auto delay : {1s, 2s, 4s, 8s, 8s}) {
+      const auto old = poll.start(now);
+      now += 2s;
+      assert(poll.expired(now));
+      poll.failed(now);
+      assert(!poll.pending() && !poll.matches(old));
+      assert(!poll.due(now + delay - 1ms) && poll.due(now + delay));
+      now += delay;
+    }
+    // Recovery restores normal scheduling; a service disappearance also backs off.
+    poll.start(now); poll.succeeded(now);
+    assert(!poll.due(now + 999ms) && poll.due(now + 1s));
+    now += 1s;
+    poll.failed(now);
+    assert(!poll.due(now + 999ms) && poll.due(now + 1s));
+  }
   {
     using namespace easy_debug_bridge;
     const GripperCalibration c{-.008612826752, .004282757541, 0, .05};

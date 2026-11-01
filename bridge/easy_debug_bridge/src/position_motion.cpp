@@ -18,6 +18,7 @@
 #include <atomic>
 #include <optional>
 #include "easy_debug_bridge/motion_log.hpp"
+#include "easy_debug_bridge/controller_health.hpp"
 
 namespace easy_debug_bridge {
 namespace {
@@ -107,13 +108,15 @@ struct PositionMotion::Impl {
   std::string gripper_error{"等待夹爪模型"};
   GripperCalibration gripper_calibration;
   double gripper_velocity_limit{}, gripper_acceleration_limit{};
-  Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, controller_request_at{}, model_at{}, model_request_at{};
-  bool controller_pending{false}, controller_active{false}, model_pending{false};
-  int64_t controller_request_id{0}; uint64_t controller_generation{0}, model_generation{0};
+  Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, model_at{}, model_request_at{};
+  bool controller_active{false}, model_pending{false}, controller_slow{false};
+  ControllerHealthPoll controller_poll;
+  int64_t controller_request_id{0}; uint64_t model_generation{0};
   std::string model_error{"等待 MoveIt 模型"}, model_signature, model_urdf;
   std::string controller_error{"arm_trajectory_controller 未激活或状态已过期"};
   MotionLog logs;
   std::string health_reason;
+  std::string controller_health_reason;
   const std::string log_session = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
   PositionMotionModel model;
   std::shared_ptr<Motion> current;
@@ -154,52 +157,70 @@ struct PositionMotion::Impl {
   void error(const Request &r, const std::string &message) {
     r.send("{\"op\":\"error\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) + ",\"message\":" + quote(message) + "}");
   }
+  void controller_failed(const std::string &reason) {
+    controller_poll.failed(Clock::now());
+    controller_active = false; gripper_controller_active = false; controller_at = {};
+    controller_error = reason;
+  }
   void poll_controllers() {
-    if (controller_pending) {
-      if (fresh(controller_request_at, 2)) return;
+    if (controller_poll.pending()) {
+      if (!controller_poll.expired(Clock::now()) && controllers->service_is_ready()) return;
       controllers->remove_pending_request(controller_request_id);
-      ++controller_generation; // Ignore a late response even if the service disappears.
-      controller_pending = false; controller_active = false; gripper_controller_active = false; controller_at = {};
-      controller_error = "arm_trajectory_controller 状态查询超时（ListControllers >2s）";
-      log(0, "", "controller", controller_error, "warn");
+      controller_failed(controllers->service_is_ready()
+          ? "arm_trajectory_controller 状态查询超时（ListControllers ≥2s）"
+          : "ControllerManager ListControllers 服务不可用");
+      return; // Never issue an immediate replacement for a failed request.
     }
+    if (!controller_poll.due(Clock::now())) return;
     if (!controllers->service_is_ready()) {
-      controller_active = false; gripper_controller_active = false; controller_at = {};
-      controller_error = "ControllerManager ListControllers 服务不可用";
-      controller_request_at = Clock::now();
+      controller_failed("ControllerManager ListControllers 服务不可用");
       return;
     }
-    controller_pending = true; controller_request_at = Clock::now();
-    const auto generation = ++controller_generation;
-    controller_request_id = controllers->async_send_request(std::make_shared<Controllers::Request>(), [this, generation](rclcpp::Client<Controllers>::SharedFuture future) {
-      if (generation != controller_generation) return;
-      controller_pending = false; controller_active = false; gripper_controller_active = false;
-      const auto latency = std::chrono::duration<double>(Clock::now() - controller_request_at).count();
-      if (latency > .8) log(0, "", "controller", "ListControllers 响应耗时 " + std::to_string(latency) + " s", "warn");
-      try {
-        controller_error = "arm_trajectory_controller 未激活、缺失或类型不匹配";
-        bool gripper_conflict = false;
-        size_t gripper_count = 0;
-        for (const auto &c : future.get()->controller) {
-          if (c.name == gripper_controller && c.state == "active" && c.type == "joint_trajectory_controller/JointTrajectoryController") {
-            ++gripper_count;
-            gripper_controller_active = same_motion_joints(c.claimed_interfaces,
-                {gripper_motion_joint() + "/position", gripper_motion_joint() + "/velocity"});
-          } else if (c.state == "active") {
-            for (const auto &claim : c.claimed_interfaces)
-              if (claim.rfind(gripper_motion_joint() + "/", 0) == 0) gripper_conflict = true;
-          }
-          if (c.name != controller || c.state != "active" || c.type != "joint_trajectory_controller/JointTrajectoryController") continue;
-          if (!arm_position_velocity_claimed(c.claimed_interfaces))
-            controller_error = "轨迹控制器必须认领六关节 position+velocity 接口，请更新控制栈并重新启用轨迹控制";
-          else { controller_active = true; controller_error.clear(); }
+    const auto generation = controller_poll.start(Clock::now());
+    try {
+      controller_request_id = controllers->async_send_request(std::make_shared<Controllers::Request>(), [this, generation](rclcpp::Client<Controllers>::SharedFuture future) {
+        if (!controller_poll.matches(generation)) return;
+        // Enforce the same deadline even if the response callback runs before the timer.
+        if (controller_poll.expired(Clock::now())) {
+          controller_failed("arm_trajectory_controller 状态查询超时（ListControllers ≥2s）");
+          return;
         }
-        gripper_controller_active = gripper_controller_active && !gripper_conflict && gripper_count == 1;
-        controller_at = Clock::now();
-      } catch (const std::exception &e) {
-        controller_at = {}; controller_error = std::string("ControllerManager 查询失败：") + e.what();
-      }
-    }).request_id;
+        const auto latency = controller_poll.latency(Clock::now());
+        controller_active = false; gripper_controller_active = false;
+        try {
+          controller_error = "arm_trajectory_controller 未激活、缺失或类型不匹配";
+          bool gripper_conflict = false;
+          size_t gripper_count = 0;
+          for (const auto &c : future.get()->controller) {
+            if (c.name == gripper_controller && c.state == "active" && c.type == "joint_trajectory_controller/JointTrajectoryController") {
+              ++gripper_count;
+              gripper_controller_active = same_motion_joints(c.claimed_interfaces,
+                  {gripper_motion_joint() + "/position", gripper_motion_joint() + "/velocity"});
+            } else if (c.state == "active") {
+              for (const auto &claim : c.claimed_interfaces)
+                if (claim.rfind(gripper_motion_joint() + "/", 0) == 0) gripper_conflict = true;
+            }
+            if (c.name != controller || c.state != "active" || c.type != "joint_trajectory_controller/JointTrajectoryController") continue;
+            if (!arm_position_velocity_claimed(c.claimed_interfaces))
+              controller_error = "轨迹控制器必须认领六关节 position+velocity 接口，请更新控制栈并重新启用轨迹控制";
+            else { controller_active = true; controller_error.clear(); }
+          }
+          gripper_controller_active = gripper_controller_active && !gripper_conflict && gripper_count == 1;
+          controller_at = Clock::now();
+          controller_poll.succeeded(controller_at);
+          const bool slow = latency > .8;
+          if (slow != controller_slow) {
+            log(0, "", "controller", slow ? "ListControllers 响应较慢（" + std::to_string(latency) + " s），保持单请求轮询"
+                : "ListControllers 响应耗时已恢复正常", slow ? "warn" : "info");
+            controller_slow = slow;
+          }
+        } catch (const std::exception &e) {
+          controller_failed(std::string("ControllerManager 查询失败：") + e.what());
+        }
+      }).request_id;
+    } catch (const std::exception &e) {
+      controller_failed(std::string("ControllerManager 查询发送失败：") + e.what());
+    }
   }
   std::vector<std::string> model_keys() {
     std::vector<std::string> keys{"robot_description", "robot_description_semantic", "moveit_manage_controllers",
@@ -277,13 +298,17 @@ struct PositionMotion::Impl {
       } catch (const std::exception &e) { model_error = std::string("MoveIt 配置不可用：") + e.what(); model_at = {}; }
     });
   }
+  std::string controller_readiness() const {
+    if (!controller_active) return controller_error;
+    if (!fresh(controller_at, ControllerHealthPoll::validity_seconds))
+      return "arm_trajectory_controller 状态已过期（ListControllers >3.1s）";
+    return "";
+  }
   std::string readiness(bool starting = true) {
     if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
     if (!fresh(model_at, 10) || !model_error.empty()) return model_error.empty() ? "MoveIt 模型信息已过期" : model_error;
-    if (!controller_active) return controller_error;
-    // One-second polling + a two-second in-flight response budget. Actual JTC,
-    // MCU and joint feedback below must STILL be fresh within one second.
-    if (!fresh(controller_at, 3.1)) return "arm_trajectory_controller 状态已过期（ListControllers >3.1s）";
+    const auto controller_reason = controller_readiness();
+    if (!controller_reason.empty()) return controller_reason;
     if (!fresh(joints_at) || !fresh(state_at) || !fresh(hardware_at)) return "JointState、控制器或硬件反馈缺失/已过期";
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || (hardware.active_joint_mask & 0x3f) != 0x3f) return "硬件未处于 TRACK、存在故障或六关节未全部使能";
     if (!arm_joint_set(state.joint_names)) return "轨迹控制器关节集合与 arm 不匹配";
@@ -302,7 +327,7 @@ struct PositionMotion::Impl {
   std::string gripper_readiness(bool starting = true) {
     if (!execute_action->action_server_is_ready()) return "MoveIt /execute_trajectory 未启动";
     if (!gripper_supported || !fresh(model_at, 10) || !model_error.empty()) return gripper_error.empty() ? "夹爪模型已过期" : gripper_error;
-    if (!gripper_controller_active || !fresh(controller_at, 3.1)) return "夹爪轨迹控制器未激活或未认领 position+velocity 接口";
+    if (!gripper_controller_active || !fresh(controller_at, ControllerHealthPoll::validity_seconds)) return "夹爪轨迹控制器未激活或未认领 position+velocity 接口";
     if (!fresh(gripper_state_at) || !fresh(joints_at) || !fresh(hardware_at)) return "夹爪反馈缺失或已过期";
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || !(hardware.active_joint_mask & 0x40)) return "夹爪未使能、未处于 TRACK 或存在故障";
     try {
@@ -636,11 +661,19 @@ struct PositionMotion::Impl {
     }
   }
   void tick() {
-    if (!fresh(controller_request_at, 1.0)) poll_controllers();
+    poll_controllers();
     if (!fresh(model_request_at, 3)) poll_model();
+    const auto controller_reason = controller_readiness();
+    if (controller_reason != controller_health_reason) {
+      log(0, "", "controller", controller_reason.empty() ? "轨迹控制器状态校验已恢复" : controller_reason,
+          controller_reason.empty() ? "info" : "warn");
+      controller_health_reason = controller_reason;
+    }
     const auto health = readiness(false);
     if (health != health_reason) {
-      log(0, "", "health", health.empty() ? "规划执行条件已就绪" : health, health.empty() ? "info" : "warn");
+      // Controller failures already have a canonical transition above.
+      if (health.empty() || health != controller_reason)
+        log(0, "", "health", health.empty() ? "规划执行条件已就绪" : health, health.empty() ? "info" : "warn");
       health_reason = health;
     }
     std::deque<Request> pending;
