@@ -313,13 +313,14 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("toolbar", { name: "应用工具栏" });
-    await user.click(screen.getByRole("button", { name: /\/stm32\/status/ }));
+    await user.click(screen.getByRole("button", { name: /^\/stm32\/status/ }));
     act(() => {
       doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "old-session-urdf" });
       doubles.listener?.({ op: "topic_message", topic: "/stm32/status", data: { fault_code: 4 } });
     });
-    await user.click(screen.getByRole("tab", { name: "Robot View" }));
+    await user.click(screen.getByRole("button", { name: "Motion" }));
     expect(screen.getByTestId("urdf")).toHaveTextContent("old-session-urdf");
+    await user.click(screen.getByRole("button", { name: "Topics" }));
     expect(screen.getByLabelText("Topic JSON")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "断开" }));
@@ -327,8 +328,9 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("toolbar", { name: "应用工具栏" });
 
-    await user.click(screen.getByRole("tab", { name: "Robot View" }));
+    await user.click(screen.getByRole("button", { name: "Motion" }));
     expect(screen.getByTestId("urdf")).toHaveTextContent("empty");
+    await user.click(screen.getByRole("button", { name: "Topics" }));
     expect(screen.getByText("从左侧或 Topic Graph 选择一个 Topic")).toBeVisible();
     expect(screen.queryByLabelText("Topic JSON")).not.toBeInTheDocument();
   });
@@ -394,13 +396,13 @@ describe("App workflow", () => {
     const sendsBeforeFilter = doubles.send.mock.calls.length;
 
     await user.type(filter, "STATUS");
-    expect(screen.getByRole("button", { name: /\/stm32\/status/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^\/stm32\/status/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: /\/robot_description/ })).not.toBeInTheDocument();
 
     await user.clear(filter);
     await user.type(filter, "std_msgs");
     expect(screen.getByRole("button", { name: /\/robot_description/ })).toBeVisible();
-    expect(screen.queryByRole("button", { name: /\/stm32\/status/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^\/stm32\/status/ })).not.toBeInTheDocument();
     expect(doubles.send).toHaveBeenCalledTimes(sendsBeforeFilter);
   });
 
@@ -436,38 +438,41 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await user.click(await screen.findByRole("button", { name: "在 Topic Graph 聚焦 Controller arm_controller" }));
-    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
+    await user.click(await screen.findByRole("button", { name: "查看 arm_controller Graph" }));
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
-  it("activates and deactivates controllers and refreshes the list after each operation", async () => {
-    const user = userEvent.setup();
-    render(<App />);
+  it("keeps Topics read-only and confirms verified Controller switches only in Motion", async () => {
+    const baseInvoke = doubles.invoke.getMockImplementation()!;
+    const states = { joint_state_broadcaster: "active", arm_controller: "inactive" };
+    doubles.invoke.mockImplementation(async (command, args) => {
+      if (command === "check_ros_controllers") return { manager: "/controller_manager", available: true,
+        controllers: Object.entries(states).map(([name,state]) => ({name,state,typeName: name === "arm_controller" ? "joint_trajectory_controller/JointTrajectoryController" : "joint_state_broadcaster/JointStateBroadcaster"})), message: "" };
+      if (command === "switch_ros_controller") {
+        states[args.controllerName as keyof typeof states] = args.action === "activate" ? "active" : "inactive";
+        return `${args.controllerName} ${args.action} complete`;
+      }
+      return baseInvoke(command,args);
+    });
+    const user = userEvent.setup(); render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("joint_state_broadcaster");
-
-    const controllerQueries = () => doubles.invoke.mock.calls
-      .filter(([command]) => command === "check_ros_controllers").length;
-    const beforeDeactivate = controllerQueries();
-    await user.click(screen.getByRole("button", { name: "停用 Controller joint_state_broadcaster" }));
-    expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", {
-      profile: expect.any(Object),
-      controllerName: "joint_state_broadcaster",
-      action: "deactivate",
-    });
-    await waitFor(() => expect(controllerQueries()).toBe(beforeDeactivate + 1));
-    expect(screen.getByText("joint_state_broadcaster deactivate complete")).toBeVisible();
-
-    const beforeActivate = controllerQueries();
-    await user.click(screen.getByRole("button", { name: "激活 Controller arm_controller" }));
-    expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", {
-      profile: expect.any(Object),
-      controllerName: "arm_controller",
-      action: "activate",
-    });
-    await waitFor(() => expect(controllerQueries()).toBe(beforeActivate + 1));
-    expect(screen.getByText("arm_controller activate complete")).toBeVisible();
+    expect(screen.queryByRole("button", {name:"停用 joint_state_broadcaster"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name:"激活 arm_controller"})).not.toBeInTheDocument();
+    expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
+    await user.click(screen.getByRole("button", {name:"Motion"}));
+    const before = doubles.invoke.mock.calls.filter(([c]) => c === "check_ros_controllers").length;
+    await user.click(screen.getByRole("button",{name:"停用 joint_state_broadcaster"}));
+    expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
+    await user.click(screen.getByRole("button",{name:"确认停用"}));
+    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", { profile:expect.any(Object), controllerName:"joint_state_broadcaster", action:"deactivate" }));
+    await waitFor(() => expect(doubles.invoke.mock.calls.filter(([c]) => c === "check_ros_controllers").length).toBeGreaterThanOrEqual(before+2));
+    expect(await screen.findByText("joint_state_broadcaster deactivate complete")).toBeVisible();
+    await user.click(screen.getByRole("button",{name:"激活 arm_controller"}));
+    await user.click(screen.getByRole("button",{name:"确认激活"}));
+    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", {profile:expect.any(Object),controllerName:"arm_controller",action:"activate"}));
+    expect(await screen.findByText("arm_controller activate complete")).toBeVisible();
   });
 
   it("manually refreshes Topics and ROS Control and executes both 30-second pollers", async () => {
@@ -495,7 +500,7 @@ describe("App workflow", () => {
       const automaticRefreshes = intervalSpy.mock.calls
         .filter(([, delay]) => delay === 30_000)
         .map(([callback]) => callback as () => void);
-      expect(automaticRefreshes).toHaveLength(2);
+      expect(automaticRefreshes).toHaveLength(3); // Topics Graph adds its own visible-page poller.
       const topicsBeforeAutoRefresh = doubles.listTopics.mock.calls.length;
       const controllersBeforeAutoRefresh = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
       await act(async () => {
@@ -542,7 +547,7 @@ describe("App workflow", () => {
     const control = await screen.findByRole("region", { name: "ROS Control Controllers" });
     expect(control).toHaveTextContent("离线");
     expect(control).toHaveTextContent("controller_manager 服务不可用或查询超时");
-    expect(screen.getByRole("tab", { name: "Robot View" })).toBeVisible();
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
   it("selects a topic and independently collapses all three dashboard data panels", async () => {
@@ -550,7 +555,7 @@ describe("App workflow", () => {
     const { container } = render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByText("micro-ROS Agent：运行中");
-    await user.click(screen.getByRole("button", { name: /\/stm32\/status/ }));
+    await user.click(screen.getByRole("button", { name: /^\/stm32\/status/ }));
     expect(doubles.request).toHaveBeenCalledWith(expect.objectContaining({ op: "subscribe", topic: "/stm32/status" }));
 
     await user.click(screen.getByRole("button", { name: "收起Topics" }));
@@ -592,18 +597,26 @@ describe("App workflow", () => {
     }));
   });
 
-  it("keeps the same Robot View element across Graph and main navigation", async () => {
-    const user = userEvent.setup();
-    render(<App />);
+  it("retains one Motion scene while Topics stays read-only and releases RGBD on navigation", async () => {
+    const user = userEvent.setup(); render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByLabelText("ROS Topic Graph");
+    expect(screen.queryByTestId("urdf")).not.toBeInTheDocument();
+    expect(doubles.send.mock.calls.some(([m]) => m.op === "subscribe_rgbd")).toBe(false);
+    expect(screen.queryByRole("button", { name: /激活 arm_controller|停用 joint_state_broadcaster/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Motion" }));
     const viewer = await screen.findByTestId("urdf");
-    await user.click(screen.getByRole("tab", { name: "Topic Graph" }));
+    expect(viewer).toBeVisible();
+    expect(doubles.send).toHaveBeenCalledWith(expect.objectContaining({ op: "subscribe_rgbd" }));
+    await user.click(screen.getByRole("tab", { name: "位置" }));
     expect(viewer).not.toBeVisible();
+    expect(doubles.send).toHaveBeenCalledWith({ op: "unsubscribe_rgbd" });
     await user.click(screen.getByRole("tab", { name: "Robot View" }));
     expect(screen.getByTestId("urdf")).toBe(viewer);
-    await user.click(screen.getByRole("button", { name: "Status" }));
-    expect(viewer).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "Topics" }));
+    expect(viewer).not.toBeVisible();
+    expect(screen.queryByRole("tab", { name: "位置" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Motion" }));
     expect(screen.getByTestId("urdf")).toBe(viewer);
     expect(viewer).toBeVisible();
   });
@@ -613,7 +626,7 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await user.click(await screen.findByRole("button", { name: /\/test\/image/ }));
+    await user.click(await screen.findByRole("button", { name: /^\/test\/image/ }));
     const subscription = { op: "subscribe", topic: "/test/image", type: "sensor_msgs/msg/Image" };
     await waitFor(() => expect(doubles.request).toHaveBeenCalledWith(subscription));
     await user.click(screen.getByRole("tab", { name: "详情" }));
@@ -628,7 +641,7 @@ describe("App workflow", () => {
     doubles.request.mockClear();
     await user.click(screen.getByRole("button", { name: "Topics" }));
     await waitFor(() => expect(doubles.request).toHaveBeenCalledWith(subscription));
-    expect(screen.queryByText(/1 条/)).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main", {name:"Topics"})).queryByText(/1 条/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
     await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({ op: "unsubscribe", topic: "/test/image" }));
   });
@@ -637,6 +650,7 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: "Motion" }));
     await screen.findByText("micro-ROS Agent：运行中");
     doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "<robot/>" });
     await waitFor(() => expect(screen.getByTestId("urdf")).toHaveTextContent("<robot/>"));
@@ -646,7 +660,6 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await user.click(screen.getByRole("tab", { name: "Topic Graph" }));
 
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
     expect(doubles.getGraph).toHaveBeenCalledTimes(1);
@@ -664,8 +677,8 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await user.click(await screen.findByRole("button", { name: /\/stm32\/status/ }));
-    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
+    await user.click(await screen.findByRole("button", { name: /^\/stm32\/status/ }));
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
     expect(await screen.findByRole("button", { name: "Topic /stm32/status" })).toHaveClass("selected");
     await user.click(screen.getByRole("button", { name: "Node /hardware_driver" }));
     expect(screen.getByRole("tab", { name: "详情" })).toHaveAttribute("aria-selected", "true");
@@ -725,7 +738,7 @@ describe("App workflow", () => {
     expect(localStorage.getItem("robot-console-page")).toBe("motor");
 
     await user.click(screen.getByRole("button", { name: "Topics" }));
-    expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
     expect(screen.queryByTestId("motor")).not.toBeInTheDocument();
   });
 
@@ -733,7 +746,8 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await screen.findByText("arm_controller");
+    await user.click(await screen.findByRole("button", { name: "Motion" }));
+    await within(screen.getByRole("main", {name:"Motion"})).findByText("arm_controller");
 
     // 默认 mock 中 arm_controller 是 inactive，因此不构成可下发的轨迹控制器。
     expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("none");
@@ -775,7 +789,8 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await screen.findByText("arm/trajectory_controller");
+    await user.click(await screen.findByRole("button", { name: "Motion" }));
+    await within(screen.getByRole("main", {name:"Motion"})).findByText("arm/trajectory_controller");
 
     expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("arm/trajectory_controller@/arm/trajectory_controller/joint_trajectory");
     expect(doubles.request).toHaveBeenCalledWith({ op: "subscribe", topic: "/arm/trajectory_controller/controller_state", type: "control_msgs/msg/JointTrajectoryControllerState" });
@@ -821,7 +836,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     const control = await screen.findByRole("region", { name: "ROS Control Controllers" });
     expect(control).toHaveTextContent("轨迹");
-    expect(screen.getByTitle("激活后可在 Robot View 拖拽 TCP 并下发轨迹")).toHaveTextContent("轨迹");
+    expect(within(control).getByText("轨迹")).toBeVisible();
   });
 
   it("keeps navigation out of the toolbar and restores center view tabs to the panel", async () => {
@@ -834,11 +849,10 @@ describe("App workflow", () => {
     expect(within(toolbar).queryByText("Robot Console")).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "Topics" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("tab")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Robot View" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByRole("tab", { name: "Robot View" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "DataGraph" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Monitor" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Robot View" }).closest(".center-tabs")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Motion" })).toBeVisible();
 
     const topicCalls = doubles.listTopics.mock.calls.length;
     const controllerCalls = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
@@ -848,15 +862,14 @@ describe("App workflow", () => {
       doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length,
     ).toBe(controllerCalls + 1));
 
-    await user.click(screen.getByRole("tab", { name: "Topic Graph" }));
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Topic Graph" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("pauses and resumes live topic data without disconnecting", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: "Motion" }));
     await screen.findByRole("toolbar", { name: "应用工具栏" });
     act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "first" }));
     expect(screen.getByTestId("urdf")).toHaveTextContent("first");
@@ -940,7 +953,7 @@ describe("App workflow", () => {
     expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
     expect(screen.queryByRole("group", { name: "页面切换" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Topics" }));
-    expect(await screen.findByRole("tab", { name: "Robot View" })).toBeVisible();
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
   it("adds numeric fields from Topic Inspector into Monitor panels", async () => {
@@ -1312,6 +1325,7 @@ describe("App workflow", () => {
     expect(screen.getByText("待同步")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "返回连接" }));
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: "Motion" }));
     await user.click(await screen.findByRole("tab", { name: "位置" }));
     expect(screen.getByRole("region", { name: "位置" })).toBeVisible();
     expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
@@ -1332,6 +1346,7 @@ describe("App workflow", () => {
     try {
       const user = userEvent.setup(); render(<App />);
       await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await user.click(await screen.findByRole("button", { name: "Motion" }));
       await screen.findByRole("tab", { name: "位置" });
       act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"], position: [0, -.2, -.3, 0, 0, 0] } }));
       await user.click(screen.getByRole("tab", { name: "位置" }));
@@ -1344,6 +1359,13 @@ describe("App workflow", () => {
       await user.click(move);
       expect(doubles.request).toHaveBeenCalledWith(expect.objectContaining({ op: "position_move", positions: [0, -.2, -.3, 0, 0, 0], confirmation: "ARMED" }), 5000);
       expect(doubles.request.mock.calls.some(([m]) => m.op === "trajectory_command")).toBe(false);
+      const moveRequest = doubles.request.mock.calls.find(([m]) => m.op === "position_move")![0];
+      await user.click(screen.getByRole("button", { name: "Topics" }));
+      const task = screen.getByRole("status", {name:"当前运动任务"});
+      expect(task).toHaveTextContent("姿态 1");
+      expect(screen.getByRole("main", {name:"Topics"})).toBeVisible();
+      await user.click(within(task).getByRole("button", {name:"取消运动"}));
+      expect(doubles.request).toHaveBeenCalledWith({op:"position_cancel",command_id:moveRequest.command_id},5000);
     } finally { doubles.request.mockResolvedValue({ op: "joint_command_ack", sequence: 1 }); }
   });
 

@@ -7,12 +7,13 @@
 1. [连接与会话](#_1-连接与会话)
 2. [Status（状态总览）](#status状态总览)
 3. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
-4. [Monitor](#monitor)
-5. [Robot View（URDF）](#_3-robot-view-urdf)
-6. [MIT 电机控制](#_4-mit-电机控制)
-7. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
-8. [Joint4 标定](#_6-joint4-标定)
-9. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
+4. [Motion 工作区](#motion-工作区)
+5. [Monitor](#monitor)
+6. [Robot View（URDF）](#_3-robot-view-urdf)
+7. [MIT 电机控制](#_4-mit-电机控制)
+8. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
+9. [Joint4 标定](#_6-joint4-标定)
+10. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
 10. [重力辨识（设计草案）](#_8-重力辨识设计草案)
 
 ---
@@ -82,7 +83,7 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ### 做什么
 
-浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的仪表盘 Panel 做 30 秒滑动窗口曲线。侧栏还可查看 `/controller_manager` 并 Activate / Deactivate。
+浏览 ROS graph 中的 Topic，只读订阅并查看消息；用 Topic Graph 看 Publisher / Subscriber 拓扑；在 Inspector 里查看原始 JSON，并对 `sensor_msgs/msg/Image` 做 Canvas 预览；把数值字段加入左侧导航 **Monitor** 页的仪表盘 Panel 做 30 秒滑动窗口曲线。侧栏只读查看 `/controller_manager`；Controller 卡片的「管理」打开 Motion 执行控制器操作。
 
 ### 界面结构
 
@@ -98,10 +99,10 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 **Topic Graph**
 
-1. 在中心面板切到「Topic Graph」Tab；打开时立即加载，默认每 30 秒刷新，也可点「刷新 Graph」。
+1. 打开 Topics 中心的 Topic Graph；进入时立即加载，默认每 30 秒刷新，也可点「刷新 Graph」。
 2. ROS Node 为圆角矩形、Topic 为椭圆，均使用界面的蓝青/青绿色；连接越多图形越大。力导向布局根据连接关系聚拢相关节点，并避开重叠。连线箭头保留发布/订阅方向，悬停可查看完整名称与关系。默认隐藏 Bridge 节点和私有 Topic，可用开关显示；共享机器人数据 Topic 仍显示。
 3. 画布初始以 100% 缩放显示；滚轮/按钮缩放、拖动画布无限平移，节点可拖到初始布局之外（刷新后保留）。Fit 将所有节点放入视野，Reset 以 100% 缩放居中现有节点；连线粒子动画示意流向与快慢（占位流速，真实 Hz 待接）。
-4. 点击 ROS Controller 卡片按实际 ROS 关系聚焦节点、Topic 和连线；点击图节点高亮一跳关联。点击左侧 Topic 也会打开 Graph 并聚焦。点击 Topic 图形订阅该 Topic，点击 Node 图形显示详情。
+4. 点击 ROS Controller 卡片的「查看 Graph」按实际 ROS 关系聚焦节点、Topic 和连线；点击图节点高亮一跳关联。点击左侧 Topic 也会打开 Graph 并聚焦。点击 Topic 图形订阅该 Topic，点击 Node 图形显示详情。
 
 **Inspector / 图像**
 
@@ -112,7 +113,7 @@ JointState topic: /stm32/joint_states           # 内置默认
 **ROS Control**
 
 1. Topics 下方查看 Controller 名称、类型、active/inactive（约 30 秒只读刷新）。
-2. 按状态执行 Activate / Deactivate（经受约束的 SSH `ros2 control switch_controllers --strict`）；操作后会刷新列表并显示结果。
+2. 点击「查看 Graph」聚焦对应拓扑；点击「管理」打开 Motion 的 Controllers 侧栏。Topics 不提供 Activate / Deactivate。
 
 ### 可解码消息类型
 
@@ -128,6 +129,19 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 - 订阅失败单独展示，不会中断 Graph 刷新。
 
 ---
+
+## Motion 工作区
+
+Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View / 位置**，左侧 Controllers
+负责单个控制器管理，底部为两者共享的规划执行日志。顶部可查看机械臂/夹爪控制器、MoveIt、
+关节反馈和时钟就绪状态。缺少反馈仍可进入页面查看原因；实际执行保留现有全部安全门。
+
+- Robot View 用于 TCP、关节和夹爪预览，点击确认后经 MoveIt 执行；位置 Tab 管理和执行保存点位。
+- Controllers 默认展开，可收起；Activate / Deactivate 需在提示中确认，状态改变或有冲突任务时禁止切换。
+- Status 继续负责 Teleop / Trajectory / VLA 的整栈启动、模式切换、安全停止和解除输出。
+- 运动过程中切到其他页，全局任务条仍显示阶段，可返回 Motion 或取消本会话的运动；切页本身不视为任务完成。
+- Motion Tab 与侧栏展开偏好独立记忆；默认 Robot View 和展开侧栏。导航记忆兼容旧 Topics `dashboard` 标识。
+- RGBD 仅在可见的 Motion → Robot View 且实时显示开启时订阅，切到位置或其他页会释放当前客户端兴趣并清空点云。
 
 ## Monitor
 
@@ -173,12 +187,12 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ### 做什么
 
-从配置的 `std_msgs/msg/String` Topic（默认 `/robot_description`）加载 URDF，用 Three.js + React Three Fiber + `urdf-loader` 渲染机器人，并由 `JointState` 驱动关节。TCP 拖拽手柄也挂在本视图上（见 [§5](#_5-tcp-拖拽轨迹)）。
+在 Motion → Robot View 中，从配置的 `std_msgs/msg/String` Topic（默认 `/robot_description`）加载 URDF，用 Three.js + React Three Fiber + `urdf-loader` 渲染机器人，并由 `JointState` 驱动关节。TCP 拖拽手柄也挂在本视图上（见 [§5](#_5-tcp-拖拽轨迹)）。
 
 ### 怎么用
 
 1. 确认内置 URDF Topic（默认 `/robot_description`）与 JointState Topic 与当前固件 / ros2-stack 一致（界面不再编辑这些字段）。
-2. 连接后切到中心面板「Robot View」；Bridge 拉取 URDF 与 `package://` 网格 / 纹理。
+2. 连接后打开 Navigation → Motion →「Robot View」；Bridge 拉取 URDF 与 `package://` 网格 / 纹理。
 3. 模型随 JointState 的 name/position 更新；缺少的位置按 0 处理。
 4. 视图内 heads-up 会显示 URDF 错误或轨迹控制器状态（与窄面板布局兼容，互不遮挡）。
 
@@ -244,7 +258,7 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ### 怎么用
 
-1. 在 ROS Control 中确认存在 **active** 的轨迹控制器（类型 `joint_trajectory_controller/JointTrajectoryController` 优先，名称含 `traj` 次之）。列表会标「轨迹」；Robot View 右上角显示控制器名与 Topic。
+1. 在 Motion 的 Controllers 中确认存在 **active** 的轨迹控制器（类型 `joint_trajectory_controller/JointTrajectoryController` 优先，名称含 `traj` 次之）。列表会标「轨迹」；Robot View 右上角显示控制器名与 Topic。
 2. （可选）在连接配置填写 `tcpLink`；留空时在叶子 link 中按 tool0 / tcp / gripper / ee_link / flange 等命名特征加链深度自动挑选，并在视图展示实际 link。
 3. 拖拽红 X、绿 Y、蓝 Z 箭头或圆环（屏幕恒定尺寸），支持基座/工具轴；平移保持姿态、旋转保持位置。XYZ 数值用 mm，固定轴 RPY 用度；拖拽期间暂停轨道相机；**Esc** 取消并恢复到实时反馈位姿。
 4. 松手保留预览；需要时调整夹爪的单指行程（mm）。勾选工作区安全确认后点击「确认执行」，按最新反馈重新校验 6D IK 后，把完整位置/四元数交给 MoveIt 检查碰撞、规划和执行。夹爪也可单独调整。

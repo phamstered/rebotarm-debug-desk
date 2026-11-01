@@ -1481,3 +1481,70 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .viewer-overlay > button:disabled { opacity: .45; cursor: default; }
 .viewer-overlay > label:has(input[type="checkbox"]) { flex-wrap: nowrap; }
 .viewer-overlay > label > input[type="checkbox"] { width: 14px; flex: 0 0 14px; margin: 0; }
+
+/* Motion and Topics keep independent geometry and visibility. */
+.app-page-content { display: flex; flex-direction: column; }
+.app-page-content > .app-toolbar { flex: 0 0 auto; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 7px 16px; border-bottom: 1px solid var(--line); background: #0a1721; overflow-x: auto; }
+.app-page-content > main, .app-page-content > .status-page { flex: 1; min-height: 0; }
+.topics-workspace { grid-template-rows: minmax(0, 1fr); grid-template-areas: "topics urdf data"; height: auto; }
+.motion-workspace { display: grid; flex: 1; min-height: 0; min-width: 0; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "motion-header motion-header" "controllers content" "controllers motion-log"; background: var(--panel); }
+.motion-workspace[hidden], .motion-workspace [hidden] { display: none; }
+.motion-workspace.controllers-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-areas: "motion-header" "content" "motion-log"; }
+.motion-workspace-header { grid-area: motion-header; padding: 10px 14px; border-bottom: 1px solid var(--line); min-width: 0; }
+.motion-workspace-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
+.motion-workspace-navigation > strong { color: var(--cyan); font-size: 17px; }
+.motion-readiness { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.motion-controller-sidebar { grid-area: controllers; overflow: auto; min-height: 0; border-right: 1px solid var(--line); padding: 12px; }
+.motion-controller-sidebar h2 { margin: 0; font-size: 14px; }
+.motion-controller-sidebar .controller-item { position: relative; padding: 12px 10px; }
+.motion-controller-sidebar .controller-action-button { position: relative; margin-top: 8px; z-index: 1; }
+.motion-content { grid-area: content; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+.motion-content > .robot-view-pane, .motion-positions { height: 100%; min-height: 0; }
+.motion-positions { overflow: auto; }
+.motion-positions > .position-page { min-height: 100%; height: auto; }
+.motion-workspace-log { grid-area: motion-log; min-height: 0; max-height: 28vh; overflow: auto; border-top: 1px solid var(--line); }
+.motion-workspace-log .motion-terminal { margin: 0; }
+.motion-readiness .ok { color: var(--cyan); }
+.motion-readiness .warn { color: #f1bd70; }
+.global-motion-status { flex: 0 0 auto; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 9px 14px; background: #17383e; border-bottom: 1px solid #3b7777; font-size: 12px; }
+.global-motion-status button { padding: 5px 10px; background: #10272f; color: #dcebf7; border: 1px solid #46747d; border-radius: 5px; }
+.controller-confirmation { padding: 12px; border: 1px solid #806843; border-radius: 8px; background: #282219; }
+.controller-confirmation button { margin: 8px 6px 0 0; }
+@media (max-width: 1100px) {
+  .topics-workspace { grid-template-rows: minmax(250px, 2fr) minmax(180px, 1fr); grid-template-areas: "topics urdf" "topics data"; }
+  .topics-workspace.right-sidebar-collapsed { grid-template-rows: minmax(250px, 1fr) 30px; }
+  .motion-workspace { grid-template-columns: 230px minmax(0, 1fr); }
+  .motion-controller-sidebar { padding: 8px; }
+  .motion-workspace-header { padding: 8px; }
+  .motion-workspace-log { max-height: 24vh; }
+}
+@media (max-width: 980px) {
+  .motion-workspace:not(.controllers-collapsed) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "motion-header" "content" "motion-log"; position: relative; }
+  .motion-controller-sidebar { grid-area: content; position: absolute; left: 0; top: 0; bottom: 0; z-index: 10; width: 260px; background: #0c1924; box-shadow: 8px 0 24px #0008; }
+}
+
+/* A running task adds a row without displacing the workspace. */
+.app-main-column { display: flex; flex-direction: column; }
+.connected-topbar { flex: 0 0 auto; }
+.app-page-content { flex: 1 1 auto; height: auto; }
+.controller-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; position: relative; z-index: 1; }
+.controller-actions button, .motion-controllers-panel > header button { padding: 5px 8px; border: 1px solid #355362; border-radius: 5px; background: #10232e; color: #b8d2df; font-size: 11px; }
+.controller-type { font-size: 10px; color: var(--muted); overflow-wrap: anywhere; }
+.controller-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.controller-identity strong { overflow-wrap: anywhere; }
+.controller-trajectory-badge { color: var(--cyan); font-size: 10px; }
+.motion-controllers-panel > header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.controller-item.focused { outline: 1px solid var(--cyan); }
+
+/* Controller cards have explicit state badges rather than text inside a dot. */
+.controller-list .controller-item { padding: 10px; }
+.controller-item > .controller-identity { overflow: visible; white-space: normal; line-height: 1.5; }
+.controller-item > .controller-type { white-space: normal; overflow-wrap: anywhere; line-height: 1.4; color: var(--muted); font-size: 10px; }
+.controller-item > .controller-actions { overflow: visible; white-space: normal; }
+.controller-status-badge { flex: 0 0 auto; color: #a9b8c0; font: 10px monospace; }
+.controller-status-badge.active { color: #79d9c6; }
+.controller-status-badge.inactive { color: #d8ae68; }
+.controller-status-badge::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; }
+/* Keep the drawer toggle readable when the global toolbar uses icon-only buttons. */
+.motion-workspace-navigation .toolbar-action { font-size: 11px; }
+.motion-readiness > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
