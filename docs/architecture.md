@@ -59,6 +59,8 @@ Robot View's left-arm wrist RGBD preview uses a separate Bridge session and the 
 
 Agents and developers should deploy the Jetson package with `npm run deploy:bridge` (`scripts/deploy-bridge.mjs`) rather than ad-hoc SSH copy steps. The script syncs into `<remote>/src/easy_debug_bridge/` (remote workspace defaults to `easy_debug_bridge` resolved against the remote user's `$HOME`; override with an absolute or `$HOME`-relative path via `--remote` / `$BRIDGE_DEPLOY_REMOTE`; `.`/`..`/`~` segments are rejected), runs `colcon build --symlink-install --packages-select easy_debug_bridge` after sourcing Humble and the robot overlay, then checks the resolved `bridge_node` and loopback listener. Restarting the process that owns `127.0.0.1:8765` requires an explicit `--restart` flag. Desktop `start_session` remains responsible for day-to-day Bridge bring-up over SSH once the install tree is current.
 
+Native deployment resolves Node before launching the fixed repository script: an explicit `NODE_BINARY` wins, followed by the inherited PATH and macOS Homebrew install locations. Invalid explicit overrides fail without fallback. The selected executable is passed directly to the process API, with a child-scoped PATH for helper tools; no login shell or shell startup file is evaluated and no global environment is changed. The existing SSH/deployment stages and loopback-only Bridge listener remain unchanged.
+
 ## Current limits
 
 - One desktop session profile at a time.

@@ -80,6 +80,8 @@ npm run install:mac
 
 会先构建 release 版 **Robot Console.app**，再原子安装到 `/Applications/Robot Console.app`；更新失败时恢复旧版本。仅需生成安装包时可运行 `npm run tauri build`。
 
+连接页“升级 Bridge”需要本机已安装 Node.js 和本仓库源码。从 Finder/Dock 启动时不依赖终端的 PATH：依次查找 `NODE_BINARY`、应用 PATH、macOS 的 `/opt/homebrew/bin/node` 与 `/usr/local/bin/node`；进度中显示实际路径。显式 `NODE_BINARY` 无效时直接报错，不静默换版本。仅通过 shell 初始化的版本管理器可在启动应用时提供 `NODE_BINARY` 绝对路径；应用不会执行 shell 启动文件。
+
 调试版 `.app`：
 
 ```text
