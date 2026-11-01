@@ -19,6 +19,8 @@
 #include <optional>
 #include "easy_debug_bridge/motion_log.hpp"
 #include "easy_debug_bridge/controller_health.hpp"
+#include "easy_debug_bridge/clock_sync_core.hpp"
+#include <std_msgs/msg/u_int32_multi_array.hpp>
 
 namespace easy_debug_bridge {
 namespace {
@@ -77,6 +79,7 @@ struct PositionMotion::Impl {
   struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; };
   struct Motion {
     uint64_t owner{}; std::string id, label, phase{"validating"}, message;
+    uint64_t clock_generation{};
     std::vector<double> target; PositionMotionModel model;
     std::vector<double> velocity_limits, acceleration_limits;
     bool gripper{false}, plan_only{false}, tcp{false}; TcpPoseModel tcp_model; TcpPose tcp_target;
@@ -101,6 +104,9 @@ struct PositionMotion::Impl {
   rclcpp::Subscription<Joints>::SharedPtr joints_sub;
   rclcpp::Subscription<State>::SharedPtr state_sub, gripper_state_sub;
   rclcpp::Subscription<Hardware>::SharedPtr hardware_sub;
+  rclcpp::Subscription<std_msgs::msg::UInt32MultiArray>::SharedPtr clock_diagnostics_sub;
+  ClockSyncMonitor clock_monitor;
+  FirmwareClockMonitor firmware_clock;
   rclcpp::TimerBase::SharedPtr timer;
   Joints joints; State state, gripper_state; Hardware hardware;
   Clock::time_point gripper_state_at{};
@@ -132,7 +138,14 @@ struct PositionMotion::Impl {
     parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group", rmw_qos_profile_parameters, callback_group);
     const auto qos = rclcpp::QoS(10).best_effort();
     rclcpp::SubscriptionOptions options; options.callback_group = callback_group;
-    joints_sub = node.create_subscription<Joints>(joint_topic, qos, [this](Joints::ConstSharedPtr m) { joints = *m; joints_at = Clock::now(); }, options);
+    joints_sub = node.create_subscription<Joints>(joint_topic, qos, [this](Joints::ConstSharedPtr m) {
+      joints = *m; joints_at = Clock::now();
+      clock_monitor.observe(m->header.stamp.sec, m->header.stamp.nanosec, node.now().nanoseconds(), joints_at);
+    }, options);
+    clock_diagnostics_sub = node.create_subscription<std_msgs::msg::UInt32MultiArray>(
+        "/stm32/microros_diagnostics", qos, [this](std_msgs::msg::UInt32MultiArray::ConstSharedPtr m) {
+          if (firmware_clock.observe(m->data, Clock::now())) clock_monitor.new_epoch();
+        }, options);
     hardware_sub = node.create_subscription<Hardware>(status_topic, qos, [this](Hardware::ConstSharedPtr m) { hardware = *m; hardware_at = Clock::now(); }, options);
     state_sub = node.create_subscription<State>("/" + controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { state = *m; state_at = Clock::now(); }, options);
     gripper_state_sub = node.create_subscription<State>("/" + gripper_controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { gripper_state = *m; gripper_state_at = Clock::now(); }, options);
@@ -304,12 +317,20 @@ struct PositionMotion::Impl {
       return "arm_trajectory_controller 状态已过期（ListControllers >3.1s）";
     return "";
   }
+  ClockSyncSnapshot clock_snapshot() const {
+    const auto steady = Clock::now();
+    auto snapshot = clock_monitor.snapshot(node.now().nanoseconds(), steady);
+    firmware_clock.apply(snapshot, steady);
+    return snapshot;
+  }
   std::string readiness(bool starting = true) {
     if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
     if (!fresh(model_at, 10) || !model_error.empty()) return model_error.empty() ? "MoveIt 模型信息已过期" : model_error;
     const auto controller_reason = controller_readiness();
     if (!controller_reason.empty()) return controller_reason;
     if (!fresh(joints_at) || !fresh(state_at) || !fresh(hardware_at)) return "JointState、控制器或硬件反馈缺失/已过期";
+    const auto sync = clock_snapshot();
+    if (!sync.healthy()) return sync.message;
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || (hardware.active_joint_mask & 0x3f) != 0x3f) return "硬件未处于 TRACK、存在故障或六关节未全部使能";
     if (!arm_joint_set(state.joint_names)) return "轨迹控制器关节集合与 arm 不匹配";
     try {
@@ -428,6 +449,7 @@ struct PositionMotion::Impl {
     }
     validate_position_target(target, motion_model);
     auto m = std::make_shared<Motion>(); m->owner = r.owner; m->id = id;
+    m->clock_generation = clock_snapshot().generation;
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
     if (m->label.size() > 512) throw std::runtime_error("点位名称过长");
     m->target = target; m->model = motion_model; m->gripper = has_gripper; m->calibration = gripper_calibration;
@@ -552,6 +574,8 @@ struct PositionMotion::Impl {
     }
     const auto reason = readiness();
     if (!reason.empty()) throw std::runtime_error(reason);
+    if (clock_snapshot().generation != m->clock_generation)
+      throw std::runtime_error("规划期间时钟基准改变，未执行旧时间基准的轨迹");
     if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，未执行规划轨迹");
     if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
     if (m->gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
@@ -628,7 +652,7 @@ struct PositionMotion::Impl {
       const bool home = fresh(model_at, 10) && model.home.size() == 6 && model_error.empty();
       const auto gripper_reason = reason.empty() ? gripper_readiness() : reason;
       std::string gripper_sample;
-      if (gripper_supported && fresh(model_at, 10) && model_error.empty() && fresh(joints_at)) try {
+      if (gripper_supported && fresh(model_at, 10) && model_error.empty() && fresh(joints_at) && clock_snapshot().healthy()) try {
         const auto position = calibrated_gripper_value(joints.name, joints.position, gripper_calibration);
         if (position >= gripper_calibration.lower - 1e-8 && position <= gripper_calibration.upper + 1e-8) {
           std::ostringstream value; value << std::setprecision(17) << position;
@@ -689,6 +713,7 @@ struct PositionMotion::Impl {
     if (!m || m->terminal) return;
     if (!m->cancel_requested) {
       auto reason = readiness(false);
+      if (reason.empty() && clock_snapshot().generation != m->clock_generation) reason = "运动期间时钟基准改变";
       if (reason.empty() && m->gripper) reason = gripper_readiness(false);
       if (!reason.empty()) cancel(m, reason + "，已请求取消");
       if (!fresh(m->started, std::max(180.,m->duration+60.))) cancel(m, "运动超时，已请求取消");
@@ -697,6 +722,7 @@ struct PositionMotion::Impl {
     if (m->cancel_requested && !fresh(m->cancel_at, 5) && m->phase != "stop_failed")
       update(m, "stop_failed", "停止未确认；保留控制进程，请检查现场并使用既有安全停机入口");
     if (!m->result_at.time_since_epoch().count() || !fresh(joints_at) || joints_at < m->result_at) return;
+    if (!clock_snapshot().healthy()) return;
     if (m->gripper && (!fresh(gripper_state_at) || gripper_state_at < m->result_at)) return;
     try {
       const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);

@@ -32,11 +32,13 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int32.hpp>
+#include <std_msgs/msg/u_int32_multi_array.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include "easy_debug_bridge/bridge_build_id.hpp"
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion.hpp"
+#include "easy_debug_bridge/clock_sync_core.hpp"
 #include "easy_debug_bridge/topic_json.hpp"
 
 #include <algorithm>
@@ -325,8 +327,10 @@ class BridgeNode : public rclcpp::Node {
       image_cleanup_timer_->cancel();
     });
     image_cleanup_timer_->cancel();
-    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
-    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    tf_context_ = make_tf_context(0);
+    clock_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions safety_options;
+    safety_options.callback_group = clock_callback_group_;
     auto qos = rclcpp::QoS(10).best_effort().durability_volatile();
     command_publisher_ = create_publisher<microros_stm32h723_bridge::msg::JointCommand>(
         command_topic_, qos);
@@ -340,15 +344,28 @@ class BridgeNode : public rclcpp::Node {
           if (sequence_ < message->last_command_sequence) {
             sequence_ = message->last_command_sequence;
           }
-        });
+        }, safety_options);
     safety_joint_subscription_ = create_subscription<sensor_msgs::msg::JointState>(
         joint_state_topic_, qos, [this](const sensor_msgs::msg::JointState::SharedPtr message) {
-          std::lock_guard<std::mutex> lock(control_mutex_);
-          latest_joint_state_ = *message;
-          have_joint_state_ = !message->position.empty() && !message->velocity.empty() &&
-                              !message->effort.empty();
-          joint_received_at_ = std::chrono::steady_clock::now();
-        });
+          const auto received = std::chrono::steady_clock::now();
+          {
+            std::lock_guard<std::mutex> lock(control_mutex_);
+            latest_joint_state_ = *message;
+            have_joint_state_ = !message->position.empty() && !message->velocity.empty() &&
+                                !message->effort.empty();
+            joint_received_at_ = received;
+          }
+          std::lock_guard<std::mutex> lock(clock_mutex_);
+          clock_monitor_.observe(message->header.stamp.sec, message->header.stamp.nanosec,
+                                 now().nanoseconds(), received);
+        }, safety_options);
+    clock_diagnostics_subscription_ = create_subscription<std_msgs::msg::UInt32MultiArray>(
+        "/stm32/microros_diagnostics", qos,
+        [this](std_msgs::msg::UInt32MultiArray::ConstSharedPtr message) {
+          std::lock_guard<std::mutex> lock(clock_mutex_);
+          if (firmware_clock_.observe(message->data, std::chrono::steady_clock::now()))
+            clock_monitor_.new_epoch();
+        }, safety_options);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_);
     RCLCPP_INFO(get_logger(), "Easy Debug Bridge configured on 127.0.0.1:%d", port_);
   }
@@ -432,6 +449,8 @@ class BridgeNode : public rclcpp::Node {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\"}");
+      } else if (op == "clock_sync_info") {
+        send_clock_sync_info(session, request_id);
       } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel") {
         const std::weak_ptr<WebSocketSession> weak = session;
         position_motion_->request(session->id(), request, [weak](const std::string &reply) {
@@ -475,6 +494,51 @@ class BridgeNode : public rclcpp::Node {
   }
 
  private:
+  struct TfContext {
+    uint64_t generation;
+    std::shared_ptr<tf2_ros::Buffer> buffer;
+    std::shared_ptr<tf2_ros::TransformListener> listener;
+  };
+  std::shared_ptr<TfContext> make_tf_context(uint64_t generation) {
+    auto context = std::make_shared<TfContext>();
+    context->generation = generation;
+    context->buffer = std::make_shared<tf2_ros::Buffer>(get_clock());
+    context->listener = std::make_shared<tf2_ros::TransformListener>(*context->buffer);
+    return context;
+  }
+  easy_debug_bridge::ClockSyncSnapshot clock_snapshot() {
+    std::lock_guard<std::mutex> lock(clock_mutex_);
+    const auto steady = std::chrono::steady_clock::now();
+    auto snapshot = clock_monitor_.snapshot(now().nanoseconds(), steady);
+    firmware_clock_.apply(snapshot, steady);
+    return snapshot;
+  }
+  void send_clock_sync_info(const std::shared_ptr<WebSocketSession> &session, const std::string &request_id) {
+    std::ostringstream out;
+    {
+      std::lock_guard<std::mutex> lock(clock_mutex_);
+      const auto steady = std::chrono::steady_clock::now();
+      auto snapshot = clock_monitor_.snapshot(now().nanoseconds(), steady);
+      firmware_clock_.apply(snapshot, steady);
+      out << "{\"op\":\"clock_sync_info\",\"request_id\":" << json_quote(request_id)
+          << ",\"supported\":true,\"state\":" << json_quote(snapshot.state)
+          << ",\"message\":" << json_quote(snapshot.message)
+          << ",\"source_topic\":" << json_quote(joint_state_topic_)
+          << ",\"generation\":" << snapshot.generation;
+      if (snapshot.source_offset_ms) out << ",\"source_offset_ms\":" << *snapshot.source_offset_ms;
+      if (snapshot.feedback_age_ms) out << ",\"feedback_age_ms\":" << *snapshot.feedback_age_ms;
+      out << ",\"firmware\":{\"supported\":" << (firmware_clock_.supported() ? "true" : "false");
+      if (firmware_clock_.supported()) {
+        out << ",\"synchronized\":" << (firmware_clock_.reason(steady).empty() ? "true" : "false")
+            << ",\"failure_count\":" << firmware_clock_.failure_count()
+            << ",\"last_sync_duration_ms\":" << firmware_clock_.duration_ms();
+        if (const auto age = firmware_clock_.age_ms(steady)) out << ",\"sync_age_ms\":" << *age;
+      }
+      out << "}}";
+    }
+    session->send(out.str());
+  }
+
   std::string error_message(const std::string &request_id, const std::string &message) const {
     return "{\"op\":\"error\",\"request_id\":" + json_quote(request_id) +
            ",\"message\":" + json_quote(message) + "}";
@@ -1453,9 +1517,25 @@ class BridgeNode : public rclcpp::Node {
     if (!ws) return;
 
     const std::string source_frame = rgb->header.frame_id;
+    const auto sync = clock_snapshot();
+    if (!sync.healthy()) {
+      send_rgbd_frame_failure(ws, session, source_frame, sync.message, true);
+      std::lock_guard<std::mutex> lock(session->mutex);
+      if (session->latest_rgb == rgb) session->latest_rgb.reset();
+      if (session->latest_depth == depth) session->latest_depth.reset();
+      return;
+    }
+    std::shared_ptr<TfContext> tf;
+    {
+      std::lock_guard<std::mutex> lock(tf_mutex_);
+      // Recreate the listener to reacquire latched static transforms as well as
+      // discarding dynamic transforms from the previous clock epoch.
+      if (tf_context_->generation != sync.generation) tf_context_ = make_tf_context(sync.generation);
+      tf = tf_context_;
+    }
     geometry_msgs::msg::TransformStamped transform;
     try {
-      transform = tf_buffer_->lookupTransform(
+      transform = tf->buffer->lookupTransform(
           session->target_frame, source_frame, rgb->header.stamp,
           tf2::durationFromSec(0.15));
     } catch (const tf2::TransformException &ex) {
@@ -1468,6 +1548,8 @@ class BridgeNode : public rclcpp::Node {
       if (report_failure) send_rgbd_frame_failure(ws, session, source_frame, ex.what(), true);
       return;
     }
+    const auto after_sync = clock_snapshot();
+    if (!after_sync.healthy() || after_sync.generation != sync.generation) return;
 
     if (rgb->width != depth->width || rgb->height != depth->height) {
       send_rgbd_frame_failure(ws, session, source_frame, "RGB 与 Depth 分辨率不一致", false);
@@ -1573,8 +1655,13 @@ class BridgeNode : public rclcpp::Node {
   std::unordered_map<std::string, std::string> subscription_types_;
   std::mutex rgbd_mutex_;
   std::unordered_map<uint64_t, std::shared_ptr<RgbdSession>> rgbd_sessions_;
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  std::mutex tf_mutex_;
+  std::shared_ptr<TfContext> tf_context_;
+  rclcpp::CallbackGroup::SharedPtr clock_callback_group_;
+  std::mutex clock_mutex_;
+  easy_debug_bridge::ClockSyncMonitor clock_monitor_;
+  easy_debug_bridge::FirmwareClockMonitor firmware_clock_;
+  rclcpp::Subscription<std_msgs::msg::UInt32MultiArray>::SharedPtr clock_diagnostics_subscription_;
   rclcpp::Publisher<microros_stm32h723_bridge::msg::JointCommand>::SharedPtr command_publisher_;
   std::mutex trajectory_mutex_;
   std::unordered_map<std::string, rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr>

@@ -1,3 +1,5 @@
+import { ClockSyncStatus } from "./ClockSyncStatus";
+import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { GRIPPER_JOINT_NAME } from "./positionLogic";
 import { MotionTerminal } from "./MotionTerminal";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
@@ -155,6 +157,7 @@ export function UrdfViewer({
   rgbdNearM = 0.05,
   rgbdFarM = 3,
   rgbdStatus = null,
+  clockSync,
   onRgbdVisibleChange,
   onRgbdPointSizeChange,
   onRgbdColorModeChange,
@@ -170,6 +173,7 @@ export function UrdfViewer({
   tcpLink: string;
   trajectoryController: TrajectoryController | null;
   onSendTrajectory(request: TrajectorySendRequest): Promise<void>;
+  clockSync?: ClockStatus;
   rgbdCloud?: ColoredPointCloud | null;
   rgbdVisible?: boolean;
   rgbdPointSize?: number;
@@ -480,6 +484,7 @@ export function UrdfViewer({
         </>}
         {rgbdStatus?.enabled !== false && (
           <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
+            {clockSync && <ClockSyncStatus value={clockSync} />}
             <div className="viewer-overlay-row">
               <label><input type="checkbox" checked={rgbdVisible} onChange={(e) => onRgbdVisibleChange?.(e.target.checked)} /> 点云</label>
               <select value={rgbdColorMode} onChange={(e) => onRgbdColorModeChange?.(e.target.value as RgbdColorMode)} aria-label="点云着色">
@@ -508,7 +513,7 @@ export function UrdfViewer({
               </strong>
             </div>
             {!rgbdStatus?.tfOk && rgbdStatus?.tfError && (
-              <div className="viewer-overlay-row error" role="alert">{rgbdStatus.tfError}</div>
+              <details className="error"><summary>RGBD 暂不可用，查看错误详情</summary><div style={{ overflowWrap: "anywhere" }}>{rgbdStatus.tfError}</div></details>
             )}
             {!rgbdStatus?.pointCount && !rgbdStatus?.tfError && (
               <div className="viewer-overlay-row">等待 RGBD 帧；检查相机 Topic 和对齐深度</div>

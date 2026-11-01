@@ -56,6 +56,9 @@ if(BUILD_TESTING)
   add_executable(test_tcp_pose_core test/test_tcp_pose_core.cpp)
   target_include_directories(test_tcp_pose_core PRIVATE include)
   add_test(NAME tcp_pose_core COMMAND test_tcp_pose_core)
+  add_executable(test_clock_sync_core test/test_clock_sync_core.cpp)
+  target_include_directories(test_clock_sync_core PRIVATE include)
+  add_test(NAME clock_sync_core COMMAND test_clock_sync_core)
   add_executable(test_tcp_pose_model test/test_tcp_pose_model.cpp)
   target_include_directories(test_tcp_pose_model PRIVATE include)
   add_test(NAME tcp_pose_model COMMAND test_tcp_pose_model)
@@ -69,6 +72,10 @@ if(BUILD_TESTING)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gripper_motion_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(gripper_motion_ros PROPERTIES
       ENVIRONMENT "ROS_DOMAIN_ID=213;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
+    add_test(NAME clock_sync_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_clock_sync_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(clock_sync_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=215;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 120)
     add_test(NAME controller_health_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_controller_health_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(controller_health_ros PROPERTIES
