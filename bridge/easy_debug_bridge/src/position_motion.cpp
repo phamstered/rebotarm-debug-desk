@@ -2,6 +2,8 @@
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/tcp_pose_model.hpp"
+#include <shape_msgs/msg/solid_primitive.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp/parameter_client.hpp>
 #include <moveit_msgs/action/move_group.hpp>
@@ -14,6 +16,7 @@
 #include <mutex>
 #include <set>
 #include <atomic>
+#include <optional>
 #include "easy_debug_bridge/motion_log.hpp"
 
 namespace easy_debug_bridge {
@@ -39,6 +42,28 @@ std::string numbers(const std::vector<double> &values) {
 bool fresh(Clock::time_point at, double seconds = 1.0) {
   return at != Clock::time_point{} && std::chrono::duration<double>(Clock::now() - at).count() < seconds;
 }
+TcpPose read_tcp_pose(const Tree &request) {
+  const auto &field = request.get_child("tcp_pose");
+  if (!field.data().empty()) throw std::runtime_error("tcp_pose 必须是完整位姿对象");
+  std::set<std::string> fields;
+  for (const auto &item : field) {
+    if (!fields.insert(item.first).second || (item.first != "frame_id" && item.first != "tcp_link" && item.first != "position" && item.first != "orientation"))
+      throw std::runtime_error("tcp_pose 字段无效或重复");
+  }
+  if (fields.size() != 4) throw std::runtime_error("tcp_pose 缺少坐标系、TCP link 或位姿字段");
+  TcpPose pose;
+  auto read_array = [&](const std::string &key, auto &out) {
+    const auto &array = field.get_child(key);
+    if (!array.data().empty() || array.size() != out.size()) throw std::runtime_error("TCP 位姿数组长度无效");
+    size_t index = 0;
+    for (const auto &item : array) {
+      if (!item.first.empty() || !item.second.empty()) throw std::runtime_error("TCP 位姿必须使用数值数组");
+      out[index++] = item.second.get_value<double>();
+    }
+  };
+  read_array("position", pose.position); read_array("orientation", pose.orientation);
+  return validate_tcp_pose(pose);
+}
 std::vector<double> read_values(const Tree &request) {
   std::vector<double> values;
   if (const auto field = request.get_child_optional("positions"))
@@ -53,7 +78,8 @@ struct PositionMotion::Impl {
     uint64_t owner{}; std::string id, label, phase{"validating"}, message;
     std::vector<double> target; PositionMotionModel model;
     std::vector<double> velocity_limits, acceleration_limits;
-    bool gripper{false}, plan_only{false}; GripperCalibration calibration; Send send; Handle::SharedPtr handle;
+    bool gripper{false}, plan_only{false}, tcp{false}; TcpPoseModel tcp_model; TcpPose tcp_target;
+    GripperCalibration calibration; Send send; Handle::SharedPtr handle;
     ExecuteHandle::SharedPtr execution_handle;
     std::vector<size_t> held_axes;
     double duration{0}, recommended_duration{0};
@@ -84,7 +110,7 @@ struct PositionMotion::Impl {
   Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, controller_request_at{}, model_at{}, model_request_at{};
   bool controller_pending{false}, controller_active{false}, model_pending{false};
   int64_t controller_request_id{0}; uint64_t controller_generation{0}, model_generation{0};
-  std::string model_error{"等待 MoveIt 模型"}, model_signature;
+  std::string model_error{"等待 MoveIt 模型"}, model_signature, model_urdf;
   std::string controller_error{"arm_trajectory_controller 未激活或状态已过期"};
   MotionLog logs;
   std::string health_reason;
@@ -247,7 +273,7 @@ struct PositionMotion::Impl {
         if (current && !current->terminal && !model_signature.empty() && signature != model_signature)
           cancel(current, "MoveIt 模型或配置改变，已请求取消");
         start_tolerance = configured_start_tolerance;
-        model = std::move(parsed); model_signature = std::move(signature); model_error.clear(); model_at = Clock::now();
+        model = std::move(parsed); model_signature = std::move(signature); model_urdf = p[0].as_string(); model_error.clear(); model_at = Clock::now();
       } catch (const std::exception &e) { model_error = std::string("MoveIt 配置不可用：") + e.what(); model_at = {}; }
     });
   }
@@ -330,9 +356,26 @@ struct PositionMotion::Impl {
     const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
     const auto rotation_joint = r.data.get_optional<std::string>("joint_name");
     const auto joint_targets = r.data.get_child_optional("joint_targets");
-    const auto gripper_position = r.data.get_optional<double>("gripper_position");
+    const auto pose_field = r.data.get_child_optional("tcp_pose");
+    if (pose_field && (joint_targets || rotation_joint || r.data.get_child_optional("joint_position") ||
+        r.data.get_child_optional("positions") || r.data.get_child_optional("home")))
+      throw std::runtime_error("tcp_pose 不能与关节目标或 HOME 字段混用");
+    TcpPose pose_target; TcpPoseModel pose_model;
+    if (pose_field) {
+      pose_target = read_tcp_pose(r.data);
+      const auto frame = pose_field->get<std::string>("frame_id"), link = pose_field->get<std::string>("tcp_link");
+      if (frame.empty() || link.empty()) throw std::runtime_error("TCP 坐标系与 link 不能为空");
+      pose_model = parse_tcp_pose_model(model_urdf, link, frame);
+    }
+    std::optional<double> gripper_position;
+    if (const auto field = r.data.get_child_optional("gripper_position")) {
+      if (!field->empty() || field->data().empty()) throw std::runtime_error("gripper_position 必须为有限数值");
+      // get_optional<T> hides conversion errors; a malformed gripper target must never disappear.
+      gripper_position = r.data.get<double>("gripper_position");
+      if (!std::isfinite(*gripper_position)) throw std::runtime_error("gripper_position 必须为有限数值");
+    }
     if (gripper_position && (joint_targets || rotation_joint || r.data.get<bool>("home", false)))
-      throw std::runtime_error("gripper_position 只能与六轴 positions 一起指定");
+      throw std::runtime_error("gripper_position 只能与六轴 positions 或 tcp_pose 一起指定");
     std::vector<std::pair<std::string, double>> edits;
     if (joint_targets) {
       if (!joint_targets->data().empty() || rotation_joint || r.data.get_child_optional("joint_position") ||
@@ -350,9 +393,9 @@ struct PositionMotion::Impl {
     if (has_gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
     const auto motion_model = has_gripper ? gripper_motion_model(model, gripper_calibration, has_arm) : model;
     const auto actual = measured(motion_model);
-    auto target = joint_targets || rotation_joint ? edited_motion_target(actual, edits, motion_model)
+    auto target = pose_field ? actual : joint_targets || rotation_joint ? edited_motion_target(actual, edits, motion_model)
       : r.data.get<bool>("home", false) ? model.home : read_values(r.data);
-    if (gripper_position) target.push_back(*gripper_position);
+    if (gripper_position) { if (pose_field) target.back() = *gripper_position; else target.push_back(*gripper_position); }
     double duration = 0;
     if (r.data.get_child_optional("motion_duration_s")) {
       duration = r.data.get<double>("motion_duration_s"); validate_motion_duration(duration);
@@ -366,7 +409,8 @@ struct PositionMotion::Impl {
     m->velocity_limits = has_arm ? velocity_limits : std::vector<double>{};
     m->acceleration_limits = has_arm ? acceleration_limits : std::vector<double>{};
     if (has_gripper) { m->velocity_limits.push_back(gripper_velocity_limit); m->acceleration_limits.push_back(gripper_acceleration_limit); }
-    m->send = r.send; m->duration = duration; m->plan_only = duration > 0 || has_gripper;
+    m->send = r.send; m->duration = duration; m->plan_only = duration > 0 || has_gripper || bool(pose_field);
+    m->tcp = bool(pose_field); m->tcp_model = std::move(pose_model); m->tcp_target = pose_target;
     if (m->plan_only && !execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
     current = m; in_motion.store(true);
     seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
@@ -383,7 +427,30 @@ struct PositionMotion::Impl {
     }
     goal.request.start_state.joint_state.header.stamp = node.now();
     moveit_msgs::msg::Constraints constraints;
+    if (m->tcp) {
+      // KDL arm IK solves for joint6's child. Retain the complete fixed TCP offset.
+      const auto tip = tcp_target_to_arm_tip(m->tcp_model, m->tcp_target);
+      moveit_msgs::msg::PositionConstraint position;
+      position.header.frame_id = m->tcp_model.root_link;
+      position.link_name = m->tcp_model.arm_tip_link; position.weight = 1;
+      shape_msgs::msg::SolidPrimitive sphere;
+      sphere.type = shape_msgs::msg::SolidPrimitive::SPHERE; sphere.dimensions = {.003};
+      geometry_msgs::msg::Pose region;
+      region.position.x = tip.position[0]; region.position.y = tip.position[1]; region.position.z = tip.position[2];
+      region.orientation.w = 1;
+      position.constraint_region.primitives.push_back(sphere);
+      position.constraint_region.primitive_poses.push_back(region);
+      constraints.position_constraints.push_back(position);
+      moveit_msgs::msg::OrientationConstraint orientation;
+      orientation.header.frame_id = m->tcp_model.root_link; orientation.link_name = m->tcp_model.arm_tip_link;
+      orientation.orientation.x = tip.orientation[0]; orientation.orientation.y = tip.orientation[1];
+      orientation.orientation.z = tip.orientation[2]; orientation.orientation.w = tip.orientation[3];
+      orientation.absolute_x_axis_tolerance = orientation.absolute_y_axis_tolerance = orientation.absolute_z_axis_tolerance = .005;
+      orientation.parameterization = moveit_msgs::msg::OrientationConstraint::ROTATION_VECTOR; orientation.weight = 1;
+      constraints.orientation_constraints.push_back(orientation);
+    }
     for (size_t i = 0; i < motion_model.joint_names.size(); ++i) {
+      if (m->tcp && motion_model.joint_names[i] != gripper_motion_joint()) continue;
       moveit_msgs::msg::JointConstraint c; c.joint_name = motion_model.joint_names[i]; c.position = target[i];
       c.tolerance_above = c.tolerance_below = motion_goal_tolerance(c.joint_name); c.weight = 1; constraints.joint_constraints.push_back(c);
       if ((joint_targets || rotation_joint) && std::none_of(edits.begin(), edits.end(),
@@ -484,8 +551,15 @@ struct PositionMotion::Impl {
     for (size_t i = 0; i < m->model.joint_names.size(); ++i) {
       if (std::abs(points.front().positions[i] - actual[i]) > (m->model.joint_names[i] == gripper_motion_joint() ? .001 : start_tolerance))
         throw std::runtime_error("规划后实测起点已变化，请重新规划");
-      if (std::abs(points.back().positions[i] - m->target[i]) > motion_goal_tolerance(m->model.joint_names[i]) + 1e-9)
+      if ((!m->tcp || m->model.joint_names[i] == gripper_motion_joint()) && std::abs(points.back().positions[i] - m->target[i]) > motion_goal_tolerance(m->model.joint_names[i]) + 1e-9)
         throw std::runtime_error("规划轨迹终点与目标不匹配");
+    }
+    if (m->tcp) {
+      const std::vector<double> arm_goal(points.back().positions.begin(), points.back().positions.begin() + 6);
+      const auto final_pose = tcp_forward_pose(m->tcp_model, arm_goal);
+      if (tcp_pose_position_error(final_pose, m->tcp_target) > .005 || tcp_pose_orientation_error(final_pose, m->tcp_target) > .02)
+        throw std::runtime_error("MoveIt 轨迹终点未满足 TCP 位置/姿态目标，未执行");
+      m->target = points.back().positions;
     }
     for (const auto &point : points) for (const auto i : m->held_axes)
       if (std::abs(point.positions[i] - m->target[i]) > motion_hold_tolerance(m->model.joint_names[i]) + 1e-9)
@@ -539,7 +613,7 @@ struct PositionMotion::Impl {
       const auto after = r.data.get<std::string>("motion_log_session", "") == log_session ? r.data.get<uint64_t>("motion_log_after", 0) : 0;
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
-          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true" +
+          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true,\"tcp_pose_supported\":true" +
           ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
@@ -595,13 +669,18 @@ struct PositionMotion::Impl {
       const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
       // A gripper-only goal still requires the complete arm to be stopped before releasing the shared motion lock.
       const bool stopped = motion_stopped(m->model.joint_names, velocity) && motion_stopped(arm_motion_joints(), ordered_arm_values(joints.name, joints.velocity));
-      const bool reached = stopped && motion_target_reached(m->model.joint_names, m->target, actual, velocity);
+      bool pose_reached = true;
+      if (m->tcp) {
+        const auto measured_pose = tcp_forward_pose(m->tcp_model, ordered_arm_values(joints.name, joints.position));
+        pose_reached = tcp_pose_position_error(measured_pose, m->tcp_target) <= .005 && tcp_pose_orientation_error(measured_pose, m->tcp_target) <= .02;
+      }
+      const bool reached = stopped && pose_reached && motion_target_reached(m->model.joint_names, m->target, actual, velocity);
       if (((m->cancel_requested || m->failed_result) && stopped) || (m->phase == "verifying" && reached)) {
         if (m->settled_at == Clock::time_point{}) m->settled_at = Clock::now();
         if (!fresh(m->settled_at, 0.2)) {
           log(m->owner, m->id, "feedback", "target=" + numbers(m->target) + " actual=" + numbers(actual) + " velocity=" + numbers(velocity));
           update(m, m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
-            m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->gripper ? "已到达目标（机械臂误差 ≤0.02 rad、夹爪误差 ≤1 mm，已停稳）" : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）"), true);
+            m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : m->gripper ? "已到达目标（机械臂误差 ≤0.02 rad、夹爪误差 ≤1 mm，已停稳）" : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）"), true);
         }
       } else {
         m->settled_at = {};

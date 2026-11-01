@@ -4,8 +4,10 @@ import {
   forwardKinematics,
   resolveTcpLink,
   solvePositionIk,
+  solvePoseIk,
+  normalizeQuaternion,
 } from "./kinematicsLogic";
-import type { KinematicFrame, KinematicJoint, KinematicModel, Vec3 } from "./kinematicsLogic";
+import type { KinematicFrame, KinematicJoint, KinematicModel, Vec3, Quat, PoseIkResult } from "./kinematicsLogic";
 import type { ControllerInfo, TopicInfo, TrajectoryPoint } from "./types";
 
 export type TrajectoryController = { name: string; topic: string; jointNames?: string[]; readinessError?: string };
@@ -79,6 +81,8 @@ export type TrajectoryPlan = {
   /** 解算后的 TCP 位置。 */
   solved: Vec3;
   positionError: number;
+  orientationError?: number;
+  solvedQuaternion?: Quat;
   duration: number;
   points: TrajectoryPoint[];
 };
@@ -95,6 +99,7 @@ export function planTrajectory(options: {
   jointState: { name?: string[]; position?: number[] } | null;
   controllerJointNames?: string[];
   target: Vec3;
+  targetQuaternion?: Quat;
   /** 上一帧 IK 解，按运动链顺序，用于拖拽热启动。 */
   seed?: number[];
 }): TrajectoryPlanResult {
@@ -125,7 +130,12 @@ export function planTrajectory(options: {
   const chainIndices = joints.map((joint) => commandNames.indexOf(joint.name));
 
   const seed = joints.map((joint, index) => options.seed?.[index] ?? start[chainIndices[index]]);
-  const ik = solvePositionIk(chain, seed, options.target);
+  let ik;
+  try {
+    ik = options.targetQuaternion === undefined ? solvePositionIk(chain, seed, options.target)
+      : solvePoseIk(chain, seed, {position: options.target, quaternion: normalizeQuaternion(options.targetQuaternion)});
+  } catch (reason) { return {error: reason instanceof Error ? reason.message : String(reason)}; }
+  const orientationError = options.targetQuaternion === undefined ? undefined : (ik as PoseIkResult).orientationError;
   const frame: KinematicFrame = forwardKinematics(chain, ik.positions);
 
   const goal = ik.positions.reduce(
@@ -147,6 +157,7 @@ export function planTrajectory(options: {
     target: options.target,
     solved: frame.position,
     positionError: ik.positionError,
+    ...(orientationError === undefined ? {} : {orientationError, solvedQuaternion: frame.quaternion}),
     duration,
     points: [
       // 先在当前反馈位置停留一小段，避免控制器用过期状态起步造成跳变。
@@ -156,7 +167,7 @@ export function planTrajectory(options: {
   };
 
   if (!ik.reached) {
-    return { plan, error: `IK 未收敛：TCP 位置误差 ${(ik.positionError * 1000).toFixed(1)} mm` };
+    return { plan, error: `IK 未收敛：TCP 位置误差 ${(ik.positionError * 1000).toFixed(1)} mm${orientationError !== undefined ? ` / 姿态误差 ${(orientationError * 180 / Math.PI).toFixed(2)}°` : ""}` };
   }
   return { plan };
 }

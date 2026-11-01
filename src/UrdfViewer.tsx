@@ -10,7 +10,6 @@ import {
   GridHelper,
   Group,
   PerspectiveCamera,
-  Vector2,
   Vector3,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -18,13 +17,16 @@ import { type URDFRobot } from "urdf-loader";
 import { disposeUrdfObject, hydrateUrdfResources, loadUrdfScene } from "./urdfAssetLogic";
 import type { BridgeClient } from "./bridge";
 import {
-  cameraFacingNormal,
-  intersectRayPlane,
+  chainToLink,
+  actuatedJoints,
+  forwardKinematics,
   parseKinematics,
   resolveTcpLink,
-  sceneToUrdfPoint,
 } from "./kinematicsLogic";
 import type { KinematicJoint, KinematicModel, Vec3 } from "./kinematicsLogic";
+import { TcpPoseHandle } from "./TcpPoseHandle";
+import { TcpPosePanel } from "./TcpPosePanel";
+import type { TcpHandleFrame, TcpTargetPose } from "./tcpPoseInteractionLogic";
 import { JointRotationPanel } from "./JointRotationPanel";
 import { pickedRotationJoint, rotationalJoints, type JointRotationPreview } from "./jointRotationLogic";
 import type { PositionMotionControls } from "./positionMotionLogic";
@@ -43,12 +45,6 @@ type JointState = { name?: string[]; position?: number[] };
 
 export type TrajectorySendRequest = { jointNames: string[]; points: TrajectoryPoint[] };
 export type ViewerStatus = { kind: "info" | "success" | "error"; text: string };
-
-const HANDLE_COLORS = { disabled: 0x4b6472, ready: 0x22d3ee, dragging: 0x7dd3fc };
-
-function toVec3(vector: Vector3): Vec3 {
-  return [vector.x, vector.y, vector.z];
-}
 
 function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolean }) {
   const { camera, gl } = useThree();
@@ -86,139 +82,6 @@ function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolea
     }
   }, [camera, robot]);
   return null;
-}
-
-/**
- * TCP 夹爪拖拽手柄：跟随 URDF link 的世界位姿，按住后把鼠标移动映射到
- * 过 TCP 的正交平面，并把平面内的目标点交给上层做 IK。
- */
-function TrajectoryHandle({
-  robot,
-  linkName,
-  enabled,
-  dragging,
-  onDragStart,
-  onDragMove,
-  onDragEnd,
-  onDragCancel,
-}: {
-  robot: URDFRobot | null;
-  linkName: string;
-  enabled: boolean;
-  dragging: boolean;
-  onDragStart(): void;
-  onDragMove(target: Vec3): void;
-  onDragEnd(): void;
-  onDragCancel(): void;
-}) {
-  const { camera, gl, raycaster } = useThree();
-  const groupRef = useRef<Group>(null);
-  const callbacks = useRef({ onDragStart, onDragMove, onDragEnd, onDragCancel, enabled, linkName, robot });
-  callbacks.current = { onDragStart, onDragMove, onDragEnd, onDragCancel, enabled, linkName, robot };
-
-  useFrame(() => {
-    const group = groupRef.current;
-    const link = callbacks.current.robot?.links?.[callbacks.current.linkName];
-    if (!group || !link) return;
-    link.getWorldPosition(group.position);
-    // 保持手柄在屏幕上的尺寸恒定，任何缩放级别都可拾取。
-    group.scale.setScalar(Math.max(camera.position.distanceTo(group.position) * 0.022, 1e-4));
-  });
-
-  // 在 window 捕获阶段抢占指针事件：抓取手柄时 OrbitControls 不会同时开始旋转相机。
-  // 捕获阶段从外到内派发，因此先于 canvas 上的 OrbitControls / R3F 监听器执行。
-  useEffect(() => {
-    const element: HTMLCanvasElement = gl.domElement;
-    const drag = { planeOrigin: new Vector3(), planeNormal: new Vector3(), active: false, pointerId: -1 };
-
-    const rayFromEvent = (event: PointerEvent) => {
-      const rect = element.getBoundingClientRect();
-      raycaster.setFromCamera(
-        new Vector2(
-          ((event.clientX - rect.left) / rect.width) * 2 - 1,
-          -((event.clientY - rect.top) / rect.height) * 2 + 1,
-        ),
-        camera,
-      );
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      const current = callbacks.current;
-      if (event.target !== element) return;
-      if (!current.enabled || !current.robot?.links?.[current.linkName] || !groupRef.current) return;
-      rayFromEvent(event);
-      if (raycaster.intersectObject(groupRef.current, true).length === 0) return;
-      event.preventDefault();
-      event.stopPropagation();
-      element.setPointerCapture(event.pointerId);
-      drag.pointerId = event.pointerId;
-      groupRef.current.getWorldPosition(drag.planeOrigin);
-      drag.planeNormal.set(...cameraFacingNormal(toVec3(camera.position), toVec3(drag.planeOrigin)));
-      drag.active = true;
-      current.onDragStart();
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (!drag.active) return;
-      event.preventDefault();
-      event.stopPropagation();
-      rayFromEvent(event);
-      const hit = intersectRayPlane(
-        toVec3(raycaster.ray.origin),
-        toVec3(raycaster.ray.direction),
-        toVec3(drag.planeOrigin),
-        toVec3(drag.planeNormal),
-      );
-      if (hit) callbacks.current.onDragMove(sceneToUrdfPoint(hit));
-    };
-
-    const finish = (event: PointerEvent) => {
-      if (!drag.active) return;
-      event.preventDefault();
-      event.stopPropagation();
-      drag.active = false;
-      if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
-      callbacks.current.onDragEnd();
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !drag.active) return;
-      drag.active = false;
-      callbacks.current.onDragCancel();
-    };
-
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("pointermove", onPointerMove, true);
-    window.addEventListener("pointerup", finish, true);
-    window.addEventListener("pointercancel", finish, true);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      if (drag.active) {
-        drag.active = false;
-        if (element.hasPointerCapture(drag.pointerId)) element.releasePointerCapture(drag.pointerId);
-        callbacks.current.onDragCancel();
-      }
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("pointermove", onPointerMove, true);
-      window.removeEventListener("pointerup", finish, true);
-      window.removeEventListener("pointercancel", finish, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [camera, gl, raycaster]);
-
-  const color = dragging ? HANDLE_COLORS.dragging : enabled ? HANDLE_COLORS.ready : HANDLE_COLORS.disabled;
-  return (
-    <group ref={groupRef}>
-      <mesh>
-        <sphereGeometry args={[1, 24, 16]} />
-        <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.85} />
-      </mesh>
-      <mesh rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[1.8, 0.12, 12, 48]} />
-        <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.6} />
-      </mesh>
-    </group>
-  );
 }
 
 function Scene({
@@ -280,7 +143,7 @@ export function UrdfViewer({
   bridge,
   tcpLink,
   trajectoryController,
-  onSendTrajectory,
+  onSendTrajectory: _onSendTrajectory,
   active = true,
   motionInfo = { state: "idle" },
   jointMotion,
@@ -328,6 +191,9 @@ export function UrdfViewer({
     }
     return { name: names, position: positions };
   }, [rawJointState, jointMotion?.gripper?.position, jointMotion?.gripper?.fresh]);
+  const [targetPose, setTargetPose] = useState<TcpTargetPose | null>(null);
+  const [handleFrame, setHandleFrame] = useState<TcpHandleFrame>("base");
+  const [poseInputError, setPoseInputError] = useState("");
   const [tcpPending, setTcpPending] = useState(false);
   const tcpPendingRef = useRef(false);
   const [gripperText, setGripperText] = useState("");
@@ -341,22 +207,20 @@ export function UrdfViewer({
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [preview, setPreview] = useState<{ target: Vec3; error: string; positionError: number } | null>(null);
+  const [preview, setPreview] = useState<{ target: Vec3; error: string; positionError: number; orientationError: number } | null>(null);
   const [status, setStatus] = useState<ViewerStatus | null>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const draggingRef = useRef(false);
-  const targetRef = useRef<Vec3 | null>(null);
+  const targetRef = useRef<TcpTargetPose | null>(null);
   const seedRef = useRef<number[]>([]);
   const jointStateRef = useRef<JointState | null>(jointState);
   const controllerRef = useRef<TrajectoryController | null>(trajectoryController);
-  const sendRef = useRef(onSendTrajectory);
   const [interaction, setInteraction] = useState<"tcp" | "joint">("tcp");
   const [selectedJoint, setSelectedJoint] = useState("");
   const [jointPreviewReset, setJointPreviewReset] = useState(0);
   const [jointPreview, setJointPreview] = useState<JointRotationPreview | null>(null);
   const jointPreviewRef = useRef<JointRotationPreview | null>(null);
   controllerRef.current = trajectoryController;
-  sendRef.current = onSendTrajectory;
 
   const model = useMemo(() => {
     if (!xml.trim()) return null;
@@ -376,6 +240,18 @@ export function UrdfViewer({
     }
   }, [model, tcpLink]);
 
+  const handleSession = useMemo(() => crypto.randomUUID(), [bridge, xml, tcp.name]);
+  const actualPose = useMemo<TcpTargetPose | null>(() => {
+    if (!model || model instanceof Error || !tcp.name || !jointState?.name || !jointState.position) return null;
+    if (new Set(jointState.name).size !== jointState.name.length) return null;
+    try {
+      const chain = chainToLink(model, tcp.name);
+      const values = actuatedJoints(chain).map((joint) => jointState.position![jointState.name!.indexOf(joint.name)]);
+      if (!values.every((value) => typeof value === "number" && Number.isFinite(value))) return null;
+      const fk = forwardKinematics(chain, values);
+      return { position: fk.position, orientation: fk.quaternion };
+    } catch { return null; }
+  }, [model, tcp.name, jointState]);
   useEffect(() => () => { loadedScene.current?.dispose(); loadedScene.current = null; robotRef.current = null; }, []);
   useEffect(() => {
     if (loadedScene.current && loadedScene.current.xml !== xml) {
@@ -436,16 +312,18 @@ export function UrdfViewer({
     if (active && !draggingRef.current && !tcpPendingRef.current) applyState();
   }, [applyState, jointState, active]);
 
-  const solvePreview = useCallback((target: Vec3) => {
+  const solvePreview = useCallback((target: TcpTargetPose) => {
     const current = model;
     if (!current || current instanceof Error || !tcp.name) return;
-    targetRef.current = target;
+    targetRef.current = target; setTargetPose(target);
+    tcpPendingRef.current = true; setTcpPending(true);
     const result = planTrajectory({
       model: current,
       tcpLink: tcp.name,
       jointState: jointStateRef.current,
       controllerJointNames: controllerRef.current?.jointNames ?? [],
-      target,
+      target: target.position,
+      targetQuaternion: target.orientation,
       seed: seedRef.current,
     });
     if (result.plan) {
@@ -453,13 +331,12 @@ export function UrdfViewer({
       applyTrajectoryPlan(result.plan, (name, value) => robotRef.current?.setJointValue(name, value));
     }
     if (Number.isFinite(gripperTargetRef.current)) robotRef.current?.setJointValue(GRIPPER_JOINT_NAME, gripperTargetRef.current!);
-    setPreview({ target, error: result.error ?? "", positionError: result.plan?.positionError ?? 0 });
+    setPreview({ target: target.position, error: result.error ?? "", positionError: result.plan?.positionError ?? 0, orientationError: result.plan?.orientationError ?? Infinity });
   }, [model, tcp.name]);
 
   const handleDragStart = useCallback(() => {
     draggingRef.current = true;
     tcpPendingRef.current = false; setTcpPending(false);
-    targetRef.current = null;
     seedRef.current = [];
     setDragging(true);
     setPreview(null);
@@ -467,11 +344,11 @@ export function UrdfViewer({
     setStatus({ kind: "info", text: "拖拽中：松开鼠标保留预览，确认后执行，Esc 取消" });
   }, [jointMotion?.recordLog]);
 
-  const handleDragMove = useCallback((target: Vec3) => solvePreview(target), [solvePreview]);
+  const handleDragMove = useCallback((target: TcpTargetPose) => solvePreview(target), [solvePreview]);
 
   const handleDragCancel = useCallback(() => {
     draggingRef.current = false;
-    targetRef.current = null;
+    targetRef.current = null; setTargetPose(null); setPoseInputError("");
     tcpPendingRef.current = false; setTcpPending(false); setGripperText(""); gripperTargetRef.current = undefined;
     setDragging(false);
     setPreview(null);
@@ -492,22 +369,20 @@ export function UrdfViewer({
   }, [handleDragCancel]);
 
   const confirmTcp = async () => {
-    if (!activeRef.current || draggingRef.current || jointMotion?.busy || !jointMotion?.armed || jointMotion.jointTargetsReason) return;
+    if (!activeRef.current || draggingRef.current || jointMotion?.busy || !jointMotion?.armed || poseInputError) return;
     const target = targetRef.current;
-    const targets: Record<string, number> = {};
-    let duration = 5;
     if (target) {
-      if (!model || model instanceof Error || !tcp.name) return;
+      if (!model || model instanceof Error || !tcp.name || !jointMotion.executeTcpPose || jointMotion.tcpPoseReason) return;
       const result = planTrajectory({ model, tcpLink: tcp.name, jointState: jointStateRef.current,
-        controllerJointNames: controllerRef.current?.jointNames ?? [], target, seed: seedRef.current });
-      if (result.error || !result.plan) { setStatus({ kind: "error", text: result.error || "IK 未收敛" }); return; }
-      result.plan.jointNames.forEach((name, i) => { targets[name] = result.plan!.goal[i]; });
-      duration = Math.max(5, result.plan.duration);
+        controllerJointNames: controllerRef.current?.jointNames ?? [], target: target.position, targetQuaternion: target.orientation, seed: seedRef.current });
+      if (result.error || !result.plan || !Number.isFinite(result.plan.orientationError) || result.plan.positionError > .005 || result.plan.orientationError! > .02) { setStatus({ kind: "error", text: result.error || "位姿 IK 未收敛" }); return; }
+      const pose = { frame_id: model.rootLink, tcp_link: tcp.name, position: [...target.position] as Vec3, orientation: [...target.orientation] as typeof target.orientation };
+      handleDragCancel();
+      await jointMotion.executeTcpPose(pose, Math.max(5, result.plan.duration), gripperTarget);
+    } else if (gripperTarget !== undefined && !jointMotion.jointTargetsReason) {
+      handleDragCancel();
+      await jointMotion.executeJoints({ [GRIPPER_JOINT_NAME]: gripperTarget }, 5);
     }
-    if (gripperTarget !== undefined) targets[GRIPPER_JOINT_NAME] = gripperTarget;
-    if (!Object.keys(targets).length) return;
-    handleDragCancel();
-    await jointMotion.executeJoints(targets, duration);
   };
   useEffect(() => {
     if ((!active || jointMotion?.busy) && (draggingRef.current || tcpPendingRef.current || gripperTargetRef.current !== undefined)) handleDragCancel();
@@ -516,7 +391,7 @@ export function UrdfViewer({
     const key = (event: KeyboardEvent) => { if (event.key === "Escape" && (tcpPendingRef.current || gripperTargetRef.current !== undefined)) handleDragCancel(); };
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
   }, [handleDragCancel]);
-  useEffect(() => { if (tcpPendingRef.current || gripperTargetRef.current !== undefined) handleDragCancel(); }, [xml, bridge]);
+  useEffect(() => { if (tcpPendingRef.current || gripperTargetRef.current !== undefined) handleDragCancel(); }, [xml, bridge, tcp.name]);
 
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
@@ -562,13 +437,17 @@ export function UrdfViewer({
           {enabled
             ? dragging
               ? preview
-                ? `拖拽中 · IK 误差 ${(preview.positionError * 1000).toFixed(1)} mm`
+                ? `拖拽中 · IK 误差 ${(preview.positionError * 1000).toFixed(1)} mm / ${(preview.orientationError * 180 / Math.PI).toFixed(2)}°`
                 : "拖拽中…"
-              : "按住青色夹爪手柄拖拽，松手预览，确认执行"
+              : "拖动 XYZ 箭头或旋转圆环，松手预览，确认执行"
             : trajectoryController
               ? trajectoryController.readinessError || "等待轨迹控制器关节反馈后可拖拽 TCP"
               : "轨迹控制器激活后可拖拽 TCP 下发轨迹"}
         </div>
+        <TcpPosePanel pose={targetPose ?? actualPose} frame={handleFrame} frameId={model && !(model instanceof Error) ? model.rootLink : ""}
+          disabled={!active || dragging || Boolean(jointMotion?.busy) || !robot} onFrame={setHandleFrame} onChange={solvePreview} onInputError={setPoseInputError} />
+        {poseInputError && <p className="error" role="alert">{poseInputError}</p>}
+        {preview && <p>位姿 IK：{(preview.positionError * 1000).toFixed(2)} mm / {(preview.orientationError * 180 / Math.PI).toFixed(2)}°</p>}
         <label>夹爪（joint7）单指行程 mm
           <input aria-label="TCP 夹爪行程 mm" type="number" step="0.1"
             min={(jointMotion?.gripper?.lower ?? 0) * 1000} max={(jointMotion?.gripper?.upper ?? 0) * 1000}
@@ -584,10 +463,10 @@ export function UrdfViewer({
         {jointMotion?.gripper && !jointMotion.gripper.available && <p>{jointMotion.gripper.message}</p>}
         <label><input type="checkbox" checked={jointMotion?.armed ?? false} disabled={!jointMotion || jointMotion.busy}
           onChange={(event) => jointMotion?.setArmed(event.target.checked)} />已确认工作区安全，允许运动</label>
-        <button type="button" disabled={!active || dragging || (!tcpPending && gripperTarget === undefined) || Boolean(preview?.error) || !jointMotion?.armed || jointMotion.busy || Boolean(jointMotion.jointTargetsReason) || (gripperTarget !== undefined && (!Number.isFinite(gripperTarget) || !jointMotion.gripper?.available || !jointMotion.gripper.fresh || gripperTarget < jointMotion.gripper.lower || gripperTarget > jointMotion.gripper.upper))}
+        <button type="button" disabled={!active || dragging || (!tcpPending && gripperTarget === undefined) || Boolean(preview?.error) || Boolean(poseInputError) || !jointMotion?.armed || jointMotion.busy || Boolean(tcpPending ? jointMotion.tcpPoseReason || !jointMotion.executeTcpPose : jointMotion.jointTargetsReason) || (gripperTarget !== undefined && (!Number.isFinite(gripperTarget) || !jointMotion.gripper?.available || !jointMotion.gripper.fresh || gripperTarget < jointMotion.gripper.lower || gripperTarget > jointMotion.gripper.upper))}
           onClick={() => void confirmTcp()}>确认执行</button>
         <button type="button" disabled={!tcpPending && gripperTarget === undefined} onClick={handleDragCancel}>恢复实时</button>
-        {jointMotion?.jointTargetsReason && <p>{jointMotion.jointTargetsReason}</p>}
+        {(jointMotion?.tcpPoseReason || !jointMotion?.executeTcpPose) && <p>{jointMotion?.tcpPoseReason || "当前 Bridge 不支持 TCP 位姿规划，请更新 Bridge"}</p>}
         {preview?.error && <div className="viewer-overlay-row error">{preview.error}</div>}
         {preview && !preview.error && dragging && (
           <div className="viewer-overlay-row">
@@ -650,17 +529,10 @@ export function UrdfViewer({
             farM={rgbdFarM}
           />
           {active && interaction === "joint" && robot && rotationJoint && <JointAxisMarker robot={robot} joint={rotationJoint} />}
-          {active && interaction === "tcp" && robot && tcp.name && (
-            <TrajectoryHandle
-              robot={robot}
-              linkName={tcp.name}
-              enabled={enabled}
-              dragging={dragging}
-              onDragStart={handleDragStart}
-              onDragMove={handleDragMove}
-              onDragEnd={() => void handleDragEnd()}
-              onDragCancel={handleDragCancel}
-            />
+          {active && interaction === "tcp" && robot && tcp.name && (targetPose ?? actualPose) && (
+            <TcpPoseHandle key={handleSession} pose={(targetPose ?? actualPose)!} frame={handleFrame}
+              enabled={enabled} onDragStart={handleDragStart} onDragMove={handleDragMove}
+              onDragEnd={handleDragEnd} onDragCancel={handleDragCancel} />
           )}
         </Scene>
       </Canvas>

@@ -1,3 +1,5 @@
+import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
+import { normalizeQuaternion, quaternionFromRpy, quaternionToRpy, quaternionAngularDistance, quaternionRotationVector, multiplyQuaternions, rotateVectorByQuaternion, solvePoseIk } from "./kinematicsLogic";
 import { describe, expect, it } from "vitest";
 import {
   actuatedJoints,
@@ -318,5 +320,63 @@ describe("拖拽坐标换算", () => {
   it("平行射线与背向射线不产生交点", () => {
     expect(intersectRayPlane([0, 5, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0])).toBeNull();
     expect(intersectRayPlane([0, 5, 0], [0, 1, 0], [0, 0, 0], [0, 1, 0])).toBeNull();
+  });
+});
+
+
+describe("full TCP pose preview", () => {
+  const model = parseKinematics(rebotarmUrdf);
+  const chain = chainToLink(model, "gripper_link");
+  const q = [-.2,-.8,-.9,.25,.3,-.2];
+  const seedFrame = forwardKinematics(chain,q);
+  it("normalizes safely and rejects invalid rotations", () => {
+    expect(normalizeQuaternion([0,0,0,2])).toEqual([0,0,0,1]);
+    expect(Math.hypot(...normalizeQuaternion([1e308,1e308,1e308,1e308]))).toBeCloseTo(1,12);
+    for(const invalid of [[0,0,0,0],[0,NaN,0,1],[0,0,Infinity,1]])
+      expect(()=>normalizeQuaternion(invalid as [number,number,number,number])).toThrow();
+    expect(()=>solvePoseIk(chain,q,{position:[NaN,0,0],quaternion:[0,0,0,1]})).toThrow();
+    expect(()=>solvePoseIk(chain,q.slice(1),seedFrame)).toThrow();
+    expect(()=>solvePoseIk(chain,q,seedFrame,{orientationWeight:0})).toThrow();
+  });
+  it("represents RzRyRx rotations and handles both gimbal locks", () => {
+    for(const rpy of [[.4,-.8,1.2],[.4,Math.PI/2,1.2],[.4,-Math.PI/2,1.2],[0,0,Math.PI]]) {
+      const rotation=quaternionFromRpy(rpy as Vec3);
+      expect(quaternionAngularDistance(rotation,matToQuat(rotationFromRpy(rpy as Vec3)))).toBeLessThan(1e-10);
+      expect(quaternionAngularDistance(rotation,quaternionFromRpy(quaternionToRpy(rotation)))).toBeLessThan(1e-7);
+    }
+    const rotated=rotateVectorByQuaternion(quaternionFromRpy([0,0,Math.PI/2]),[1,0,0]);
+    expect(rotated[0]).toBeCloseTo(0,12); expect(rotated[1]).toBeCloseTo(1,12);
+  });
+  it("uses the shortest quaternion arc across signs and pi", () => {
+    const a=quaternionFromRpy([0,0,Math.PI-.01]), b=quaternionFromRpy([0,0,-Math.PI+.01]);
+    expect(quaternionAngularDistance(a,b)).toBeCloseTo(.02,10);
+    expect(quaternionAngularDistance(a,a.map(v=>-v) as [number,number,number,number])).toBeLessThan(1e-12);
+    expect(Math.hypot(...quaternionRotationVector([1,0,0,0],[0,0,0,1]))).toBeCloseTo(Math.PI,12);
+  });
+  it("converges for a combined actual arm pose including fixed TCP offset", () => {
+    const desired=forwardKinematics(chain,[-.1,-.75,-.85,.3,.35,-.15]);
+    const result=solvePoseIk(chain,q,desired);
+    expect(result.reached).toBe(true);
+    expect(result.positionError).toBeLessThan(.001);
+    expect(result.orientationError).toBeLessThan(.003);
+    const solved=forwardKinematics(chain,result.positions);
+    expect(quaternionAngularDistance(solved.quaternion,desired.quaternion)).toBeLessThan(.003);
+  });
+  it("translates while holding orientation", () => {
+    const target={position:[seedFrame.position[0]+.01,seedFrame.position[1]+.005,seedFrame.position[2]-.005] as Vec3,quaternion:seedFrame.quaternion};
+    const result=solvePoseIk(chain,q,target);
+    expect(result.reached).toBe(true);expect(result.positionError).toBeLessThan(.001);expect(result.orientationError).toBeLessThan(.003);
+  });
+  it("rotates while holding the TCP position", () => {
+    const target={position:seedFrame.position,quaternion:multiplyQuaternions(quaternionFromRpy([.04,-.02,.03]),seedFrame.quaternion)};
+    const result=solvePoseIk(chain,q,target);
+    expect(result.reached).toBe(true);expect(result.positionError).toBeLessThan(.001);expect(result.orientationError).toBeLessThan(.003);
+  });
+  it("rejects a pose when position alone is reachable but orientation is not", () => {
+    const planar=chainToLink(parseKinematics(ARM_URDF),"tool0");
+    const initial=forwardKinematics(planar,[0,0,0]);
+    const result=solvePoseIk(planar,[0,0,0],{position:initial.position,quaternion:quaternionFromRpy([Math.PI/2,0,0])});
+    expect(result.reached).toBe(false);expect(result.orientationError).toBeGreaterThan(.02);
+    result.positions.forEach((v,i)=>{expect(v).toBeGreaterThanOrEqual(actuatedJoints(planar)[i].lower);expect(v).toBeLessThanOrEqual(actuatedJoints(planar)[i].upper);});
   });
 });

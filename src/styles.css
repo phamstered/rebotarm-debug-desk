@@ -1468,3 +1468,16 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .viewer-overlay > label > input[type="number"] { min-width: 0; width: 100%; }
 .position-editor > label:has(input[type="checkbox"]) { display: flex; flex-direction: row; align-items: center; gap: 6px; }
 .position-editor > label > input[type="checkbox"] { width: auto; }
+
+.tcp-pose-panel { display: grid; gap: 6px; min-width: 0; }
+.tcp-pose-panel p { margin: 0; color: #8ba8b8; line-height: 1.45; }
+.tcp-pose-panel > label { display: flex; gap: 6px; align-items: center; }
+.tcp-pose-panel select { flex: 1; min-width: 0; }
+.tcp-pose-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.tcp-pose-values label { display: grid; gap: 3px; min-width: 0; }
+.tcp-pose-values small { color: #829aa9; }
+.tcp-pose-values input { width: 100%; min-width: 0; padding: 5px; }
+.tcp-pose-panel select, .viewer-overlay > button { color: #c4e5ed; background: #102936; border: 1px solid #315769; border-radius: 5px; padding: 5px; }
+.viewer-overlay > button:disabled { opacity: .45; cursor: default; }
+.viewer-overlay > label:has(input[type="checkbox"]) { flex-wrap: nowrap; }
+.viewer-overlay > label > input[type="checkbox"] { width: 14px; flex: 0 0 14px; margin: 0; }

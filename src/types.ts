@@ -127,6 +127,8 @@ export type TrajectoryPoint = {
   time_from_start: number;
 };
 
+export type TcpPose = { frame_id: string; tcp_link: string; position: [number, number, number]; orientation: [number, number, number, number] };
+
 export type BridgeEnvelope = {
   op: string;
   request_id?: string;
@@ -177,6 +179,8 @@ export type BridgeEnvelope = {
   gripper_position?: number;
   gripper_feedback_fresh?: boolean;
   gripper_feedback_age_ms?: number;
+  tcp_pose_supported?: boolean;
+  tcp_pose?: TcpPose;
   joint_rotation_supported?: boolean;
   joint_targets_supported?: boolean;
   motion_duration_supported?: boolean;

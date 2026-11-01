@@ -6,6 +6,7 @@ are sent. Pass the freshly built bridge_node binary as the only argument.
 """
 import base64
 import json
+import math
 import os
 import signal
 import socket
@@ -99,9 +100,17 @@ class WebSocket:
 class MockRobot(Node):
     def __init__(self):
         super().__init__('move_group')
-        urdf = '<robot name="test">' + ''.join(
-            '<joint name="%s" type="revolute"><limit lower="-1" upper="1"/></joint>' % j for j in ARM)
-        urdf += '<joint name="%s" type="prismatic"><limit lower="0" upper="0.0715"/></joint></robot>' % GRIPPER
+        urdf = '<robot name="test"><link name="base_link"/>'
+        for i, joint in enumerate(ARM, 1):
+            parent = 'base_link' if i == 1 else 'link%d' % (i-1)
+            axis = ['0 0 1', '0 1 0', '0 1 0', '1 0 0', '0 1 0', '0 0 1'][i-1]
+            urdf += ('<link name="link%d"/><joint name="%s" type="revolute"><parent link="%s"/>'
+                     '<child link="link%d"/><origin xyz="0 0 0.05"/><axis xyz="%s"/>'
+                     '<limit lower="-1" upper="1"/></joint>') % (i, joint, parent, i, axis)
+        urdf += ('<link name="gripper_link"/><joint name="tool_mount" type="fixed"><parent link="link6"/>'
+                 '<child link="gripper_link"/><origin xyz="0.02 0 0.1" rpy="0 0 0.3"/></joint>'
+                 '<link name="finger"/><joint name="%s" type="prismatic"><parent link="gripper_link"/>'
+                 '<child link="finger"/><limit lower="0" upper="0.0715"/></joint></robot>') % GRIPPER
         srdf = '<robot name="test"><group name="arm">' + ''.join('<joint name="%s"/>' % j for j in ARM)
         srdf += '</group><group_state name="home" group="arm">' + ''.join('<joint name="%s" value="0"/>' % j for j in ARM)
         srdf += '</group_state><group name="gripper"><joint name="%s"/></group>' % GRIPPER
@@ -128,6 +137,8 @@ class MockRobot(Node):
         self.mismatch = False
         self.pause = False
         self.hold_plan = False
+        self.invalid_pose_plan = False
+        self.pose_measurement_bias = False
         self.arm_pub = self.create_publisher(JointTrajectoryControllerState, '/arm_trajectory_controller/controller_state', qos_profile_sensor_data)
         self.gripper_pub = self.create_publisher(JointTrajectoryControllerState, '/gripper_trajectory_controller/controller_state', qos_profile_sensor_data)
         self.joints_pub = self.create_publisher(JointState, '/stm32/joint_states', qos_profile_sensor_data)
@@ -184,7 +195,22 @@ class MockRobot(Node):
             result.error_code.val = -7
             return result
         names = [GRIPPER] if request.group_name == 'gripper' else ARM + ([GRIPPER] if request.group_name == 'arm_with_gripper' else [])
-        targets = {c.joint_name: c.position for c in request.goal_constraints[0].joint_constraints}
+        constraints = request.goal_constraints[0]
+        targets = {c.joint_name: c.position for c in constraints.joint_constraints}
+        if constraints.position_constraints:
+            assert handle.request.planning_options.plan_only
+            position = constraints.position_constraints[0]
+            orientation = constraints.orientation_constraints[0]
+            assert position.link_name == orientation.link_name == 'link6'
+            assert position.header.frame_id == orientation.header.frame_id == 'base_link'
+            assert orientation.parameterization == orientation.ROTATION_VECTOR
+            center = position.constraint_region.primitive_poses[0].position
+            assert abs(center.x) < 1e-8 and abs(center.y) < 1e-8 and abs(center.z-.3) < 1e-8
+            q = orientation.orientation
+            yaw = 2*math.atan2(q.z, q.w)
+            assert abs(q.x) < 1e-8 and abs(q.y) < 1e-8
+            targets.update({j: 0. for j in ARM})
+            targets['joint1'] = yaw + (.2 if self.invalid_pose_plan else 0.)
         result.planned_trajectory.joint_trajectory.joint_names = list(reversed(names))  # Exercise name-based reordering.
         for alpha, sec in [(0., 0), (.5, 3), (1., 6)]:
             point = JointTrajectoryPoint()
@@ -204,6 +230,9 @@ class MockRobot(Node):
         trajectory = handle.request.trajectory.joint_trajectory
         self.executions.append(trajectory)
         self.positions.update(zip(trajectory.joint_names, trajectory.points[-1].positions))
+        if self.pose_measurement_bias:
+            self.positions['joint1'] += .015
+            self.positions['joint6'] += .015
         result = ExecuteTrajectory.Result()
         result.error_code.val = 1
         handle.succeed()
@@ -281,20 +310,60 @@ def main(binary):
             assert reply.get('accepted') is not False, reply
             wait_for(completed)
             assert robot.groups[-1] == 'arm' and robot.positions[GRIPPER] == held
-            robot.hold_plan = True
-            command_id = str(uuid.uuid4())
-            reply = ws.request('position_move', command_id=command_id, confirmation='ARMED', joint_targets={GRIPPER: .02}, motion_duration_s=6.)
+            def pose(yaw):
+                return dict(frame_id='base_link', tcp_link='gripper_link',
+                            position=[.02*math.cos(yaw), .02*math.sin(yaw), .4],
+                            orientation=[0., 0., math.sin((yaw+.3)/2), math.cos((yaw+.3)/2)])
+            assert info()['tcp_pose_supported'] is True
+            before = len(robot.groups)
+            for invalid in [dict(pose(.2), frame_id='map'), dict(pose(.2), tcp_link='finger'),
+                            dict(pose(.2), orientation=[0.,0.,0.,0.]),
+                            dict(pose(.2), orientation=[0.,0.,0.,2.]),
+                            dict(pose(.2), position=[0.,0.])]:
+                assert move(tcp_pose=invalid)['accepted'] is False
+            assert move(tcp_pose=pose(.2), home=False)['accepted'] is False
+            for malformed_gripper in [None, 'oops', {}]:
+                assert move(tcp_pose=pose(.2), gripper_position=malformed_gripper)['accepted'] is False
+            assert len(robot.groups) == before
+            reply = move(tcp_pose=pose(.2), motion_duration_s=6.)
             assert reply.get('accepted') is not False, reply
-            wait_for(lambda: info()['busy'])
+            wait_for(completed)
+            assert robot.groups[-1] == 'arm'
+            assert abs(robot.positions['joint1']-.2) < 1e-8
+            reply = move(tcp_pose=pose(.1), gripper_position=.025, motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(completed)
+            assert robot.groups[-1] == 'arm_with_gripper' and abs(robot.positions[GRIPPER]-.025)<1e-8
+            held = robot.positions[GRIPPER]
+            # A planner's success flag cannot override a wrong TCP orientation.
+            robot.invalid_pose_plan = True
             before = len(robot.executions)
-            ws.request('position_cancel', command_id=command_id)
-            wait_for(lambda: completed('canceled'))
-            assert len(robot.executions) == before and robot.positions[GRIPPER] == held
-            robot.hold_plan = False
+            reply = move(tcp_pose=pose(.2), motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(lambda: completed('failed'))
+            assert len(robot.executions) == before
+            robot.invalid_pose_plan = False
+            # Per-joint errors <0.02rad can still exceed the orientation tolerance.
+            robot.pose_measurement_bias = True
+            reply = move(tcp_pose=pose(.2), motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(lambda: completed('failed'))
+            robot.pose_measurement_bias = False
+            for held_goal in [dict(joint_targets={GRIPPER: .02}), dict(tcp_pose=pose(.1), gripper_position=.02)]:
+                robot.hold_plan = True
+                command_id = str(uuid.uuid4())
+                reply = ws.request('position_move', command_id=command_id, confirmation='ARMED', motion_duration_s=6., **held_goal)
+                assert reply.get('accepted') is not False, reply
+                wait_for(lambda: info()['busy'])
+                before = len(robot.executions)
+                ws.request('position_cancel', command_id=command_id)
+                wait_for(lambda: completed('canceled'))
+                assert len(robot.executions) == before and robot.positions[GRIPPER] == held
+                robot.hold_plan = False
             robot.pause = True
             wait_for(lambda: not info()['available'])
             assert move(joint_targets={GRIPPER: .02})['accepted'] is False
-            print('PASS: calibrated snapshot, limits/aliases, mismatch/staleness, 7-axis and gripper-only execution, HOME hold, cancel-before-execute')
+            print('PASS: calibrated snapshot, limits/aliases, mismatch/staleness, 7-axis and gripper-only execution, HOME hold, cancel-before-execute, full TCP pose constraints/offsets and orientation failures')
             ws.socket.close()
         finally:
             # Release a held callback even when a cancellation assertion fails,

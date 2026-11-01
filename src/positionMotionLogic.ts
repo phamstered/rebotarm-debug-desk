@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
-import type { BridgeEnvelope, MotionLogEntry } from "./types";
+import type { BridgeEnvelope, MotionLogEntry, TcpPose } from "./types";
 import type { CustomPosition } from "./positionLogic";
 import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME } from "./positionLogic";
 
@@ -22,6 +22,8 @@ export type PositionMotionControls = {
   executeJoint(jointName: string, position: number): Promise<void>;
   jointTargetsReason: string;
   executeJoints(targets: Record<string, number>, duration: number): Promise<void>;
+  tcpPoseReason?: string;
+  executeTcpPose?(pose: TcpPose, duration?: number, gripperPosition?: number): Promise<void>;
   cancel(): Promise<void>;
 };
 const idle: PositionMotionState = { commandId: "", label: "", phase: "idle", message: "" };
@@ -41,7 +43,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     setLogs((value) => [...value, entry].slice(-5000));
   }, [logContext]);
   const [state, setState] = useState<PositionMotionState>(idle);
-  const initialInfo = { available: false, message: "等待 MoveIt 状态", home: [] as number[], busy: false, jointRotation: false, jointTargets: false, duration: false, durationMessage: "", gripper: { supported: false, available: false, message: "当前 Bridge 不支持夹爪，请更新 Bridge", lower: 0, upper: 0, position: undefined as number | undefined, fresh: false } };
+  const initialInfo = { available: false, message: "等待 MoveIt 状态", home: [] as number[], busy: false, tcpPose: false, jointRotation: false, jointTargets: false, duration: false, durationMessage: "", gripper: { supported: false, available: false, message: "当前 Bridge 不支持夹爪，请更新 Bridge", lower: 0, upper: 0, position: undefined as number | undefined, fresh: false } };
   const [info, setInfo] = useState(initialInfo);
   const [armed, setArmed] = useState(false);
   const generation = useRef(0);
@@ -113,7 +115,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
         }, remaining);
         const home = Array.isArray(reply.home_positions) && reply.home_positions.length === 6 && reply.home_positions.every(Number.isFinite) ? reply.home_positions : [];
         setInfo({ available: reply.available === true, message: reply.message || "", home, busy: reply.busy === true,
-          jointRotation: reply.joint_rotation_supported === true, jointTargets: reply.joint_targets_supported === true, duration: reply.motion_duration_supported === true, durationMessage: reply.motion_duration_message || "",
+          tcpPose: reply.tcp_pose_supported === true, jointRotation: reply.joint_rotation_supported === true, jointTargets: reply.joint_targets_supported === true, duration: reply.motion_duration_supported === true, durationMessage: reply.motion_duration_message || "",
           gripper: { supported: reply.gripper_supported === true && reply.gripper_joint_name === GRIPPER_JOINT_NAME,
             available: reply.gripper_supported === true && reply.gripper_joint_name === GRIPPER_JOINT_NAME && reply.gripper_available === true && gripperFresh &&
               Number.isFinite(reply.gripper_lower) && Number.isFinite(reply.gripper_upper) && reply.gripper_lower! < reply.gripper_upper!,
@@ -168,18 +170,21 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     return () => { generation.current++; abort.abort(); window.clearInterval(timer); if (gripperExpiry !== undefined) window.clearTimeout(gripperExpiry); if (liveExpiry !== undefined) window.clearTimeout(liveExpiry); off(); };
   }, [bridge, connected, profileKey]);
 
-  async function execute(position: CustomPosition | "home" | { kind: "joint"; jointName: string; position: number } | { kind: "joints"; targets: Record<string, number>; duration: number }) {
+  async function execute(position: CustomPosition | "home" | { kind: "joint"; jointName: string; position: number } | { kind: "joints"; targets: Record<string, number>; duration: number } | { kind: "tcp"; pose: TcpPose; duration?: number; gripperPosition?: number }) {
     const value = context.current;
     if (locked.current || value.info.busy) { recordLog("rejected", "已有运动任务，未重复下发", "warn"); return; }
     const joint = typeof position === "object" && "kind" in position && position.kind === "joint" ? position : null;
     const multi = typeof position === "object" && "kind" in position && position.kind === "joints" ? position : null;
+    const tcp = typeof position === "object" && "kind" in position && position.kind === "tcp" ? position : null;
     const saved = typeof position === "object" && !("kind" in position) ? position : null;
-    const label = joint ? joint.jointName === GRIPPER_JOINT_NAME ? `夹爪（joint7） → ${(joint.position * 1000).toFixed(2)} mm` : `${joint.jointName} → ${(joint.position * 180 / Math.PI).toFixed(2)}°` : multi ? `关节联合调整 · ${multi.duration} s` : saved?.name ?? "HOME";
+    const label = joint ? joint.jointName === GRIPPER_JOINT_NAME ? `夹爪（joint7） → ${(joint.position * 1000).toFixed(2)} mm` : `${joint.jointName} → ${(joint.position * 180 / Math.PI).toFixed(2)}°` : multi ? `关节联合调整 · ${multi.duration} s` : tcp ? "TCP 位姿目标" : saved?.name ?? "HOME";
     const fail = (message: string) => {
       recordLog("rejected", `${label} · ${message}`, "error");
       setState({ ...idle, label, phase: "failed", message });
     };
     const block = !value.connected ? "请先连接 Jetson" : value.localBlock || (!value.info.available ? value.info.message : "") ||
+      (tcp && !value.info.tcpPose ? "当前 Bridge 不支持 TCP 位姿规划，请更新 Bridge" : "") ||
+      (tcp && tcp.duration !== undefined && (!value.info.duration || value.info.durationMessage) ? value.info.durationMessage || "当前 Bridge 不支持指定位姿运动时长" : "") ||
       (joint && !value.info.jointRotation ? "当前 Bridge 不支持单关节旋转，请更新 Bridge" : "") ||
       (multi && (!value.info.jointTargets || !value.info.duration) ? "当前 Bridge 不支持联合关节及指定时长，请更新 Bridge" : "") ||
       (multi ? value.info.durationMessage : "") ||
@@ -197,7 +202,8 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     if (saved && (saved.positions.length !== 6 || !saved.positions.every(Number.isFinite))) {
       fail("点位关节数据无效"); return;
     }
-    const gripperTarget = saved?.gripperPosition ?? (joint?.jointName === GRIPPER_JOINT_NAME ? joint.position : multi?.targets[GRIPPER_JOINT_NAME]);
+    if (tcp && (!tcp.pose.frame_id.trim() || !tcp.pose.tcp_link.trim() || tcp.pose.position.length !== 3 || !tcp.pose.position.every(Number.isFinite) || tcp.pose.orientation.length !== 4 || !tcp.pose.orientation.every(Number.isFinite) || Math.abs(Math.hypot(...tcp.pose.orientation) - 1) > 1e-6 || (tcp.duration !== undefined && (!Number.isFinite(tcp.duration) || tcp.duration < 1e-9 || tcp.duration > 2147483647)))) { fail("TCP 位姿或运动时长无效"); return; }
+    const gripperTarget = tcp?.gripperPosition ?? saved?.gripperPosition ?? (joint?.jointName === GRIPPER_JOINT_NAME ? joint.position : multi?.targets[GRIPPER_JOINT_NAME]);
     if (gripperTarget !== undefined) {
       const g = value.info.gripper;
       if (!g.supported || !g.available || !g.fresh) { fail(g.message); return; }
@@ -211,10 +217,11 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     try {
       const reply = await bridge.request({
         op: "position_move", command_id: id, label, confirmation: "ARMED",
-        gripper_position: saved?.gripperPosition,
-        home: position === "home", positions: saved ? [...saved.positions] : undefined,
+        tcp_pose: tcp ? { ...tcp.pose, position: [...tcp.pose.position], orientation: [...tcp.pose.orientation] } : undefined,
+        gripper_position: tcp?.gripperPosition ?? saved?.gripperPosition,
+        home: tcp ? undefined : position === "home", positions: saved ? [...saved.positions] : undefined,
         joint_name: joint?.jointName, joint_position: joint?.position,
-        joint_targets: multi ? { ...multi.targets } : undefined, motion_duration_s: multi?.duration,
+        joint_targets: multi ? { ...multi.targets } : undefined, motion_duration_s: tcp?.duration ?? multi?.duration,
       }, 5000);
       if (generation.current !== current || active.current !== id) return;
       if (reply.op === "position_move_ack" && reply.accepted === false) {
@@ -254,6 +261,8 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
       (!info.jointRotation ? "当前 Bridge 不支持单关节旋转，请更新 Bridge" : ""),
     jointTargetsReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") ||
       (!info.jointTargets || !info.duration ? "当前 Bridge 不支持联合关节及指定时长，请更新 Bridge" : "") || info.durationMessage,
+    tcpPoseReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") || (!info.tcpPose ? "当前 Bridge 不支持 TCP 位姿规划，请更新 Bridge" : ""),
+    executeTcpPose: (pose, duration, gripperPosition) => execute({ kind: "tcp", pose: { ...pose, position: [...pose.position], orientation: [...pose.orientation] }, duration, gripperPosition }),
     executeJoints: (targets, duration) => execute({ kind: "joints", targets: { ...targets }, duration }),
     execute, executeJoint: (jointName, position) => execute({ kind: "joint", jointName, position }), cancel,
   };

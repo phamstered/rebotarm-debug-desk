@@ -369,7 +369,7 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 
 旧 Bridge 缺少上述能力时，客户端不得发送夹爪目标或把失败请求降级为六轴运动。未就绪时仍允许六轴管理和原有运动。反馈快照不要求硬件已 TRACK，因此可在无运动时采集位置；执行还需全部安全门通过。
 
-保存点位使用六轴 `positions` 加可选 `gripper_position`（有限 m）。该字段不能与 HOME、`joint_targets` 或单关节字段混用；省略表示不改变夹爪，绝不补 0。HOME 始终只使用 SRDF arm/home。关节调整/TCP 确认使用 `joint_targets`，例如：
+保存点位使用六轴 `positions` 加可选 `gripper_position`（有限 m）；完整 TCP Pose 也可带该夹爪目标。该字段不能与 HOME、`joint_targets` 或单关节字段混用；省略表示不改变夹爪，绝不补 0。HOME 始终只使用 SRDF arm/home。关节调整/TCP 确认使用 `joint_targets`，例如：
 
 ```json
 {"op":"position_move","request_id":"uuid","command_id":"uuid","confirmation":"ARMED","joint_targets":{"joint2":-0.3,"gripper_finger_left_joint":0.025},"motion_duration_s":5}
@@ -378,3 +378,26 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 仅夹爪目标选择 `gripper` 组，六轴加夹爪选择 `arm_with_gripper`，其余选择 `arm`。夹爪不参与 TCP 位置 IK。Bridge 不接受 `joint7` 别名或 mimic 手指为独立目标。
 
 夹爪目标额外要求新鲜 TRACK/无故障/bit0x40、专用 JTC active 且认领 position+velocity、控制器米制实测与标定原始反馈差 ≤1 mm，以及启动时速度 ≤1 mm/s。MoveIt 参数须提供与硬件相同的 scale/offset 和有效范围（首版最大 0–0.05 m），启用 ≤0.02 m/s、≤0.04 m/s² 限幅。目标容差 0.5 mm；执行前起点差 ≤1 mm。Action 成功后夹爪误差 ≤1 mm、速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才报告完成；取消也等待新鲜停止反馈。遇阻未到位不视为抓取成功。
+
+## TCP XYZ/RPY 完整位姿扩展
+
+`position_motion_info.tcp_pose_supported:true` 表示支持完整 TCP Pose 规划。能力缺失时客户端禁用 Pose 确认，不降级为位置 IK 或关节目标；其余关节/点位 API 保持兼容。
+
+```json
+{
+  "op":"position_move", "request_id":"uuid", "command_id":"uuid",
+  "confirmation":"ARMED", "label":"TCP 位姿",
+  "tcp_pose":{
+    "frame_id":"base_link", "tcp_link":"gripper_link",
+    "position":[0.2,0.0,0.3], "orientation":[0.0,0.0,0.0,1.0]
+  },
+  "motion_duration_s":5, "gripper_position":0.025
+}
+```
+
+- `position` 为精确三个有限米值；`orientation` 为四个有限 xyzw 值，四元数范数与 1 差不超过 1e-3，再在服务端归一化。零四元数、重复/未知字段、错误数组长度拒绝。
+- `frame_id` 必须是当前 URDF 根 link；`tcp_link` 必须在完整 joint1–joint6 链之后、仅通过 fixed joint 连接，或为 joint6 子 link。可动手指、mimic link 目标、未知/循环/断开的模型均拒绝；不提供任意 TF/命令入口。
+- `tcp_pose` 不能与任何 `home`（包括 false）、`positions`、`joint_targets`、`joint_name`、`joint_position` 字段混用。可附带现有 `gripper_position`（m）与 `motion_duration_s`；省略夹爪保持当前，省略时长采用 MoveIt 推荐时长。
+- Bridge 将 TCP fixed 偏移转换为机械臂求解器 tip 的位置与姿态约束，位置球半径 3 mm、旋转向量分量容差 0.005 rad。夹爪存在时附带独立 JointConstraint；其模型、标定、接口与硬件门禁不变。
+- Pose 始终 plan-only；执行前核对关节集合、限位、全段时序/速度/加速度、实测起点及 FK 终点（TCP 位置 ≤5 mm、姿态最短角 ≤0.02 rad）。姿态被规划器忽略时，即使 Action success 也拒绝 ExecuteTrajectory。
+- Action 结果、取消和心跳沿用点位协议。只有实测 TCP 位姿和计划关节到位、所有受控轴停稳持续 200 ms 才成功；姿态不达标报告失败。MoveIt 的关节空间路径不保证笛卡尔直线或逐点跟随鼠标。
