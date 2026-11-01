@@ -142,6 +142,9 @@ export type ClockSyncInfo = {
 };
 
 export type BridgeEnvelope = {
+  subscription_id?: string;
+  frame_age_ms?: number;
+  rgbd_subscription_id_supported?: boolean;
   supported?: boolean;
   state?: ClockSyncInfo["state"];
   source_topic?: string;

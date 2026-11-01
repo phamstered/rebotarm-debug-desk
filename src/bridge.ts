@@ -1,6 +1,7 @@
 import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo } from "./types";
 
 export type BridgeHello = {
+  rgbd_subscription_id_supported?: boolean;
   bridge_version?: string;
   bridge_build_id?: string;
   ros_distro?: string;

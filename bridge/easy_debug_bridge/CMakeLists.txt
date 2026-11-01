@@ -76,6 +76,10 @@ if(BUILD_TESTING)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_clock_sync_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(clock_sync_ros PROPERTIES
       ENVIRONMENT "ROS_DOMAIN_ID=215;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 120)
+    add_test(NAME rgbd_stream_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_rgbd_stream_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(rgbd_stream_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=216;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 120)
     add_test(NAME controller_health_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_controller_health_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(controller_health_ros PROPERTIES

@@ -26,6 +26,7 @@ import {
 export type StatusTone = "ok" | "warn" | "fail" | "idle" | "unknown";
 
 export type BridgeHelloInfo = {
+  rgbdSubscriptionIdSupported?: boolean;
   bridgeVersion?: string;
   bridgeBuildId?: string;
   rosDistro?: string;

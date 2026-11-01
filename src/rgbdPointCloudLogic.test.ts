@@ -8,6 +8,7 @@ import {
   cloudPositionsToScene,
   createRgbdSessionState,
   depthMetersFromBytes,
+  parseRgbdFrameMeta,
   poseToMat4,
   quatToMat4,
   readRgb888,
@@ -204,4 +205,10 @@ describe("session / queue isolation", () => {
     expect(p[1]).toBeCloseTo(1);
     expect(p[2]).toBeCloseTo(0);
   });
+});
+
+it("validates Bridge-provided frame age before accepting success metadata", () => {
+  for (const age of [-1, NaN, Infinity, 500, 15000]) expect(() => parseRgbdFrameMeta(encodeMeta({ frame_age_ms: age }))).toThrow();
+  expect(parseRgbdFrameMeta(encodeMeta({ frame_age_ms: 499 })).frame_age_ms).toBe(499);
+  expect(parseRgbdFrameMeta(encodeMeta()).frame_age_ms).toBeUndefined();
 });
