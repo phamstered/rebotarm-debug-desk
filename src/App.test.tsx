@@ -5,6 +5,9 @@ import { EXPECTED_BRIDGE_BUILD_ID } from "./bridgeVersion";
 
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
+  listen: vi.fn(),
+  deployListener: undefined as ((event: { payload: string }) => void) | undefined,
+  deployUnlisten: vi.fn(),
   save: vi.fn(),
   connect: vi.fn().mockResolvedValue({
     bridge_version: "0.1.0",
@@ -33,7 +36,7 @@ const doubles = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke, Channel: class { onmessage = (_event: unknown) => {}; } }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: doubles.listen }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: doubles.save }));
 vi.mock("./bridge", () => ({
   BridgeClient: class {
@@ -106,6 +109,11 @@ describe("App workflow", () => {
     // Keep legacy workflow tests on Topics after connect; dedicated cases cover Status default.
     localStorage.setItem("easy-debug-navigate-status-on-connect", "false");
     vi.clearAllMocks();
+    doubles.deployListener = undefined;
+    doubles.listen.mockImplementation(async (event: string, handler: (value: { payload: string }) => void) => {
+      if (event === "bridge-deploy-progress") { doubles.deployListener = handler; return doubles.deployUnlisten; }
+      return () => {};
+    });
     doubles.save.mockResolvedValue("/tmp/robot-console-diagnostics.json");
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
@@ -256,6 +264,36 @@ describe("App workflow", () => {
     });
     await screen.findByRole("toolbar", { name: "应用工具栏" });
     expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
+  });
+
+  it("accumulates Bridge upgrade output and keeps it after failure, ignoring late progress", async () => {
+    doubles.connect.mockResolvedValueOnce({ bridge_version: "0.1.0", bridge_build_id: "old-build", ros_distro: "humble" });
+    let fail!: (reason: Error) => void;
+    const pending = new Promise((_, reject) => { fail = reject; });
+    const normal = doubles.invoke.getMockImplementation()!;
+    doubles.invoke.mockImplementation((command, args) => command === "deploy_bridge" ? pending : normal(command, args));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    const dialog = await screen.findByRole("dialog", { name: "Bridge 版本不匹配" });
+    await user.click(within(dialog).getByRole("button", { name: "升级" }));
+    await waitFor(() => expect(doubles.deployListener).toBeTypeOf("function"));
+    act(() => {
+      doubles.deployListener?.({ payload: "[build] starting" });
+      doubles.deployListener?.({ payload: "[remote] compiling\n[remote] linking" });
+    });
+    const log = screen.getByRole("log", { name: "Bridge 升级日志输出" });
+    expect(log).toHaveTextContent("准备升级 Bridge");
+    expect(log).toHaveTextContent("[build] starting");
+    expect(log).toHaveTextContent("[remote] linking");
+    await act(async () => fail(new Error("build failed")));
+    expect(log).toHaveTextContent("[build] starting");
+    expect(log).toHaveTextContent("[error] build failed");
+    expect(doubles.deployUnlisten).toHaveBeenCalled();
+    act(() => doubles.deployListener?.({ payload: "obsolete output" }));
+    expect(log).not.toHaveTextContent("obsolete output");
+    await user.click(screen.getByRole("button", { name: /^重试$/ }));
+    expect(screen.queryByRole("log", { name: "Bridge 升级日志输出" })).not.toBeInTheDocument();
   });
 
   it("warns without forcing upgrade when hello lacks build id", async () => {

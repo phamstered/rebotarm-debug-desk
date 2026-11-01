@@ -1,3 +1,5 @@
+import { DeployProgressLog } from "./DeployProgressLog";
+import { appendDeployLog } from "./deployLogLogic";
 import { ControlLogViewer } from "./ControlLogViewer";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -374,7 +376,7 @@ export default function App() {
   const [recentHosts, setRecentHosts] = useState<RecentHost[]>(() => loadRecentHosts());
   const [bridgeVersionCheck, setBridgeVersionCheck] = useState<BridgeVersionCheck | null>(null);
   const [versionDialogOpen, setVersionDialogOpen] = useState(false);
-  const [deployProgress, setDeployProgress] = useState("");
+  const [deployProgress, setDeployProgress] = useState<string[]>([]);
   const [lastKnownDomainId, setLastKnownDomainId] = useState<number | null>(() => loadLastKnownDomainId());
   const [navigateStatusOnConnect, setNavigateStatusOnConnect] = useState(() => loadNavigateStatusOnConnect());
   const [connectHistory, setConnectHistory] = useState<ConnectHistory | null>(() => loadConnectHistory());
@@ -1216,7 +1218,7 @@ export default function App() {
     setBridgeHello(null);
     setBridgeVersionCheck(null);
     setVersionDialogOpen(false);
-    setDeployProgress("");
+    setDeployProgress([]);
     setAgentStatus(null);
     setAgentError("");
     setUsbProbe(null);
@@ -1379,29 +1381,33 @@ export default function App() {
 
   async function upgradeBridge() {
     setVersionDialogOpen(false);
-    setDeployProgress("准备升级 Bridge…");
+    setDeployProgress(["准备升级 Bridge…"]);
     setStage("upgrading");
     setError("");
     bridge.close();
     await invoke("stop_session").catch(() => undefined);
     let unlisten: (() => void) | undefined;
+    let receiving = true;
     try {
       unlisten = await listen<string>("bridge-deploy-progress", (event) => {
-        setDeployProgress(event.payload);
+        if (receiving) setDeployProgress((lines) => appendDeployLog(lines, event.payload));
       });
     } catch {
       // Browser / test environments without the event plugin still show stage text.
     }
     try {
       const result = await invoke<{ ok: boolean; message: string; log: string }>("deploy_bridge", { profile });
-      setDeployProgress(result.message || "Bridge 升级完成");
+      receiving = false;
+      setDeployProgress((lines) => appendDeployLog(lines, result.message || "Bridge 升级完成"));
       setToolbarNotice(result.message || "Bridge 已升级");
       await connect();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStage("failed");
-      setDeployProgress("");
+      receiving = false;
+      setDeployProgress((lines) => appendDeployLog(lines, `[error] ${reason instanceof Error ? reason.message : String(reason)}`));
     } finally {
+      receiving = false;
       unlisten?.();
     }
   }
@@ -1731,7 +1737,7 @@ export default function App() {
               <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理位置</button>
             </div>
           </div>
-          {stage === "upgrading" && deployProgress && <pre className="deploy-progress" aria-live="polite">{deployProgress}</pre>}
+          {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
           {error && (
             <div className="error-panel" role="alert">
               <pre className="error-box">{error}</pre>
