@@ -439,6 +439,39 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("123456", result.stdout)
 
+    def test_bare_python_republisher_identity_is_exact_and_same_user(self):
+        script = '/home/robot/ws/install/microros_stm32h723_bridge/lib/microros_stm32h723_bridge/stm32_state_republisher.py'
+        for command, owner, accepted in (
+            (f'python3 {script} --ros-args -r __node:=stm32_state_republisher', 1000, True),
+            (f'python3 {script} --ros-args -r __node:=robot_feedback_republisher', 1000, True),
+            (f'python3 {script}', 1001, False),
+            (f'python3 {script}.unrelated', 1000, False),
+            (f'python3 {script.replace("microros_stm32h723_bridge/", "other/")}', 1000, False),
+            (f'python3 -c {script}', 1000, False),
+        ):
+            body = r'''ps() {
+                if [[ "$*" == *args=* ]]; then echo "$COMMAND"; else echo "$OWNER"; fi
+            }
+            id() { echo 1000; }
+            awk() { echo 123456; }
+            COMMAND='COMMAND_VALUE'; OWNER=OWNER_VALUE
+            arm_owner_identity 123
+            '''.replace('COMMAND_VALUE', command).replace('OWNER_VALUE', str(owner))
+            result, _, _ = self.run_shell(body)
+            self.assertEqual(result.returncode == 0, accepted, (command, owner, result.stderr))
+
+    def test_unverified_launch_child_reports_pid_without_signalling(self):
+        body = r'''
+            pgrep() { echo 40045; }
+            ps() { echo S; }
+            arm_owner_identity() { return 1; }
+            arm_stop_launch_children 39930 parent-identity
+        '''
+        result, events, _ = self.run_shell(body)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Cannot verify arm launch child 40045 of parent 39930', result.stderr)
+        self.assertNotIn('signal', events)
+
     ORPHAN_MOCK = r'''
         pgrep() {
             [[ "$1" != -P ]] || return 1

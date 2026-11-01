@@ -243,7 +243,7 @@ owns_ros2() {
 # Check only arm command owners in this ROS domain. Unknown/unreadable owners
 # block startup; do not force-kill arbitrary ROS processes to claim cleanliness.
 arm_owner_pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/[c]ontroller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/[r]obo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
-arm_launch_child_pattern='^(/opt/ros/humble/lib/[r]obot_state_publisher/robot_state_publisher|(/usr/bin/python3 )?/[^ ]*/microros_stm32h723_bridge/stm32_state_republisher[.]py|(/usr/bin/python3 )?/opt/ros/humble/lib/[c]ontroller_manager/spawner (joint_state_broadcaster|gravity_compensation_controller|joint4_calibration_controller|arm_trajectory_controller|arm_teleop_controller|gripper_teleop_controller|gripper_trajectory_controller|vla_position_controller))( |$)'
+arm_launch_child_pattern='^(/opt/ros/humble/lib/[r]obot_state_publisher/robot_state_publisher|((/usr/bin/)?python3 )?/[^ ]*/microros_stm32h723_bridge/stm32_state_republisher[.]py|(/usr/bin/python3 )?/opt/ros/humble/lib/[c]ontroller_manager/spawner (joint_state_broadcaster|gravity_compensation_controller|joint4_calibration_controller|arm_trajectory_controller|arm_teleop_controller|gripper_teleop_controller|gripper_trajectory_controller|vla_position_controller))( |$)'
 
 arm_owner_identity() {
     local command owner started
@@ -271,7 +271,10 @@ arm_stop_launch_children() {
     for child in $(pgrep -P "$parent"); do
         state=$(ps -p "$child" -o stat=)
         [[ -n "$state" && "$state" != Z* ]] || continue
-        identity=$(arm_owner_identity "$child") || return 1
+        identity=$(arm_owner_identity "$child") || {
+            echo "Cannot verify arm launch child $child of parent $parent (command, UID or start time); refusing cleanup." >&2
+            return 1
+        }
         # ros2_control is stopped separately first. Reap only this launcher's
         # RSP, arm spawners and recognized arm command nodes, never arbitrary descendants.
         command=$(tail -n 1 <<<"$identity")
