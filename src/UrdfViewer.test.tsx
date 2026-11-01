@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Group } from "three";
 import userEvent from "@testing-library/user-event";
@@ -6,9 +6,10 @@ import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import type { PositionMotionControls } from "./positionMotionLogic";
 import type { URDFRobot } from "urdf-loader";
 import type { BridgeClient } from "./bridge";
-const doubles = vi.hoisted(() => ({ hydrate: vi.fn(), load: vi.fn(), dispose: vi.fn(), assetsDispose: vi.fn() }));
-vi.mock("@react-three/fiber", () => ({ Canvas: ({ frameloop }: { frameloop: string }) => <div data-testid="canvas" data-frameloop={frameloop} />, useFrame: vi.fn(), useThree: vi.fn() }));
+const doubles = vi.hoisted(() => ({ hydrate: vi.fn(), load: vi.fn(), dispose: vi.fn(), assetsDispose: vi.fn(), children: null as any }));
+vi.mock("@react-three/fiber", () => ({ Canvas: ({ frameloop, children }: { frameloop: string; children: any }) => { doubles.children = children; return <div data-testid="canvas" data-frameloop={frameloop} />; }, useFrame: vi.fn(), useThree: vi.fn() }));
 vi.mock("./urdfAssetLogic", () => ({ hydrateUrdfResources: doubles.hydrate, loadUrdfScene: doubles.load, disposeUrdfObject: doubles.dispose }));
+import * as trajectoryLogic from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 const xml = '<robot name="test"><link name="base"/></robot>';
 const props = { xml, bridge: {} as BridgeClient, jointState: { name: ["j1"], position: [1] }, tcpLink: "base", trajectoryController: null, onSendTrajectory: vi.fn() };
@@ -23,7 +24,7 @@ describe("Robot View lifecycle", () => {
     view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, readinessError: "无法读取轨迹控制器反馈：类型未安装" }} />);
     expect(screen.getByText("无法读取轨迹控制器反馈：类型未安装")).toBeVisible();
     view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, jointNames: ["j1"] }} />);
-    await waitFor(() => expect(screen.getByText("按住青色夹爪手柄拖拽，即可规划并下发轨迹")).toBeVisible());
+    await waitFor(() => expect(screen.getByText("按住青色夹爪手柄拖拽，松手预览，确认执行")).toBeVisible());
     expect(props.onSendTrajectory).not.toHaveBeenCalled();
   });
   it("preserves the scene and canvas across navigation, pauses frames and applies fresh feedback on return", async () => {
@@ -95,4 +96,54 @@ describe("Robot View lifecycle", () => {
     expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
     expect(motion.executeJoints).toHaveBeenCalledTimes(1);
   });
+  it("previews calibrated joint7 in mm, ignores raw actuator units, and executes only after confirmation", async () => {
+    const parsed = robot(); doubles.load.mockResolvedValue(parsed);
+    const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
+      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false,
+      setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn(),
+      gripper: { supported: true, available: true, fresh: true, position: .025, lower: 0, upper: .05, message: "" } };
+    const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper_finger_left_joint"];
+    render(<UrdfViewer {...props} xml={rebotarmUrdf} tcpLink="" jointState={{ name: names, position: [0,0,0,0,0,0,-2] }} jointMotion={motion} />);
+    await waitFor(() => expect(doubles.load).toHaveBeenCalledOnce());
+    expect(parsed.setJointValue).toHaveBeenCalledWith("gripper_finger_left_joint", .025);
+    expect(parsed.setJointValue).not.toHaveBeenCalledWith("gripper_finger_left_joint", -2);
+    fireEvent.change(screen.getByLabelText("TCP 夹爪行程 mm"), { target: { value: "30" } });
+    expect(parsed.setJointValue).toHaveBeenLastCalledWith("gripper_finger_left_joint", .03);
+    expect(motion.executeJoints).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    expect(motion.executeJoints).toHaveBeenCalledExactlyOnceWith({ gripper_finger_left_joint: .03 }, 5);
+    expect(props.onSendTrajectory).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("TCP 夹爪行程 mm"), { target: { value: "70" } });
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByLabelText("TCP 夹爪行程 mm")).toHaveValue(null);
+  });
+
+  it("holds TCP preview after release and replans on explicit confirmation, refusing a newly failed IK", async () => {
+    const parsed = robot(); doubles.load.mockResolvedValue(parsed);
+    const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
+      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false,
+      setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn() };
+    const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
+    const plan = { jointNames: names, start: [0,0,0,0,0,0], goal: [.1,0,0,0,0,0], chainJointNames: names, chainIndices: [0,1,2,3,4,5], chainGoal: [.1,0,0,0,0,0], target: [0,0,0] as [number,number,number], solved: [0,0,0] as [number,number,number], positionError: 0, duration: 1, points: [] };
+    const spy = vi.spyOn(trajectoryLogic, "planTrajectory").mockReturnValue({ plan });
+    const props2 = { ...props, xml: rebotarmUrdf, tcpLink: "", jointState: { name: names, position: [0,0,0,0,0,0] }, jointMotion: motion,
+      trajectoryController: { name: "arm", topic: "/arm/joint_trajectory", jointNames: names } };
+    const view = render(<UrdfViewer {...props2} />);
+    await waitFor(() => expect(doubles.load).toHaveBeenCalledOnce());
+    const find = (node: any): any => Array.isArray(node) ? node.map(find).find(Boolean) : node?.props?.onDragStart ? node.props : find(node?.props?.children ?? []);
+    act(() => { find(doubles.children).onDragStart(); find(doubles.children).onDragMove([.1,.2,.3]); find(doubles.children).onDragEnd(); });
+    expect(motion.executeJoints).not.toHaveBeenCalled();
+    const count = (parsed.setJointValue as any).mock.calls.length;
+    view.rerender(<UrdfViewer {...props2} jointState={{ name: names, position: [.2,0,0,0,0,0] }} />);
+    expect((parsed.setJointValue as any).mock.calls.length).toBe(count);
+    spy.mockReturnValueOnce({ error: "IK 未收敛：目标已不可达" });
+    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    expect(motion.executeJoints).not.toHaveBeenCalled();
+    expect(screen.getByText("IK 未收敛：目标已不可达")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    expect(motion.executeJoints).toHaveBeenCalledExactlyOnceWith({ joint1:.1,joint2:0,joint3:0,joint4:0,joint5:0,joint6:0 },5);
+    expect(props.onSendTrajectory).not.toHaveBeenCalled(); spy.mockRestore();
+  });
+
 });

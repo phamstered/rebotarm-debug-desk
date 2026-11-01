@@ -3,13 +3,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+// Keep the existing path so v1 data is migrated in place by the frontend.
 const FILE_NAME: &str = "positions.v1.json";
-const EMPTY: &str = r#"{"schemaVersion":1,"profiles":{}}"#;
+const EMPTY: &str = r#"{"schemaVersion":2,"profiles":{}}"#;
 
 pub fn validate_positions_json(text: &str) -> Result<(), String> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("点位文件不是有效 JSON：{error}"))?;
     let root = value.as_object().ok_or("点位文件必须是对象")?;
-    if root.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+    let version = root.get("schemaVersion").and_then(Value::as_u64);
+    if !matches!(version, Some(1) | Some(2)) {
         return Err("不支持的点位文件版本".into());
     }
     let profiles = root.get("profiles").and_then(Value::as_object).ok_or("缺少 profiles")?;
@@ -34,6 +36,17 @@ pub fn validate_positions_json(text: &str) -> Result<(), String> {
             let joints = item.get("positions").and_then(Value::as_array).ok_or("关节值无效")?;
             if joints.len() != 6 {
                 return Err("关节数量必须是 6".into());
+            }
+            if let Some(gripper) = item.get("gripperPosition") {
+                // Missing means keep the current opening. Never replace it
+                // with zero while loading an old six-axis position.
+                if version != Some(2) {
+                    return Err("夹爪目标需要点位文件版本 2".into());
+                }
+                let number = gripper.as_f64().ok_or("夹爪行程必须是有限数值")?;
+                if !number.is_finite() || number < 0.0 {
+                    return Err("夹爪行程必须是非负有限数值（米）".into());
+                }
             }
             for joint in joints {
                 let number = joint.as_f64().ok_or("关节值必须是有限数值")?;
@@ -110,6 +123,29 @@ mod tests {
             }] } }
         });
         assert!(validate_positions_json(&custom.to_string()).is_ok());
+    }
+
+    #[test]
+    fn preserves_legacy_points_and_validates_optional_gripper_metres() {
+        let mut store = serde_json::json!({
+            "schemaVersion": 2,
+            "profiles": { "jetson|robot|22": { "positions": [{
+                "id": "id-1", "name": "取料位", "positions": [0, 0, 0, 0, 0, 0]
+            }] } }
+        });
+        assert!(validate_positions_json(&store.to_string()).is_ok());
+        let point = &mut store["profiles"]["jetson|robot|22"]["positions"][0];
+        point["gripperPosition"] = serde_json::json!(0.025);
+        assert!(validate_positions_json(&store.to_string()).is_ok());
+        for invalid in [serde_json::json!(-0.01), serde_json::json!("0.025"), serde_json::Value::Null] {
+            store["profiles"]["jetson|robot|22"]["positions"][0]["gripperPosition"] = invalid;
+            assert!(validate_positions_json(&store.to_string()).is_err());
+        }
+        store["profiles"]["jetson|robot|22"]["positions"][0]["gripperPosition"] = serde_json::json!(0.025);
+        store["schemaVersion"] = serde_json::json!(1);
+        assert!(validate_positions_json(&store.to_string()).is_err());
+        store["profiles"]["jetson|robot|22"]["positions"][0].as_object_mut().unwrap().remove("gripperPosition");
+        assert!(validate_positions_json(&store.to_string()).is_ok());
     }
 
     #[test]

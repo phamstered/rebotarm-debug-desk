@@ -327,15 +327,15 @@ Jetson 侧按时间戳配对 RGB/Depth（默认容差 50ms）、预览降采样�
 
 ## MoveIt2 保存点位执行
 
-固定组 `arm`（joint1–joint6），固定 MoveIt Action `/move_action` 和真实控制器 `arm_trajectory_controller`。其他组、任意 Action/Topic 名称不接受配置。
+固定组为 `arm`（joint1–joint6）、`gripper`（独立夹爪）或 `arm_with_gripper`（联合七自由度）。固定 MoveIt Action `/move_action`，执行仅允许真实 `arm_trajectory_controller` 和可选 `gripper_trajectory_controller`；客户端不能指定组名或任意 Action/Topic。
 
 - `{"op":"position_motion_info","request_id":"..."}` 返回 `available`、门禁失败 `message`、当前 SRDF `home_positions`（未同步为空）、全局 `busy` 和本会话拥有的 `command_id`。连接期间每秒轮询该操作续约会话心跳（5 秒超时取消）。若本会话有运动，随后发送其最新状态。
 - `{"op":"position_move","request_id":"...","command_id":"UUID","label":"取料位","confirmation":"ARMED","home":false,"positions":[0,-0.2,-0.3,0,0,0]}`。positions 固定按 joint1–joint6，目标为点击时快照。`home:true` 时在 Bridge 读取当前 SRDF HOME，忽略客户端 positions。
 - `position_motion_info` 另返回 `joint_rotation_supported:true` 表示支持单关节目标。字段缺失时客户端必须禁用此功能，不能回退为普通点位请求。
-- 单关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","label":"joint2 旋转","confirmation":"ARMED","joint_name":"joint2","joint_position":-0.3}`，角度单位 rad。`joint_name` 仅支持 joint1–joint6，`joint_position` 必须有限且在 MoveIt URDF 限位内。不能与 `home:true` 或任何 `positions` 字段混用；缺少配对字段时拒绝。
+- 单关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","label":"joint2 旋转","confirmation":"ARMED","joint_name":"joint2","joint_position":-0.3}`，角度单位 rad。`joint_name` 支持 joint1–joint6（rad）及具备夹爪能力时的 `gripper_finger_left_joint`（m），`joint_position` 必须有限且在有效模型/标定限位内。不能与 `home:true` 或任何 `positions` 字段混用；缺少配对字段时拒绝。
 - 单关节受理时由 Bridge 从当前 STM32 JointState 取得其他五轴的目标值，在 MoveIt 请求 `path_constraints.joint_constraints` 中约束其围绕起点 ±0.001 rad；选中轴使用现有关节目标约束。保持原碰撞规划、速度/加速度缩放、会话和取消保护。此约束不构成物理跟踪误差为零的保证。
-- 联合关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","confirmation":"ARMED","joint_targets":{"joint1":0.1,"joint2":-0.3},"motion_duration_s":5}`。`joint_targets` 必须为包含 1–6 个唯一 joint1–joint6 键的对象，值为有限 rad，不能与 `positions`、`home:true` 或旧单关节字段混用。未编辑轴由 Bridge 实测反馈补齐，并添加 ±0.001 rad 路径保持约束；全部六轴指定时不加保持约束。旧 `joint_name` / `joint_position` 仍兼容。
-- `motion_duration_s` 可选，须为有限正数，精度至少 1 ns、最大 2147483647 秒（ROS 时间表示边界）；无 0.1–120 秒业务门禁。指定时 plan-only 规划的速度/加速度缩放为 1.0，原始时长通过 `position_motion.recommended_duration_s` 返回界面，仅供参考。时间可统一伸长或压缩，速度/加速度按倍率缩放；校验整段样条速度/加速度不超过当前每轴 MoveIt 上限（配置必须启用且不超过 1 rad/s、1 rad/s²），超限时 failed 并且不发送 ExecuteTrajectory。压缩时缺少导数数据不能验证则拒绝。省略时保持原 MoveGroup 直接执行。总运动 watchdog 为 max(180, 指定时长+60) 秒；心跳仍为 5 秒。
+- 联合关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","confirmation":"ARMED","joint_targets":{"joint1":0.1,"joint2":-0.3},"motion_duration_s":5}`。`joint_targets` 必须为包含 1–7 个唯一受控关节键的对象，六轴值为有限 rad，可选 `gripper_finger_left_joint` 值为有限 m，不能与 `positions`、`home:true` 或旧单关节字段混用。未编辑轴由 Bridge 实测反馈补齐，并添加 ±0.001 rad 路径保持约束；全部六轴指定时不加保持约束。旧 `joint_name` / `joint_position` 仍兼容。
+- `motion_duration_s` 可选，须为有限正数，精度至少 1 ns、最大 2147483647 秒（ROS 时间表示边界）；无 0.1–120 秒业务门禁。指定时 plan-only 规划的速度/加速度缩放为 1.0，原始时长通过 `position_motion.recommended_duration_s` 返回界面，仅供参考。时间可统一伸长或压缩，速度/加速度按倍率缩放；校验整段样条速度/加速度不超过当前每轴 MoveIt 上限（配置必须启用且不超过 1 rad/s、1 rad/s²），超限时 failed 并且不发送 ExecuteTrajectory。压缩时缺少导数数据不能验证则拒绝。省略且仅涉及六轴时保持原 MoveGroup 直接执行。含夹爪的请求始终先 plan-only，省略时长则采用规划推荐时长，再校验并通过 ExecuteTrajectory 执行。总运动 watchdog 为 max(180, 指定时长+60) 秒；心跳仍为 5 秒。
 - `position_motion_info` 广告 `joint_targets_supported:true`、`motion_duration_supported:true`。客户端缺少任一能力时不能提交联合定时运动，不能静默丢弃时长或降级为旧点位请求。`motion_duration_message` 非空表示定时执行入口未就绪（例如 `/execute_trajectory` 缺失），客户端显示该原因。规划/执行两个阶段共享 command_id、互斥、心跳与取消状态；断线或取消后不启动下一阶段。
 - 执行前要求 active JTC 认领六关节 `position+velocity`、实测速度 ≤0.05 rad/s、JTC actual 与 STM32 实测位置偏差 ≤0.02 rad，并校验反馈新鲜、完整、有限、硬件 TRACK/无故障及六轴使能；不满足时 `available:false` / `accepted:false` 的 `message` 说明原因。点位与单关节请求均已移除启动连续性检查，不再以 JTC desired/reference 的位置偏差、参考速度、字段存在性或连续稳定 200 ms 作为门禁。MoveIt 仍使用真实实测起点，自身起点容差、限位与碰撞检查保持有效。
 - 成功受理返回 `position_move_ack` 与 `command_id`；门禁拒绝返回同一 ACK、`accepted:false` 与 `message`。Bridge 缓存最近 256 个已受理指令的 command_id，缓存内重复请求不重复执行；不同会话不能抢占运动。ACK 不代表规划成功或到达。
@@ -354,3 +354,27 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 - `motion_log_truncated`：非零游标落在已淘汰记录之前，表示存在同步缺口。Bridge 保留全局最近 2048 条，每条消息最多 8192 字节；完整过程同时写入 ROS logger。
 
 客户端未提供上述字段时仍可读取信息；旧 Bridge 不返回日志字段，点位协议保持兼容。日志查询只读，不创建运动、不执行轨迹。`position_motion` 保持原有状态事件格式，定期重发的状态快照不重复生成审计条目。
+
+### joint7 夹爪扩展
+
+`position_motion_info` 返回：
+
+| 字段 | 语义 |
+| --- | --- |
+| `gripper_supported` | 新鲜模型、标定、规划组、限幅及控制器映射通过核验 |
+| `gripper_available` / `gripper_message` | 当前能否执行夹爪目标及具体阻止原因 |
+| `gripper_joint_name` | 固定 `gripper_finger_left_joint`，不是可任意配置的执行名 |
+| `gripper_lower` / `gripper_upper` | 有效单指行程范围，单位 m，取已核验的硬件标定范围 |
+| `gripper_feedback_fresh` / `gripper_position` / `gripper_feedback_age_ms` | 标定模型有效且原始反馈在 1 秒内、位于有效行程时提供的米制位置；过期不返回位置；客户端按年龄在剩余 1 秒有效期内本地过期，查询卡住时不能继续采集旧值 |
+
+旧 Bridge 缺少上述能力时，客户端不得发送夹爪目标或把失败请求降级为六轴运动。未就绪时仍允许六轴管理和原有运动。反馈快照不要求硬件已 TRACK，因此可在无运动时采集位置；执行还需全部安全门通过。
+
+保存点位使用六轴 `positions` 加可选 `gripper_position`（有限 m）。该字段不能与 HOME、`joint_targets` 或单关节字段混用；省略表示不改变夹爪，绝不补 0。HOME 始终只使用 SRDF arm/home。关节调整/TCP 确认使用 `joint_targets`，例如：
+
+```json
+{"op":"position_move","request_id":"uuid","command_id":"uuid","confirmation":"ARMED","joint_targets":{"joint2":-0.3,"gripper_finger_left_joint":0.025},"motion_duration_s":5}
+```
+
+仅夹爪目标选择 `gripper` 组，六轴加夹爪选择 `arm_with_gripper`，其余选择 `arm`。夹爪不参与 TCP 位置 IK。Bridge 不接受 `joint7` 别名或 mimic 手指为独立目标。
+
+夹爪目标额外要求新鲜 TRACK/无故障/bit0x40、专用 JTC active 且认领 position+velocity、控制器米制实测与标定原始反馈差 ≤1 mm，以及启动时速度 ≤1 mm/s。MoveIt 参数须提供与硬件相同的 scale/offset 和有效范围（首版最大 0–0.05 m），启用 ≤0.02 m/s、≤0.04 m/s² 限幅。目标容差 0.5 mm；执行前起点差 ≤1 mm。Action 成功后夹爪误差 ≤1 mm、速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才报告完成；取消也等待新鲜停止反馈。遇阻未到位不视为抓取成功。

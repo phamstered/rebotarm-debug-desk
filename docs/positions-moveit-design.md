@@ -1,7 +1,7 @@
 # 位置管理 Panel 与 MoveIt2 规划方案（Draft）
 
 > 方案日期：2026-10-25 · 跟踪 [Issue #120](https://github.com/phamstered/rebotarm-debug-desk/issues/120)。
-> **点位点击执行已接入 MoveIt `/move_action`，以当前实现文档为准。** 拖出独立窗口和 Robot View 误差汇总面板仍属后续设计。已实现「位置」Tab、当前 SRDF HOME、点位文件、点位运动状态和取消 watchdog；拖拽仍走原来的本地轨迹下发。本文下述独立 plan/execute 适配层等内容包含尚未实现的设计项。
+> **点位点击执行已接入 MoveIt `/move_action`，以当前实现文档为准。** 拖出独立窗口和 Robot View 误差汇总面板仍属后续设计。已实现「位置」Tab、当前 SRDF HOME、点位文件、点位运动状态和取消 watchdog。joint7 扩展已加入可选夹爪目标，TCP 松手改为保留预览、确认后经 MoveIt 执行；本文首版六轴、不含夹爪的描述是历史设计，当前行为见 [已实现功能](./basic-features#joint7-夹爪与位置兼容)。本文下述独立窗口等内容仍包含尚未实现的设计项。
 
 ## 1. 需求与设计结论
 

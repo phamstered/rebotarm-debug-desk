@@ -761,9 +761,10 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
              arm_clean_environment || exit 1; \
              moveit_manage stop || exit 1; \
+             arm_trajectory_gripper \"{mode}\" || exit 1; \
              arm_progress startup \"启动 Trajectory 与重力补偿控制器\"; \
              arm_rotate_log \"$HOME/.cache/robot-console/arm-trajectory.log\" || exit 1; \
-             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory --gravity=true --clean=false \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --position-controller=trajectory --gravity=true --gripper=\"$arm_gripper\" --clean=false \
                >\"$HOME/.cache/robot-console/arm-trajectory.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$traj_pid_file\"; \
              wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"Controller self-check passed:\" || exit 1; \

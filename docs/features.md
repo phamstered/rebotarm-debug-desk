@@ -240,14 +240,14 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ### 做什么
 
-在 Robot View 中拖拽 TCP（夹爪）目标，松手后向 active 的 `JointTrajectoryController` 的 `~/joint_trajectory` 下发两点 `trajectory_msgs/msg/JointTrajectory`。
+在 Robot View 中预览 TCP 目标和可选夹爪（joint7）行程，松手保留预览，确认后由 Jetson MoveIt 统一规划执行。关节调整与位置管理使用相同执行入口；旧六轴点位和 HOME 保持夹爪当前开度。
 
 ### 怎么用
 
 1. 在 ROS Control 中确认存在 **active** 的轨迹控制器（类型 `joint_trajectory_controller/JointTrajectoryController` 优先，名称含 `traj` 次之）。列表会标「轨迹」；Robot View 右上角显示控制器名与 Topic。
 2. （可选）在连接配置填写 `tcpLink`；留空时在叶子 link 中按 tool0 / tcp / gripper / ee_link / flange 等命名特征加链深度自动挑选，并在视图展示实际 link。
 3. 拖拽手柄（跟随 TCP 世界位姿、屏幕恒定尺寸）：按住后鼠标在过 TCP 的正交平面上移动；拖拽期间暂停轨道相机；**Esc** 取消并恢复到实时反馈位姿。
-4. 松手：按最新 JointState 重算 IK，下发轨迹——第 1 点为当前反馈（短暂停留），第 2 点为目标；时长按最大关节位移在 0.4–6 s 内估算。
+4. 松手保留预览；需要时调整夹爪的单指行程（mm）。勾选工作区安全确认后点击「确认执行」，按最新反馈重算目标并由 MoveIt 检查碰撞、规划和执行。夹爪也可单独调整。
 
 <TcpTrajectoryFlow />
 
@@ -256,7 +256,7 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 - **仅**在存在 active 轨迹控制器时开放拖拽。
 - 只做位置 IK，TCP 姿态保持不变；残差超过 5 mm 拒发。成功时会展示实际残差，避免暗示夹爪精确落点。
 - 正/逆解保留 TCP 链上的 fixed joint 与工具偏移；轨迹只含可控关节，其他 JointState 关节保持反馈值。
-- Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求已有订阅者；关节名重复、点数/长度不一致、非有限值、非严格递增 `time_from_start` 均拒绝。
+- 执行要求 MoveIt、active JTC、反馈和硬件安全条件就绪。夹爪需配套独立轨迹控制器与标定配置，内部单位 m，不把 STM32 原始反馈当作行程；未就绪显示具体原因。Action 成功还要核对实际到位和停稳，遇阻不报告抓取成功。
 - IK 未收敛、缺新鲜 JointState 或 send 失败时，模型恢复反馈位姿并在视图内展示原因。
 
 ---

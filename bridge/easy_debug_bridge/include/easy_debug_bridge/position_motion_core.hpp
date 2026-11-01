@@ -67,13 +67,14 @@ inline std::vector<double> ordered_arm_values(const std::vector<std::string> &na
 }
 struct PositionMotionModel {
   std::vector<double> lower, upper, home;
+  std::vector<std::string> joint_names = arm_motion_joints();
 };
 inline void validate_position_target(const std::vector<double> &values, const PositionMotionModel &model) {
-  if (values.size() != 6 || model.lower.size() != 6 || model.upper.size() != 6)
-    throw std::runtime_error("目标必须包含六个关节");
-  for (size_t i = 0; i < 6; ++i) {
+  if (values.empty() || values.size() != model.joint_names.size() || model.lower.size() != values.size() || model.upper.size() != values.size())
+    throw std::runtime_error("目标关节与模型维度不匹配");
+  for (size_t i = 0; i < values.size(); ++i) {
     if (!std::isfinite(values[i]) || values[i] < model.lower[i] || values[i] > model.upper[i])
-      throw std::runtime_error("目标超过限位或不是有限值：" + arm_motion_joints()[i]);
+      throw std::runtime_error("目标超过限位或不是有限值：" + model.joint_names[i]);
   }
 }
 inline size_t arm_joint_index(const std::string &name) {
