@@ -70,7 +70,7 @@ Native deployment resolves Node before launching the fixed repository script: an
 - Monitor provides live numeric charts and Jetson-side `ros2 bag play` (SSH); downloading, indexing and client-side bag parsing remain follow-up work. TF visualization is not part of this vertical slice. The toolbar can record all topics on the Jetson.
 - Topic Graph can visualize every discovered type. Inspector detail queries read ROS graph metadata; live data viewing requires the corresponding message type support in the Bridge ROS environment.
 - ROS Control targets `/controller_manager` and supports controller Activate/Deactivate. Trajectory commands only reach the active `JointTrajectoryController`'s `~/joint_trajectory` topic; the Bridge rejects any other topic.
-- TCP dragging supports independent XYZ translation and axis rotation in base/tool frames. Numeric RPY uses fixed XYZ axes; quaternions carry the target pose. A held target is independent of feedback and of the local IK preview.
+- TCP dragging retains a center sphere for free translation in a fixed camera-facing plane, alongside independent XYZ translation and axis rotation in base/tool frames. Numeric RPY uses fixed XYZ axes; quaternions carry the target pose. A held target is independent of feedback and of the local IK preview.
 
 ## Status log reader
 

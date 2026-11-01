@@ -439,7 +439,7 @@ export function UrdfViewer({
               ? preview
                 ? `拖拽中 · IK 误差 ${(preview.positionError * 1000).toFixed(1)} mm / ${(preview.orientationError * 180 / Math.PI).toFixed(2)}°`
                 : "拖拽中…"
-              : "拖动 XYZ 箭头或旋转圆环，松手预览，确认执行"
+              : "拖动青色球快速定位，XYZ/RPY 微调；松手预览，确认执行"
             : trajectoryController
               ? trajectoryController.readinessError || "等待轨迹控制器关节反馈后可拖拽 TCP"
               : "轨迹控制器激活后可拖拽 TCP 下发轨迹"}
