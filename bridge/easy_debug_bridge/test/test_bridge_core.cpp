@@ -1,6 +1,7 @@
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/gripper_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
 
 #include "easy_debug_bridge/motion_log.hpp"
@@ -12,6 +13,54 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    const GripperCalibration c{-.008612826752, .004282757541, 0, .05};
+    auto rejects = [](auto f) { try { f(); } catch (const std::exception &) { return true; } return false; };
+    assert(std::abs(calibrated_gripper_value({gripper_motion_joint()}, {.497253418}, c)) < 1e-8);
+    assert(std::abs(calibrated_gripper_value({gripper_motion_joint()}, {-5.308041573}, c) - .05) < 1e-8);
+    assert(std::abs(calibrated_gripper_value({gripper_motion_joint()}, {2}, c, true) - 2*c.scale) < 1e-12);
+    for (const auto &invalid : {GripperCalibration{0, 0, 0, .05}, GripperCalibration{NAN, 0, 0, .05},
+        GripperCalibration{1, INFINITY, 0, .05}, GripperCalibration{1, 0, -.01, .05},
+        GripperCalibration{1, 0, 0, .0715}, GripperCalibration{1, 0, .05, .05}})
+      assert(rejects([&] { validate_gripper_calibration(invalid); }));
+    assert(rejects([&] { calibrated_gripper_value({"joint7"}, {0}, c); }));
+    assert(rejects([&] { calibrated_gripper_value({gripper_motion_joint(), gripper_motion_joint()}, {0, 0}, c); }));
+    assert(rejects([&] { calibrated_gripper_value({gripper_motion_joint()}, {NAN}, c); }));
+    assert(!same_motion_joints({"joint1", "joint1"}, {"joint1", "joint1"}));
+    const PositionMotionModel arm{std::vector<double>(6, -1), std::vector<double>(6, 1), std::vector<double>(6, 0)};
+    const auto gripper = gripper_motion_model(arm, c, false);
+    const auto combined = gripper_motion_model(arm, c, true);
+    assert(gripper.joint_names == std::vector<std::string>{gripper_motion_joint()});
+    assert(combined.joint_names.size() == 7 && combined.lower.back() == 0 && combined.upper.back() == .05);
+    assert(edited_motion_target({.025}, {{gripper_motion_joint(), .04}}, gripper) == std::vector<double>{.04});
+    const std::vector<double> actual{.1, .2, .3, .4, .5, .6, .025};
+    const auto target = edited_motion_target(actual, {{"joint2", -.2}, {gripper_motion_joint(), .04}}, combined);
+    assert((target == std::vector<double>{.1, -.2, .3, .4, .5, .6, .04}));
+    assert(rejects([&] { edited_motion_target(actual, {{gripper_motion_joint(), .06}}, combined); }));
+    assert(rejects([&] { edited_motion_target(actual, {{gripper_motion_joint(), NAN}}, combined); }));
+    assert(rejects([&] { edited_motion_target(actual, {{gripper_motion_joint(), 0}, {gripper_motion_joint(), .01}}, combined); }));
+    assert(rejects([&] { edited_motion_target(actual, {{"joint7", 0}}, combined); }));
+    assert(rejects([&] { edited_motion_target(actual, {}, combined); }));
+    assert(motion_target_reached(gripper.joint_names, {.025}, {.0255}, {0}));
+    assert(!motion_target_reached(gripper.joint_names, {.025}, {.027}, {0}));
+    assert(!motion_target_reached(gripper.joint_names, {.025}, {.025}, {.002}));
+    assert(!motion_target_reached(gripper.joint_names, {NAN}, {.025}, {0}));
+    assert(!motion_stopped(gripper.joint_names, {NAN}));
+    const std::vector<TimedMotionPoint> path{{{0}, {0}, {0}, {}, 0}, {{.05}, {0}, {0}, {}, 10000000000}};
+    assert(stretch_motion(path, 10, gripper, {.02}, {.04}).back().positions.front() == .05);
+    assert(rejects([&] { stretch_motion(path, .1, gripper, {.02}, {.04}); }));
+    auto malformed = path; malformed.back().velocities.push_back(0);
+    assert(rejects([&] { stretch_motion(malformed, 10, gripper, {.02}, {.04}); }));
+    auto overshoot = path;
+    overshoot.front().velocities = {-.001};
+    // Every knot and derivative limit passes, but interpolation drives past the closed stop.
+    assert(rejects([&] { stretch_motion(overshoot, 10, gripper, {.02}, {.04}); }));
+    overshoot.front().accelerations.clear(); overshoot.back().accelerations.clear();
+    assert(rejects([&] { stretch_motion(overshoot, 10, gripper, {.02}, {.04}); }));
+    malformed = path; malformed.front().velocities.clear();
+    assert(rejects([&] { stretch_motion(malformed, 20, gripper, {.02}, {.04}); }));
+  }
   {
     easy_debug_bridge::MotionLog log;
     log.append(1, "secret", "planning", "private target", "info");

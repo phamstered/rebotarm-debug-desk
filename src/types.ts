@@ -168,6 +168,15 @@ export type BridgeEnvelope = {
   home?: boolean;
   positions?: number[];
   home_positions?: number[];
+  gripper_supported?: boolean;
+  gripper_available?: boolean;
+  gripper_message?: string;
+  gripper_joint_name?: string;
+  gripper_lower?: number;
+  gripper_upper?: number;
+  gripper_position?: number;
+  gripper_feedback_fresh?: boolean;
+  gripper_feedback_age_ms?: number;
   joint_rotation_supported?: boolean;
   joint_targets_supported?: boolean;
   motion_duration_supported?: boolean;

@@ -13,6 +13,12 @@ LAUNCH = ['/opt/ros/humble/bin/ros2', 'launch', 'rebotarm_moveit_config',
           'real_move_group.launch.py']
 
 
+def valid_launch_arguments(args):
+    if args and args[-1] in (b'enable_gripper:=true', b'enable_gripper:=false'):
+        args = args[:-1]
+    return args[-3:] == [v.encode() for v in LAUNCH[-3:]]
+
+
 def identity(pid):
     try:
         path = Path('/proc') / str(pid)
@@ -20,7 +26,7 @@ def identity(pid):
         if fields[0] == 'Z':
             return None
         args = (path / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
-        if args[-3:] != [v.encode() for v in LAUNCH[-3:]]:
+        if not valid_launch_arguments(args):
             raise ValueError('MoveIt PID 已被其他进程使用，保留现场')
         environment = dict(item.split(b'=', 1) for item in
                            (path / 'environ').read_bytes().split(b'\0') if b'=' in item)
@@ -49,12 +55,15 @@ class RosProbe:
         from moveit_msgs.action import MoveGroup
         from moveit_msgs.srv import GetPlanningScene
         from rcl_interfaces.srv import GetParameters
+        from controller_manager_msgs.srv import ListControllers
         self.rclpy = rclpy
         rclpy.init()
         self.node = rclpy.create_node('robot_console_moveit_readiness')
         self.action = ActionClient(self.node, MoveGroup, '/move_action')
         self.parameters = self.node.create_client(GetParameters, '/move_group/get_parameters')
         self.scene = self.node.create_client(GetPlanningScene, '/get_planning_scene')
+        self.controllers = self.node.create_client(ListControllers, '/controller_manager/list_controllers')
+        self.controller_request = ListControllers.Request
 
     def tick(self):
         self.rclpy.spin_once(self.node, timeout_sec=0.2)
@@ -74,9 +83,34 @@ class RosProbe:
         return (self.action.server_is_ready() and self.parameters.service_is_ready()
                 and self.scene.service_is_ready())
 
+    def gripper_enabled(self):
+        if not self.controllers.wait_for_service(timeout_sec=2):
+            raise ValueError('ControllerManager 不可用，拒绝猜测夹爪执行配置')
+        future = self.controllers.call_async(self.controller_request())
+        self.rclpy.spin_until_future_complete(self.node, future, timeout_sec=2)
+        if not future.done() or future.exception() is not None:
+            raise ValueError('ControllerManager 查询失败或超时，拒绝猜测夹爪执行配置')
+        return gripper_controller_enabled(future.result().controller)
+
     def close(self):
         self.node.destroy_node()
         self.rclpy.shutdown()
+
+
+def gripper_controller_enabled(controllers):
+    joint = 'gripper_finger_left_joint'
+    owners = [c for c in controllers if c.state == 'active' and
+              any(i.startswith(joint + '/') for i in c.claimed_interfaces)]
+    dedicated = [c for c in controllers if c.name == 'gripper_trajectory_controller'
+                 and c.state == 'active']
+    if not dedicated:
+        return False
+    required = {joint + '/position', joint + '/velocity'}
+    if (len(dedicated) != 1 or len(owners) != 1 or owners[0] is not dedicated[0]
+            or dedicated[0].type != 'joint_trajectory_controller/JointTrajectoryController'
+            or set(dedicated[0].claimed_interfaces) != required):
+        raise ValueError('夹爪轨迹控制器接口不匹配或存在并发控制器')
+    return True
 
 
 class Manager:
@@ -122,7 +156,7 @@ class Manager:
             time.sleep(0.2)
         self.file.unlink(missing_ok=True)
 
-    def start(self, probe):
+    def start(self, probe, enable_gripper=False):
         owner = self.owner()
         # Allow DDS discovery before deciding whether an externally started
         # planner exists; an existing but unready node must not be duplicated.
@@ -143,7 +177,8 @@ class Manager:
                 history.mkdir(exist_ok=True)
                 log.rename(history / f'arm-moveit.log.{uuid.uuid4().hex}')
             with log.open('wb') as output:
-                process = subprocess.Popen(LAUNCH, stdin=subprocess.DEVNULL,
+                launch = LAUNCH + (['enable_gripper:=true'] if enable_gripper else [])
+                process = subprocess.Popen(launch, stdin=subprocess.DEVNULL,
                                            stdout=output, stderr=subprocess.STDOUT,
                                            start_new_session=True)
             deadline = time.monotonic() + 2
@@ -180,7 +215,7 @@ def main():
         raise ValueError('不支持的 MoveIt 操作')
     probe = RosProbe()
     try:
-        pid, message = manager.start(probe)
+        pid, message = manager.start(probe, enable_gripper=probe.gripper_enabled())
         print(f'OK|{pid}|{message}', flush=True)
     except Exception:
         # A failed planner never interrupts the arm's continuous command stream.

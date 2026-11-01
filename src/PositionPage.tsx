@@ -3,7 +3,7 @@ import { ArmModeWorkflow } from "./ArmModeWorkflow";
 import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { positionMotionBusy, type PositionMotionControls } from "./positionMotionLogic";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
-import { ARM_JOINT_NAMES, homeRow, nextCapturedPoseName, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
+import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, homeRow, nextCapturedPoseName, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
 
 const blankJoints = () => ["0", "0", "0", "0", "0", "0"];
 
@@ -34,6 +34,8 @@ export function PositionPage({
 }) {
   const [name, setName] = useState("");
   const [joints, setJoints] = useState<string[]>(blankJoints);
+  const [gripper, setGripper] = useState("");
+  const [includeGripper, setIncludeGripper] = useState(false);
   const [note, setNote] = useState("");
   const [source, setSource] = useState<"manual" | "feedback">("manual");
   const [editorOpen, setEditorOpen] = useState(false);
@@ -47,6 +49,7 @@ export function PositionPage({
   const homeReady = motion?.homePositions.length === 6;
 
   function openCreate() {
+    setIncludeGripper(false); setGripper("");
     setEditingId(null);
     setName("");
     setJoints(blankJoints());
@@ -64,6 +67,8 @@ export function PositionPage({
     }
     setEditingId(null);
     setName(nextCapturedPoseName(positions));
+    setIncludeGripper(Boolean(motion?.gripper?.fresh && motion.gripper.position !== undefined));
+    setGripper(motion?.gripper?.position === undefined ? "" : String(motion.gripper.position * 1000));
     setJoints(captured.positions.map((value) => String(value)));
     setSource("feedback");
     setNote("");
@@ -72,7 +77,8 @@ export function PositionPage({
   }
 
   function save() {
-    const draft = { name, positions: joints.map(Number), note, source };
+    if (includeGripper && (!gripper.trim() || !Number.isFinite(Number(gripper)))) { setFormError("请输入有效的夹爪行程"); return; }
+    const draft = { gripperPosition: includeGripper ? Number(gripper) / 1000 : undefined, name, positions: joints.map(Number), note, source };
     const error = editingId ? onUpdate(editingId, draft) : onCreate(draft);
     if (error) {
       setFormError(error);
@@ -88,7 +94,7 @@ export function PositionPage({
       <div className="position-toolbar">
         <div>
           <h2>位置</h2>
-          <p>保存六个关节角；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。</p>
+          <p>保存六个关节角和可选夹爪行程；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。</p>
         </div>
         <div className="position-toolbar-actions">
           {onBack && <button type="button" className="position-quiet" onClick={onBack}>返回连接</button>}
@@ -128,6 +134,7 @@ export function PositionPage({
                 <strong>HOME</strong>
                 <span className="position-lock">锁定</span>
               </div>
+              <p>夹爪：保持当前</p>
               <p className="position-sync">{homeReady ? "SRDF arm/home" : home.sync === "pending" ? "待同步" : ""}</p>
             </div>
           </article>
@@ -136,8 +143,8 @@ export function PositionPage({
               key={position.id}
               position={position}
               confirming={pendingDelete === position.id}
-              moveDisabled={disabled || (editorOpen && editingId === position.id)}
-              moveReason={editorOpen && editingId === position.id ? "正在编辑，请先保存或取消后再执行" : motion?.busy ? "已有点位运动正在执行" : moveReason}
+              moveDisabled={disabled || (position.gripperPosition !== undefined && !motion?.gripper?.available) || (editorOpen && editingId === position.id)}
+              moveReason={position.gripperPosition !== undefined && !motion?.gripper?.available ? motion?.gripper?.message || "当前 Bridge 不支持夹爪" : editorOpen && editingId === position.id ? "正在编辑，请先保存或取消后再执行" : motion?.busy ? "已有点位运动正在执行" : moveReason}
               onMove={() => void motion?.execute(position)}
               urdfXml={urdfXml}
               previewPositions={editorOpen && editingId === position.id ? joints.map(Number) : undefined}
@@ -145,6 +152,8 @@ export function PositionPage({
                 setEditingId(position.id);
                 setName(position.name);
                 setJoints(position.positions.map(String));
+                setIncludeGripper(position.gripperPosition !== undefined);
+                setGripper(position.gripperPosition === undefined ? "" : String(position.gripperPosition * 1000));
                 setNote(position.note);
                 setSource(position.source);
                 setEditorOpen(true);
@@ -163,7 +172,7 @@ export function PositionPage({
           {editorOpen ? (
             <form className="position-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>
               <h3>{editingId ? "编辑点位" : "新建点位"}</h3>
-              <UrdfPoseThumbnail xml={urdfXml} label="正在保存" jointNames={[...ARM_JOINT_NAMES]} positions={joints.map(Number)} />
+              <UrdfPoseThumbnail xml={urdfXml} label="正在保存" jointNames={includeGripper ? [...ARM_JOINT_NAMES, GRIPPER_JOINT_NAME] : [...ARM_JOINT_NAMES]} positions={includeGripper ? [...joints.map(Number), Number(gripper) / 1000] : joints.map(Number)} />
               <label>点位名称<input aria-label="点位名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
               <div className="position-joints">
                 {ARM_JOINT_NAMES.map((jointName, index) => (
@@ -180,6 +189,9 @@ export function PositionPage({
                   </label>
                 ))}
               </div>
+              <label><input type="checkbox" aria-label="保存夹爪目标" checked={includeGripper} onChange={(event) => setIncludeGripper(event.target.checked)} />保存夹爪目标（不选则保持当前）</label>
+              {includeGripper && <label>夹爪（joint7）单指行程 mm<input aria-label="夹爪行程 mm" inputMode="decimal" value={gripper} onChange={(event) => setGripper(event.target.value)} /></label>}
+              {!motion?.gripper?.fresh && source === "feedback" && <p>夹爪反馈不可用，当前仅采集六轴；可手动填写夹爪目标。</p>}
               {formError && <p className="position-error" role="alert">{formError}</p>}
               <div className="position-editor-actions">
                 <button type="button" className="position-quiet" onClick={() => { setEditorOpen(false); setFormError(""); }}>取消</button>
@@ -225,7 +237,7 @@ function PositionCard({
     }}>
       <button type="button" className="position-target" aria-label={`移动到 ${position.name}`} disabled={moveDisabled}
         title={moveReason || `由 MoveIt2 规划并移动到 ${position.name}`} onClick={onMove}>
-        <UrdfPoseThumbnail xml={urdfXml} label={position.name} jointNames={position.jointNames} positions={positions} />
+        <UrdfPoseThumbnail xml={urdfXml} label={position.name} jointNames={position.gripperPosition === undefined ? position.jointNames : [...position.jointNames, GRIPPER_JOINT_NAME]} positions={position.gripperPosition === undefined ? positions : [...positions, position.gripperPosition]} />
         <span>移动</span>
       </button>
       <div className="position-card-body">
@@ -238,6 +250,7 @@ function PositionCard({
               : <button type="button" className="position-quiet" aria-label={`删除 ${position.name}`} onClick={onAskDelete}>删除</button>}
           </div>
         </div>
+        <p>夹爪（joint7）：{position.gripperPosition === undefined ? "保持当前" : `${(position.gripperPosition * 1000).toFixed(2)} mm`}</p>
         <ul className="position-joint-chips" aria-label={`${position.name} 关节`}>
           {position.jointNames.map((jointName, index) => (
             <li key={jointName}><span>{jointName}</span><b>{positions[index]?.toFixed(3)}</b></li>

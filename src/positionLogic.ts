@@ -1,5 +1,6 @@
 export const HOME_POSITION_ID = "builtin:home";
 export const ARM_JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"] as const;
+export const GRIPPER_JOINT_NAME = "gripper_finger_left_joint";
 export const JOINT_FEEDBACK_FRESH_MS = 1000;
 
 export type PositionSource = "manual" | "feedback";
@@ -10,6 +11,7 @@ export type CustomPosition = {
   group: "arm";
   jointNames: string[];
   positions: number[];
+  gripperPosition?: number;
   source: PositionSource;
   note: string;
   capturedAt: number | null;
@@ -20,12 +22,13 @@ export type CustomPosition = {
 export type PositionDraft = {
   name: string;
   positions: number[];
+  gripperPosition?: number;
   note: string;
   source?: PositionSource;
 };
 
 export type PositionStore = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   profiles: Record<string, { positions: CustomPosition[] }>;
 };
 
@@ -45,7 +48,7 @@ export function profileKeyFor(profile: { host: string; username: string; sshPort
 }
 
 export function emptyPositionStore(): PositionStore {
-  return { schemaVersion: 1, profiles: {} };
+  return { schemaVersion: 2, profiles: {} };
 }
 
 export function homeRow(): HomeRow {
@@ -62,6 +65,7 @@ function normalizeCustom(value: unknown): CustomPosition | null {
   if (record.id === HOME_POSITION_ID || record.name === "HOME") return null;
   if (typeof record.id !== "string" || typeof record.name !== "string") return null;
   if (!Array.isArray(record.positions) || !finiteJoints(record.positions)) return null;
+  if (record.gripperPosition !== undefined && (typeof record.gripperPosition !== "number" || !Number.isFinite(record.gripperPosition) || record.gripperPosition < 0)) return null;
   const name = record.name.trim();
   if (!name || name === "HOME") return null;
   return {
@@ -70,6 +74,7 @@ function normalizeCustom(value: unknown): CustomPosition | null {
     group: "arm",
     jointNames: [...ARM_JOINT_NAMES],
     positions: record.positions.map((item) => Number(item)),
+    gripperPosition: typeof record.gripperPosition === "number" && Number.isFinite(record.gripperPosition) ? record.gripperPosition : undefined,
     source: record.source === "feedback" ? "feedback" : "manual",
     note: typeof record.note === "string" ? record.note : "",
     capturedAt: typeof record.capturedAt === "number" ? record.capturedAt : null,
@@ -82,21 +87,21 @@ export function parsePositionStore(raw: string | null | undefined, _profileKey: 
   const empty = { ...emptyPositionStore(), home: HOME_ROW };
   if (!raw) return empty;
   try {
-    const parsed = JSON.parse(raw) as Partial<PositionStore>;
-    if (parsed.schemaVersion !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") return empty;
+    const parsed = JSON.parse(raw) as Omit<Partial<PositionStore>, "schemaVersion"> & { schemaVersion?: number };
+    if (![1, 2].includes(parsed.schemaVersion ?? 0) || !parsed.profiles || typeof parsed.profiles !== "object") return empty;
     const profiles: PositionStore["profiles"] = {};
     for (const [key, profile] of Object.entries(parsed.profiles)) {
       const positions = Array.isArray(profile?.positions) ? profile.positions.map(normalizeCustom).filter((item): item is CustomPosition => item !== null) : [];
       profiles[key] = { positions };
     }
-    return { schemaVersion: 1, profiles, home: HOME_ROW };
+    return { schemaVersion: 2, profiles, home: HOME_ROW };
   } catch {
     return empty;
   }
 }
 
 export function serializePositionStore(store: PositionStore) {
-  return JSON.stringify({ schemaVersion: 1, profiles: store.profiles });
+  return JSON.stringify({ schemaVersion: 2, profiles: store.profiles });
 }
 
 function draftError(draft: PositionDraft, positions: CustomPosition[], ignoreId?: string) {
@@ -104,6 +109,7 @@ function draftError(draft: PositionDraft, positions: CustomPosition[], ignoreId?
   if (!name) return "点位名称不能为空";
   if (name === "HOME") return "HOME 是保留名称";
   if (positions.some((item) => item.id !== ignoreId && item.name === name)) return "点位名称重复";
+  if (draft.gripperPosition !== undefined && (!Number.isFinite(draft.gripperPosition) || draft.gripperPosition < 0)) return "夹爪目标必须是非负有限数值";
   if (!finiteJoints(draft.positions)) return "六个关节都必须是有限数值";
   return "";
 }
@@ -122,6 +128,7 @@ export function addPosition(store: PositionStore, profileKey: string, draft: Pos
     group: "arm",
     jointNames: [...ARM_JOINT_NAMES],
     positions: [...draft.positions],
+    gripperPosition: draft.gripperPosition,
     source: draft.source === "feedback" ? "feedback" : "manual",
     note: draft.note,
     capturedAt: null,
@@ -141,6 +148,7 @@ export function updatePosition(store: PositionStore, profileKey: string, id: str
       ...item,
       name: draft.name.trim(),
       positions: [...draft.positions],
+      gripperPosition: draft.gripperPosition,
       note: draft.note,
       updatedAt: now,
     } : item)),

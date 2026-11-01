@@ -51,7 +51,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
 - 页面导航只保留在左侧 Navigation，**Status** 为第一项（只读状态总览卡片网格），其后为 Topics、Monitor、数据采集、Motor 和 Calibration；Robot View / Topic Graph / 位置 作为 Topics 中心面板标题栏内的局部 Tab。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
-- **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；Teleop / Trajectory / RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；启动前读取新鲜 HardwareStatus，拒绝未恢复的锁存故障；停止旧 Teleop / Trajectory 前调用现有硬件 safe_stop（按当前增益执行 RETURN → DISABLE），等待 STM32 DISABLE 确认后仅通知启动脚本清理，不发送孤立 HOLD；安全停止被拒绝或确认超时时保留命令进程并报错；SSH 侧互斥保护并等待脚本完整自检与非零命令确认后才报告启动成功，超时保留 PID 供「停止」处理）。回零停不下来时可选择「解除输出并停止」，确认现场支撑后由控制器 `~/disable` 服务持续发送零输出 DISABLE，收到 STM32 回执后才停进程（需要支持该服务的 ROS 控制插件）；服务缺失或回执失败时不会改用外部发布者或强杀。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。一键 Trajectory 执行 `scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true --clean=false`，默认同时启用独立的 `gravity_compensation_controller`；仍等待启动脚本完成控制器状态自检后才报告成功。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；启动时与 Teleop/Trajectory 一样，先安全回零、确认 DISABLE、清理并核验旧模式，再以 Trajectory+gravity 初始化新控制环境，在同一原生互斥锁内切到 VLA；不复用旧命令状态，初始化/清理失败则中止；成功后校验 controller active（及可用时的 TRACK）；`fault_code=11` 禁用启动类按钮。可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。完整用法见 [VLA 使用指南](./vla)。无一键升级全部或自动刷写 STM32。
+- **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；Teleop / Trajectory / RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；启动前读取新鲜 HardwareStatus，拒绝未恢复的锁存故障；停止旧 Teleop / Trajectory 前调用现有硬件 safe_stop（按当前增益执行 RETURN → DISABLE），等待 STM32 DISABLE 确认后仅通知启动脚本清理，不发送孤立 HOLD；安全停止被拒绝或确认超时时保留命令进程并报错；SSH 侧互斥保护并等待脚本完整自检与非零命令确认后才报告启动成功，超时保留 PID 供「停止」处理）。回零停不下来时可选择「解除输出并停止」，确认现场支撑后由控制器 `~/disable` 服务持续发送零输出 DISABLE，收到 STM32 回执后才停进程（需要支持该服务的 ROS 控制插件）；服务缺失或回执失败时不会改用外部发布者或强杀。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。一键 Trajectory 执行 `scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true --clean=false`，并按新鲜硬件使能掩码的 bit0x40 选择 `--gripper=true/false`，默认同时启用独立的 `gravity_compensation_controller`；仍等待启动脚本完成控制器状态自检后才报告成功。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；启动时与 Teleop/Trajectory 一样，先安全回零、确认 DISABLE、清理并核验旧模式，再以 Trajectory+gravity 初始化新控制环境，在同一原生互斥锁内切到 VLA；不复用旧命令状态，初始化/清理失败则中止；成功后校验 controller active（及可用时的 TRACK）；`fault_code=11` 禁用启动类按钮。可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。完整用法见 [VLA 使用指南](./vla)。无一键升级全部或自动刷写 STM32。
 - Status 分为「连接 / 硬件健康 / 控制模式 / 传感器」四个 Tab；默认打开连接。Tab 按卡片状态聚合，异常优先于注意、未知、正常、空闲，隐藏分区仍持续更新汇总；支持左右方向键、Home/End。Fault 芯片会自动打开硬件 Tab 并高亮 Hardware，HOLD / 故障提示在所有 Tab 保留。
 - 控制模式 Tab 保留互斥模式条与停止/解除输出确认，并提供实时日志：默认按当前模式选 Teleop、Trajectory 或 ROS 控制器/VLA，也可选择 RealSense。通过 Tauri `read_control_log` 走只读 SSH，每轮完成后间隔 1 秒刷新，仅在控制 Tab 和窗口可见、SSH 可用时工作；搜索不区分大小写并移除终端控制字符。关闭「跟随最新」或向上滚动后保留阅读位置，刷新不覆盖搜索内容。
 
@@ -71,14 +71,14 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 4. Topic Graph、Inspector 与 Monitor
 
-- Robot View 同级提供 Topic Graph 和「位置」Tab（DataGraph 已迁至 Monitor 导航页）。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「位置」保存当前连接（SSH 主机、用户、端口）下的六个臂关节点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链画一张姿态缩略图；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理位置」打开同一份数据。自定义点可以新增、编辑和删除。
+- Robot View 同级提供 Topic Graph 和「位置」Tab（DataGraph 已迁至 Monitor 导航页）。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「位置」保存当前连接（SSH 主机、用户、端口）下的六轴及可选夹爪点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链画一张姿态缩略图；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理位置」打开同一份数据。自定义点可以新增、编辑和删除。
 - 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。若轨迹控制器已运行但规划器未启动，可在位置页点击“启动 MoveIt”；随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
-- MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。只允许 `arm` 六关节；不控制夹爪，不自动切换控制器。速度与加速度缩放为 1.0（不缩放）；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤1 rad/s 与加速度 ≤1 rad/s²（真实入口采用 1/1、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
+- MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。支持 `arm` 六关节及可选 `gripper` / `arm_with_gripper`，通过独立夹爪 JTC 协调执行；执行请求不自动切换控制器。速度与加速度缩放为 1.0（不缩放）；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤1 rad/s 与加速度 ≤1 rad/s²（真实入口采用 1/1、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
 - Bridge 在规划前及执行期间校验控制器 active、三类反馈 <1 秒、TRACK/故障/使能掩码、反馈一致性、完整有限关节值和模型限位。跨连接只允许一个点位运动，`command_id` 去重；规划/执行超过 180 秒、故障、反馈丢失、配置变化、连接断开或会话心跳超过 5 秒会请求取消。手动 MIT（DISABLE 除外）、旧拖拽轨迹及重力辨识不能覆盖正在运行的点位运动。
 - 启动点位前核对 active JTC 实际认领六关节 `position+velocity` 接口，并要求实测关节速度 ≤0.05 rad/s。已移除独立的启动连续性检查：不再校验 JTC desired/reference 的位置偏差、参考速度或字段完整性，也不等待参考连续稳定 200 ms。MoveIt 仍以新鲜实测关节状态作为规划起点，保留自身起点容差与碰撞检查；JTC actual 与 STM32 实测位置仍须相差 ≤0.02 rad。此变更不改变低速跟踪或重力补偿。旧 position-only JTC 仍不可执行点位。
 - 界面显示校验、规划、执行、到位检查和取消阶段；只有 MoveIt Action 成功且新鲜六关节误差 ≤0.02 rad、速度 ≤0.03 rad/s 持续 200 ms 才显示到达。取消 ACK 不代表停止；确认新鲜反馈停稳后才显示取消完成，5 秒未确认则显示“停止未确认”并保持锁定。断线不会自动重发运动。
 - 碰撞检查覆盖 URDF 自碰撞与 MoveIt Planning Scene 中的已知障碍物。Robot View 显示的 RGBD 点云目前不自动写入 Planning Scene，不能据此声称已检查现场所有物体。
-- Robot View 左上角有「运动控制」面板。还没有执行结果时显示「无运动」。误差由下发关节或 TCP 目标与停稳反馈计算：关节为弧度差，TCP 位置为毫米、姿态为角度。切回 Robot View 后该面板持续展示点位运动状态，点位运动期间锁定 TCP 拖拽；拖拽本身仍按原有本地 IK 松手下发，其误差结果尚未写入该面板。
+- Robot View 左上角有「运动控制」面板。还没有执行结果时显示「无运动」。误差由下发关节或 TCP 目标与停稳反馈计算：关节为弧度差，TCP 位置为毫米、姿态为角度。切回 Robot View 后该面板持续展示点位运动状态，点位运动期间锁定 TCP 拖拽；TCP 松手保留预览，显式确认后也由同一 MoveIt 运动状态机执行并显示阶段。
 - Topic Graph 在打开时立即加载，默认每 30 秒自动刷新，也可点击“刷新 Graph”手动刷新；图变化不影响现有 Topic 数据订阅。
 - Graph 使用确定性的力导向布局：ROS Node 为圆角矩形、Topic 为椭圆，使用与界面一致的蓝青/青绿色，连线保留发布/订阅方向；图形大小反映连接数。节点之间有斥力、连接有引力，并进行碰撞消除；初始布局以可用尺寸为参考，但节点坐标不受初始布局矩形限制。默认隐藏 Bridge 节点及其私有 Topic，可用“显示 Bridge”开关恢复；共享机器人数据 Topic 保留。
 - 无限画布初始以 100% 缩放居中节点，支持滚轮/按钮缩放、空白处拖拽平移；可将节点拖到初始布局之外，刷新后仍保留手动位置（节点仍存在时）。Fit 根据所有节点的实际位置缩放取景，Reset 以 100% 缩放将现有节点居中；选中节点后仍可自由平移，松手不会重新居中。节点标签完整显示 Node 与 Topic 的原始名称，保留 `/`，不截断或附加省略号；每行最多 10 个 Unicode 字符，图形随行数增大以容纳全部文字。完整名称也可从悬停提示和辅助标签读取。连接线上用粒子动画示意数据流向与快慢（当前为占位流速：publish 快于 subscribe，尚未接真实 Hz）。
@@ -173,12 +173,12 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ### Robot View 关节联合调整
 
-- 在 Robot View 选择「关节调整」，可分别输入 joint1–joint6 的目标角度（度），也可选择或点击模型关节后用滑块调整。所有已编辑轴同时预览，切换所选关节保留其他目标；未编辑轴继续显示实时反馈。fixed、prismatic 与 mimic 关节不提供独立旋转操作。
+- 在 Robot View 选择「关节调整」，可分别输入 joint1–joint6 的目标角度（度），也可选择或点击模型关节后用滑块调整。所有已编辑轴同时预览，切换所选关节保留其他目标；未编辑轴继续显示实时反馈。夹爪（joint7，`gripper_finger_left_joint`）为独立直线自由度，以单指行程 mm 调整；fixed 与 mimic 关节不提供独立操作。
 - 调整仅预览，反馈不会覆盖已编辑目标。「恢复实时」、Esc、切换操作方式、隐藏视图或模型/连接变化会清除预览；显示实际角度、目标和所选关节 URDF 限位。连续关节不强制回绕。
-- 运动时长默认 5 秒，接受可用 ROS 时间表示的有限正数，不再限制为 0.1–120 秒，也不以低于推荐时长为由拒绝。MoveIt 规划返回的原始时长在界面显示，仅供参考；轨迹可伸长或压缩，速度除以时间倍率、加速度除以倍率平方。Bridge 使用当前六轴限速/限加速度，对整段三次/五次插值样条做保守上界校验，超限或无法验证时拒绝执行。运动时长不含规划和到位核验耗时，长运动总超时随指定时长增加，5 秒会话心跳要求不变。
+- 运动时长默认 5 秒，接受可用 ROS 时间表示的有限正数，不再限制为 0.1–120 秒，也不以低于推荐时长为由拒绝。MoveIt 规划返回的原始时长在界面显示，仅供参考；轨迹可伸长或压缩，速度除以时间倍率、加速度除以倍率平方。Bridge 使用当前受控关节限速/限加速度，对整段三次/五次插值样条做保守上界校验，超限或无法验证时拒绝执行；夹爪还校验整段插值不越过标定行程。运动时长不含规划和到位核验耗时，长运动总超时随指定时长增加，5 秒会话心跳要求不变。
 - 勾选工作区安全确认并点击「确认执行」后，一次提交所有已编辑关节及运动时长。Bridge 从新鲜实测状态补齐其余轴目标，并添加 ±0.001 rad 路径保持约束；全部六轴已编辑时不添加保持约束。无法在约束内避碰则规划失败；约束不构成硬件零误差保持保证。
 - 定时执行使用 MoveIt `/move_action` 的 plan-only 结果，校验路径、起终点和时序后，通过 `/execute_trajectory` 一次执行完整轨迹。规划与执行共享运动锁、心跳和取消；执行前再次核对新鲜反馈、实测起点与 MoveIt 起点容差，已取消或断线的规划不进入执行。只有 Action 成功且实际到位、停稳后才报告完成。
-- 保留 active JTC、六关节 position+velocity 接口、TRACK/故障、反馈新鲜度/一致性和实测停稳等安全条件；不恢复已删除的 JTC 参考连续性检查。需要 Bridge 广告 `joint_targets_supported` 和 `motion_duration_supported`，缺失时禁用确认执行；`/execute_trajectory` 未就绪时显示具体原因。其他 URDF 旋转关节可预览，真机执行仍限 arm 六轴。
+- 保留 active JTC、六关节 position+velocity 接口、TRACK/故障、反馈新鲜度/一致性和实测停稳等安全条件；不恢复已删除的 JTC 参考连续性检查。需要 Bridge 广告 `joint_targets_supported` 和 `motion_duration_supported`，缺失时禁用确认执行；`/execute_trajectory` 未就绪时显示具体原因。其他 URDF 旋转关节可预览；真机执行允许 arm 六轴及经过能力核验的独立夹爪。
 
 ### TCP 拖拽
 
@@ -188,9 +188,9 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - 拖拽过程按帧求位置逆解：有限差分雅可比 + 自适应阻尼最小二乘，关节限位钳制，单次下降卡住时做确定性随机重启。仅做位置求解，TCP 姿态保持不变；只有残差不超过 5 mm 才允许下发，下发成功时会把实际残差一并展示，避免暗示夹爪精确落在目标点上。
 - 自动订阅 active 控制器的 `controller_state`（旧版本兼容 `state`）读取实际 `joint_names`，按该列表与顺序生成轨迹，不再把 JointState 中额外的手指关节发给只控制 joint1–6 的机械臂控制器。未收到有效列表时手柄不可拖拽，订阅失败显示具体错误。TCP 链含有控制器不接收的关节时拒绝规划并提示检查 TCP link。
 - 正运动学和逆解保留 TCP 链上的 fixed joint 与工具偏移；控制器负责但不在 TCP 链上的关节保持当前反馈，其他反馈关节不进入轨迹且不被预览改写。反馈位置缺失、非有限值或关节名重复时拒绝规划，不以零补齐。拖拽期间预览位姿不被实时 JointState 覆盖。
-- 松开鼠标时按最新 JointState 重算一次并下发 `trajectory_msgs/msg/JointTrajectory`：第 1 点为当前反馈位置（短暂停留），第 2 点为目标位置，执行时长按最大关节位移在 0.4–6 s 内估算。
-- 下发失败或 IK 未收敛时把模型恢复到反馈位姿并在视图内展示原因，不隐藏失败。
-- 松手下发前再次校验当前 active 控制器的关节集合与顺序；JointState 或控制器反馈超过 1 秒、尚未收到反馈或实时显示暂停时拒绝下发。Bridge ACK 表示消息已发布，不代表控制器已接受或机械臂已执行完成。
+- 松开鼠标保留 IK 目标预览，不触发运动。可填写可选夹爪目标（mm），点击「确认执行」才按最新反馈重算目标，通过 Bridge 的 `position_move` 统一进行 MoveIt 碰撞规划与执行；夹爪不参与机械臂位置 IK，也可单独确认夹爪运动。
+- IK 未收敛时保留预览并在视图内展示原因，禁止确认执行；可用「恢复实时」或 Esc 撤销。
+- 确认执行需要会话安全解锁、MoveIt 就绪和新鲜反馈。Bridge 校验当前控制器、模型、起点和目标后才执行。ACK 表示受理，不代表规划成功或实际到位。
 - Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求该 Topic 已有订阅者；关节名重复、点数/长度不一致、非有限数值以及非严格递增的 `time_from_start` 都会被拒绝。
 
 ## 12. 全局工具栏、诊断与 rosbag
@@ -234,7 +234,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |
 | 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置逆解收敛与限位钳制、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
 | 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |
-| 轨迹下发 | 松手下发（成功/IK 未收敛/无 JointState/send 失败）、未激活拒发、active 控制器下发 JointTrajectory、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |
+| 轨迹规划 | IK 目标与失败边界、TCP 松手预览后确认、夹爪能力门禁、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |
 | Bridge 轨迹 | Topic 白名单、关节名/点数/长度/有限值/时间递增校验、错误文案、Duration 拆分 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | macOS 安装 | release 构建后安装到 `/Applications`、失败回滚原安装 | `scripts/install-macos-app.node-test.mjs` |
 | Bridge 部署 | 参数解析、rsync 参数、远端脚本与校验输出解析 | `scripts/deploy-bridge.node-test.mjs` |
@@ -301,3 +301,10 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 - 过程窗口在当前连接中保留最近 5000 条，重连清空；导出包含保留的全部记录，不受搜索影响（32 MiB 上限）。Bridge 最近 2048 条用于增量同步，每批最多 256 条；窗口溢出有提示。Bridge 端过程记录也写入 ROS 日志与进程输出（常规启动为 `/tmp/easy_debug_bridge.log`，Bridge 重启会替换该输出文件）；长期保留请在重启前导出，非永久无限存储。
 - 控制器服务查询每秒最多一次，最多等待 2 秒；上次成功校验的激活状态在下一次查询等待期间最多保留 3.1 秒。查询超时/服务不可用即失效，不以持续收到 Topic 作为永久 active 证明。收到 inactive、类型或接口不符的结果立即阻止执行；硬件、JointState 和 JTC 实时反馈仍要求 1 秒内新鲜。慢查询耗时和超时原因均记录，过期响应不能恢复状态。
 - 运动反馈、Action/参数/控制器服务与 watchdog 使用独立的互斥 ROS 回调组，减少图像/拓扑解析阻塞运动状态更新；仍由同一个运动状态机串行处理，不增加并发控制入口。
+
+## joint7 夹爪与位置兼容
+
+- 位置存储升级为 schemaVersion 2，六轴值仍按 joint1–joint6 保存，可选 `gripperPosition` 保存米制单指行程。version 1 自动迁移且不补夹爪值；旧点位与 HOME 显示「保持当前」。编辑和新增可勾选保存夹爪目标，卡片/缩略图展示夹爪姿态。
+- 「保存当前姿态」在 Bridge 提供新鲜标定夹爪快照时默认带上夹爪；缺失时明确提示只采集六轴，并可手动填写。保存编辑不执行运动。模型不直接应用 `/stm32/joint_states` 的原始夹爪值；优先订阅 `/robot_feedback/joint_states` 的高频标定位置，状态查询快照作为回退，两者一秒过期失效。右手指随主手指 mimic 联动。
+- 夹爪执行额外核对模型标定、有效范围、专用 JTC position+velocity、bit0x40、反馈新鲜度与一致性。未就绪给出原因，旧 Bridge 不静默丢弃夹爪目标。夹爪限幅按当前标定配置（首版不超过 0–50 mm、20 mm/s、40 mm/s²），不采用 URDF 71.5 mm 上限替代标定行程。
+- 夹爪 Action 成功后还须误差 ≤1 mm、速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才完成；取消、故障、断线共享同一运动锁与停止核验。位置控制遇阻未到位显示失败，不报告抓取成功。

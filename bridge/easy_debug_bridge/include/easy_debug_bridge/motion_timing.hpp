@@ -1,5 +1,6 @@
 #pragma once
 #include "easy_debug_bridge/position_motion_core.hpp"
+#include "easy_debug_bridge/gripper_motion_core.hpp"
 #include <cstdint>
 
 namespace easy_debug_bridge {
@@ -11,6 +12,21 @@ struct TimedMotionPoint {
   std::vector<double> positions, velocities, accelerations, effort;
   int64_t time_ns{};
 };
+// A prismatic finger must remain within calibrated travel between knots too.
+inline void bounded_position_spline(const std::vector<double> &b, double lower, double upper, int depth = 0) {
+  const auto within = [&](double x) { return std::isfinite(x) && x >= lower - 1e-9 && x <= upper + 1e-9; };
+  if (!within(b.front()) || !within(b.back())) throw std::runtime_error("夹爪样条轨迹超过标定行程");
+  if (std::all_of(b.begin(), b.end(), within)) return;
+  if (depth >= 12) throw std::runtime_error("无法确认夹爪样条位于标定行程内");
+  auto row = b; std::vector<double> left{b.front()}, right{b.back()};
+  while (row.size() > 1) {
+    for (size_t i = 0; i + 1 < row.size(); ++i) row[i] = (row[i] + row[i+1]) / 2;
+    row.pop_back(); left.push_back(row.front()); right.push_back(row.back());
+  }
+  std::reverse(right.begin(), right.end());
+  bounded_position_spline(left, lower, upper, depth + 1);
+  bounded_position_spline(right, lower, upper, depth + 1);
+}
 // Convex-hull bounds on cubic/quintic interpolation, subdivided when needed.
 inline void bounded_spline(const std::vector<double> &b, double h, double vmax, double amax, int depth=0) {
   std::vector<double> v, a;
@@ -38,7 +54,7 @@ inline std::vector<TimedMotionPoint> stretch_motion(std::vector<TimedMotionPoint
   for (const auto &point : points) {
     validate_position_target(point.positions, model);
     for (const auto *values : {&point.velocities, &point.accelerations, &point.effort})
-      if ((!values->empty() && values->size() != 6) ||
+      if ((!values->empty() && values->size() != model.joint_names.size()) ||
           !std::all_of(values->begin(), values->end(), [](double v) { return std::isfinite(v); }))
         throw std::runtime_error("规划轨迹速度/加速度/力矩数组无效");
     if (point.time_ns < 0 || point.time_ns <= previous) throw std::runtime_error("规划轨迹时间必须递增");
@@ -56,22 +72,27 @@ inline std::vector<TimedMotionPoint> stretch_motion(std::vector<TimedMotionPoint
     for (auto &a : point.accelerations) a /= scale * scale;
   }
   points.back().time_ns = target_ns;
-  if (velocity_limits.size()!=6 || acceleration_limits.size()!=6) throw std::runtime_error("运动限幅不完整");
-  for(size_t k=0;k<6;++k) {
+  if (velocity_limits.size()!=model.joint_names.size() || acceleration_limits.size()!=model.joint_names.size()) throw std::runtime_error("运动限幅不完整");
+  for(size_t k=0;k<model.joint_names.size();++k) {
     if(!std::isfinite(velocity_limits[k])||!std::isfinite(acceleration_limits[k])||velocity_limits[k]<=0||acceleration_limits[k]<=0)
       throw std::runtime_error("运动限幅无效");
     for(size_t i=1;i<points.size();++i) {
       const auto &x=points[i-1],&y=points[i];double h=(y.time_ns-x.time_ns)/1e9;
       if(x.velocities.empty()||y.velocities.empty()) {
+        if (model.joint_names[k] == gripper_motion_joint())
+          throw std::runtime_error("夹爪轨迹缺少速度，无法验证整段运动限幅");
         if(scale<1 || std::abs((y.positions[k]-x.positions[k])/h)>velocity_limits[k])
           throw std::runtime_error("缺少速度数据或轨迹超限，无法验证指定时长");
         continue;
       }
       double p=x.positions[k],q=y.positions[k],v=x.velocities[k],w=y.velocities[k];
-      if(!x.accelerations.empty()&&!y.accelerations.empty())
-        bounded_spline({p,p+v*h/5,p+2*v*h/5+x.accelerations[k]*h*h/20,
-            q-2*w*h/5+y.accelerations[k]*h*h/20,q-w*h/5,q},h,velocity_limits[k],acceleration_limits[k]);
-      else bounded_spline({p,p+v*h/3,q-w*h/3,q},h,velocity_limits[k],acceleration_limits[k]);
+      const auto controls = !x.accelerations.empty()&&!y.accelerations.empty()
+        ? std::vector<double>{p,p+v*h/5,p+2*v*h/5+x.accelerations[k]*h*h/20,
+            q-2*w*h/5+y.accelerations[k]*h*h/20,q-w*h/5,q}
+        : std::vector<double>{p,p+v*h/3,q-w*h/3,q};
+      bounded_spline(controls,h,velocity_limits[k],acceleration_limits[k]);
+      if (model.joint_names[k] == gripper_motion_joint())
+        bounded_position_spline(controls, model.lower[k], model.upper[k]);
     }
   }
 

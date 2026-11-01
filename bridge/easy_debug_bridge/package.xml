@@ -22,5 +22,6 @@
   <depend>controller_manager_msgs</depend>
   <depend>rosidl_typesupport_introspection_cpp</depend>
   <depend>microros_stm32h723_bridge</depend>
+  <test_depend>rclpy</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Isolated Bridge/MoveIt contract smoke. Run only with ROS_DOMAIN_ID=213.
+
+All ROS publishers, controllers and Actions below are mocks. No motor commands
+are sent. Pass the freshly built bridge_node binary as the only argument.
+"""
+import base64
+import json
+import os
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+import rclpy
+from rclpy.action import ActionServer, CancelResponse
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from controller_manager_msgs.msg import ControllerState
+from controller_manager_msgs.srv import ListControllers
+from control_msgs.msg import JointTrajectoryControllerState
+from microros_stm32h723_bridge.msg import HardwareStatus
+from moveit_msgs.action import ExecuteTrajectory, MoveGroup
+from sensor_msgs.msg import JointState
+from trajectory_msgs.msg import JointTrajectoryPoint
+
+ARM = ['joint%d' % i for i in range(1, 7)]
+GRIPPER = 'gripper_finger_left_joint'
+SCALE, OFFSET = -.008612826752, .004282757541
+
+
+class WebSocket:
+    """Small RFC6455 text client, using stdlib only for isolated ROS tests."""
+    def __init__(self, port):
+        self.events = {}
+        self.command_id = None
+        self.socket = socket.create_connection(('127.0.0.1', port), timeout=3)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.socket.sendall(('GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
+                            'Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n'
+                            'Sec-WebSocket-Key: %s\r\n\r\n' % key).encode())
+        response = b''
+        while not response.endswith(b'\r\n\r\n'):
+            chunk = self.socket.recv(1)
+            if not chunk:
+                self.socket.close()
+                raise RuntimeError('WebSocket closed during handshake')
+            response += chunk
+        assert b'101 Switching Protocols' in response, response
+
+    def read(self, count):
+        value = b''
+        while len(value) < count:
+            chunk = self.socket.recv(count - len(value))
+            if not chunk:
+                raise RuntimeError('WebSocket closed')
+            value += chunk
+        return value
+
+    def receive(self):
+        # Beast fragments larger motion-log replies across continuation frames.
+        payload = b''
+        while True:
+            first, second = self.read(2)
+            length = second & 127
+            if length == 126:
+                length = struct.unpack('!H', self.read(2))[0]
+            elif length == 127:
+                length = struct.unpack('!Q', self.read(8))[0]
+            assert not second & 128, 'Server frames must not be masked'
+            assert first & 15 in (0, 1), first
+            payload += self.read(length)
+            if first & 128:
+                break
+        message = json.loads(payload)
+        if message.get('op') == 'position_motion':
+            self.events[message['command_id']] = message
+        return message
+
+    def request(self, op, **fields):
+        request_id = str(uuid.uuid4())
+        if op == 'position_move':
+            self.command_id = fields['command_id']
+        data = json.dumps(dict(op=op, request_id=request_id, **fields)).encode()
+        mask = os.urandom(4)
+        header = bytes([129, 128 | len(data)]) if len(data) < 126 else bytes([129, 254]) + struct.pack('!H', len(data))
+        self.socket.sendall(header + mask + bytes(x ^ mask[i % 4] for i, x in enumerate(data)))
+        while True:
+            reply = self.receive()
+            if reply.get('request_id') == request_id:
+                return reply
+
+
+class MockRobot(Node):
+    def __init__(self):
+        super().__init__('move_group')
+        urdf = '<robot name="test">' + ''.join(
+            '<joint name="%s" type="revolute"><limit lower="-1" upper="1"/></joint>' % j for j in ARM)
+        urdf += '<joint name="%s" type="prismatic"><limit lower="0" upper="0.0715"/></joint></robot>' % GRIPPER
+        srdf = '<robot name="test"><group name="arm">' + ''.join('<joint name="%s"/>' % j for j in ARM)
+        srdf += '</group><group_state name="home" group="arm">' + ''.join('<joint name="%s" value="0"/>' % j for j in ARM)
+        srdf += '</group_state><group name="gripper"><joint name="%s"/></group>' % GRIPPER
+        srdf += '<group name="arm_with_gripper">' + ''.join('<joint name="%s"/>' % j for j in ARM + [GRIPPER]) + '</group></robot>'
+        params = {'robot_description': urdf, 'robot_description_semantic': srdf,
+                  'moveit_manage_controllers': False,
+                  'moveit_controller_manager': 'moveit_simple_controller_manager/MoveItSimpleControllerManager',
+                  'trajectory_execution.allowed_start_tolerance': .01,
+                  'moveit_simple_controller_manager.controller_names': ['arm_trajectory_controller', 'gripper_trajectory_controller'],
+                  'debug_desk.gripper_position_scale': SCALE, 'debug_desk.gripper_position_offset': OFFSET,
+                  'debug_desk.gripper_lower': 0., 'debug_desk.gripper_upper': .05}
+        for name, joints in [('arm_trajectory_controller', ARM), ('gripper_trajectory_controller', [GRIPPER])]:
+            for key, value in dict(joints=joints, type='FollowJointTrajectory', action_ns='follow_joint_trajectory').items():
+                params['moveit_simple_controller_manager.%s.%s' % (name, key)] = value
+        for joint in ARM + [GRIPPER]:
+            for key, value in dict(max_velocity=.02 if joint == GRIPPER else 1.,
+                                   max_acceleration=.04 if joint == GRIPPER else 1.,
+                                   has_velocity_limits=True, has_acceleration_limits=True).items():
+                params['robot_description_planning.joint_limits.%s.%s' % (joint, key)] = value
+        for key, value in params.items():
+            self.declare_parameter(key, value)
+        self.positions = dict(zip(ARM + [GRIPPER], [0.] * 6 + [.025]))
+        self.groups, self.executions = [], []
+        self.mismatch = False
+        self.pause = False
+        self.hold_plan = False
+        self.arm_pub = self.create_publisher(JointTrajectoryControllerState, '/arm_trajectory_controller/controller_state', qos_profile_sensor_data)
+        self.gripper_pub = self.create_publisher(JointTrajectoryControllerState, '/gripper_trajectory_controller/controller_state', qos_profile_sensor_data)
+        self.joints_pub = self.create_publisher(JointState, '/stm32/joint_states', qos_profile_sensor_data)
+        self.hardware_pub = self.create_publisher(HardwareStatus, '/stm32/status', qos_profile_sensor_data)
+        self.service = self.create_service(ListControllers, '/controller_manager/list_controllers', self.controllers)
+        # Reentrant callbacks allow feedback and cancellation while mock planning is held.
+        from rclpy.callback_groups import ReentrantCallbackGroup
+        group = ReentrantCallbackGroup()
+        self.move = ActionServer(self, MoveGroup, '/move_action', execute_callback=self.plan,
+                                 cancel_callback=lambda _: CancelResponse.ACCEPT, callback_group=group)
+        self.execute = ActionServer(self, ExecuteTrajectory, '/execute_trajectory', execute_callback=self.run,
+                                    cancel_callback=lambda _: CancelResponse.ACCEPT, callback_group=group)
+        self.timer = self.create_timer(.05, self.publish)
+
+    def controllers(self, _, response):
+        for name, joints in [('arm_trajectory_controller', ARM), ('gripper_trajectory_controller', [GRIPPER])]:
+            c = ControllerState(name=name, state='active', type='joint_trajectory_controller/JointTrajectoryController')
+            c.claimed_interfaces = [j + '/' + interface for j in joints for interface in ['position', 'velocity']]
+            response.controller.append(c)
+        return response
+
+    def publish(self):
+        if self.pause:
+            return
+        stamp = self.get_clock().now().to_msg()
+        joints = JointState()
+        joints.header.stamp = stamp
+        joints.name = ARM + [GRIPPER]
+        joints.position = [self.positions[j] for j in ARM] + [(self.positions[GRIPPER] - OFFSET) / SCALE]
+        joints.velocity = [0.] * 7
+        joints.effort = [0.] * 7
+        self.joints_pub.publish(joints)
+        for publisher, names in [(self.arm_pub, ARM), (self.gripper_pub, [GRIPPER])]:
+            state = JointTrajectoryControllerState()
+            state.header.stamp = stamp
+            state.joint_names = names
+            state.actual.positions = [self.positions[j] + (.005 if j == GRIPPER and self.mismatch else 0) for j in names]
+            state.actual.velocities = [0.] * len(names)
+            publisher.publish(state)
+        hardware = HardwareStatus()
+        hardware.mode = HardwareStatus.MODE_TRACK
+        hardware.active_joint_mask = 127
+        hardware.fault_code = 0
+        self.hardware_pub.publish(hardware)
+
+    def plan(self, handle):
+        request = handle.request.request
+        self.groups.append(request.group_name)
+        while self.hold_plan and not handle.is_cancel_requested:
+            time.sleep(.02)
+        result = MoveGroup.Result()
+        if handle.is_cancel_requested:
+            handle.canceled()
+            result.error_code.val = -7
+            return result
+        names = [GRIPPER] if request.group_name == 'gripper' else ARM + ([GRIPPER] if request.group_name == 'arm_with_gripper' else [])
+        targets = {c.joint_name: c.position for c in request.goal_constraints[0].joint_constraints}
+        result.planned_trajectory.joint_trajectory.joint_names = list(reversed(names))  # Exercise name-based reordering.
+        for alpha, sec in [(0., 0), (.5, 3), (1., 6)]:
+            point = JointTrajectoryPoint()
+            point.positions = [(1-alpha)*self.positions[j] + alpha*targets[j] for j in reversed(names)]
+            point.velocities = [0.] * len(names)
+            point.accelerations = [0.] * len(names)
+            point.time_from_start.sec = sec
+            result.planned_trajectory.joint_trajectory.points.append(point)
+        result.error_code.val = 1
+        # Legacy arm-only requests execute through MoveGroup itself.
+        if not handle.request.planning_options.plan_only:
+            self.positions.update(targets)
+        handle.succeed()
+        return result
+
+    def run(self, handle):
+        trajectory = handle.request.trajectory.joint_trajectory
+        self.executions.append(trajectory)
+        self.positions.update(zip(trajectory.joint_names, trajectory.points[-1].positions))
+        result = ExecuteTrajectory.Result()
+        result.error_code.val = 1
+        handle.succeed()
+        return result
+
+
+def wait_for(fn, timeout=15):
+    until = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < until:
+        last = fn()
+        if last:
+            return last
+        time.sleep(.1)
+    raise AssertionError('Timed out: %r' % last)
+
+
+def main(binary):
+    assert os.environ.get('ROS_DOMAIN_ID') == '213', 'Must use isolated ROS_DOMAIN_ID=213'
+    rclpy.init()
+    robot = MockRobot()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(robot)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    with socket.socket() as reserve:
+        reserve.bind(('127.0.0.1', 0))
+        port = reserve.getsockname()[1]
+    with open('/tmp/joint7-bridge-smoke.log', 'w') as log:
+        process = subprocess.Popen([binary, '--ros-args', '-p', 'port:=%d' % port], stdout=log, stderr=log)
+        try:
+            def connect():
+                try:
+                    return WebSocket(port)
+                except OSError:
+                    return None
+            ws = wait_for(connect)
+            info = lambda: ws.request('position_motion_info')
+            ready = wait_for(lambda: (lambda i: i if i.get('gripper_available') else None)(info()))
+            assert ready['gripper_supported'] and ready['gripper_feedback_fresh'], ready
+            assert abs(ready['gripper_position'] - .025) < 1e-8, ready
+            def move(**fields):
+                return ws.request('position_move', command_id=str(uuid.uuid4()), confirmation='ARMED', **fields)
+            for targets in [{GRIPPER: .06}, {GRIPPER: -.01}, {'joint7': 0.}]:
+                reply = move(joint_targets=targets, motion_duration_s=5.)
+                assert reply.get('accepted') is False, reply
+            assert not robot.groups
+            robot.mismatch = True
+            wait_for(lambda: not info()['gripper_available'])
+            assert move(joint_targets={GRIPPER: .03})['accepted'] is False
+            robot.mismatch = False
+            wait_for(lambda: info()['gripper_available'])
+            def completed(expected='succeeded'):
+                state = info()
+                event = ws.events.get(ws.command_id, {})
+                phase = event.get('motion_phase')
+                if state['busy'] or phase not in ('succeeded', 'failed', 'canceled'):
+                    return False
+                assert phase == expected, event
+                return True
+            reply = move(joint_targets={'joint1': .1, GRIPPER: .035}, motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(completed)
+            assert robot.groups[-1] == 'arm_with_gripper', robot.groups
+            assert abs(robot.positions[GRIPPER] - .035) < 1e-9
+            assert robot.executions[-1].points[-1].time_from_start.sec == 6
+            assert len(robot.executions[-1].joint_names) == 7
+            reply = move(joint_targets={GRIPPER: .03}, motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(completed)
+            assert robot.groups[-1] == 'gripper'
+            assert robot.executions[-1].joint_names == [GRIPPER]
+            held = robot.positions[GRIPPER]
+            reply = move(home=True)
+            assert reply.get('accepted') is not False, reply
+            wait_for(completed)
+            assert robot.groups[-1] == 'arm' and robot.positions[GRIPPER] == held
+            robot.hold_plan = True
+            command_id = str(uuid.uuid4())
+            reply = ws.request('position_move', command_id=command_id, confirmation='ARMED', joint_targets={GRIPPER: .02}, motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(lambda: info()['busy'])
+            before = len(robot.executions)
+            ws.request('position_cancel', command_id=command_id)
+            wait_for(lambda: completed('canceled'))
+            assert len(robot.executions) == before and robot.positions[GRIPPER] == held
+            robot.hold_plan = False
+            robot.pause = True
+            wait_for(lambda: not info()['available'])
+            assert move(joint_targets={GRIPPER: .02})['accepted'] is False
+            print('PASS: calibrated snapshot, limits/aliases, mismatch/staleness, 7-axis and gripper-only execution, HOME hold, cancel-before-execute')
+            ws.socket.close()
+        finally:
+            # Release a held callback even when a cancellation assertion fails,
+            # so executor teardown cannot wait forever for its worker thread.
+            robot.hold_plan = False
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            executor.shutdown(timeout_sec=5)
+            robot.destroy_node()
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main(sys.argv[1])

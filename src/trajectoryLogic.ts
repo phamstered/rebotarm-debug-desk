@@ -40,7 +40,7 @@ export function isTrajectoryController(controller: ControllerInfo): boolean {
 
 /** 只有 active 的轨迹控制器才能接收轨迹指令，类型匹配优先于名称匹配。 */
 export function findActiveTrajectoryController(controllers: ControllerInfo[]): TrajectoryController | null {
-  const active = controllers.filter((controller) => controller.state === "active");
+  const active = controllers.filter((controller) => controller.state === "active" && !/gripper/i.test(controller.name));
   const match = active.find((controller) => /jointtrajectorycontroller/i.test(controller.typeName))
     ?? active.find((controller) => /traj/i.test(controller.name));
   return match ? { name: match.name, topic: trajectoryTopicFor(match.name) } : null;

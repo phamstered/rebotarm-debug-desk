@@ -1,3 +1,4 @@
+import { GRIPPER_JOINT_NAME } from "./positionLogic";
 import { MotionTerminal } from "./MotionTerminal";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,7 +28,7 @@ import type { KinematicJoint, KinematicModel, Vec3 } from "./kinematicsLogic";
 import { JointRotationPanel } from "./JointRotationPanel";
 import { pickedRotationJoint, rotationalJoints, type JointRotationPreview } from "./jointRotationLogic";
 import type { PositionMotionControls } from "./positionMotionLogic";
-import { applyTrajectoryPlan, dispatchTrajectory, planTrajectory } from "./trajectoryLogic";
+import { applyTrajectoryPlan, planTrajectory } from "./trajectoryLogic";
 import type { TrajectoryController } from "./trajectoryLogic";
 import type { TrajectoryPoint } from "./types";
 import { MotionControlPanel, type MotionControlInfo } from "./MotionControlPanel";
@@ -269,13 +270,13 @@ function JointAxisMarker({ robot, joint }: { robot: URDFRobot; joint: KinematicJ
     marker.scale.setScalar(Math.max(camera.position.distanceTo(marker.position) * 0.035, 1e-4));
   });
   return <group ref={group} visible={false}>
-    <mesh><torusGeometry args={[1, .045, 8, 64]} /><meshBasicMaterial color="#fbbf24" depthTest={false} transparent opacity={.9} /></mesh>
+    <mesh>{joint.type === "prismatic" ? <boxGeometry args={[.15, .15, 2]} /> : <torusGeometry args={[1, .045, 8, 64]} />}<meshBasicMaterial color="#fbbf24" depthTest={false} transparent opacity={.9} /></mesh>
     <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[.025, .025, 3, 8]} /><meshBasicMaterial color="#fbbf24" depthTest={false} transparent opacity={.8} /></mesh>
   </group>;
 }
 export function UrdfViewer({
   xml,
-  jointState,
+  jointState: rawJointState,
   bridge,
   tcpLink,
   trajectoryController,
@@ -318,6 +319,21 @@ export function UrdfViewer({
   onRgbdColorModeChange?(mode: RgbdColorMode): void;
   onRgbdNearFarChange?(nearM: number, farM: number): void;
 }) {
+  const jointState = useMemo(() => {
+    if (!rawJointState) return null;
+    const names: string[] = [], positions: number[] = [];
+    rawJointState.name?.forEach((name, i) => { if (name !== GRIPPER_JOINT_NAME) { names.push(name); positions.push(rawJointState.position?.[i] ?? NaN); } });
+    if (jointMotion?.gripper?.fresh && jointMotion.gripper.position !== undefined) {
+      names.push(GRIPPER_JOINT_NAME); positions.push(jointMotion.gripper.position);
+    }
+    return { name: names, position: positions };
+  }, [rawJointState, jointMotion?.gripper?.position, jointMotion?.gripper?.fresh]);
+  const [tcpPending, setTcpPending] = useState(false);
+  const tcpPendingRef = useRef(false);
+  const [gripperText, setGripperText] = useState("");
+  const gripperTarget = gripperText.trim() ? Number(gripperText) / 1000 : undefined;
+  const gripperTargetRef = useRef(gripperTarget);
+  gripperTargetRef.current = gripperTarget;
   const activeRef = useRef(active);
   activeRef.current = active;
   const loadedScene = useRef<{ xml: string; dispose(): void } | null>(null);
@@ -391,6 +407,8 @@ export function UrdfViewer({
     applyJointState(jointStateRef.current?.name, jointStateRef.current?.position, (name, value) => {
       robotRef.current?.setJointValue(name, value);
     });
+    const g = gripperTargetRef.current;
+    if (activeRef.current && g !== undefined && Number.isFinite(g)) robotRef.current?.setJointValue(GRIPPER_JOINT_NAME, g);
     const value = jointPreviewRef.current;
     if (activeRef.current && value) for (const [name, position] of Object.entries(value)) robotRef.current?.setJointValue(name, position);
   }, []);
@@ -415,7 +433,7 @@ export function UrdfViewer({
   useEffect(() => {
     jointStateRef.current = jointState;
     // 拖拽过程中预览位姿由 IK 驱动，不能被实时反馈覆盖。
-    if (active && !draggingRef.current) applyState();
+    if (active && !draggingRef.current && !tcpPendingRef.current) applyState();
   }, [applyState, jointState, active]);
 
   const solvePreview = useCallback((target: Vec3) => {
@@ -434,17 +452,19 @@ export function UrdfViewer({
       seedRef.current = result.plan.chainGoal;
       applyTrajectoryPlan(result.plan, (name, value) => robotRef.current?.setJointValue(name, value));
     }
+    if (Number.isFinite(gripperTargetRef.current)) robotRef.current?.setJointValue(GRIPPER_JOINT_NAME, gripperTargetRef.current!);
     setPreview({ target, error: result.error ?? "", positionError: result.plan?.positionError ?? 0 });
   }, [model, tcp.name]);
 
   const handleDragStart = useCallback(() => {
     draggingRef.current = true;
+    tcpPendingRef.current = false; setTcpPending(false);
     targetRef.current = null;
     seedRef.current = [];
     setDragging(true);
     setPreview(null);
     jointMotion?.recordLog("tcp-preview", "开始 TCP 拖拽预览");
-    setStatus({ kind: "info", text: "拖拽中：松开鼠标下发轨迹，Esc 取消" });
+    setStatus({ kind: "info", text: "拖拽中：松开鼠标保留预览，确认后执行，Esc 取消" });
   }, [jointMotion?.recordLog]);
 
   const handleDragMove = useCallback((target: Vec3) => solvePreview(target), [solvePreview]);
@@ -452,6 +472,7 @@ export function UrdfViewer({
   const handleDragCancel = useCallback(() => {
     draggingRef.current = false;
     targetRef.current = null;
+    tcpPendingRef.current = false; setTcpPending(false); setGripperText(""); gripperTargetRef.current = undefined;
     setDragging(false);
     setPreview(null);
     applyState();
@@ -461,69 +482,48 @@ export function UrdfViewer({
 
   useEffect(() => { if (!active && draggingRef.current) handleDragCancel(); }, [active, handleDragCancel]);
 
-  const handleDragEnd = useCallback(async () => {
+  const handleDragEnd = useCallback(() => {
+    draggingRef.current = false; setDragging(false);
     if (!activeRef.current) { handleDragCancel(); return; }
-    draggingRef.current = false;
-    setDragging(false);
+    if (targetRef.current) {
+      tcpPendingRef.current = true; setTcpPending(true);
+      setStatus({ kind: "info", text: "目标预览中，确认后由 MoveIt 规划执行" });
+    } else handleDragCancel();
+  }, [handleDragCancel]);
+
+  const confirmTcp = async () => {
+    if (!activeRef.current || draggingRef.current || jointMotion?.busy || !jointMotion?.armed || jointMotion.jointTargetsReason) return;
     const target = targetRef.current;
-    targetRef.current = null;
-    if (!target) {
-      setPreview(null);
-      applyState();
-      setStatus(null);
-      return;
+    const targets: Record<string, number> = {};
+    let duration = 5;
+    if (target) {
+      if (!model || model instanceof Error || !tcp.name) return;
+      const result = planTrajectory({ model, tcpLink: tcp.name, jointState: jointStateRef.current,
+        controllerJointNames: controllerRef.current?.jointNames ?? [], target, seed: seedRef.current });
+      if (result.error || !result.plan) { setStatus({ kind: "error", text: result.error || "IK 未收敛" }); return; }
+      result.plan.jointNames.forEach((name, i) => { targets[name] = result.plan!.goal[i]; });
+      duration = Math.max(5, result.plan.duration);
     }
-    const current = model;
-    const controller = controllerRef.current;
-    if (!current || current instanceof Error || !tcp.name || !controller) {
-      setPreview(null);
-      applyState();
-      jointMotion?.recordLog("tcp-rejected", "轨迹控制器未激活或模型不可用，未下发轨迹", "error");
-      setStatus({ kind: "error", text: "轨迹控制器未激活，未下发轨迹" });
-      return;
-    }
-    jointMotion?.recordLog("tcp-planning", `TCP target=${JSON.stringify(target)} controller=${controller.topic}`);
-    setStatus({ kind: "info", text: `正在规划并下发轨迹到 ${controller.topic}…` });
-    // 松手时按最新反馈重算一次，保证轨迹起点不落后于真实关节状态。
-    const outcome = await dispatchTrajectory({
-      model: current,
-      tcpLink: tcp.name,
-      jointState: jointStateRef.current,
-      controllerJointNames: controller.jointNames ?? [],
-      target,
-      seed: seedRef.current,
-      send: (request) => {
-        if (!activeRef.current) return Promise.reject(new Error("Robot View 已隐藏，未下发轨迹"));
-        return sendRef.current(request);
-      },
-    });
-    setPreview({
-      target,
-      error: outcome.status === "sent" ? "" : outcome.error ?? "",
-      positionError: outcome.plan?.positionError ?? 0,
-    });
-    if (outcome.status === "sent" && outcome.plan) {
-      const plan = outcome.plan;
-      jointMotion?.recordLog("tcp-dispatch", `已发布轨迹（ACK 不表示到位）：${JSON.stringify(plan)}`);
-      // 残差不为零时一并展示，避免界面暗示夹爪精确落在了目标点上。
-      const residual = plan.positionError > 0.0005
-        ? ` / TCP 误差 ${(plan.positionError * 1000).toFixed(1)} mm`
-        : "";
-      setStatus({
-        kind: "success",
-        text: `已下发轨迹：${plan.jointNames.length} 关节 / ${plan.points.length} 点 / ${plan.duration.toFixed(2)} s${residual}`,
-      });
-      return;
-    }
-    applyState();
-    jointMotion?.recordLog("tcp-failed", outcome.error ?? "轨迹下发失败", "error");
-    setStatus({ kind: "error", text: outcome.error ?? "轨迹下发失败，未下发轨迹" });
-  }, [applyState, model, tcp.name, handleDragCancel, jointMotion?.recordLog]);
+    if (gripperTarget !== undefined) targets[GRIPPER_JOINT_NAME] = gripperTarget;
+    if (!Object.keys(targets).length) return;
+    handleDragCancel();
+    await jointMotion.executeJoints(targets, duration);
+  };
+  useEffect(() => {
+    if ((!active || jointMotion?.busy) && (draggingRef.current || tcpPendingRef.current || gripperTargetRef.current !== undefined)) handleDragCancel();
+  }, [active, jointMotion?.busy, handleDragCancel]);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape" && (tcpPendingRef.current || gripperTargetRef.current !== undefined)) handleDragCancel(); };
+    window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
+  }, [handleDragCancel]);
+  useEffect(() => { if (tcpPendingRef.current || gripperTargetRef.current !== undefined) handleDragCancel(); }, [xml, bridge]);
 
   const modelError = model instanceof Error ? model.message : "";
   const overlayError = error || modelError || tcp.error;
-  const enabled = Boolean(active && interaction === "tcp" && trajectoryController?.jointNames?.length && !trajectoryController.readinessError && tcp.name && robot && !overlayError);
-  const rotationJoints = useMemo(() => rotationalJoints(model instanceof Error ? null : model), [model]);
+  const enabled = Boolean(active && !jointMotion?.busy && interaction === "tcp" && trajectoryController?.jointNames?.length && !trajectoryController.readinessError && tcp.name && robot && !overlayError);
+  const rotationJoints = useMemo(() => rotationalJoints(model instanceof Error ? null : model).map((joint) =>
+    joint.name === GRIPPER_JOINT_NAME && jointMotion?.gripper?.supported
+      ? { ...joint, lower: Math.max(joint.lower, jointMotion.gripper.lower), upper: Math.min(joint.upper, jointMotion.gripper.upper) } : joint), [model, jointMotion?.gripper?.supported, jointMotion?.gripper?.lower, jointMotion?.gripper?.upper]);
   const rotationJoint = rotationJoints.find((joint) => joint.name === selectedJoint);
   const pickJoint = (event: ThreeEvent<MouseEvent>) => {
     if (!active || interaction !== "joint" || jointMotion?.busy || !model || model instanceof Error || event.delta > 4) return;
@@ -541,8 +541,8 @@ export function UrdfViewer({
       <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={motionInfo} />}>
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-interaction" aria-label="Robot View 操作方式">
-          <button type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("tcp"); }}>TCP 拖拽</button>
-          <button type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); setInteraction("joint"); }}>关节调整</button>
+          <button type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("tcp"); }}>TCP 拖拽</button>
+          <button type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("joint"); }}>关节调整</button>
         </div>
         {interaction === "joint" && <JointRotationPanel joints={rotationJoints} selected={selectedJoint}
           jointState={jointState} active={active && Boolean(robot) && !overlayError} motion={jointMotion} hasPreview={Boolean(jointPreview)} resetKey={jointPreviewReset}
@@ -564,11 +564,30 @@ export function UrdfViewer({
               ? preview
                 ? `拖拽中 · IK 误差 ${(preview.positionError * 1000).toFixed(1)} mm`
                 : "拖拽中…"
-              : "按住青色夹爪手柄拖拽，即可规划并下发轨迹"
+              : "按住青色夹爪手柄拖拽，松手预览，确认执行"
             : trajectoryController
               ? trajectoryController.readinessError || "等待轨迹控制器关节反馈后可拖拽 TCP"
               : "轨迹控制器激活后可拖拽 TCP 下发轨迹"}
         </div>
+        <label>夹爪（joint7）单指行程 mm
+          <input aria-label="TCP 夹爪行程 mm" type="number" step="0.1"
+            min={(jointMotion?.gripper?.lower ?? 0) * 1000} max={(jointMotion?.gripper?.upper ?? 0) * 1000}
+            disabled={!active || jointMotion?.busy || !jointMotion?.gripper?.available || !jointMotion.gripper.fresh}
+            placeholder={jointMotion?.gripper?.position === undefined ? "保持当前" : `${(jointMotion.gripper.position * 1000).toFixed(2)}（保持当前）`}
+            value={gripperText} onChange={(event) => { setGripperText(event.target.value); const value = event.target.value.trim() ? Number(event.target.value) / 1000 : undefined; if (value !== undefined && Number.isFinite(value)) robotRef.current?.setJointValue(GRIPPER_JOINT_NAME, value); else { gripperTargetRef.current = undefined; if (jointMotion?.gripper?.position !== undefined) robotRef.current?.setJointValue(GRIPPER_JOINT_NAME, jointMotion.gripper.position); } }} />
+        </label>
+        <input aria-label="TCP 夹爪行程滑块" type="range" step="0.1"
+          min={(jointMotion?.gripper?.lower ?? 0) * 1000} max={(jointMotion?.gripper?.upper ?? 0) * 1000}
+          value={Number.isFinite(gripperTarget) ? gripperTarget! * 1000 : (jointMotion?.gripper?.position ?? 0) * 1000}
+          disabled={!active || jointMotion?.busy || !jointMotion?.gripper?.available || !jointMotion.gripper.fresh}
+          onChange={(event) => { setGripperText(event.target.value); robotRef.current?.setJointValue(GRIPPER_JOINT_NAME, Number(event.target.value) / 1000); }} />
+        {jointMotion?.gripper && !jointMotion.gripper.available && <p>{jointMotion.gripper.message}</p>}
+        <label><input type="checkbox" checked={jointMotion?.armed ?? false} disabled={!jointMotion || jointMotion.busy}
+          onChange={(event) => jointMotion?.setArmed(event.target.checked)} />已确认工作区安全，允许运动</label>
+        <button type="button" disabled={!active || dragging || (!tcpPending && gripperTarget === undefined) || Boolean(preview?.error) || !jointMotion?.armed || jointMotion.busy || Boolean(jointMotion.jointTargetsReason) || (gripperTarget !== undefined && (!Number.isFinite(gripperTarget) || !jointMotion.gripper?.available || !jointMotion.gripper.fresh || gripperTarget < jointMotion.gripper.lower || gripperTarget > jointMotion.gripper.upper))}
+          onClick={() => void confirmTcp()}>确认执行</button>
+        <button type="button" disabled={!tcpPending && gripperTarget === undefined} onClick={handleDragCancel}>恢复实时</button>
+        {jointMotion?.jointTargetsReason && <p>{jointMotion.jointTargetsReason}</p>}
         {preview?.error && <div className="viewer-overlay-row error">{preview.error}</div>}
         {preview && !preview.error && dragging && (
           <div className="viewer-overlay-row">

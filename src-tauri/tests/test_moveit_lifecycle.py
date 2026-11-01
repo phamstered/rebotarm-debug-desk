@@ -95,6 +95,38 @@ class MoveitTests(unittest.TestCase):
         self.assertEqual(json.loads(self.manager.file.read_text()), self.owner)
         self.assertEqual(next(log.parent.glob('history/*')).read_text(), 'previous session')
 
+    def test_launch_identity_only_accepts_known_gripper_suffix(self):
+        args = [value.encode() for value in module.LAUNCH]
+        self.assertTrue(module.valid_launch_arguments(args))
+        for flag in [b'enable_gripper:=true', b'enable_gripper:=false']:
+            self.assertTrue(module.valid_launch_arguments(args + [flag]))
+        for flag in [b'enable_gripper:=other', b'unknown:=true']:
+            self.assertFalse(module.valid_launch_arguments(args + [flag]))
+        self.assertFalse(module.valid_launch_arguments(args + [b'enable_gripper:=true', b'enable_gripper:=true']))
+        self.assertFalse(module.valid_launch_arguments([b'/bin/sleep', b'10']))
+
+    def test_gripper_launch_adds_only_allowlisted_parameter(self):
+        self.probe.count.side_effect = [0, 1]
+        self.assertEqual(self.manager.start(self.probe, enable_gripper=True)[0], 123)
+        self.assertEqual(self.spawn.call_args.args[0], module.LAUNCH + ['enable_gripper:=true'])
+
+    def test_gripper_mapping_requires_unique_active_owner_and_both_interfaces(self):
+        from types import SimpleNamespace
+        controller = SimpleNamespace(name='gripper_trajectory_controller', state='active',
+            type='joint_trajectory_controller/JointTrajectoryController',
+            claimed_interfaces=['gripper_finger_left_joint/position', 'gripper_finger_left_joint/velocity'])
+        self.assertFalse(module.gripper_controller_enabled([]))
+        self.assertTrue(module.gripper_controller_enabled([controller]))
+        foreign = SimpleNamespace(name='teleop', state='active',
+            claimed_interfaces=['gripper_finger_left_joint/position'])
+        with self.assertRaisesRegex(ValueError, '并发'):
+            module.gripper_controller_enabled([controller, foreign])
+        controller.claimed_interfaces.pop()
+        with self.assertRaisesRegex(ValueError, '接口'):
+            module.gripper_controller_enabled([controller])
+        controller.state = 'inactive'
+        self.assertFalse(module.gripper_controller_enabled([controller]))
+
     def test_early_exit_retains_diagnostics_and_owner(self):
         self.probe.count.return_value = 0
         self.spawn.return_value.poll.return_value = 1

@@ -9,7 +9,7 @@ HELPER = Path(__file__).resolve().parents[1] / "src/arm_mode_lifecycle.sh"
 
 
 class LifecycleTests(unittest.TestCase):
-    def run_shell(self, body, *, mode=3, fault=0, controller=0, reject=0):
+    def run_shell(self, body, *, mode=3, fault=0, controller=0, reject=0, mask="63"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "phase").write_text("initial")
@@ -44,6 +44,7 @@ class LifecycleTests(unittest.TestCase):
                         fi
                         echo "status:$value" >> "$EVENTS"
                         printf 'header:\n  stamp:\n    sec: 100\n    nanosec: %s\n' "$((stamp + 1))"
+                        printf 'active_joint_mask: %s\n' "$MASK"
                         printf 'mode: %s\nfault_code: %s\nlast_command_sequence: 50\n' "$value" "$FAULT"
                     fi
                 }
@@ -55,13 +56,27 @@ class LifecycleTests(unittest.TestCase):
                 }
             '''
             env = dict(os.environ, HELPER=str(HELPER), ROOT=str(root), EVENTS=str(root / "events"),
-                       MODE=str(mode), FAULT=str(fault), CONTROLLER=str(controller), REJECT=str(reject))
+                       MODE=str(mode), FAULT=str(fault), CONTROLLER=str(controller), REJECT=str(reject), MASK=mask)
             # Sleep is simulated, but each poll still touches the filesystem.
             # The repeated-stop case polls until the fake supervisor exits;
             # 5s of wall clock is tight on a loaded CI runner.
             result = subprocess.run(["bash", "-c", mock + "\n" + body], env=env,
                                     text=True, capture_output=True, timeout=20)
             return result, (root / "events").read_text() if (root / "events").exists() else "", (root / "pid").exists()
+
+    def test_trajectory_gripper_requires_valid_fresh_presence_mask(self):
+        for mask, expected in [('63', 'false'), ('127', 'true'), ('064', 'true')]:
+            result, events, _ = self.run_shell('arm_trajectory_gripper trajectory && echo "$arm_gripper"', mask=mask)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), expected)
+            self.assertEqual(events, 'status:3\n')
+        for mask in ['', 'no', '128', '99999999999999999999999']:
+            result, _, _ = self.run_shell('arm_trajectory_gripper trajectory', mask=mask)
+            self.assertNotEqual(result.returncode, 0)
+        result, events, _ = self.run_shell('arm_trajectory_gripper vla && echo "$arm_gripper"', mask='127')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'false')
+        self.assertEqual(events, '')
 
     def test_initial_disabled_does_not_publish_or_request_hold(self):
         result, events, _ = self.run_shell("arm_safe_stop")
@@ -407,6 +422,18 @@ class LifecycleTests(unittest.TestCase):
         arm_owner_identity 123 || exit 15
         COMMAND='/usr/bin/python3 /opt/ros/humble/lib/controller_manager/spawner unrelated_controller'
         arm_owner_identity 123 && exit 16
+        COMMAND='/usr/bin/python3 /home/robot/ws/install/microros_stm32h723_bridge/lib/microros_stm32h723_bridge/stm32_state_republisher.py --ros-args -r __node:=robot_feedback_republisher'
+        arm_owner_identity 123 || exit 17
+        COMMAND='/home/robot/ws/install/microros_stm32h723_bridge/lib/microros_stm32h723_bridge/stm32_state_republisher.py --ros-args -r __node:=robot_feedback_republisher'
+        arm_owner_identity 123 || exit 18
+        OWNER=1001; arm_owner_identity 123 && exit 19
+        OWNER=1000
+        COMMAND='/usr/bin/python3 /home/robot/ws/install/other/lib/other/stm32_state_republisher.py'
+        arm_owner_identity 123 && exit 20
+        COMMAND='/usr/bin/python3 /home/robot/ws/install/microros_stm32h723_bridge/lib/microros_stm32h723_bridge/stm32_state_republisher.py.unrelated'
+        arm_owner_identity 123 && exit 21
+        COMMAND='/usr/bin/python3 /home/robot/ws/install/microros_stm32h723_bridge/lib/microros_stm32h723_bridge/stm32_state_republisherXpy'
+        arm_owner_identity 123 && exit 22
         exit 0'''
         result, _, _ = self.run_shell(body)
         self.assertEqual(result.returncode, 0, result.stderr)

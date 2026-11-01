@@ -56,5 +56,12 @@ if(BUILD_TESTING)
   target_include_directories(test_topic_json PRIVATE include)
   ament_target_dependencies(test_topic_json rclcpp std_msgs trajectory_msgs rosidl_typesupport_introspection_cpp)
   add_test(NAME topic_json COMMAND test_topic_json)
+  if(moveit_msgs_FOUND AND control_msgs_FOUND AND controller_manager_msgs_FOUND)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME gripper_motion_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gripper_motion_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(gripper_motion_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=213;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
+  endif()
 endif()
 ament_package()

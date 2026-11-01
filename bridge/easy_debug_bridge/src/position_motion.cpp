@@ -29,6 +29,7 @@ using State = control_msgs::msg::JointTrajectoryControllerState;
 using Hardware = microros_stm32h723_bridge::msg::HardwareStatus;
 using Tree = boost::property_tree::ptree;
 const std::string controller = "arm_trajectory_controller";
+const std::string gripper_controller = "gripper_trajectory_controller";
 std::string quote(const std::string &value) { return position_json_quote(value); }
 std::string numbers(const std::vector<double> &values) {
   std::ostringstream out; out << '[' << std::setprecision(17);
@@ -50,7 +51,9 @@ struct PositionMotion::Impl {
   struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; };
   struct Motion {
     uint64_t owner{}; std::string id, label, phase{"validating"}, message;
-    std::vector<double> target; Send send; Handle::SharedPtr handle;
+    std::vector<double> target; PositionMotionModel model;
+    std::vector<double> velocity_limits, acceleration_limits;
+    bool gripper{false}, plan_only{false}; GripperCalibration calibration; Send send; Handle::SharedPtr handle;
     ExecuteHandle::SharedPtr execution_handle;
     std::vector<size_t> held_axes;
     double duration{0}, recommended_duration{0};
@@ -69,10 +72,15 @@ struct PositionMotion::Impl {
   rclcpp::Client<Controllers>::SharedPtr controllers;
   std::shared_ptr<rclcpp::AsyncParametersClient> parameters;
   rclcpp::Subscription<Joints>::SharedPtr joints_sub;
-  rclcpp::Subscription<State>::SharedPtr state_sub;
+  rclcpp::Subscription<State>::SharedPtr state_sub, gripper_state_sub;
   rclcpp::Subscription<Hardware>::SharedPtr hardware_sub;
   rclcpp::TimerBase::SharedPtr timer;
-  Joints joints; State state; Hardware hardware;
+  Joints joints; State state, gripper_state; Hardware hardware;
+  Clock::time_point gripper_state_at{};
+  bool gripper_controller_active{false}, gripper_supported{false};
+  std::string gripper_error{"等待夹爪模型"};
+  GripperCalibration gripper_calibration;
+  double gripper_velocity_limit{}, gripper_acceleration_limit{};
   Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, controller_request_at{}, model_at{}, model_request_at{};
   bool controller_pending{false}, controller_active{false}, model_pending{false};
   int64_t controller_request_id{0}; uint64_t controller_generation{0}, model_generation{0};
@@ -98,6 +106,7 @@ struct PositionMotion::Impl {
     joints_sub = node.create_subscription<Joints>(joint_topic, qos, [this](Joints::ConstSharedPtr m) { joints = *m; joints_at = Clock::now(); }, options);
     hardware_sub = node.create_subscription<Hardware>(status_topic, qos, [this](Hardware::ConstSharedPtr m) { hardware = *m; hardware_at = Clock::now(); }, options);
     state_sub = node.create_subscription<State>("/" + controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { state = *m; state_at = Clock::now(); }, options);
+    gripper_state_sub = node.create_subscription<State>("/" + gripper_controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { gripper_state = *m; gripper_state_at = Clock::now(); }, options);
     timer = node.create_wall_timer(std::chrono::milliseconds(100), [this] { tick(); }, callback_group);
   }
   std::string event(const Motion &m) const {
@@ -124,12 +133,12 @@ struct PositionMotion::Impl {
       if (fresh(controller_request_at, 2)) return;
       controllers->remove_pending_request(controller_request_id);
       ++controller_generation; // Ignore a late response even if the service disappears.
-      controller_pending = false; controller_active = false; controller_at = {};
+      controller_pending = false; controller_active = false; gripper_controller_active = false; controller_at = {};
       controller_error = "arm_trajectory_controller 状态查询超时（ListControllers >2s）";
       log(0, "", "controller", controller_error, "warn");
     }
     if (!controllers->service_is_ready()) {
-      controller_active = false; controller_at = {};
+      controller_active = false; gripper_controller_active = false; controller_at = {};
       controller_error = "ControllerManager ListControllers 服务不可用";
       controller_request_at = Clock::now();
       return;
@@ -138,17 +147,28 @@ struct PositionMotion::Impl {
     const auto generation = ++controller_generation;
     controller_request_id = controllers->async_send_request(std::make_shared<Controllers::Request>(), [this, generation](rclcpp::Client<Controllers>::SharedFuture future) {
       if (generation != controller_generation) return;
-      controller_pending = false; controller_active = false;
+      controller_pending = false; controller_active = false; gripper_controller_active = false;
       const auto latency = std::chrono::duration<double>(Clock::now() - controller_request_at).count();
       if (latency > .8) log(0, "", "controller", "ListControllers 响应耗时 " + std::to_string(latency) + " s", "warn");
       try {
         controller_error = "arm_trajectory_controller 未激活、缺失或类型不匹配";
-        for (const auto &c : future.get()->controller) if (c.name == controller && c.state == "active"
-            && c.type == "joint_trajectory_controller/JointTrajectoryController") {
+        bool gripper_conflict = false;
+        size_t gripper_count = 0;
+        for (const auto &c : future.get()->controller) {
+          if (c.name == gripper_controller && c.state == "active" && c.type == "joint_trajectory_controller/JointTrajectoryController") {
+            ++gripper_count;
+            gripper_controller_active = same_motion_joints(c.claimed_interfaces,
+                {gripper_motion_joint() + "/position", gripper_motion_joint() + "/velocity"});
+          } else if (c.state == "active") {
+            for (const auto &claim : c.claimed_interfaces)
+              if (claim.rfind(gripper_motion_joint() + "/", 0) == 0) gripper_conflict = true;
+          }
+          if (c.name != controller || c.state != "active" || c.type != "joint_trajectory_controller/JointTrajectoryController") continue;
           if (!arm_position_velocity_claimed(c.claimed_interfaces))
             controller_error = "轨迹控制器必须认领六关节 position+velocity 接口，请更新控制栈并重新启用轨迹控制";
           else { controller_active = true; controller_error.clear(); }
         }
+        gripper_controller_active = gripper_controller_active && !gripper_conflict && gripper_count == 1;
         controller_at = Clock::now();
       } catch (const std::exception &e) {
         controller_at = {}; controller_error = std::string("ControllerManager 查询失败：") + e.what();
@@ -167,6 +187,12 @@ struct PositionMotion::Impl {
       keys.push_back("robot_description_planning.joint_limits." + j + ".has_velocity_limits");
       keys.push_back("robot_description_planning.joint_limits." + j + ".has_acceleration_limits");
     }
+    for (const auto &suffix : {"joints", "type", "action_ns"})
+      keys.push_back("moveit_simple_controller_manager." + gripper_controller + "." + suffix);
+    for (const auto &suffix : {"gripper_position_scale", "gripper_position_offset", "gripper_lower", "gripper_upper"})
+      keys.push_back("debug_desk." + std::string(suffix));
+    for (const auto &suffix : {"max_velocity", "max_acceleration", "has_velocity_limits", "has_acceleration_limits"})
+      keys.push_back("robot_description_planning.joint_limits." + gripper_motion_joint() + "." + suffix);
     return keys;
   }
   void poll_model() {
@@ -183,24 +209,39 @@ struct PositionMotion::Impl {
       model_pending = false;
       try {
         auto p = future.get();
-        if (p.size() != 33 || p[2].as_bool()) throw std::runtime_error("MoveIt 必须配置 moveit_manage_controllers=false");
-        if (p[3].as_string_array() != std::vector<std::string>{controller} || !arm_joint_set(p[4].as_string_array()))
-          throw std::runtime_error("MoveIt 只能配置真实 arm_trajectory_controller 六关节");
+        if (p.size() != 44 || p[2].as_bool()) throw std::runtime_error("MoveIt 必须配置 moveit_manage_controllers=false");
+        const auto configured_controllers = p[3].as_string_array();
+        const bool includes_gripper = same_motion_joints(configured_controllers, {controller, gripper_controller});
+        if ((!includes_gripper && configured_controllers != std::vector<std::string>{controller}) || !arm_joint_set(p[4].as_string_array()))
+          throw std::runtime_error("MoveIt 必须仅配置审核过的 arm/gripper 轨迹控制器");
         const auto configured_start_tolerance = p[5].as_double();
         if (!std::isfinite(configured_start_tolerance) || configured_start_tolerance <= 0 || configured_start_tolerance > 0.02)
           throw std::runtime_error("MoveIt 起点容差必须在 (0, 0.02] rad");
         if (p[6].as_string() != "moveit_simple_controller_manager/MoveItSimpleControllerManager"
             || p[7].as_string() != "FollowJointTrajectory" || p[8].as_string() != "follow_joint_trajectory")
           throw std::runtime_error("MoveIt 执行控制器 Action 配置不匹配");
-        for (size_t i = 9; i < p.size(); i += 4) {
+        for (size_t i = 9; i < 33; i += 4) {
           const double velocity = p[i].as_double(), acceleration = p[i+1].as_double();
           if (!std::isfinite(velocity) || velocity <= 0 || velocity > 1 || !std::isfinite(acceleration)
               || acceleration <= 0 || acceleration > 1 || !p[i+2].as_bool() || !p[i+3].as_bool())
             throw std::runtime_error("MoveIt 必须启用不超过 1 rad/s、1 rad/s² 的速度/加速度限幅，请使用 real_move_group.launch.py");
         }
         velocity_limits.clear(); acceleration_limits.clear();
-        for (size_t i=9;i<p.size();i+=4) { velocity_limits.push_back(p[i].as_double()); acceleration_limits.push_back(p[i+1].as_double()); }
+        for (size_t i=9;i<33;i+=4) { velocity_limits.push_back(p[i].as_double()); acceleration_limits.push_back(p[i+1].as_double()); }
         auto parsed = position_motion_model(p[0].as_string(), p[1].as_string());
+        gripper_supported = false; gripper_error = "当前 MoveIt 未配置夹爪轨迹控制";
+        if (includes_gripper) try {
+          if (p[33].as_string_array() != std::vector<std::string>{gripper_motion_joint()} ||
+              p[34].as_string() != "FollowJointTrajectory" || p[35].as_string() != "follow_joint_trajectory")
+            throw std::runtime_error("夹爪执行控制器 Action 配置不匹配");
+          GripperCalibration calibration{p[36].as_double(), p[37].as_double(), p[38].as_double(), p[39].as_double()};
+          validate_gripper_motion_model(p[0].as_string(), p[1].as_string(), calibration);
+          const double v = p[40].as_double(), a = p[41].as_double();
+          if (!p[42].as_bool() || !p[43].as_bool() || !std::isfinite(v) || v <= 0 || v > .02 || !std::isfinite(a) || a <= 0 || a > .04)
+            throw std::runtime_error("夹爪须启用不超过 0.02 m/s、0.04 m/s² 的运动限幅");
+          gripper_calibration = calibration; gripper_velocity_limit = v; gripper_acceleration_limit = a;
+          gripper_supported = true; gripper_error.clear();
+        } catch (const std::exception &e) { gripper_error = std::string("夹爪配置不可用：") + e.what(); }
         std::string signature;
         for (const auto &value : p) signature += value.value_to_string();
         if (current && !current->terminal && !model_signature.empty() && signature != model_signature)
@@ -231,6 +272,31 @@ struct PositionMotion::Impl {
       }
     } catch (const std::exception &e) { return e.what(); }
     return "";
+  }
+  std::string gripper_readiness(bool starting = true) {
+    if (!execute_action->action_server_is_ready()) return "MoveIt /execute_trajectory 未启动";
+    if (!gripper_supported || !fresh(model_at, 10) || !model_error.empty()) return gripper_error.empty() ? "夹爪模型已过期" : gripper_error;
+    if (!gripper_controller_active || !fresh(controller_at, 3.1)) return "夹爪轨迹控制器未激活或未认领 position+velocity 接口";
+    if (!fresh(gripper_state_at) || !fresh(joints_at) || !fresh(hardware_at)) return "夹爪反馈缺失或已过期";
+    if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || !(hardware.active_joint_mask & 0x40)) return "夹爪未使能、未处于 TRACK 或存在故障";
+    try {
+      if (gripper_state.joint_names != std::vector<std::string>{gripper_motion_joint()}) return "夹爪控制器关节集合不匹配";
+      const auto actual = calibrated_gripper_value(joints.name, joints.position, gripper_calibration);
+      const auto velocity = calibrated_gripper_value(joints.name, joints.velocity, gripper_calibration, true);
+      const auto control = ordered_motion_values({gripper_motion_joint()}, gripper_state.joint_names, gripper_state.actual.positions).front();
+      if (actual < gripper_calibration.lower - .001 || actual > gripper_calibration.upper + .001 || std::abs(actual - control) > .001) return "夹爪控制器与标定后的 STM32 反馈不一致或超出行程";
+      if (starting && std::abs(velocity) > .001) return "夹爪尚未停稳";
+    } catch (const std::exception &e) { return e.what(); }
+    return "";
+  }
+  std::vector<double> measured(const PositionMotionModel &motion_model, bool velocity = false, const GripperCalibration *saved = nullptr) const {
+    auto values = velocity ? joints.velocity : joints.position;
+    if (std::find(motion_model.joint_names.begin(), motion_model.joint_names.end(), gripper_motion_joint()) != motion_model.joint_names.end()) {
+      const auto converted = calibrated_gripper_value(joints.name, values, saved ? *saved : gripper_calibration, velocity);
+      const auto found = std::find(joints.name.begin(), joints.name.end(), gripper_motion_joint());
+      values[found - joints.name.begin()] = converted;
+    }
+    return ordered_motion_values(motion_model.joint_names, joints.name, values);
   }
   void request_cancel_handle(const std::shared_ptr<Motion> &m) {
     // rclcpp_action forgets completed goals. Canceling such a handle throws;
@@ -264,7 +330,9 @@ struct PositionMotion::Impl {
     const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
     const auto rotation_joint = r.data.get_optional<std::string>("joint_name");
     const auto joint_targets = r.data.get_child_optional("joint_targets");
-    const auto actual = ordered_arm_values(joints.name, joints.position);
+    const auto gripper_position = r.data.get_optional<double>("gripper_position");
+    if (gripper_position && (joint_targets || rotation_joint || r.data.get<bool>("home", false)))
+      throw std::runtime_error("gripper_position 只能与六轴 positions 一起指定");
     std::vector<std::pair<std::string, double>> edits;
     if (joint_targets) {
       if (!joint_targets->data().empty() || rotation_joint || r.data.get_child_optional("joint_position") ||
@@ -277,36 +345,51 @@ struct PositionMotion::Impl {
     if (!rotation_joint && r.data.get_child_optional("joint_position"))
       throw std::runtime_error("单关节旋转缺少 joint_name");
     if (rotation_joint) edits.emplace_back(*rotation_joint, r.data.get<double>("joint_position"));
-    auto target = joint_targets || rotation_joint ? combined_joint_target(actual, edits, model)
+    const bool has_gripper = gripper_position || std::any_of(edits.begin(), edits.end(), [](const auto &e) { return e.first == gripper_motion_joint(); });
+    const bool has_arm = !(joint_targets || rotation_joint) || std::any_of(edits.begin(), edits.end(), [](const auto &e) { return e.first != gripper_motion_joint(); });
+    if (has_gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
+    const auto motion_model = has_gripper ? gripper_motion_model(model, gripper_calibration, has_arm) : model;
+    const auto actual = measured(motion_model);
+    auto target = joint_targets || rotation_joint ? edited_motion_target(actual, edits, motion_model)
       : r.data.get<bool>("home", false) ? model.home : read_values(r.data);
+    if (gripper_position) target.push_back(*gripper_position);
     double duration = 0;
     if (r.data.get_child_optional("motion_duration_s")) {
       duration = r.data.get<double>("motion_duration_s"); validate_motion_duration(duration);
       if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
     }
-    validate_position_target(target, model);
+    validate_position_target(target, motion_model);
     auto m = std::make_shared<Motion>(); m->owner = r.owner; m->id = id;
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
     if (m->label.size() > 512) throw std::runtime_error("点位名称过长");
-    m->target = target; m->send = r.send; m->duration = duration;
+    m->target = target; m->model = motion_model; m->gripper = has_gripper; m->calibration = gripper_calibration;
+    m->velocity_limits = has_arm ? velocity_limits : std::vector<double>{};
+    m->acceleration_limits = has_arm ? acceleration_limits : std::vector<double>{};
+    if (has_gripper) { m->velocity_limits.push_back(gripper_velocity_limit); m->acceleration_limits.push_back(gripper_acceleration_limit); }
+    m->send = r.send; m->duration = duration; m->plan_only = duration > 0 || has_gripper;
+    if (m->plan_only && !execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
     current = m; in_motion.store(true);
     seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
     Group::Goal goal;
-    goal.request.group_name = "arm"; goal.request.pipeline_id = "ompl";
+    goal.request.group_name = has_gripper ? (has_arm ? "arm_with_gripper" : "gripper") : "arm"; goal.request.pipeline_id = "ompl";
     goal.request.allowed_planning_time = 5; goal.request.num_planning_attempts = 1;
     goal.request.max_velocity_scaling_factor = 1.0; goal.request.max_acceleration_scaling_factor = 1.0;
     goal.request.start_state.is_diff = true;
     goal.request.start_state.joint_state.name = arm_motion_joints();
-    goal.request.start_state.joint_state.position = actual;
+    goal.request.start_state.joint_state.position = ordered_arm_values(joints.name, joints.position);
+    if (has_gripper) {
+      goal.request.start_state.joint_state.name.push_back(gripper_motion_joint());
+      goal.request.start_state.joint_state.position.push_back(calibrated_gripper_value(joints.name, joints.position, gripper_calibration));
+    }
     goal.request.start_state.joint_state.header.stamp = node.now();
     moveit_msgs::msg::Constraints constraints;
-    for (size_t i = 0; i < 6; ++i) {
-      moveit_msgs::msg::JointConstraint c; c.joint_name = arm_motion_joints()[i]; c.position = target[i];
-      c.tolerance_above = c.tolerance_below = 0.005; c.weight = 1; constraints.joint_constraints.push_back(c);
+    for (size_t i = 0; i < motion_model.joint_names.size(); ++i) {
+      moveit_msgs::msg::JointConstraint c; c.joint_name = motion_model.joint_names[i]; c.position = target[i];
+      c.tolerance_above = c.tolerance_below = motion_goal_tolerance(c.joint_name); c.weight = 1; constraints.joint_constraints.push_back(c);
       if ((joint_targets || rotation_joint) && std::none_of(edits.begin(), edits.end(),
           [&](const auto &edit) { return edit.first == c.joint_name; })) {
         c.position = actual[i];
-        c.tolerance_above = c.tolerance_below = joint_rotation_hold_tolerance;
+        c.tolerance_above = c.tolerance_below = motion_hold_tolerance(c.joint_name);
         goal.request.path_constraints.joint_constraints.push_back(c);
         m->held_axes.push_back(i);
       }
@@ -314,7 +397,7 @@ struct PositionMotion::Impl {
     log(m->owner, m->id, "validating", m->label + " · start=" + numbers(actual) + " target=" + numbers(target) +
         " duration_s=" + std::to_string(duration) + " scaling=1/1");
     goal.request.goal_constraints.push_back(constraints);
-    goal.planning_options.plan_only = duration > 0; goal.planning_options.replan = false;
+    goal.planning_options.plan_only = m->plan_only; goal.planning_options.replan = false;
     goal.planning_options.planning_scene_diff.is_diff = true;
     goal.planning_options.planning_scene_diff.robot_state.is_diff = true;
     r.send("{\"op\":\"position_move_ack\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
@@ -329,7 +412,7 @@ struct PositionMotion::Impl {
     };
     options.feedback_callback = [this, m](Handle::SharedPtr, const std::shared_ptr<const Group::Feedback> f) {
       if (m->terminal || m->cancel_requested) return;
-      const bool executing = m->duration == 0 && (f->state.find("MONITOR") != std::string::npos || f->state.find("EXECUT") != std::string::npos);
+      const bool executing = !m->plan_only && (f->state.find("MONITOR") != std::string::npos || f->state.find("EXECUT") != std::string::npos);
       update(m, executing ? "executing" : "planning", "MoveIt：" + f->state);
     };
     options.result_callback = [this, m](const Handle::WrappedResult &result) {
@@ -337,7 +420,7 @@ struct PositionMotion::Impl {
       log(m->owner, m->id, "result", "MoveGroup result=" + std::to_string(static_cast<int>(result.code)) +
           " error_code=" + std::to_string(result.result ? result.result->error_code.val : 0) +
           " points=" + std::to_string(result.result ? result.result->planned_trajectory.joint_trajectory.points.size() : 0));
-      if (m->duration > 0 && !m->cancel_requested && result.code == rclcpp_action::ResultCode::SUCCEEDED &&
+      if (m->plan_only && !m->cancel_requested && result.code == rclcpp_action::ResultCode::SUCCEEDED &&
           result.result && result.result->error_code.val == 1) {
         try { execute_plan(m, result.result->planned_trajectory); }
         catch (const std::exception &e) { update(m, "failed", e.what(), true); }
@@ -379,34 +462,36 @@ struct PositionMotion::Impl {
     if (!reason.empty()) throw std::runtime_error(reason);
     if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，未执行规划轨迹");
     if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
-    if (!arm_joint_set(plan.joint_trajectory.joint_names) || !plan.multi_dof_joint_trajectory.points.empty() ||
-        !plan.multi_dof_joint_trajectory.joint_names.empty()) throw std::runtime_error("规划轨迹必须仅包含 arm 六关节");
+    if (m->gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
+    if (!same_motion_joints(plan.joint_trajectory.joint_names, m->model.joint_names) || !plan.multi_dof_joint_trajectory.points.empty() ||
+        !plan.multi_dof_joint_trajectory.joint_names.empty()) throw std::runtime_error("规划轨迹关节集合与请求不匹配");
     const auto &names = plan.joint_trajectory.joint_names;
     if (plan.joint_trajectory.points.size() < 2 || plan.joint_trajectory.points.size() > 10000)
       throw std::runtime_error("规划轨迹点数无效");
     std::vector<TimedMotionPoint> points;
     for (const auto &point : plan.joint_trajectory.points) {
       if (point.time_from_start.nanosec >= 1000000000) throw std::runtime_error("规划轨迹时间无效");
-      points.push_back({ordered_arm_values(names, point.positions),
-          point.velocities.empty() ? std::vector<double>{} : ordered_arm_values(names, point.velocities),
-          point.accelerations.empty() ? std::vector<double>{} : ordered_arm_values(names, point.accelerations),
-          point.effort.empty() ? std::vector<double>{} : ordered_arm_values(names, point.effort),
+      points.push_back({ordered_motion_values(m->model.joint_names, names, point.positions),
+          point.velocities.empty() ? std::vector<double>{} : ordered_motion_values(m->model.joint_names, names, point.velocities),
+          point.accelerations.empty() ? std::vector<double>{} : ordered_motion_values(m->model.joint_names, names, point.accelerations),
+          point.effort.empty() ? std::vector<double>{} : ordered_motion_values(m->model.joint_names, names, point.effort),
           static_cast<int64_t>(point.time_from_start.sec) * 1000000000 + point.time_from_start.nanosec});
     }
     if (!points.empty()) { m->recommended_duration=points.back().time_ns/1e9; update(m,"planning","MoveIt 推荐运动时长："+std::to_string(m->recommended_duration)+" 秒（仅供参考）"); }
-    points = stretch_motion(std::move(points), m->duration, model, velocity_limits, acceleration_limits);
-    const auto actual = ordered_arm_values(joints.name, joints.position);
-    for (size_t i = 0; i < 6; ++i) {
-      if (std::abs(points.front().positions[i] - actual[i]) > start_tolerance)
+    if (m->duration == 0) m->duration = m->recommended_duration;
+    points = stretch_motion(std::move(points), m->duration, m->model, m->velocity_limits, m->acceleration_limits);
+    const auto actual = measured(m->model, false, &m->calibration);
+    for (size_t i = 0; i < m->model.joint_names.size(); ++i) {
+      if (std::abs(points.front().positions[i] - actual[i]) > (m->model.joint_names[i] == gripper_motion_joint() ? .001 : start_tolerance))
         throw std::runtime_error("规划后实测起点已变化，请重新规划");
-      if (std::abs(points.back().positions[i] - m->target[i]) > .005 + 1e-9)
+      if (std::abs(points.back().positions[i] - m->target[i]) > motion_goal_tolerance(m->model.joint_names[i]) + 1e-9)
         throw std::runtime_error("规划轨迹终点与目标不匹配");
     }
     for (const auto &point : points) for (const auto i : m->held_axes)
-      if (std::abs(point.positions[i] - m->target[i]) > joint_rotation_hold_tolerance + 1e-9)
+      if (std::abs(point.positions[i] - m->target[i]) > motion_hold_tolerance(m->model.joint_names[i]) + 1e-9)
         throw std::runtime_error("规划轨迹不满足未编辑关节的保持约束");
     Execute::Goal goal;
-    goal.trajectory.joint_trajectory.joint_names = arm_motion_joints();
+    goal.trajectory.joint_trajectory.joint_names = m->model.joint_names;
     goal.trajectory.joint_trajectory.header.frame_id = plan.joint_trajectory.header.frame_id;
     for (const auto &point : points) {
       trajectory_msgs::msg::JointTrajectoryPoint out;
@@ -442,6 +527,15 @@ struct PositionMotion::Impl {
       if (current && current->owner == r.owner && !current->terminal) current->lease_at = Clock::now();
       const auto reason = readiness();
       const bool home = fresh(model_at, 10) && model.home.size() == 6 && model_error.empty();
+      const auto gripper_reason = reason.empty() ? gripper_readiness() : reason;
+      std::string gripper_sample;
+      if (gripper_supported && fresh(model_at, 10) && model_error.empty() && fresh(joints_at)) try {
+        const auto position = calibrated_gripper_value(joints.name, joints.position, gripper_calibration);
+        if (position >= gripper_calibration.lower - 1e-8 && position <= gripper_calibration.upper + 1e-8) {
+          std::ostringstream value; value << std::setprecision(17) << position;
+          gripper_sample = value.str();
+        }
+      } catch (...) {}
       const auto after = r.data.get<std::string>("motion_log_session", "") == log_session ? r.data.get<uint64_t>("motion_log_after", 0) : 0;
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
@@ -449,6 +543,13 @@ struct PositionMotion::Impl {
           ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
+          ",\"gripper_supported\":" + (gripper_supported && home ? "true" : "false") +
+          ",\"gripper_available\":" + (gripper_reason.empty() ? "true" : "false") +
+          ",\"gripper_message\":" + quote(gripper_reason) + ",\"gripper_joint_name\":" + quote(gripper_motion_joint()) +
+          ",\"gripper_lower\":" + std::to_string(gripper_calibration.lower) + ",\"gripper_upper\":" + std::to_string(gripper_calibration.upper) +
+          ",\"gripper_feedback_age_ms\":" + std::to_string(gripper_sample.empty() ? 1000. : std::chrono::duration<double, std::milli>(Clock::now() - joints_at).count()) +
+          ",\"gripper_feedback_fresh\":" + (gripper_sample.empty() ? "false" : "true") +
+          (gripper_sample.empty() ? "" : ",\"gripper_position\":" + gripper_sample) +
           ",\"home_positions\":" + (home ? numbers(model.home) : "[]") +
           ",\"motion_log_session\":" + quote(log_session) + "," + logs.page(r.owner, after) + "}");
       if (current && current->owner == r.owner) r.send(event(*current));
@@ -480,7 +581,8 @@ struct PositionMotion::Impl {
     const auto m = current;
     if (!m || m->terminal) return;
     if (!m->cancel_requested) {
-      const auto reason = readiness(false);
+      auto reason = readiness(false);
+      if (reason.empty() && m->gripper) reason = gripper_readiness(false);
       if (!reason.empty()) cancel(m, reason + "，已请求取消");
       if (!fresh(m->started, std::max(180.,m->duration+60.))) cancel(m, "运动超时，已请求取消");
       if (!fresh(m->lease_at, 5)) cancel(m, "会话心跳超过 5 秒，已请求取消");
@@ -488,16 +590,18 @@ struct PositionMotion::Impl {
     if (m->cancel_requested && !fresh(m->cancel_at, 5) && m->phase != "stop_failed")
       update(m, "stop_failed", "停止未确认；保留控制进程，请检查现场并使用既有安全停机入口");
     if (!m->result_at.time_since_epoch().count() || !fresh(joints_at) || joints_at < m->result_at) return;
+    if (m->gripper && (!fresh(gripper_state_at) || gripper_state_at < m->result_at)) return;
     try {
-      const auto actual = ordered_arm_values(joints.name, joints.position), velocity = ordered_arm_values(joints.name, joints.velocity);
-      const bool stopped = std::all_of(velocity.begin(), velocity.end(), [](double v) { return std::abs(v) <= 0.03; });
-      const bool reached = position_target_reached(m->target, actual, velocity);
+      const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
+      // A gripper-only goal still requires the complete arm to be stopped before releasing the shared motion lock.
+      const bool stopped = motion_stopped(m->model.joint_names, velocity) && motion_stopped(arm_motion_joints(), ordered_arm_values(joints.name, joints.velocity));
+      const bool reached = stopped && motion_target_reached(m->model.joint_names, m->target, actual, velocity);
       if (((m->cancel_requested || m->failed_result) && stopped) || (m->phase == "verifying" && reached)) {
         if (m->settled_at == Clock::time_point{}) m->settled_at = Clock::now();
         if (!fresh(m->settled_at, 0.2)) {
           log(m->owner, m->id, "feedback", "target=" + numbers(m->target) + " actual=" + numbers(actual) + " velocity=" + numbers(velocity));
           update(m, m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
-            m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）", true);
+            m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->gripper ? "已到达目标（机械臂误差 ≤0.02 rad、夹爪误差 ≤1 mm，已停稳）" : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）"), true);
         }
       } else {
         m->settled_at = {};

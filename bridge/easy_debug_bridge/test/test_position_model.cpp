@@ -13,6 +13,33 @@ int main() {
   for(int i=6;i>=1;--i) srdf+="<joint name='joint"+std::to_string(i)+"' value='"+std::to_string(i*.1)+"'/>";
   srdf+="</group_state></robot>";
   const auto model=position_motion_model(urdf,srdf);
+  const GripperCalibration calibration{-.008612826752, .004282757541, 0, .05};
+  auto gripper_urdf = urdf;
+  gripper_urdf.insert(gripper_urdf.find("</robot>"),
+      "<joint name='gripper_finger_left_joint' type='prismatic'><limit lower='0' upper='0.0715'/></joint>");
+  auto gripper_srdf = srdf;
+  std::string groups = "<group name='gripper'><joint name='gripper_finger_left_joint'/></group><group name='arm_with_gripper'>";
+  for (const auto &name : arm_motion_joints()) groups += "<joint name='" + name + "'/>";
+  groups += "<joint name='gripper_finger_left_joint'/></group>";
+  gripper_srdf.insert(gripper_srdf.find("</robot>"), groups);
+  validate_gripper_motion_model(gripper_urdf, gripper_srdf, calibration);
+  const auto rejects_gripper = [&](std::string u, std::string s) {
+    try { validate_gripper_motion_model(u, s, calibration); } catch (...) { return true; } return false;
+  };
+  assert(rejects_gripper(urdf, gripper_srdf));
+  assert(rejects_gripper(gripper_urdf, srdf));
+  auto malformed = gripper_urdf;
+  malformed.replace(malformed.find("type='prismatic'"), 16, "type='revolute'");
+  assert(rejects_gripper(malformed, gripper_srdf));
+  malformed = gripper_urdf;
+  malformed.replace(malformed.find("upper='0.0715'"), 14, "upper='0.01'");
+  assert(rejects_gripper(malformed, gripper_srdf));
+  malformed = gripper_urdf;
+  malformed.insert(malformed.find("<limit lower='0'"), "<mimic joint='joint1'/>");
+  assert(rejects_gripper(malformed, gripper_srdf));
+  malformed = gripper_srdf;
+  malformed.insert(malformed.find("<group name='gripper'>"), groups);
+  assert(rejects_gripper(gripper_urdf, malformed));
   for(size_t i=0;i<6;++i) assert(std::abs(model.home[i]-(i+1)*.1)<1e-8);
   const auto rejects=[&](std::string u,std::string s) { try { position_motion_model(u,s); } catch (...) { return true; } return false; };
   assert(rejects(urdf,"<robot/>"));

@@ -3,7 +3,7 @@
     <p id="rdd-tcp-title" class="rdd-diagram__title">TCP 拖拽轨迹 · IK 与下发</p>
     <p id="rdd-tcp-desc" class="rdd-diagram__sr">
       需有 active JointTrajectoryController 才开放拖拽；逐帧位置 IK，残差超过 5 mm 拒发；
-      松手经 Bridge 校验后下发 JointTrajectory，由控制器执行。
+      松手保留预览，确认后经 Bridge 校验并由 MoveIt 规划执行，可附带独立夹爪目标。
     </p>
 
     <div class="rdd-steps" aria-hidden="true">
@@ -50,15 +50,15 @@
         <div class="rdd-branch__arm">
           <span class="rdd-branch__label rdd-branch__label--ok">是</span>
           <div class="rdd-step rdd-step--ok">
-            <strong>松手下发 JointTrajectory</strong>
-            <small>Bridge 白名单校验 → 控制器执行</small>
+            <strong>松手预览 → 确认执行</strong>
+            <small>Bridge 安全门 → MoveIt 规划与执行</small>
           </div>
         </div>
       </div>
     </div>
 
     <p class="rdd-diagram__caption">
-      仅向以 <code>/joint_trajectory</code> 结尾且已有订阅者的 Topic 发布；时长按最大关节位移在 0.4–6 s 估算。
+      夹爪（joint7）使用 mm 行程输入；统一运动任务支持取消，Action 成功后再核对实测到位与停稳。
     </p>
   </figure>
 </template>

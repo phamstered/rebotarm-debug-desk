@@ -20,6 +20,7 @@ arm_status() {
         return 1
     }
     arm_mode=$(awk '/^mode:/ {print $2; exit}' <<<"$sample")
+    arm_mask=$(awk '/^active_joint_mask:/ {print $2; exit}' <<<"$sample")
     arm_fault=$(awk '/^fault_code:/ {print $2; exit}' <<<"$sample")
     arm_sequence=$(awk '/^last_command_sequence:/ {print $2; exit}' <<<"$sample")
     arm_stamp_sec=$(awk '/^    sec:/ {print $2; exit}' <<<"$sample")
@@ -37,6 +38,19 @@ arm_status() {
         echo "STM32 fault_code=$arm_fault mode=$arm_mode; refusing arm-mode change." >&2
         return 1
     fi
+}
+
+# Hardware presence is read again after safe cleanup. Invalid/missing masks must
+# never silently opt into a seventh motor. VLA keeps its existing six-axis path.
+arm_trajectory_gripper() {
+    arm_gripper=false
+    [[ "${1:-trajectory}" != vla ]] || return 0
+    arm_status || return 1
+    if [[ ! "$arm_mask" =~ ^[0-9]{1,3}$ ]] || (( 10#$arm_mask > 127 )); then
+        echo "Missing/invalid active_joint_mask; cannot select calibrated gripper mode." >&2
+        return 1
+    fi
+    if (( (10#$arm_mask & 64) != 0 )); then arm_gripper=true; fi
 }
 
 # No retained sample or sequence drop proves a reboot. Recovery requires three
@@ -229,7 +243,7 @@ owns_ros2() {
 # Check only arm command owners in this ROS domain. Unknown/unreadable owners
 # block startup; do not force-kill arbitrary ROS processes to claim cleanliness.
 arm_owner_pattern='^((/usr/bin/python3( -u)? )?(/opt/ros/humble/lib/[c]ontroller_manager/ros2_control_node|/[^ ]*/joint_state_relay/(relay_node|leader_driver)|/[^ ]*/[r]obo_driver/driver)|bash [^ ]*/scripts/start_arm_teleop.sh|/usr/bin/python3 /opt/ros/humble/bin/ros2 launch (microros_stm32h723_bridge stm32h723_arm.launch.py|joint_state_relay relay_to_microros_arm.launch.py))( |$)'
-arm_launch_child_pattern='^(/opt/ros/humble/lib/[r]obot_state_publisher/robot_state_publisher|(/usr/bin/python3 )?/opt/ros/humble/lib/[c]ontroller_manager/spawner (joint_state_broadcaster|gravity_compensation_controller|joint4_calibration_controller|arm_trajectory_controller|arm_teleop_controller|gripper_teleop_controller|vla_position_controller))( |$)'
+arm_launch_child_pattern='^(/opt/ros/humble/lib/[r]obot_state_publisher/robot_state_publisher|(/usr/bin/python3 )?/[^ ]*/microros_stm32h723_bridge/stm32_state_republisher[.]py|(/usr/bin/python3 )?/opt/ros/humble/lib/[c]ontroller_manager/spawner (joint_state_broadcaster|gravity_compensation_controller|joint4_calibration_controller|arm_trajectory_controller|arm_teleop_controller|gripper_teleop_controller|gripper_trajectory_controller|vla_position_controller))( |$)'
 
 arm_owner_identity() {
     local command owner started

@@ -1,3 +1,4 @@
+import { GRIPPER_JOINT_NAME } from "./positionLogic";
 import type { KinematicJoint, KinematicModel } from "./kinematicsLogic";
 
 export type JointRotationPreview = Record<string, number>;
@@ -6,7 +7,7 @@ export const degreesToRadians = (value: number) => value * Math.PI / 180;
 
 export function rotationalJoints(model: KinematicModel | null): KinematicJoint[] {
   return (model?.joints ?? []).filter((joint) =>
-    (joint.type === "revolute" || joint.type === "continuous") && !joint.mimic &&
+    (joint.type === "revolute" || joint.type === "continuous" || (joint.type === "prismatic" && joint.name === GRIPPER_JOINT_NAME)) && !joint.mimic &&
     joint.axis.every(Number.isFinite) && Math.hypot(...joint.axis) > 1e-9);
 }
 
@@ -16,6 +17,8 @@ export function pickedRotationJoint(model: KinematicModel, ancestorNames: string
   for (const name of ancestorNames) {
     const found = joints.find((joint) => joint.child === name || joint.name === name);
     if (found) return found.name;
+    const mimic = model.joints.find((joint) => joint.child === name || joint.name === name)?.mimic;
+    if (mimic === GRIPPER_JOINT_NAME && joints.some((joint) => joint.name === mimic)) return mimic;
   }
   return null;
 }
@@ -28,9 +31,12 @@ export function jointFeedback(names: string[] | undefined, positions: number[] |
 
 export function rotationInput(joint: KinematicJoint, text: string): { position?: number; error: string } {
   const degrees = text.trim() ? Number(text) : NaN;
-  const position = degreesToRadians(degrees);
-  if (!Number.isFinite(position)) return { error: "请输入有效的目标角度" };
+  const position = joint.type === "prismatic" ? degrees / 1000 : degreesToRadians(degrees);
+  if (!Number.isFinite(position)) return { error: joint.type === "prismatic" ? "请输入有效的目标行程" : "请输入有效的目标角度" };
   if (joint.type !== "continuous" && (position < joint.lower - 1e-10 || position > joint.upper + 1e-10))
-    return { error: "目标角度超过 URDF 关节限位" };
+    return { error: joint.type === "prismatic" ? "目标行程超过标定或 URDF 关节限位" : "目标角度超过 URDF 关节限位" };
   return { position: joint.type === "continuous" ? position : Math.min(joint.upper, Math.max(joint.lower, position)), error: "" };
 }
+
+export const jointDisplayValue = (joint: KinematicJoint, value: number) => joint.type === "prismatic" ? value * 1000 : radiansToDegrees(value);
+export const jointUnit = (joint: KinematicJoint) => joint.type === "prismatic" ? "mm" : "°";
