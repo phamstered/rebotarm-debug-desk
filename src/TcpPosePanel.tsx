@@ -51,7 +51,7 @@ export function TcpPosePanel({
         </select>
       </label>
       <p>
-        红 X · 绿 Y · 蓝 Z；箭头平移，圆环旋转。数值相对 {frameId || "基座"}。
+        青色球快速拖动位置；红 X · 绿 Y · 蓝 Z 箭头、旋转圆环及 XYZ/RPY 数值用于微调。数值相对 {frameId || "基座"}。
       </p>
       <div className="tcp-pose-values">
         {["X", "Y", "Z", "Roll", "Pitch", "Yaw"].map((label, i) => (

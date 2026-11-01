@@ -61,7 +61,7 @@ Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐
 
 行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 
-位置页支持保存点位及点击执行：Status 的 Trajectory 一键启动会在真实轨迹控制器与重力补偿自检通过后启动 MoveIt；已有轨迹控制器时，也可在位置页点击“启动 MoveIt”。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置和可选夹爪（joint7）目标；HOME 从当前 SRDF 同步并保持夹爪当前开度，支持取消和实际到位确认。Robot View 的关节调整与 TCP 预览也通过同一运动入口执行；TCP 使用 XYZ 平移箭头与 RPY 旋转圆环（支持基座/工具坐标），也可输入 mm/度；松手保留位姿预览，点击确认后以完整 Pose 目标交给 MoveIt 执行。夹爪需要配套控制栈的独立轨迹控制器和标定配置。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
+位置页支持保存点位及点击执行：Status 的 Trajectory 一键启动会在真实轨迹控制器与重力补偿自检通过后启动 MoveIt；已有轨迹控制器时，也可在位置页点击“启动 MoveIt”。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置和可选夹爪（joint7）目标；HOME 从当前 SRDF 同步并保持夹爪当前开度，支持取消和实际到位确认。Robot View 的关节调整与 TCP 预览也通过同一运动入口执行；TCP 保留青色球自由拖拽快速定位，使用 XYZ 平移箭头与 RPY 旋转圆环（支持基座/工具坐标）或输入 mm/度微调；松手保留位姿预览，点击确认后以完整 Pose 目标交给 MoveIt 执行。夹爪需要配套控制栈的独立轨迹控制器和标定配置。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
 
 运动不连贯或低速抖动时，可使用 [只读运动监控脚本](docs/motion-diagnostics.md) 在 Jetson 记录规划轨迹、JTC 参考/实际反馈与 STM32 指令，并离线分析；不改变控制器或电机状态。
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   Group,
+  Plane,
   Quaternion,
   Vector2,
   Vector3,
@@ -54,6 +55,8 @@ export function installTcpPosePointerHandlers({
     point: Vector3;
     parameter: number;
     radial: Vector3 | null;
+    plane: Plane | null;
+    planeStart: Vector3 | null;
   } | null = null;
   const ray = (event: PointerEvent) => {
     const rect = element.getBoundingClientRect();
@@ -85,25 +88,29 @@ export function installTcpPosePointerHandlers({
     if (
       event.target !== element ||
       event.button !== 0 ||
+      drag ||
       !getState().enabled ||
       !currentGroup
     )
       return;
     ray(event);
-    const hit = raycaster
-      .intersectObject(currentGroup, true)
-      .find((item) => item.object.userData.axisIndex !== undefined);
+    const hits = raycaster.intersectObject(currentGroup, true);
+    // The visible center sphere wins when a foreshortened axis overlaps it.
+    const hit = hits.find((item) => item.object.userData.freeDrag)
+      ?? hits.find((item) => item.object.userData.axisIndex !== undefined);
     if (!hit) return;
-    const { axisIndex, rotation } = hit.object.userData as {
-      axisIndex: number;
-      rotation: boolean;
-    };
+    const { axisIndex = 0, rotation = false, freeDrag = false } = hit.object.userData;
     const start = getState().pose,
       axis = new Vector3(...TCP_AXES[axisIndex]);
     if (getState().frame === "tool")
       axis.applyQuaternion(new Quaternion(...start.orientation));
     axis.applyQuaternion(ROOT_ROTATION);
     const point = new Vector3(...start.position).applyQuaternion(ROOT_ROTATION);
+    // Freeze the camera-facing plane and click offset for the entire free drag.
+    const plane = freeDrag
+      ? new Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new Vector3()), point)
+      : null;
+    const planeStart = plane ? raycaster.ray.intersectPlane(plane, new Vector3()) : null;
     const parameter = axisRayParameter(
       raycaster.ray.origin,
       raycaster.ray.direction,
@@ -117,7 +124,7 @@ export function installTcpPosePointerHandlers({
       point,
       axis,
     );
-    if (rotation ? !radial : parameter === null) return;
+    if (freeDrag ? !planeStart : rotation ? !radial : parameter === null) return;
     stop(event);
     element.setPointerCapture(event.pointerId);
     drag = {
@@ -130,6 +137,8 @@ export function installTcpPosePointerHandlers({
       point,
       parameter: parameter ?? 0,
       radial,
+      plane,
+      planeStart,
     };
     getState().onDragStart();
   };
@@ -137,6 +146,16 @@ export function installTcpPosePointerHandlers({
     if (!drag || event.pointerId !== drag.id) return;
     stop(event);
     ray(event);
+    if (drag.plane && drag.planeStart) {
+      const hit = raycaster.ray.intersectPlane(drag.plane, new Vector3());
+      if (!hit) return;
+      const delta = hit.sub(drag.planeStart).applyQuaternion(ROOT_ROTATION.clone().invert());
+      getState().onDragMove({
+        position: new Vector3(...drag.start.position).add(delta).toArray(),
+        orientation: [...drag.start.orientation],
+      });
+      return;
+    }
     let amount: number;
     if (drag.rotation) {
       const radial = rayRingVector(
@@ -292,6 +311,10 @@ export function TcpPoseHandle({
   }, [enabled]);
   return (
     <group ref={group} name="tcp-six-axis-handle">
+      <mesh name="tcp-free-drag-sphere" userData={{ freeDrag: true }} renderOrder={10}>
+        <sphereGeometry args={[0.22, 24, 16]} />
+        <meshBasicMaterial color={enabled ? "#22d3ee" : "#4b6472"} depthTest={false} transparent opacity={0.85} />
+      </mesh>
       {TCP_AXES.map((_, i) => (
         <group key={i}>
           <group quaternion={rotations[i].arrow}>

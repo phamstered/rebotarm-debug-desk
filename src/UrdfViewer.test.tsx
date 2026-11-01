@@ -24,7 +24,7 @@ describe("Robot View lifecycle", () => {
     view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, readinessError: "无法读取轨迹控制器反馈：类型未安装" }} />);
     expect(screen.getByText("无法读取轨迹控制器反馈：类型未安装")).toBeVisible();
     view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, jointNames: ["j1"] }} />);
-    await waitFor(() => expect(screen.getByText("拖动 XYZ 箭头或旋转圆环，松手预览，确认执行")).toBeVisible());
+    await waitFor(() => expect(screen.getByText("拖动青色球快速定位，XYZ/RPY 微调；松手预览，确认执行")).toBeVisible());
     expect(props.onSendTrajectory).not.toHaveBeenCalled();
   });
   it("preserves the scene and canvas across navigation, pauses frames and applies fresh feedback on return", async () => {

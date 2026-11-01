@@ -184,7 +184,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 - Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先；留空时优先选择 tool0/tcp/ee_link 等工具坐标系，其次选择 gripper/flange 等稳定 link，可以是带手指子 link 的夹爪基座，不因手指层级更深就选到 finger/jaw。无命名工具 link 时回退到最深叶子 link。视图显示实际使用的 link；rebotarm 默认选择 `gripper_link`。
 - 仅当 `/controller_manager` 存在 active 的轨迹控制器时开放拖拽；识别规则为类型 `joint_trajectory_controller/JointTrajectoryController` 优先、名称含 traj 次之。ROS Control 列表会用“轨迹”标记对应 Controller，Robot View 右上角显示其名称和 `/…/joint_trajectory` Topic。
-- TCP 目标使用红 X、绿 Y、蓝 Z 平移箭头及旋转圆环，保持屏幕尺寸；可选基座轴或随工具旋转的轴。平移保持目标姿态，旋转保持目标位置；抓取手柄时暂停轨道相机，其他位置仍可移动相机。Esc、丢失指针捕获、隐藏视图、模型/TCP/连接变化均取消预览并恢复实测姿态。
+- TCP 目标保留青色中心球：在固定的相机平面内自由拖动，用于快速定位，保持目标姿态且抓取偏移不跳变。红 X、绿 Y、蓝 Z 平移箭头、旋转圆环和 XYZ/RPY 数值用于微调，均保持屏幕尺寸；可选基座轴或随工具旋转的轴，中心球始终按相机平面移动。平移保持目标姿态，旋转保持目标位置；抓取手柄时暂停轨道相机，其他位置仍可移动相机。Esc、丢失指针捕获、隐藏视图、模型/TCP/连接变化均取消预览并恢复实测姿态。
 - 拖拽过程按帧求位置逆解：有限差分雅可比 + 自适应阻尼最小二乘，关节限位钳制，单次下降卡住时做确定性随机重启。同时求解位置与姿态，保留关节限位、自适应阻尼和确定性重启；只有位置误差 ≤5 mm 且姿态角误差 ≤0.02 rad 才允许确认，界面分别显示 mm/度残差。
 - 自动订阅 active 控制器的 `controller_state`（旧版本兼容 `state`）读取实际 `joint_names`，按该列表与顺序生成轨迹，不再把 JointState 中额外的手指关节发给只控制 joint1–6 的机械臂控制器。未收到有效列表时手柄不可拖拽，订阅失败显示具体错误。TCP 链含有控制器不接收的关节时拒绝规划并提示检查 TCP link。
 - 正运动学和逆解保留 TCP 链上的 fixed joint 与工具偏移；控制器负责但不在 TCP 链上的关节保持当前反馈，其他反馈关节不进入轨迹且不被预览改写。反馈位置缺失、非有限值或关节名重复时拒绝规划，不以零补齐。拖拽期间预览位姿不被实时 JointState 覆盖。
