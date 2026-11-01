@@ -14,6 +14,7 @@ import time
 import rclpy
 from geometry_msgs.msg import TransformStamped
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.utilities import get_rmw_implementation_identifier
 from sensor_msgs.msg import Image, CameraInfo
 from test_clock_sync_ros import ClockRobot, BinaryWebSocket
 from test_gripper_motion_ros import wait_for
@@ -134,6 +135,29 @@ def main(binary):
                     assert message['tf_ok'] and abs(message['pose']['translation']['x']-expected_x)<1e-5, message
 
             subscribe(ws, 'first')
+            # Independent executors on one Context still share a Fast DDS
+            # participant. Image ingress must use a separate Context/participant.
+            def rgbd_endpoints(topic):
+                return [endpoint for endpoint in robot.get_subscriptions_info_by_topic(topic)
+                        if endpoint.node_name == 'easy_debug_rgbd_receiver']
+            endpoints = []
+            for topic in ('/clock_test/rgb', '/clock_test/depth', '/clock_test/info'):
+                matched = wait_for(lambda topic=topic: rgbd_endpoints(topic))
+                assert len(matched) == 1, (topic, matched)
+                endpoints.extend(matched)
+            if get_rmw_implementation_identifier().startswith('rmw_fastrtps'):
+                def control_endpoint():
+                    return [endpoint for endpoint in robot.get_publishers_info_by_topic('/stm32/joint_commands')
+                            if endpoint.node_name == 'easy_debug_bridge']
+                control = wait_for(control_endpoint)
+                assert len(control) == 1, control
+                control_prefix = bytes(control[0].endpoint_gid[:12])
+                image_prefixes = [bytes(endpoint.endpoint_gid[:12]) for endpoint in endpoints]
+                assert len(control_prefix) == 12 and any(control_prefix), control_prefix
+                assert all(len(prefix) == 12 and any(prefix) for prefix in image_prefixes), image_prefixes
+                assert len(set(image_prefixes)) == 1, image_prefixes
+                assert all(prefix != control_prefix for prefix in image_prefixes), (
+                    'RGBD ingress shares the control DDS participant', control_prefix, image_prefixes)
             wait_for(lambda: (ws.request('clock_sync_info'), bool(ws.rgbd))[1])
             for delay in (.08, .12):
                 robot.tf_delay = delay
