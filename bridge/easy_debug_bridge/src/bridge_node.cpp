@@ -376,9 +376,19 @@ class BridgeNode : public rclcpp::Node {
     tf_context_ = make_tf_context(0);
     // Humble Fast DDS waitsets must not race subscription destruction. Only
     // this private executor sees RGBD subscriptions; it also owns their updates.
-    rgbd_receive_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
-    rgbd_receiver_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
-    rgbd_receiver_executor_->add_callback_group(rgbd_receive_group_, get_node_base_interface());
+    // An executor alone does not isolate DDS ingress: large image fragments and
+    // reliable TF otherwise share one Fast DDS participant/socket receive path.
+    rgbd_receiver_context_ = std::make_shared<rclcpp::Context>();
+    auto receiver_init = get_node_base_interface()->get_context()->get_init_options();
+    receiver_init.set_domain_id(get_node_base_interface()->get_context()->get_domain_id());
+    rgbd_receiver_context_->init(0, nullptr, receiver_init);
+    rgbd_receiver_node_ = std::make_shared<rclcpp::Node>(
+        "easy_debug_rgbd_receiver", rclcpp::NodeOptions().context(rgbd_receiver_context_).use_global_arguments(false));
+    rgbd_receive_group_ = rgbd_receiver_node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+    rclcpp::ExecutorOptions receiver_options;
+    receiver_options.context = rgbd_receiver_context_;
+    rgbd_receiver_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>(receiver_options);
+    rgbd_receiver_executor_->add_callback_group(rgbd_receive_group_, rgbd_receiver_node_->get_node_base_interface());
     clock_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions safety_options;
     safety_options.callback_group = clock_callback_group_;
@@ -442,6 +452,10 @@ class BridgeNode : public rclcpp::Node {
     rgbd_receiver_stop_.store(true);
     if (rgbd_receiver_.joinable()) rgbd_receiver_.join();
     retired_rgbd_.clear();
+    rgbd_receiver_executor_.reset();
+    rgbd_receive_group_.reset();
+    rgbd_receiver_node_.reset();
+    rgbd_receiver_context_->shutdown("RGBD receiver stopped");
   }
 
   int port() const { return port_; }
@@ -1510,17 +1524,17 @@ class BridgeNode : public rclcpp::Node {
     receive_options.callback_group = rgbd_receive_group_;
     try {
       on_rgbd_receiver([this, rgbd, weak, rgb_topic, depth_topic, info_topic, rgb_qos, depth_qos, info_qos, receive_options] {
-        rgbd->rgb_sub = create_subscription<sensor_msgs::msg::Image>(
+        rgbd->rgb_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::Image>(
             rgb_topic, rgb_qos,
             [this, weak](const sensor_msgs::msg::Image::SharedPtr message) {
               if (const auto current = weak.lock()) on_rgbd_image(current, message, true);
             }, receive_options);
-        rgbd->depth_sub = create_subscription<sensor_msgs::msg::Image>(
+        rgbd->depth_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::Image>(
             depth_topic, depth_qos,
             [this, weak](const sensor_msgs::msg::Image::SharedPtr message) {
               if (const auto current = weak.lock()) on_rgbd_image(current, message, false);
             }, receive_options);
-        rgbd->info_sub = create_subscription<sensor_msgs::msg::CameraInfo>(
+        rgbd->info_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::CameraInfo>(
             info_topic, info_qos,
             [weak](const sensor_msgs::msg::CameraInfo::SharedPtr message) {
               if (const auto current = weak.lock()) {
@@ -1795,6 +1809,8 @@ class BridgeNode : public rclcpp::Node {
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   std::unordered_map<std::string, std::string> subscription_types_;
   std::mutex rgbd_mutex_;
+  rclcpp::Context::SharedPtr rgbd_receiver_context_;
+  rclcpp::Node::SharedPtr rgbd_receiver_node_;
   rclcpp::CallbackGroup::SharedPtr rgbd_receive_group_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> rgbd_receiver_executor_;
   std::thread rgbd_receiver_;

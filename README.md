@@ -135,7 +135,7 @@ JointState topic: /stm32/joint_states             # 内置默认，界面不编�
 
 如果机器人使用其他 overlay（例如 URDF package 位于另一个工作空间），请在「高级」里把「ROS 环境脚本」改成对应 overlay 的 `install/setup.bash`。
 
-左臂腕部 RGBD 点云默认订阅 `/cameras/left_arm/wrist/`；一键 RealSense 依赖 ROS 栈中已安装的 `rebotarm_gazebo/left_wrist_camera.launch.py`，由它启用深度对齐、帧同步和连接到机器人模型的相机 TF。更换相机或多相机部署时可在连接配置中修改 RGBD Topic。 RGBD 预览使用独立接收 executor 与每会话处理线程，按采集时刻等待 TF 并丢弃过期帧；桌面以订阅令牌隔离旧流，停流后最长 500 ms 隐藏旧点云。
+左臂腕部 RGBD 点云默认订阅 `/cameras/left_arm/wrist/`；一键 RealSense 依赖 ROS 栈中已安装的 `rebotarm_gazebo/left_wrist_camera.launch.py`，由它启用深度对齐、帧同步和连接到机器人模型的相机 TF。更换相机或多相机部署时可在连接配置中修改 RGBD Topic。 RGBD 预览使用独立 ROS Context / DDS participant、接收 executor 与每会话处理线程，按采集时刻等待 TF 并丢弃过期帧；桌面以订阅令牌隔离旧流，停流后最长 500 ms 隐藏旧点云。
 
 ## 验证
 
