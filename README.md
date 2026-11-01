@@ -57,7 +57,9 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 | 重力辨识（Bridge/UI；stack #24 FULL_ARM；Jetson E2E pending） | [§8](docs/features.md#8-重力辨识) · [设计/实现说明](docs/gravity-identification.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/gravity-identification) |
 | 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
 
-Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐藏时暂停渲染并取消未完成加载；资源使用二进制传输（兼容旧 Base64）。图像仅发送给订阅它的连接，Inspector 隐藏时释放图像订阅。断开重连后重新获取资源，详见 [架构](docs/architecture.md#urdf-assets)。
+Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、位置管理和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
+
+Motion 的 Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐藏时暂停渲染并取消未完成加载；资源使用二进制传输（兼容旧 Base64）。图像仅发送给订阅它的连接，Inspector 隐藏时释放图像订阅。RGBD 仅在 Motion → Robot View、窗口可见且实时显示开启时订阅；切到位置或其他页即释放当前客户端兴趣。断开重连后重新获取资源，详见 [架构](docs/architecture.md#urdf-assets)。
 
 行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 

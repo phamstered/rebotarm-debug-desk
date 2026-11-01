@@ -14,7 +14,7 @@ describe("AppNav", () => {
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toBeVisible();
     const nav = screen.getByRole("navigation", { name: "主工具栏" });
     const navButtons = Array.from(nav.querySelectorAll(".app-nav-items .app-nav-item > button"));
-    expect(navButtons[0]).toHaveTextContent("Status");
+    expect(navButtons.slice(0, 4).map((button) => button.textContent)).toEqual(["Status", "Topics", "Motion", "Monitor"]);
     expect(screen.getByRole("button", { name: "Topics" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Status" })).not.toHaveAttribute("aria-current");
 
@@ -54,6 +54,20 @@ describe("AppNav", () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Topics" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "数据采集" })).not.toBeDisabled();
+  });
+
+  it("opens Motion read-only before ROS is ready and highlights it independently", async () => {
+    const onSelect = vi.fn();
+    render(<AppNav page="motion" expanded={false} rosReady={false} onSelect={onSelect} onToggle={() => undefined} />);
+    const motion = screen.getByRole("button", { name: "Motion" });
+    expect(motion).toBeEnabled();
+    expect(motion).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Topics" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Monitor" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Motor" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重力辨识" })).toBeDisabled();
+    await userEvent.setup().click(motion);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("motion");
   });
 
   it("gates 重力辨识 until ROS ready and can select when ready", async () => {

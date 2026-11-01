@@ -150,6 +150,7 @@ export function UrdfViewer({
   motionInfo = { state: "idle" },
   jointMotion,
   plannerLog,
+  showMotionTerminal = true,
   rgbdCloud = null,
   rgbdVisible = true,
   rgbdPointSize = 0.008,
@@ -167,6 +168,7 @@ export function UrdfViewer({
   motionInfo?: MotionControlInfo;
   jointMotion?: PositionMotionControls;
   plannerLog?: ReactNode;
+  showMotionTerminal?: boolean;
   xml: string;
   jointState: JointState | null;
   bridge: BridgeClient;
@@ -542,7 +544,7 @@ export function UrdfViewer({
         </Scene>
       </Canvas>
       </div>
-      {jointMotion && <MotionTerminal logs={jointMotion.logs} active={active} plannerLog={plannerLog} />}
+      {jointMotion && showMotionTerminal && <MotionTerminal logs={jointMotion.logs} active={active} plannerLog={plannerLog} />}
     </div>
   );
 }

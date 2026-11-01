@@ -3,7 +3,8 @@ import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { isRosGatedPage, rosGatedNavReason } from "./appLogic";
 import type { RosGatedPage } from "./appLogic";
 
-export type AppPage = "status" | "dashboard" | "monitor" | "collection" | "motor" | "calibration" | "gravity";
+import type { AppPage } from "./appNavigationLogic";
+export type { AppPage } from "./appNavigationLogic";
 
 function StatusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 9h3M7 12h6M7 15h4"/><circle cx="17" cy="15" r="2.2"/></svg>;
@@ -11,6 +12,10 @@ function StatusIcon() {
 
 function DashboardIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>;
+}
+
+function MotionIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h13M7 20v-6l5-6 6 3"/><circle cx="7" cy="14" r="2"/><circle cx="12" cy="8" r="2"/><path d="m18 9 3 2-2 3"/></svg>;
 }
 
 function MonitorIcon() {
@@ -36,6 +41,7 @@ function CollectionIcon() {
 const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () => ReactElement }> = [
   { page: "status", label: "Status", title: "Status", icon: StatusIcon },
   { page: "dashboard", label: "Topics", title: "Topics", icon: DashboardIcon },
+  { page: "motion", label: "Motion", title: "Motion", icon: MotionIcon },
   { page: "monitor", label: "Monitor", title: "Monitor", icon: MonitorIcon },
   { page: "collection", label: "数据采集", title: "LeRobot 数据采集", icon: CollectionIcon },
   { page: "motor", label: "Motor", title: "Motor", icon: MotorIcon },

@@ -1,3 +1,11 @@
+import { MotionPage } from "./MotionPage";
+import { TopicsPage } from "./TopicsPage";
+import { ControllerList } from "./ControllerList";
+import { MotionControllersPanel } from "./MotionControllersPanel";
+import { useRosControllers } from "./useRosControllers";
+import { MotionTerminal } from "./MotionTerminal";
+import { loadAppPage, loadMotionTab, loadMotionSidebar } from "./appNavigationLogic";
+import type { MotionTab } from "./appNavigationLogic";
 import { DeployProgressLog } from "./DeployProgressLog";
 import { appendDeployLog } from "./deployLogLogic";
 import { ControlLogViewer } from "./ControlLogViewer";
@@ -17,7 +25,7 @@ import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
 import { useClockSync } from "./clockSyncLogic";
-import { usePositionMotion } from "./positionMotionLogic";
+import { positionMotionBusy, usePositionMotion } from "./positionMotionLogic";
 import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
@@ -28,7 +36,7 @@ import { formatHardwareMode, isFault11Latched } from "./statusLogic";
 import { createCommandPayload } from "./motorLogic";
 import { TopicInspector } from "./TopicInspector";
 import { addFieldsToSeries } from "./dataGraphLogic";
-import type { AgentServiceStatus, ArmModeStatus, BridgeEnvelope, ConnectionProfile, ControllerInfo, HardwareStatus, RemoteActionResult, RosbagPlayStatus, RosbagStatus, RosControlStatus, TopicInfo, UsbProbeStatus } from "./types";
+import type { AgentServiceStatus, ArmModeStatus, BridgeEnvelope, ConnectionProfile, HardwareStatus, RemoteActionResult, RosbagPlayStatus, RosbagStatus, TopicInfo, UsbProbeStatus } from "./types";
 import {
   addMonitorDashboard,
   addSeriesToDashboardPanel,
@@ -48,7 +56,7 @@ import {
 } from "./monitorLogic";
 import type { MonitorWorkspace } from "./monitorLogic";
 import { resolveMonitorSampleTimeMs } from "./monitorTimeline";
-import { createTrajectoryPayload, findActiveTrajectoryController, isTrajectoryController, trajectoryJointNames, trajectoryStateTopic, TRAJECTORY_FEEDBACK_MAX_AGE_MS } from "./trajectoryLogic";
+import { createTrajectoryPayload, findActiveTrajectoryController, trajectoryJointNames, trajectoryStateTopic, TRAJECTORY_FEEDBACK_MAX_AGE_MS } from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
 import type { RgbdColorMode } from "./RgbdPointCloud";
 import { useRgbdStream } from "./rgbdStreamLogic";
@@ -97,7 +105,6 @@ import {
 
 type Stage = "idle" | "ssh" | "tunnel" | "bridge" | "upgrading" | "connected" | "failed";
 const TopicGraph = lazy(() => import("./TopicGraph").then((module) => ({ default: module.TopicGraph })));
-type CenterTab = "robot" | "graph" | "positions";
 
 const stageNames: Record<Stage, string> = {
   idle: "未连接",
@@ -355,10 +362,7 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
 }
 
 export default function App() {
-  const [appPage, setAppPage] = useState<AppPage>(() => {
-    const saved = localStorage.getItem("robot-console-page");
-    return saved === "status" || saved === "motor" || saved === "calibration" || saved === "gravity" || saved === "monitor" || saved === "collection" ? saved : "dashboard";
-  });
+  const [appPage, setAppPage] = useState<AppPage>(loadAppPage);
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
   const [stage, setStage] = useState<Stage>("idle");
@@ -398,18 +402,22 @@ export default function App() {
   const [armMode, setArmMode] = useState<ArmModeStatus | null>(null);
   const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
   const [statusActionNotice, setStatusActionNotice] = useState("");
-  const [rosControl, setRosControl] = useState<RosControlStatus | null>(null);
+  const controllerBlockRef = useRef("");
+  const getControllerBlockReason = useCallback(() => controllerBlockRef.current, []);
+  const controllers = useRosControllers({ profile, connected: stage === "connected",
+    connectionKey: JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]),
+    getBlockReason: getControllerBlockReason });
+  const { status: rosControl, refreshing: rosControlRefreshing, action: controllerAction,
+    message: controllerActionMessage, error: controllerActionError,
+    refresh: refreshRosControllers, fetchStatus: fetchRosControllers, switchController } = controllers;
   const [trajectoryStateError, setTrajectoryStateError] = useState("");
   const [topicRefreshing, setTopicRefreshing] = useState(false);
   const [topicRefreshError, setTopicRefreshError] = useState("");
-  const [rosControlRefreshing, setRosControlRefreshing] = useState(false);
-  const [controllerAction, setControllerAction] = useState<{ name: string; action: "activate" | "deactivate" } | null>(null);
-  const [controllerActionMessage, setControllerActionMessage] = useState("");
-  const [controllerActionError, setControllerActionError] = useState("");
   const [gravitySessionActive, setGravitySessionActive] = useState(false);
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
-  const [centerTab, setCenterTab] = useState<CenterTab>("robot");
+  const [motionTab, setMotionTab] = useState<MotionTab>(loadMotionTab);
+  const [motionControllersOpen, setMotionControllersOpen] = useState(loadMotionSidebar);
   const [managePositions, setManagePositions] = useState(false);
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
@@ -445,7 +453,6 @@ export default function App() {
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const connectionGenerationRef = useRef(0);
   const topicRefreshInFlightRef = useRef(false);
-  const rosControlRefreshInFlightRef = useRef(false);
   const liveUpdatesRef = useRef(true);
   const bridge = useMemo(() => new BridgeClient(), []);
   const filteredTopics = useMemo(() => {
@@ -466,11 +473,12 @@ export default function App() {
   imageInterestRef.current = stage === "connected" && appPage === "dashboard" && windowVisible && liveUpdates
     && panels.inspector && sidebars.right && inspectorDataVisible && !selectedNode && selectedTopicType === "sensor_msgs/msg/Image" ? selected : "";
   useEffect(() => {
-    if (stage === "connected" && appPage === "dashboard") {
-      setTopicsVisited(true);
-      if (centerTab === "robot") setRobotVisited(true);
-    }
-  }, [stage, appPage, centerTab]);
+    if (stage !== "connected") return;
+    if (appPage === "dashboard") setTopicsVisited(true);
+    if (appPage === "motion" && motionTab === "robot") setRobotVisited(true);
+  }, [stage, appPage, motionTab]);
+  useEffect(() => { localStorage.setItem("robot-console-motion-tab", motionTab); }, [motionTab]);
+  useEffect(() => { localStorage.setItem("robot-console-motion-controllers", String(motionControllersOpen)); }, [motionControllersOpen]);
   useEffect(() => {
     const changed = () => setWindowVisible(!document.hidden);
     document.addEventListener("visibilitychange", changed);
@@ -492,7 +500,7 @@ export default function App() {
   }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
 
   const [rgbdSession, setRgbdSession] = useRgbdStream(bridge,
-    appPage === "dashboard" && centerTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
+    appPage === "motion" && motionTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
     stage === "connected", profile, bridgeHello?.rgbdSubscriptionIdSupported === true,
     JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, effectiveLocalPort, profile.remotePort, profile.rosDomainId]));
 
@@ -521,6 +529,7 @@ export default function App() {
   }, [bridge, stage, controllerStateTopic]);
 
   const sendTrajectory = useCallback(async (request: TrajectorySendRequest) => {
+    if (controllers.action) throw new Error("Controller 切换进行中，请等待完成");
     const controller = activeTrajectoryController;
     if (!controller) throw new Error("没有激活的轨迹控制器");
     if (!liveUpdatesRef.current) throw new Error("实时显示已暂停，请恢复后再下发轨迹");
@@ -536,7 +545,7 @@ export default function App() {
       ...createTrajectoryPayload(request.jointNames, request.points),
       topic: controller.topic,
     }, 30_000);
-  }, [bridge, activeTrajectoryController, controllerStateSample, messages, profile.jointStateTopic]);
+  }, [bridge, activeTrajectoryController, controllerStateSample, messages, profile.jointStateTopic, controllers.action]);
 
   const addToMonitor = useCallback((fieldPath: string, dashboardId: string, panelId: string | null) => {
     if (!selected) return;
@@ -586,8 +595,12 @@ export default function App() {
   const positionProfileKey = profileKeyFor(profile);
   const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]));
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
-    statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
+    controllerAction ? "Controller 切换进行中，请等待完成" : statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
       activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先激活 arm_trajectory_controller 轨迹控制" : "");
+  const controllerDisabledReason = positionMotion.busy ? "运动任务尚未结束，请先取消并确认停止" :
+    statusActionBusy ? "控制模式操作进行中，请等待完成" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
+    !liveUpdates ? "实时显示已暂停，请恢复后操作" : "";
+  controllerBlockRef.current = controllerDisabledReason;
   const captureSamples = [
     {
       topic: profile.jointStateTopic,
@@ -734,70 +747,6 @@ export default function App() {
     }
   }, [bridge]);
 
-  const fetchRosControllers = useCallback(
-    () => invoke<RosControlStatus>("check_ros_controllers", { profile }),
-    [profile],
-  );
-
-  const refreshRosControllers = useCallback(async () => {
-    if (rosControlRefreshInFlightRef.current) return;
-    const generation = connectionGenerationRef.current;
-    rosControlRefreshInFlightRef.current = true;
-    setRosControlRefreshing(true);
-    try {
-      const status = await fetchRosControllers();
-      if (generation !== connectionGenerationRef.current) return;
-      setRosControl(status);
-    } catch (reason) {
-      if (generation !== connectionGenerationRef.current) return;
-      setRosControl({
-        manager: "/controller_manager",
-        available: false,
-        controllers: [],
-        message: reason instanceof Error ? reason.message : String(reason),
-      });
-    } finally {
-      if (generation === connectionGenerationRef.current) {
-        rosControlRefreshInFlightRef.current = false;
-        setRosControlRefreshing(false);
-      }
-    }
-  }, [fetchRosControllers]);
-
-  const switchController = async (controller: ControllerInfo, action: "activate" | "deactivate") => {
-    if (controllerAction) return;
-    const generation = connectionGenerationRef.current;
-    setControllerAction({ name: controller.name, action });
-    setControllerActionMessage("");
-    setControllerActionError("");
-    try {
-      const message = await invoke<string>("switch_ros_controller", {
-        profile,
-        controllerName: controller.name,
-        action,
-      });
-      if (generation === connectionGenerationRef.current) {
-        setControllerActionMessage(message || `${controller.name} ${action} 完成`);
-      }
-    } catch (reason) {
-      if (generation === connectionGenerationRef.current) {
-        setControllerActionError(reason instanceof Error ? reason.message : String(reason));
-      }
-    }
-    try {
-      const status = await fetchRosControllers();
-      if (generation === connectionGenerationRef.current) setRosControl(status);
-    } catch (reason) {
-      if (generation !== connectionGenerationRef.current) return;
-      setControllerActionError((current) => {
-        const refreshError = `列表刷新失败：${reason instanceof Error ? reason.message : String(reason)}`;
-        return current ? `${current}；${refreshError}` : refreshError;
-      });
-    } finally {
-      if (generation === connectionGenerationRef.current) setControllerAction(null);
-    }
-  };
-
   useEffect(() => {
     return bridge.onMessage((message: BridgeEnvelope) => {
       if (message.op === "topic_message" && message.topic) {
@@ -932,6 +881,7 @@ export default function App() {
   const armWorkflow = useArmModeWorkflow(profile, stage === "connected");
 
   async function runVlaStart() {
+    if (controllerAction) { setStatusActionNotice("Controller 切换进行中，请等待完成"); return; }
     if (statusActionBusy || statusActionInFlightRef.current) return;
     const actionGeneration = connectionGenerationRef.current;
     if (isFault11Latched(hardwareStatus)) {
@@ -978,6 +928,7 @@ export default function App() {
   }
 
   async function runVlaStop(alsoStopArm = false, disable = false) {
+    if (!disable && controllerAction) { setStatusActionNotice("Controller 切换进行中，请等待完成"); return; }
     if (statusActionBusy || statusActionInFlightRef.current) return;
     const actionGeneration = connectionGenerationRef.current;
     statusActionInFlightRef.current = true;
@@ -1024,6 +975,7 @@ export default function App() {
   }
 
   async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent" | "moveit") {
+    if (controllerAction && mode !== "stop") { setStatusActionNotice("Controller 切换进行中，请等待完成"); return; }
     if (statusActionBusy || statusActionInFlightRef.current) return;
     const actionGeneration = connectionGenerationRef.current;
     statusActionInFlightRef.current = true;
@@ -1126,7 +1078,6 @@ export default function App() {
     setTopicsVisited(false);
     setRobotVisited(false);
     topicRefreshInFlightRef.current = false;
-    rosControlRefreshInFlightRef.current = false;
     setSshOk(false);
     setBridgeUp(false);
     setAgentChecked(false);
@@ -1153,14 +1104,10 @@ export default function App() {
     statusActionInFlightRef.current = false;
     setStatusActionBusy(null);
     setStatusActionNotice("");
-    setRosControl(null);
+    controllers.reset();
     setFocusController("");
     setTopicRefreshing(false);
     setTopicRefreshError("");
-    setRosControlRefreshing(false);
-    setControllerAction(null);
-    setControllerActionMessage("");
-    setControllerActionError("");
     setControlStreaming(false);
     setGravitySessionActive(false);
     setEffectiveLocalPort(null);
@@ -1392,6 +1339,7 @@ export default function App() {
   }
 
   function resetWorkspaceLayout() {
+    if (appPage === "motion") { setMotionControllersOpen(true); setToolbarNotice("Motion 布局已恢复默认值"); return; }
     setLayout({ ...defaultLayoutSizes });
     setPanels({ ...defaultPanelState });
     setSidebars({ ...defaultSidebarState });
@@ -1521,12 +1469,22 @@ export default function App() {
     }
   }
 
+  function inspectController(name: string) {
+    setFocusController(name);
+    setSelectedNode(`/${name.replace(/^\/+/, "")}`);
+    setAppPage("dashboard");
+  }
+  function manageController(name: string) {
+    setFocusController(name);
+    setMotionControllersOpen(true);
+    setAppPage("motion");
+  }
+
   async function selectTopic(topic: TopicInfo) {
     const generation = connectionGenerationRef.current;
     setSelected(topic.name);
     setSelectedNode("");
     setFocusController("");
-    setCenterTab("graph");
     setTopicSubscribeError("");
     if (!topic.types[0]) {
       setTopicSubscribeError("该 Topic 没有可用消息类型");
@@ -1592,7 +1550,7 @@ export default function App() {
 
   const positionPlanner = {
     busy: statusActionBusy === "moveit-start",
-    disabledReason: stage !== "connected" ? "请先连接 Jetson" : statusActionBusy ? "控制模式操作进行中" :
+    disabledReason: stage !== "connected" ? "请先连接 Jetson" : controllerAction ? "Controller 切换进行中" : statusActionBusy ? "控制模式操作进行中" :
       positionMotion.busy ? "请等待点位运动结束或取消" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行" :
       activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先在 Status 启动 Trajectory 模式" : "",
     notice: armWorkflow.workflow?.mode === "moveit" ? statusActionNotice : "",
@@ -1739,6 +1697,11 @@ export default function App() {
         </span>
         <button className="ghost disconnect-btn" onClick={() => void disconnect()} title="断开 SSH 隧道与 Bridge">断开</button>
       </header>
+      {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
+        <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
+        <button type="button" onClick={() => setAppPage("motion")}>返回 Motion</button>
+        {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
+      </div>}
       <div className="app-page-content">
       {appPage === "status" ? (
         <StatusPage
@@ -1823,12 +1786,11 @@ export default function App() {
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
           onStreamingChange={setControlStreaming}
-          controlLocked={gravitySessionActive}
-          controlLockedReason={gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
+          controlLocked={gravitySessionActive || Boolean(controllerAction)}
+          controlLockedReason={controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
         />
       ) : null}
-      {(appPage === "dashboard" || topicsVisited) && (
-      <main hidden={appPage !== "dashboard"} className={`workspace ${sidebars.right ? "" : "right-sidebar-collapsed"}`} style={layoutStyle}>
+      {(appPage === "dashboard" || appPage === "motion") && (
       <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
         <div className="toolbar-actions" role="group" aria-label="全局操作">
         <button
@@ -1866,6 +1828,9 @@ export default function App() {
           <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title="恢复面板尺寸并展开全部面板"><span>⊞</span>重置布局</button>
         </div>
       </header>
+      )}
+      {(appPage === "dashboard" || topicsVisited) && (
+      <TopicsPage active={appPage === "dashboard"} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
       <aside
         ref={topicSidebarRef}
         className={`topic-sidebar ${sidebars.left ? "" : "sidebar-collapsed"} ${panels.topics ? "" : "topics-pane-collapsed"} ${panels.rosControl ? "" : "control-pane-collapsed"}`}
@@ -1923,103 +1888,13 @@ export default function App() {
             onToggle={() => togglePanel("rosControl")}
           />
           <div className="section-content ros-control-content">
-            <div className="controller-manager-name">{rosControl?.manager ?? "/controller_manager"}</div>
-            <div className="controller-list">
-            {controllerActionError && <div className="controller-action-feedback error">{controllerActionError}</div>}
-            {controllerActionMessage && <div className="controller-action-feedback success">{controllerActionMessage}</div>}
-            {rosControl?.controllers.map((controller) => (
-              <div className="controller-item" key={controller.name}>
-                <button type="button" className="controller-focus-button" aria-label={`在 Topic Graph 聚焦 Controller ${controller.name}`} title={`在 Topic Graph 聚焦 ${controller.name}`} onClick={() => { setFocusController(controller.name); setSelectedNode(`/${controller.name.replace(/^\/+/, "")}`); setCenterTab("graph"); }} />
-                <div>
-                  <span className={`controller-state ${controller.state}`} /> <strong>{controller.name}</strong>
-                  {isTrajectoryController(controller) && <span className="controller-tag" title="激活后可在 Robot View 拖拽 TCP 并下发轨迹">轨迹</span>}
-                </div>
-                <small title={controller.typeName}>{controller.typeName}</small>
-                <span className={`controller-state-label ${controller.state}`}>{controller.state}</span>
-                <button
-                  className={`controller-action-button ${controller.state === "active" ? "deactivate" : "activate"}`}
-                  type="button"
-                  disabled={Boolean(controllerAction) || rosControlRefreshing}
-                  aria-label={`${controller.state === "active" ? "停用" : "激活"} Controller ${controller.name}`}
-                  onClick={() => void switchController(controller, controller.state === "active" ? "deactivate" : "activate")}
-                >
-                  {controllerAction?.name === controller.name
-                    ? "Working…"
-                    : controller.state === "active" ? "Deactivate" : "Activate"}
-                </button>
-              </div>
-            ))}
-            {(!rosControl || rosControl.controllers.length === 0) && (
-              <div className={`controller-empty ${rosControl && !rosControl.available ? "error" : ""}`}>
-                {rosControl?.message || "正在读取 Controller…"}
-              </div>
-            )}
-            </div>
+            <ControllerList status={rosControl} onInspect={inspectController} onManage={manageController} focusController={focusController} />
           </div>
         </section>
       </aside>
       <section className="urdf-panel">
-        <div className="panel-title center-tabs">
-          <div className="center-tab-list" role="tablist" aria-label="中心视图">
-            <button type="button" role="tab" aria-selected={centerTab === "robot"} className={centerTab === "robot" ? "active" : ""} onClick={() => setCenterTab("robot")}>Robot View</button>
-            <button type="button" role="tab" aria-selected={centerTab === "graph"} className={centerTab === "graph" ? "active" : ""} onClick={() => setCenterTab("graph")}>Topic Graph</button>
-            <button type="button" role="tab" aria-selected={centerTab === "positions"} className={centerTab === "positions" ? "active" : ""} onClick={() => setCenterTab("positions")}>位置</button>
-          </div>
-          <span>{centerTab === "robot" ? profile.urdfTopic : centerTab === "graph" ? "ROS Node / Topic topology" : "保存的关节位置"}</span>
-        </div>
-        <div className="robot-view-pane" hidden={centerTab !== "robot"}>
-          {(robotVisited || (appPage === "dashboard" && centerTab === "robot")) && (
-            <UrdfViewer
-              clockSync={clockSync}
-              active={appPage === "dashboard" && centerTab === "robot" && windowVisible}
-              xml={urdf}
-              jointState={jointState}
-              bridge={bridge}
-              tcpLink={profile.tcpLink}
-              trajectoryController={positionMotion.busy && trajectoryController ? { ...trajectoryController, readinessError: "点位运动尚未结束，请先取消或等待完成" } : trajectoryController}
-              motionInfo={positionMotion.state.phase !== "idle" ? {
-                state: "position", label: positionMotion.state.label, phase: positionMotion.state.phase, message: positionMotion.state.message,
-              } : positionMotion.busy ? { state: "position", label: "点位运动", phase: "validating", message: "已有会话的点位任务尚未结束" } : { state: "idle" }}
-              onSendTrajectory={sendTrajectory}
-              jointMotion={positionMotion}
-              plannerLog={<ControlLogViewer profile={profile} active={appPage === "dashboard" && centerTab === "robot" && windowVisible} connected={stage === "connected"} preferredSource="moveit" />}
-              rgbdCloud={rgbdSession.cloud}
-              rgbdVisible={rgbdSession.visible}
-              rgbdPointSize={rgbdSession.pointSize}
-              rgbdColorMode={rgbdColorMode}
-              rgbdNearM={rgbdSession.nearM}
-              rgbdFarM={rgbdSession.farM}
-              rgbdStatus={{
-                enabled: profile.rgbdEnabled,
-                stale: rgbdSession.stale,
-                tfOk: rgbdSession.tfOk,
-                tfError: rgbdSession.tfError,
-                fps: rgbdSession.fps,
-                stampDiffNs: rgbdSession.cloud?.stampDiffNs,
-                pointCount: rgbdSession.cloud?.count ?? 0,
-              }}
-              onRgbdVisibleChange={(visible) => setRgbdSession((c) => ({ ...c, visible }))}
-              onRgbdPointSizeChange={(pointSize) => setRgbdSession((c) => ({ ...c, pointSize }))}
-              onRgbdColorModeChange={setRgbdColorMode}
-              onRgbdNearFarChange={(nearM, farM) => setRgbdSession((c) => ({ ...c, nearM, farM }))}
-            />
-          )}
-        </div>
-        {centerTab === "graph" && appPage === "dashboard" && <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} onSelectNode={setSelectedNode} selectedTopic={selected} selectedNode={selectedNode} focusController={focusController} onClearControllerFocus={() => setFocusController("")} /></Suspense>}
-        {centerTab === "positions" && (
-          <PositionPage
-            profileKey={positionProfileKey}
-            store={positionStore}
-            captureError={captureError}
-          urdfXml={urdf || previewUrdf}
-            onCreate={createPosition}
-            onUpdate={editPosition}
-            onDelete={removePosition}
-            onCapture={capturePose}
-            motion={positionMotion}
-            planner={positionPlanner}
-          />
-        )}
+        <div className="panel-title"><strong>Topic Graph</strong><span>ROS Node / Topic topology</span></div>
+        {appPage === "dashboard" && <Suspense fallback={<div className="graph-loading">正在加载 Topic Graph…</div>}><TopicGraph bridge={bridge} onSelectTopic={selectTopic} onSelectNode={setSelectedNode} selectedTopic={selected} selectedNode={selectedNode} focusController={focusController} onClearControllerFocus={() => setFocusController("")} /></Suspense>}
       </section>
       <section className={`data-panel ${sidebars.right ? "" : "sidebar-collapsed"}`}>
         {!sidebars.right && <button type="button" className="sidebar-rail-toggle" aria-label="展开右侧栏" title="展开右侧栏" onClick={() => setSidebars((current) => ({ ...current, right: true }))}>‹</button>}
@@ -2065,8 +1940,75 @@ export default function App() {
           }
         }}
       />}
-      </main>
+      </TopicsPage>
       )}
+      <MotionPage active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
+        controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
+        controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
+          onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}
+          message={controllerActionMessage} error={controllerActionError} disabledReason={controllerDisabledReason}
+          focusController={focusController} onInspect={inspectController} />}
+        readiness={<>
+          <span>机械臂：{rosControl?.controllers.find((controller) => controller.name === "arm_trajectory_controller")?.state ?? "未知"}</span>
+          <span>夹爪：{rosControl?.controllers.find((controller) => controller.name === "gripper_trajectory_controller")?.state ?? "未知"}</span>
+          <span>MoveIt：{positionMotion.reason || "已就绪"}</span>
+          <span>关节反馈：{captureError || "新鲜"}</span>
+          <span>时钟：{{ waiting: "等待同步", synchronized: "已对齐", unsynchronized: "失步", stale: "已过期", unsupported: "诊断不支持", disconnected: "未连接" }[clockSync.state]}</span>
+        </>}
+        robot={<>          {(robotVisited || (appPage === "motion" && motionTab === "robot")) && (
+            <UrdfViewer
+              clockSync={clockSync}
+              active={appPage === "motion" && motionTab === "robot" && windowVisible}
+              xml={urdf}
+              jointState={jointState}
+              bridge={bridge}
+              tcpLink={profile.tcpLink}
+              trajectoryController={positionMotion.busy && trajectoryController ? { ...trajectoryController, readinessError: "点位运动尚未结束，请先取消或等待完成" } : trajectoryController}
+              motionInfo={positionMotion.state.phase !== "idle" ? {
+                state: "position", label: positionMotion.state.label, phase: positionMotion.state.phase, message: positionMotion.state.message,
+              } : positionMotion.busy ? { state: "position", label: "点位运动", phase: "validating", message: "已有会话的点位任务尚未结束" } : { state: "idle" }}
+              onSendTrajectory={sendTrajectory}
+              jointMotion={positionMotion}
+              showMotionTerminal={false}
+              rgbdCloud={rgbdSession.cloud}
+              rgbdVisible={rgbdSession.visible}
+              rgbdPointSize={rgbdSession.pointSize}
+              rgbdColorMode={rgbdColorMode}
+              rgbdNearM={rgbdSession.nearM}
+              rgbdFarM={rgbdSession.farM}
+              rgbdStatus={{
+                enabled: profile.rgbdEnabled,
+                stale: rgbdSession.stale,
+                tfOk: rgbdSession.tfOk,
+                tfError: rgbdSession.tfError,
+                fps: rgbdSession.fps,
+                stampDiffNs: rgbdSession.cloud?.stampDiffNs,
+                pointCount: rgbdSession.cloud?.count ?? 0,
+              }}
+              onRgbdVisibleChange={(visible) => setRgbdSession((c) => ({ ...c, visible }))}
+              onRgbdPointSizeChange={(pointSize) => setRgbdSession((c) => ({ ...c, pointSize }))}
+              onRgbdColorModeChange={setRgbdColorMode}
+              onRgbdNearFarChange={(nearM, farM) => setRgbdSession((c) => ({ ...c, nearM, farM }))}
+            />
+          )}
+</>}
+        positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
+            profileKey={positionProfileKey}
+            store={positionStore}
+            captureError={captureError}
+          urdfXml={urdf || previewUrdf}
+            onCreate={createPosition}
+            onUpdate={editPosition}
+            onDelete={removePosition}
+            onCapture={capturePose}
+            motion={positionMotion}
+            planner={positionPlanner}
+          />
+</> : null}
+        log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
+          plannerLog={<ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible} connected={stage === "connected"} preferredSource="moveit" />} />}
+      />
+
       </div>
       </div>
       {versionDialogOpen && bridgeVersionCheck?.status === "mismatch" && (
