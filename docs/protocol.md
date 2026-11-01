@@ -307,7 +307,7 @@ Desk Robot View 通过独立的 `subscribe_rgbd` / `unsubscribe_rgbd` 请求彩�
 
 订阅可带可选 `subscription_id`（非空字符串，最长 128 字符），新 Bridge 在 ACK、每个二进制成功帧及文本失败帧回显。`hello.rgbd_subscription_id_supported:true` 表示支持该隔离能力。桌面每次订阅生成新令牌；已发现能力时拒绝缺少令牌或令牌不匹配的帧，隐藏视图、重连及改配置会取消旧帧处理。旧 Bridge 无该能力时仍按兴趣与 Topic/目标坐标系过滤；相同配置的旧网络帧无法获得强代次保证，升级后重连可启用。
 
-成功：`{"op":"subscribed_rgbd","request_id":"uuid", ...topics...}`。同一连接重复订阅会替换该连接上的 RGBD 会话。
+成功：`{"op":"subscribed_rgbd","request_id":"uuid", ...topics...}`。同一连接重复订阅会替换该连接上的 RGBD 会话。使用相同 RGB/Depth/CameraInfo Topic 组合的连接共享底层 ROS 订阅，每个连接仍独立配对、查询 TF、降采样和发送；尺寸、帧率、目标坐标系、令牌和取消语义不共享。
 
 取消：`{"op":"unsubscribe_rgbd","request_id":"uuid"}` → `{"op":"unsubscribed_rgbd","request_id":"uuid"}`。
 
