@@ -2,7 +2,7 @@
   <figure class="rdd-diagram" role="img" aria-labelledby="rdd-tcp-title" aria-describedby="rdd-tcp-desc">
     <p id="rdd-tcp-title" class="rdd-diagram__title">TCP 拖拽轨迹 · IK 与下发</p>
     <p id="rdd-tcp-desc" class="rdd-diagram__sr">
-      需有 active JointTrajectoryController 才开放拖拽；逐帧位置 IK，残差超过 5 mm 拒发；
+      需有 active JointTrajectoryController 才开放拖拽；逐帧 6D 位姿 IK，残差超过 5 mm 拒发；
       松手保留预览，确认后经 Bridge 校验并由 MoveIt 规划执行，可附带独立夹爪目标。
     </p>
 
@@ -31,12 +31,12 @@
 
       <div class="rdd-step-arrow"><span>拖拽中</span></div>
       <div class="rdd-step">
-        <strong>逐帧位置 IK</strong>
-        <small>姿态保持不变</small>
+        <strong>逐帧 6D 位姿 IK</strong>
+        <small>XYZ 平移 · RPY 旋转</small>
       </div>
       <div class="rdd-step-arrow"><span></span></div>
       <div class="rdd-step rdd-step--decision">
-        <strong>残差 ≤ 5 mm？</strong>
+        <strong>位置 ≤5 mm 且姿态 ≤0.02 rad？</strong>
       </div>
 
       <div class="rdd-branch rdd-branch--2" style="margin:0.35rem 0">

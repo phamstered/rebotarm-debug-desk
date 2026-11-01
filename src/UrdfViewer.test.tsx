@@ -24,7 +24,7 @@ describe("Robot View lifecycle", () => {
     view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, readinessError: "无法读取轨迹控制器反馈：类型未安装" }} />);
     expect(screen.getByText("无法读取轨迹控制器反馈：类型未安装")).toBeVisible();
     view.rerender(<UrdfViewer {...props} trajectoryController={{ ...controller, jointNames: ["j1"] }} />);
-    await waitFor(() => expect(screen.getByText("按住青色夹爪手柄拖拽，松手预览，确认执行")).toBeVisible());
+    await waitFor(() => expect(screen.getByText("拖动 XYZ 箭头或旋转圆环，松手预览，确认执行")).toBeVisible());
     expect(props.onSendTrajectory).not.toHaveBeenCalled();
   });
   it("preserves the scene and canvas across navigation, pauses frames and applies fresh feedback on return", async () => {
@@ -63,7 +63,7 @@ describe("Robot View lifecycle", () => {
   it("previews only the selected joint, preserves editing across feedback and executes only on confirmation", async () => {
     const user = userEvent.setup(), parsed = robot(); doubles.load.mockResolvedValue(parsed);
     const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
-      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false,
+      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", tcpPoseReason: "", executeTcpPose: vi.fn(), armed: true, busy: false,
       setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn() };
     const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
     const view = render(<UrdfViewer {...props} xml={rebotarmUrdf} tcpLink="" jointState={{ name: names, position: [0, 0, 0, 0, 0, 0] }} jointMotion={motion} />);
@@ -99,7 +99,7 @@ describe("Robot View lifecycle", () => {
   it("previews calibrated joint7 in mm, ignores raw actuator units, and executes only after confirmation", async () => {
     const parsed = robot(); doubles.load.mockResolvedValue(parsed);
     const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
-      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false,
+      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", tcpPoseReason: "", executeTcpPose: vi.fn(), armed: true, busy: false,
       setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn(),
       gripper: { supported: true, available: true, fresh: true, position: .025, lower: 0, upper: .05, message: "" } };
     const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper_finger_left_joint"];
@@ -122,18 +122,20 @@ describe("Robot View lifecycle", () => {
   it("holds TCP preview after release and replans on explicit confirmation, refusing a newly failed IK", async () => {
     const parsed = robot(); doubles.load.mockResolvedValue(parsed);
     const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
-      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", armed: true, busy: false,
+      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", tcpPoseReason: "", executeTcpPose: vi.fn(), armed: true, busy: false,
       setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn() };
     const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
-    const plan = { jointNames: names, start: [0,0,0,0,0,0], goal: [.1,0,0,0,0,0], chainJointNames: names, chainIndices: [0,1,2,3,4,5], chainGoal: [.1,0,0,0,0,0], target: [0,0,0] as [number,number,number], solved: [0,0,0] as [number,number,number], positionError: 0, duration: 1, points: [] };
+    const plan = { jointNames: names, start: [0,0,0,0,0,0], goal: [.1,0,0,0,0,0], chainJointNames: names, chainIndices: [0,1,2,3,4,5], chainGoal: [.1,0,0,0,0,0], target: [0,0,0] as [number,number,number], solved: [0,0,0] as [number,number,number], positionError: 0, orientationError: 0, duration: 1, points: [] };
     const spy = vi.spyOn(trajectoryLogic, "planTrajectory").mockReturnValue({ plan });
     const props2 = { ...props, xml: rebotarmUrdf, tcpLink: "", jointState: { name: names, position: [0,0,0,0,0,0] }, jointMotion: motion,
       trajectoryController: { name: "arm", topic: "/arm/joint_trajectory", jointNames: names } };
     const view = render(<UrdfViewer {...props2} />);
     await waitFor(() => expect(doubles.load).toHaveBeenCalledOnce());
     const find = (node: any): any => Array.isArray(node) ? node.map(find).find(Boolean) : node?.props?.onDragStart ? node.props : find(node?.props?.children ?? []);
-    act(() => { find(doubles.children).onDragStart(); find(doubles.children).onDragMove([.1,.2,.3]); find(doubles.children).onDragEnd(); });
+    act(() => { find(doubles.children).onDragStart(); find(doubles.children).onDragMove({position:[.1,.2,.3],orientation:[0,0,0,1]}); find(doubles.children).onDragEnd(); });
     expect(motion.executeJoints).not.toHaveBeenCalled();
+    expect(find(doubles.children).pose).toEqual({position:[.1,.2,.3],orientation:[0,0,0,1]});
+    expect(screen.getByLabelText("TCP X")).toHaveValue("100.00");
     const count = (parsed.setJointValue as any).mock.calls.length;
     view.rerender(<UrdfViewer {...props2} jointState={{ name: names, position: [.2,0,0,0,0,0] }} />);
     expect((parsed.setJointValue as any).mock.calls.length).toBe(count);
@@ -142,8 +144,34 @@ describe("Robot View lifecycle", () => {
     expect(motion.executeJoints).not.toHaveBeenCalled();
     expect(screen.getByText("IK 未收敛：目标已不可达")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
-    expect(motion.executeJoints).toHaveBeenCalledExactlyOnceWith({ joint1:.1,joint2:0,joint3:0,joint4:0,joint5:0,joint6:0 },5);
+    expect(motion.executeTcpPose).toHaveBeenCalledExactlyOnceWith({frame_id:"base_link",tcp_link:"gripper_link",position:[.1,.2,.3],orientation:[0,0,0,1]},5,undefined);
+    expect(motion.executeJoints).not.toHaveBeenCalled();
     expect(props.onSendTrajectory).not.toHaveBeenCalled(); spy.mockRestore();
+  });
+
+  it("keeps unreachable numeric pose targets independent of IK and blocks invalid input", async () => {
+    const parsed = robot(); doubles.load.mockResolvedValue(parsed);
+    const motion: PositionMotionControls = { logs: [], recordLog: vi.fn(), state: { phase: "idle", commandId: "", label: "", message: "" },
+      homePositions: [], reason: "", jointRotationReason: "", jointTargetsReason: "", tcpPoseReason: "", executeTcpPose: vi.fn(), armed: true, busy: false,
+      setArmed: vi.fn(), execute: vi.fn(), executeJoint: vi.fn(), executeJoints: vi.fn(), cancel: vi.fn() };
+    const names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"];
+    const spy = vi.spyOn(trajectoryLogic, "planTrajectory").mockReturnValue({error:"位姿 IK 未收敛"});
+    const props2 = {...props,xml:rebotarmUrdf,tcpLink:"",jointState:{name:names,position:[0,0,0,0,0,0]},jointMotion:motion};
+    const view=render(<UrdfViewer {...props2}/>);
+    await waitFor(()=>expect(doubles.load).toHaveBeenCalledOnce());
+    fireEvent.change(screen.getByLabelText("TCP X"),{target:{value:"9999"}});
+    const find=(node:any):any=>Array.isArray(node)?node.map(find).find(Boolean):node?.props?.onDragStart?node.props:find(node?.props?.children??[]);
+    expect(find(doubles.children).pose.position[0]).toBe(9.999);
+    expect(screen.getByRole("button",{name:"确认执行"})).toBeDisabled();
+    view.rerender(<UrdfViewer {...props2} jointState={{name:names,position:[.5,0,0,0,0,0]}}/>);
+    expect(screen.getByLabelText("TCP X")).toHaveValue("9999");
+    fireEvent.change(screen.getByLabelText("TCP Pitch"),{target:{value:"-"}});
+    expect(screen.getByRole("alert")).toHaveTextContent("有限数值");
+    expect(find(doubles.children).pose.position[0]).toBe(9.999);
+    fireEvent.keyDown(window,{key:"Escape"});
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("TCP X")).not.toHaveValue("9999");
+    expect(motion.executeTcpPose).not.toHaveBeenCalled();spy.mockRestore();
   });
 
 });

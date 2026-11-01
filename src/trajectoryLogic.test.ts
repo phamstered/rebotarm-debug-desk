@@ -365,3 +365,39 @@ describe("可视化关节写回", () => {
     expect([...written.values()]).toEqual([1, 2, 3]);
   });
 });
+
+describe("完整位姿目标预览", () => {
+  const real = parseKinematics(rebotarmUrdf);
+  const chain = chainToLink(real,"gripper_link");
+  const start = [-.2,-.8,-.9,.25,.3,-.2];
+  const names = ["joint1","joint2","joint3","joint4","joint5","joint6"];
+  const desired = forwardKinematics(chain,[-.1,-.75,-.85,.3,.35,-.15]);
+  it("checks both residuals, preserves fixed TCP offset and controller-owned unrelated axes", () => {
+    const result = planTrajectory({model:real,tcpLink:"gripper_link",
+      jointState:{name:[...names,"gripper_finger_left_joint"],position:[...start,.025]},
+      controllerJointNames:[...names,"gripper_finger_left_joint"],target:desired.position,targetQuaternion:desired.quaternion});
+    expect(result.error).toBeUndefined();
+    expect(result.plan?.positionError).toBeLessThan(.001);
+    expect(result.plan?.orientationError).toBeLessThan(.003);
+    expect(result.plan?.solvedQuaternion).toHaveLength(4);
+    expect(result.plan?.goal[6]).toBe(.025);
+    expect(result.plan?.chainGoal).toHaveLength(6);
+  });
+  it("does not accept a position-only solution for an unreachable orientation", () => {
+    const planar=parseKinematics(ARM_URDF), frame=forwardKinematics(chainToLink(planar,"tool0"),[0,0,0]);
+    const result=planTrajectory({model:planar,tcpLink:"tool0",jointState:{name:["joint1","joint2","joint3"],position:[0,0,0]},
+      target:frame.position,targetQuaternion:[Math.sin(Math.PI/4),0,0,Math.cos(Math.PI/4)]});
+    expect(result.error).toMatch(/姿态误差/);
+    expect(result.plan?.orientationError).toBeGreaterThan(.02);
+  });
+  it("rejects zero and nonfinite quaternion input and nonfinite pose seeds", () => {
+    for(const quaternion of [[0,0,0,0],[0,0,NaN,1]]) {
+      const result=planTrajectory({model:real,tcpLink:"gripper_link",jointState:{name:names,position:start},
+        target:desired.position,targetQuaternion:quaternion as [number,number,number,number]});
+      expect(result.error).toMatch(/四元数/); expect(result.plan).toBeUndefined();
+    }
+    const result=planTrajectory({model:real,tcpLink:"gripper_link",jointState:{name:names,position:start},
+      target:desired.position,targetQuaternion:desired.quaternion,seed:[NaN,...start.slice(1)]});
+    expect(result.error).toMatch(/IK 起点/);expect(result.plan).toBeUndefined();
+  });
+});

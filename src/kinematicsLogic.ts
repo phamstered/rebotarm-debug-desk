@@ -571,3 +571,170 @@ function positionJacobian(chain: KinematicJoint[], values: number[], step: numbe
 function distance3(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
+
+// --- Quaternion pose targets and six-DOF preview IK --------------------------
+export const IK_ORIENTATION_TOLERANCE = 0.02;
+/** xyzw; refuse invalid rotations instead of silently substituting identity. */
+export function normalizeQuaternion(value: Quat): Quat {
+  if (value.length !== 4 || !value.every(Number.isFinite))
+    throw new Error("姿态四元数必须包含四个有限数值");
+  const scale = Math.max(...value.map(Math.abs));
+  if (scale < 1e-12)
+    throw new Error("姿态四元数不能为零");
+  const scaled = value.map(v => v / scale);
+  const norm = Math.hypot(...scaled);
+  return scaled.map(v => v / norm) as Quat;
+}
+export function multiplyQuaternions(left: Quat, right: Quat): Quat {
+  const [x, y, z, w] = normalizeQuaternion(left), [a, b, c, d] = normalizeQuaternion(right);
+  return normalizeQuaternion([w * a + x * d + y * c - z * b, w * b - x * c + y * d + z * a, w * c + x * b - y * a + z * d, w * d - x * a - y * b - z * c]);
+}
+export function inverseQuaternion(value: Quat): Quat {
+  const [x, y, z, w] = normalizeQuaternion(value);
+  return [-x, -y, -z, w];
+}
+export function quaternionFromRpy(rpy: Vec3): Quat {
+  if (rpy.length !== 3 || !rpy.every(Number.isFinite))
+    throw new Error("RPY 必须包含三个有限数值");
+  return normalizeQuaternion(matToQuat(rotationFromRpy(rpy)));
+}
+export function quaternionToRpy(value: Quat): Vec3 {
+  const [x, y, z, w] = normalizeQuaternion(value);
+  const sinPitch = Math.max(-1, Math.min(1, 2 * (w * y - z * x)));
+  const pitch = Math.asin(sinPitch);
+  // At gimbal lock choose roll=0, preserving the represented rotation.
+  if (Math.abs(sinPitch) > 1 - 1e-12)
+    return [0, Math.sign(sinPitch) * Math.PI / 2, Math.atan2(2 * (w * z - x * y), 1 - 2 * (x * x + z * z))];
+  return [Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)), pitch,
+    Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))];
+}
+export function rotateVectorByQuaternion(value: Quat, vector: Vec3): Vec3 {
+  const [x, y, z, w] = normalizeQuaternion(value);
+  if (vector.length !== 3 || !vector.every(Number.isFinite))
+    throw new Error("向量必须包含三个有限数值");
+  const [a, b, c] = vector;
+  const tx = 2 * (y * c - z * b), ty = 2 * (z * a - x * c), tz = 2 * (x * b - y * a);
+  return [a + w * tx + y * tz - z * ty, b + w * ty + z * tx - x * tz, c + w * tz + x * ty - y * tx];
+}
+/** Shortest world-frame rotation vector from current to target, stable at pi. */
+export function quaternionRotationVector(target: Quat, current: Quat): Vec3 {
+  let q = multiplyQuaternions(target, inverseQuaternion(current));
+  if (q[3] < 0)
+    q = q.map((v) => -v) as Quat;
+  const length = Math.hypot(q[0], q[1], q[2]);
+  if (length < 1e-12)
+    return [2 * q[0], 2 * q[1], 2 * q[2]];
+  const factor = 2 * Math.atan2(length, Math.max(0, q[3])) / length;
+  return [q[0] * factor, q[1] * factor, q[2] * factor];
+}
+export function quaternionAngularDistance(a: Quat, b: Quat): number {
+  return Math.hypot(...quaternionRotationVector(a, b));
+}
+export type PoseIkResult = IkResult & {
+  orientationError: number;
+};
+export type PoseIkOptions = IkOptions & {
+  orientationTolerance?: number;
+  orientationWeight?: number;
+};
+function solveLinearSystem(matrix: number[][], rhs: number[]): number[] | null {
+  const n = rhs.length, rows = matrix.map((row, i) => [...row, rhs[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let row = col + 1; row < n; row++)
+      if (Math.abs(rows[row][col]) > Math.abs(rows[pivot][col]))
+        pivot = row;
+    if (Math.abs(rows[pivot][col]) < 1e-15)
+      return null;
+    [rows[col], rows[pivot]] = [rows[pivot], rows[col]];
+    const divisor = rows[col][col];
+    for (let k = col; k <= n; k++)
+      rows[col][k] /= divisor;
+    for (let row = 0; row < n; row++)
+      if (row !== col) {
+        const factor = rows[row][col];
+        for (let k = col; k <= n; k++)
+          rows[row][k] -= factor * rows[col][k];
+      }
+  }
+  const result = rows.map(row => row[n]);
+  return result.every(Number.isFinite) ? result : null;
+}
+/** Local preview only; execution uses an independently checked MoveIt pose goal. */
+export function solvePoseIk(chain: KinematicJoint[], seed: number[], target: {
+  position: Vec3;
+  quaternion: Quat;
+}, options: PoseIkOptions = {}): PoseIkResult {
+  if (target.position.length !== 3 || !target.position.every(Number.isFinite))
+    throw new Error("TCP 位置必须包含三个有限数值");
+  const quaternion = normalizeQuaternion(target.quaternion), joints = actuatedJoints(chain);
+  if (seed.length !== joints.length || !seed.every(Number.isFinite))
+    throw new Error("IK 起点关节反馈不完整或无效");
+  const tolerance = options.tolerance ?? IK_POSITION_TOLERANCE;
+  const orientationTolerance = options.orientationTolerance ?? IK_ORIENTATION_TOLERANCE;
+  const weight = options.orientationWeight ?? .15, step = options.jacobianStep ?? 1e-5;
+  const stepLimit = options.stepLimit ?? .25, maxIterations = options.maxIterations ?? 90;
+  const maxRestarts = options.maxRestarts ?? 6, damping = options.damping ?? 1e-3;
+  if (![tolerance, orientationTolerance, weight, step, stepLimit, damping].every(v => Number.isFinite(v) && v > 0) ||
+    !Number.isInteger(maxIterations) || maxIterations < 0 || !Number.isInteger(maxRestarts) || maxRestarts < 0)
+    throw new Error("IK 参数无效");
+  const residual = (values: number[]) => {
+    const frame = forwardKinematics(chain, values);
+    const p = target.position.map((v, i) => v - frame.position[i]);
+    const r = quaternionRotationVector(quaternion, frame.quaternion);
+    return { vector: [...p, ...r.map(v => v * weight)], positionError: Math.hypot(...p), orientationError: Math.hypot(...r) };
+  };
+  const score = (r: ReturnType<typeof residual>) => r.vector.reduce((sum, v) => sum + v * v, 0);
+  const reached = (r: ReturnType<typeof residual>) => r.positionError <= tolerance && r.orientationError <= orientationTolerance;
+  const solved = (r: ReturnType<typeof residual>) => r.positionError <= Math.min(tolerance, .001) && r.orientationError <= Math.min(orientationTolerance, .003);
+  const initial = seed.map((v, i) => clampToLimits(joints[i], v));
+  let best = { positions: initial, ...residual(initial) }, iterations = 0;
+  const random = makeRandom(options.seed ?? 7);
+  for (let restart = 0; restart <= maxRestarts; restart++) {
+    const values = restart === 0 ? [...initial] : randomStart(joints, initial, random);
+    let current = residual(values), lambda = damping;
+    for (let iteration = 0; iteration < maxIterations && !solved(current) && joints.length > 0; iteration++) {
+      iterations++;
+      const base = forwardKinematics(chain, values);
+      const jacobian = Array.from({ length: 6 }, () => Array<number>(joints.length).fill(0));
+      for (let k = 0; k < joints.length; k++) {
+        const perturbed = [...values];
+        perturbed[k] += step;
+        const frame = forwardKinematics(chain, perturbed), rotation = quaternionRotationVector(frame.quaternion, base.quaternion);
+        for (let row = 0; row < 3; row++) {
+          jacobian[row][k] = (frame.position[row] - base.position[row]) / step;
+          jacobian[row + 3][k] = rotation[row] * weight / step;
+        }
+      }
+      const gram = Array.from({ length: 6 }, (_, row) => Array.from({ length: 6 }, (_, col) => joints.reduce((sum, _, k) => sum + jacobian[row][k] * jacobian[col][k], 0)));
+      const scale = Math.max(gram.reduce((sum, row, i) => sum + row[i], 0) / 6, 1e-9);
+      let accepted = false;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const normal = gram.map((row, i) => row.map((v, j) => v + (i === j ? lambda * scale : 0)));
+        const coefficients = solveLinearSystem(normal, current.vector);
+        if (!coefficients) {
+          lambda *= 4;
+          continue;
+        }
+        const trial = values.map((v, k) => clampToLimits(joints[k], v + Math.max(-stepLimit, Math.min(stepLimit, coefficients.reduce((sum, w, row) => sum + jacobian[row][k] * w, 0)))));
+        const candidate = residual(trial);
+        if (score(candidate) < score(current)) {
+          values.splice(0, values.length, ...trial);
+          current = candidate;
+          lambda = Math.max(lambda / 3, 1e-8);
+          accepted = true;
+          break;
+        }
+        lambda = Math.min(lambda * 4, 1e8);
+      }
+      if (!accepted)
+        break;
+    }
+    // A valid pose outranks a slightly smaller weighted error with an invalid component.
+    if ((reached(current) && !reached(best)) || (reached(current) === reached(best) && score(current) < score(best)))
+      best = { positions: [...values], ...current };
+    if (reached(best))
+      break;
+  }
+  return { positions: best.positions, positionError: best.positionError, orientationError: best.orientationError, iterations, reached: reached(best) };
+}

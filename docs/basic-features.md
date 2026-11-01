@@ -184,11 +184,12 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 - Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先；留空时优先选择 tool0/tcp/ee_link 等工具坐标系，其次选择 gripper/flange 等稳定 link，可以是带手指子 link 的夹爪基座，不因手指层级更深就选到 finger/jaw。无命名工具 link 时回退到最深叶子 link。视图显示实际使用的 link；rebotarm 默认选择 `gripper_link`。
 - 仅当 `/controller_manager` 存在 active 的轨迹控制器时开放拖拽；识别规则为类型 `joint_trajectory_controller/JointTrajectoryController` 优先、名称含 traj 次之。ROS Control 列表会用“轨迹”标记对应 Controller，Robot View 右上角显示其名称和 `/…/joint_trajectory` Topic。
-- 拖拽手柄跟随 TCP link 的世界位姿，并保持屏幕上的恒定尺寸；按住后鼠标移动映射到过 TCP 的正交平面（相机正对平面），拖拽期间暂停轨道相机；Esc 取消并把模型恢复到实时反馈位姿。
-- 拖拽过程按帧求位置逆解：有限差分雅可比 + 自适应阻尼最小二乘，关节限位钳制，单次下降卡住时做确定性随机重启。仅做位置求解，TCP 姿态保持不变；只有残差不超过 5 mm 才允许下发，下发成功时会把实际残差一并展示，避免暗示夹爪精确落在目标点上。
+- TCP 目标使用红 X、绿 Y、蓝 Z 平移箭头及旋转圆环，保持屏幕尺寸；可选基座轴或随工具旋转的轴。平移保持目标姿态，旋转保持目标位置；抓取手柄时暂停轨道相机，其他位置仍可移动相机。Esc、丢失指针捕获、隐藏视图、模型/TCP/连接变化均取消预览并恢复实测姿态。
+- 拖拽过程按帧求位置逆解：有限差分雅可比 + 自适应阻尼最小二乘，关节限位钳制，单次下降卡住时做确定性随机重启。同时求解位置与姿态，保留关节限位、自适应阻尼和确定性重启；只有位置误差 ≤5 mm 且姿态角误差 ≤0.02 rad 才允许确认，界面分别显示 mm/度残差。
 - 自动订阅 active 控制器的 `controller_state`（旧版本兼容 `state`）读取实际 `joint_names`，按该列表与顺序生成轨迹，不再把 JointState 中额外的手指关节发给只控制 joint1–6 的机械臂控制器。未收到有效列表时手柄不可拖拽，订阅失败显示具体错误。TCP 链含有控制器不接收的关节时拒绝规划并提示检查 TCP link。
 - 正运动学和逆解保留 TCP 链上的 fixed joint 与工具偏移；控制器负责但不在 TCP 链上的关节保持当前反馈，其他反馈关节不进入轨迹且不被预览改写。反馈位置缺失、非有限值或关节名重复时拒绝规划，不以零补齐。拖拽期间预览位姿不被实时 JointState 覆盖。
-- 松开鼠标保留 IK 目标预览，不触发运动。可填写可选夹爪目标（mm），点击「确认执行」才按最新反馈重算目标，通过 Bridge 的 `position_move` 统一进行 MoveIt 碰撞规划与执行；夹爪不参与机械臂位置 IK，也可单独确认夹爪运动。
+- XYZ 可按 mm、Roll/Pitch/Yaw 可按度数值编辑；数值始终相对 URDF 根坐标系，拖拽坐标系切换只改变手柄轴方向。RPY 使用固定轴 XYZ（Rz·Ry·Rx），内部四元数避免 ±180° 换向和欧拉角奇异；Pitch 接近 ±90° 时显示角度不唯一。松手保留目标标记，未收敛时标记仍保留在期望位姿，不误跟随 IK 残差。
+- 点击「确认执行」才按最新反馈重新做 6D 预览校验，然后通过 `position_move.tcp_pose` 将完整 XYZ+四元数交给 MoveIt 的位置、姿态约束规划；Bridge 保留固定 TCP→腕部偏移，校验整条定时轨迹，并以 FK 核对规划终点与实际到位的位姿。夹爪可作为独立目标一起提交，也可单独确认夹爪运动；不参与机械臂 IK。旧 Bridge 缺少 `tcp_pose_supported` 时禁用位姿执行，不回退为位置目标或本地关节目标。
 - IK 未收敛时保留预览并在视图内展示原因，禁止确认执行；可用「恢复实时」或 Esc 撤销。
 - 确认执行需要会话安全解锁、MoveIt 就绪和新鲜反馈。Bridge 校验当前控制器、模型、起点和目标后才执行。ACK 表示受理，不代表规划成功或实际到位。
 - Bridge 只向以 `/joint_trajectory` 结尾且仅含字母数字下划线斜杠的 Topic 发布，并要求该 Topic 已有订阅者；关节名重复、点数/长度不一致、非有限数值以及非严格递增的 `time_from_start` 都会被拒绝。
@@ -232,7 +233,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort、关节掩码解析/校验及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |
-| 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置逆解收敛与限位钳制、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
+| 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置/姿态逆解收敛与限位钳制、四元数/RPY 转换、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
 | 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |
 | 轨迹规划 | IK 目标与失败边界、TCP 松手预览后确认、夹爪能力门禁、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |
 | Bridge 轨迹 | Topic 白名单、关节名/点数/长度/有限值/时间递增校验、错误文案、Duration 拆分 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
@@ -296,7 +297,7 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 ## Robot View 规划执行终端
 
 - Robot View 底部独立日志区域支持折叠、关键词搜索、跟随最新、手动滚动暂停跟随及导出 `.log`。不遮挡 3D 画布；切换到位置页执行的点位记录仍可在此查看。
-- 规划执行过程记录命令 ID、时间、阶段、目标/实测关节、指定/推荐时长、轨迹点数、MoveIt Action 结果和错误码，以及拒绝、取消、反馈故障和停止/到位确认。TCP 拖拽另记录本地预览、IK/发布结果；发布 ACK 不表示到位。
+- 规划执行过程记录命令 ID、时间、阶段、目标/实测关节、指定/推荐时长、轨迹点数、MoveIt Action 结果和错误码，以及拒绝、取消、反馈故障和停止/到位确认。TCP 拖拽另记录本地位姿预览与 IK 收敛结果，确认后共用规划/执行日志；受理 ACK 不表示到位。
 - 下拉切换“MoveIt 原始输出”可查看真实规划器日志（含 OMPL、碰撞和执行报错），复用既有 SSH 搜索/下载入口。只有选择该来源且窗口可见时读取文件。
 - 过程窗口在当前连接中保留最近 5000 条，重连清空；导出包含保留的全部记录，不受搜索影响（32 MiB 上限）。Bridge 最近 2048 条用于增量同步，每批最多 256 条；窗口溢出有提示。Bridge 端过程记录也写入 ROS 日志与进程输出（常规启动为 `/tmp/easy_debug_bridge.log`，Bridge 重启会替换该输出文件）；长期保留请在重启前导出，非永久无限存储。
 - 控制器服务查询每秒最多一次，最多等待 2 秒；上次成功校验的激活状态在下一次查询等待期间最多保留 3.1 秒。查询超时/服务不可用即失效，不以持续收到 Topic 作为永久 active 证明。收到 inactive、类型或接口不符的结果立即阻止执行；硬件、JointState 和 JTC 实时反馈仍要求 1 秒内新鲜。慢查询耗时和超时原因均记录，过期响应不能恢复状态。
@@ -308,3 +309,7 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 - 「保存当前姿态」在 Bridge 提供新鲜标定夹爪快照时默认带上夹爪；缺失时明确提示只采集六轴，并可手动填写。保存编辑不执行运动。模型不直接应用 `/stm32/joint_states` 的原始夹爪值；优先订阅 `/robot_feedback/joint_states` 的高频标定位置，状态查询快照作为回退，两者一秒过期失效。右手指随主手指 mimic 联动。
 - 夹爪执行额外核对模型标定、有效范围、专用 JTC position+velocity、bit0x40、反馈新鲜度与一致性。未就绪给出原因，旧 Bridge 不静默丢弃夹爪目标。夹爪限幅按当前标定配置（首版不超过 0–50 mm、20 mm/s、40 mm/s²），不采用 URDF 71.5 mm 上限替代标定行程。
 - 夹爪 Action 成功后还须误差 ≤1 mm、速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才完成；取消、故障、断线共享同一运动锁与停止核验。位置控制遇阻未到位显示失败，不报告抓取成功。
+
+### 完整 TCP 位姿目标的验证边界
+
+TCP Pose 执行不保证末端走笛卡尔直线或复现鼠标路径，MoveIt 仍规划关节空间避碰路径。Bridge 只接受 URDF 根坐标系和 joint6 之后的稳定 fixed TCP link（或 joint6 子 link），拒绝可动手指、未知 link、非有限值或无效四元数。完整 Pose 请求始终 plan-only，FK 终点满足 ≤5 mm、≤0.02 rad 才进入 ExecuteTrajectory；成功后仍需实际位姿满足相同门限并停稳。TCP+夹爪规划沿用现有 `arm_with_gripper` 组；已在隔离 MoveIt 环境验证其自动组合机械臂 IK 和夹爪关节采样，无需修改实际控制器配置。
