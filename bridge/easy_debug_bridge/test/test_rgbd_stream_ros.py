@@ -108,11 +108,11 @@ def main(binary):
                     return None
             ws = wait_for(connect)
             wait_for(lambda: ws.request('clock_sync_info')['state'] == 'synchronized')
-            def subscribe(client, token, width=2, height=2):
+            def subscribe(client, token, width=2, height=2, target_frame='base_link', max_fps=12.):
                 reply = client.request('subscribe_rgbd', subscription_id=token,
                     rgb_topic='/clock_test/rgb', depth_topic='/clock_test/depth',
-                    camera_info_topic='/clock_test/info', target_frame='base_link',
-                    max_width=width, max_height=height, max_fps=12.)
+                    camera_info_topic='/clock_test/info', target_frame=target_frame,
+                    max_width=width, max_height=height, max_fps=max_fps)
                 assert reply['op'] == 'subscribed_rgbd' and reply['subscription_id'] == token, reply
                 return reply
             def drain(client, duration):
@@ -140,8 +140,18 @@ def main(binary):
             def rgbd_endpoints(topic):
                 return [endpoint for endpoint in robot.get_subscriptions_info_by_topic(topic)
                         if endpoint.node_name == 'easy_debug_rgbd_receiver']
+            topics = ('/clock_test/rgb', '/clock_test/depth', '/clock_test/info')
+            def wait_readers(expected):
+                observed = {}
+                def matches():
+                    observed.update({topic: len(rgbd_endpoints(topic)) for topic in topics})
+                    return observed if all(count == expected for count in observed.values()) else None
+                try:
+                    return wait_for(matches, timeout=6)
+                except AssertionError as error:
+                    raise AssertionError({'expected_readers_per_topic': expected, 'observed': observed}) from error
             endpoints = []
-            for topic in ('/clock_test/rgb', '/clock_test/depth', '/clock_test/info'):
+            for topic in topics:
                 matched = wait_for(lambda topic=topic: rgbd_endpoints(topic))
                 assert len(matched) == 1, (topic, matched)
                 endpoints.extend(matched)
@@ -167,10 +177,23 @@ def main(binary):
                 check_unique(good)
             # A second reader must receive its own frames and token.
             second = wait_for(connect)
-            subscribe(second, 'parallel')
+            subscribe(second, 'parallel', target_frame='clock_mount', max_fps=8.)
+            wait_readers(1)  # Both clients share one reader for each source topic.
             good, errors = frames(second, 1.5)
             assert len(good) >= 6 and not errors, (len(good), errors)
-            assert all(m['subscription_id']=='parallel' for m in good)
+            assert all(m['subscription_id']=='parallel' and m['target_frame']=='clock_mount'
+                       and abs(m['pose']['translation']['x']-.1)<1e-6 for m in good)
+            # Removing one client must retain the source and the other worker.
+            ws.request('unsubscribe_rgbd')
+            wait_readers(1)
+            good, errors = frames(second, 1.)
+            assert len(good) >= 3 and not errors, (len(good), errors)
+            assert all(m['subscription_id']=='parallel' and m['target_frame']=='clock_mount'
+                       and abs(m['pose']['translation']['x']-.1)<1e-6 for m in good)
+            subscribe(ws, 'first-resumed')
+            wait_readers(1)
+            good, errors = frames(ws, 1.)
+            assert good and not errors and all(m['subscription_id']=='first-resumed' for m in good)
 
             for component in ('tf_enabled', 'depth_enabled'):
                 ws.tf_errors.clear()
@@ -189,15 +212,20 @@ def main(binary):
 
             # Unsubscribe + resubscribe excludes every prior token after the ACK.
             ws.request('unsubscribe_rgbd')
+            wait_readers(1)
+            second.request('unsubscribe_rgbd')
+            wait_readers(0)  # No clients remain: release all three DDS readers.
             ws.rgbd.clear();ws.tf_errors.clear()
             drain(ws, .25)
             assert not ws.rgbd and not ws.tf_errors
             subscribe(ws, 'replacement')
+            wait_readers(1)  # A fresh subscription recreates exactly three readers.
             good, errors = frames(ws, 1.)
             assert good and not errors
             assert all(m['subscription_id']=='replacement' for m in good)
             # Also replace directly while an old pending TF pair may exist.
             subscribe(ws, 'newest')
+            wait_readers(1)
             good, errors = frames(ws, 1.)
             assert good and all(m['subscription_id']=='newest' for m in good)
 
@@ -206,13 +234,16 @@ def main(binary):
             slow = wait_for(connect)
             slow.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
             subscribe(slow, 'slow', 640, 480)
+            wait_readers(1)  # Different preview sizes still share the same source.
             robot.width, robot.height = 640, 480
             good, errors = frames(ws, 4.)
             assert len(good) >= 12 and not errors, (len(good), errors)
             check_unique(good)
+            wait_readers(1)
             assert process.poll() is None
             print('PASS: 80/120ms delayed TF under continuous input; TF/depth outage grace and recovery; '
-                  'unique pairs, independent clients, unsubscribe/resubscribe tokens, slow-reader isolation')
+                  'unique pairs, independent clients, shared source readers, partial/all-client release, '
+                  'unsubscribe/resubscribe tokens, slow-reader isolation')
         except Exception:
             print('Bridge process returncode:', process.poll(), file=sys.stderr)
             log.seek(0)

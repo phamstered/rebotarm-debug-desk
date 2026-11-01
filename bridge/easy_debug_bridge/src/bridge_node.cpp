@@ -437,6 +437,7 @@ class BridgeNode : public rclcpp::Node {
           jobs.swap(rgbd_jobs_); retired.swap(retired_rgbd_); }
         for (auto &job : jobs) job();
         retired.clear(); // No rmw_wait or callback is active on this executor.
+        prune_rgbd_sources();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
       rgbd_receiver_stop_.store(true);
@@ -1389,6 +1390,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
 
+  struct RgbdSource;
   struct RgbdSession {
     struct Pair {
       sensor_msgs::msg::Image::SharedPtr rgb, depth;
@@ -1405,9 +1407,9 @@ class BridgeNode : public rclcpp::Node {
     uint32_t max_height = 240;
     double max_fps = 12.0;
     int64_t stamp_tolerance_ns = 50000000;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr rgb_sub;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub;
-    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub;
+    // Only live/retired sessions own the source. Final ownership is released
+    // by the RX thread outside spin_some after this session's worker is joined.
+    std::shared_ptr<RgbdSource> source;
     std::deque<sensor_msgs::msg::Image::SharedPtr> rgb_queue, depth_queue;
     sensor_msgs::msg::CameraInfo::SharedPtr latest_info;
     std::optional<Pair> pending;
@@ -1424,6 +1426,73 @@ class BridgeNode : public rclcpp::Node {
     std::chrono::steady_clock::time_point last_success{};
     std::mutex mutex;
   };
+
+  struct RgbdSource {
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr rgb_sub, depth_sub;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub;
+    // Accessed only by the private RX executor/thread, including attach jobs.
+    std::vector<std::weak_ptr<RgbdSession>> interests;
+  };
+  using RgbdSourceKey = std::array<std::string, 3>;
+
+  void prune_rgbd_sources() {
+    // RX-thread only. Weak map entries must never keep abandoned readers alive.
+    for (auto it = rgbd_sources_.begin(); it != rgbd_sources_.end();) {
+      if (it->second.expired()) it = rgbd_sources_.erase(it);
+      else ++it;
+    }
+  }
+
+  template<typename Callback>
+  void for_rgbd_interests(const std::shared_ptr<RgbdSource> &source, Callback callback) {
+    // Receive callbacks and subscription jobs share one RX thread. Each session
+    // retains independent matching queues, limits, pending TF work and output.
+    for (auto it = source->interests.begin(); it != source->interests.end();) {
+      const auto session = it->lock();
+      if (!session || !session->active.load()) it = source->interests.erase(it);
+      else { callback(session); ++it; }
+    }
+  }
+
+  void attach_rgbd_source(const std::shared_ptr<RgbdSession> &session,
+                          const rclcpp::QoS &rgb_qos, const rclcpp::QoS &depth_qos,
+                          const rclcpp::QoS &info_qos) {
+    // Called exclusively from an RX job outside spin_some, so partially created
+    // subscriptions also unwind on the RX thread if any creation fails.
+    if (!session->active.load()) return;
+    prune_rgbd_sources();
+    const RgbdSourceKey key{session->rgb_topic, session->depth_topic, session->camera_info_topic};
+    std::shared_ptr<RgbdSource> source;
+    if (const auto found = rgbd_sources_.find(key); found != rgbd_sources_.end()) source = found->second.lock();
+    if (!source) {
+      source = std::make_shared<RgbdSource>();
+      const std::weak_ptr<RgbdSource> weak_source = source;
+      rclcpp::SubscriptionOptions options;
+      options.callback_group = rgbd_receive_group_;
+      source->rgb_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::Image>(
+          key[0], rgb_qos, [this, weak_source](sensor_msgs::msg::Image::SharedPtr message) {
+            if (const auto current = weak_source.lock())
+              for_rgbd_interests(current, [this, &message](const auto &target) { on_rgbd_image(target, message, true); });
+          }, options);
+      source->depth_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::Image>(
+          key[1], depth_qos, [this, weak_source](sensor_msgs::msg::Image::SharedPtr message) {
+            if (const auto current = weak_source.lock())
+              for_rgbd_interests(current, [this, &message](const auto &target) { on_rgbd_image(target, message, false); });
+          }, options);
+      source->info_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::CameraInfo>(
+          key[2], info_qos, [this, weak_source](sensor_msgs::msg::CameraInfo::SharedPtr message) {
+            if (const auto current = weak_source.lock())
+              for_rgbd_interests(current, [&message](const auto &target) {
+                std::lock_guard<std::mutex> lock(target->mutex);
+                if (target->active.load()) target->latest_info = message;
+              });
+          }, options);
+      rgbd_sources_[key] = source;
+    }
+    for_rgbd_interests(source, [](const auto &) {}); // Prune retired interests before registration.
+    session->source = source;
+    source->interests.push_back(session);
+  }
 
   void clear_rgbd_session(uint64_t client) {
     std::shared_ptr<RgbdSession> previous;
@@ -1520,28 +1589,9 @@ class BridgeNode : public rclcpp::Node {
     const auto info_qos = easy_debug_bridge::rgbd_stream_qos(compatible_qos(info_topic));
     const uint64_t client = session->id();
     const std::weak_ptr<RgbdSession> weak = rgbd;
-    rclcpp::SubscriptionOptions receive_options;
-    receive_options.callback_group = rgbd_receive_group_;
     try {
-      on_rgbd_receiver([this, rgbd, weak, rgb_topic, depth_topic, info_topic, rgb_qos, depth_qos, info_qos, receive_options] {
-        rgbd->rgb_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::Image>(
-            rgb_topic, rgb_qos,
-            [this, weak](const sensor_msgs::msg::Image::SharedPtr message) {
-              if (const auto current = weak.lock()) on_rgbd_image(current, message, true);
-            }, receive_options);
-        rgbd->depth_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::Image>(
-            depth_topic, depth_qos,
-            [this, weak](const sensor_msgs::msg::Image::SharedPtr message) {
-              if (const auto current = weak.lock()) on_rgbd_image(current, message, false);
-            }, receive_options);
-        rgbd->info_sub = rgbd_receiver_node_->create_subscription<sensor_msgs::msg::CameraInfo>(
-            info_topic, info_qos,
-            [weak](const sensor_msgs::msg::CameraInfo::SharedPtr message) {
-              if (const auto current = weak.lock()) {
-                std::lock_guard<std::mutex> lock(current->mutex);
-                if (current->active.load()) current->latest_info = message;
-              }
-            }, receive_options);
+      on_rgbd_receiver([this, rgbd, rgb_qos, depth_qos, info_qos] {
+        attach_rgbd_source(rgbd, rgb_qos, depth_qos, info_qos);
       });
     } catch (...) {
       rgbd->active.store(false);
@@ -1819,6 +1869,8 @@ class BridgeNode : public rclcpp::Node {
   std::deque<std::function<void()>> rgbd_jobs_;
   std::vector<std::shared_ptr<RgbdSession>> retired_rgbd_;
   std::unordered_map<uint64_t, std::shared_ptr<RgbdSession>> rgbd_sessions_;
+  // RX-thread only; never owns the readers beyond the last interested session.
+  std::map<RgbdSourceKey, std::weak_ptr<RgbdSource>> rgbd_sources_;
   std::mutex tf_mutex_;
   std::shared_ptr<TfContext> tf_context_;
   rclcpp::CallbackGroup::SharedPtr clock_callback_group_;
