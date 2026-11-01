@@ -129,7 +129,26 @@ export type TrajectoryPoint = {
 
 export type TcpPose = { frame_id: string; tcp_link: string; position: [number, number, number]; orientation: [number, number, number, number] };
 
+export type ClockSyncInfo = {
+  supported: boolean;
+  state: "waiting" | "synchronized" | "unsynchronized" | "stale";
+  message: string;
+  source_topic: string;
+  /** Source stamp minus Jetson ROS time at receipt; positive means ahead. */
+  source_offset_ms?: number;
+  feedback_age_ms?: number;
+  generation: number;
+  firmware?: { supported: boolean; synchronized?: boolean; sync_age_ms?: number; failure_count?: number; last_sync_duration_ms?: number };
+};
+
 export type BridgeEnvelope = {
+  supported?: boolean;
+  state?: ClockSyncInfo["state"];
+  source_topic?: string;
+  source_offset_ms?: number;
+  feedback_age_ms?: number;
+  generation?: number;
+  firmware?: ClockSyncInfo["firmware"];
   op: string;
   request_id?: string;
   topic?: string;

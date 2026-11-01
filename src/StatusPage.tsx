@@ -1,3 +1,5 @@
+import { ClockSyncStatus } from "./ClockSyncStatus";
+import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentServiceStatus,
@@ -112,6 +114,7 @@ function StatusCard({
 }
 
 export function StatusPage({
+  clockSync,
   stage,
   sshOk,
   bridgeUp,
@@ -139,6 +142,7 @@ export function StatusPage({
   onQuickAction,
   onClearHighlight,
 }: {
+  clockSync?: ClockStatus;
   stage: string;
   sshOk: boolean;
   bridgeUp: boolean;
@@ -278,6 +282,7 @@ export function StatusPage({
             : zone.cards;
           const body = (
             <>
+              {zone.id === "hardware" && clockSync && <ClockSyncStatus value={clockSync} />}
               {isControl && (
                 <section className="status-mode-strip" aria-label="控制模式启停">
                   <header className="status-mode-current" aria-live="polite">

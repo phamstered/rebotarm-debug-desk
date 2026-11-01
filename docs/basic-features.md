@@ -313,3 +313,9 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 ### 完整 TCP 位姿目标的验证边界
 
 TCP Pose 执行不保证末端走笛卡尔直线或复现鼠标路径，MoveIt 仍规划关节空间避碰路径。Bridge 只接受 URDF 根坐标系和 joint6 之后的稳定 fixed TCP link（或 joint6 子 link），拒绝可动手指、未知 link、非有限值或无效四元数。完整 Pose 请求始终 plan-only，FK 终点满足 ≤5 mm、≤0.02 rad 才进入 ExecuteTrajectory；成功后仍需实际位姿满足相同门限并停稳。TCP+夹爪规划沿用现有 `arm_with_gripper` 组；已在隔离 MoveIt 环境验证其自动组合机械臂 IK 和夹爪关节采样，无需修改实际控制器配置。
+
+### 时钟同步健康显示
+
+Status 的「硬件健康」和 Robot View RGBD 区域显示 Jetson 返回的时钟同步状态、关节时间超前/落后毫秒数和异常原因。详情包含反馈接收帧龄、时间代次与可用的固件同步诊断。RGBD 原始错误放在可展开详情内，避免长堆栈遮挡画布。
+
+诊断每秒最多一次，使用独立并发保护；断线、换连接和过期响应不能复用旧的同步成功状态。Mac 不用本机时钟推算 STM32 与 Jetson 的偏差。老 Bridge 明确显示不支持时钟诊断，升级后重连可重新检查；健康提示不替代控制器、硬件和运动安全门。

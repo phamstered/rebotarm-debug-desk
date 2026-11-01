@@ -401,3 +401,16 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 - Bridge 将 TCP fixed 偏移转换为机械臂求解器 tip 的位置与姿态约束，位置球半径 3 mm、旋转向量分量容差 0.005 rad。夹爪存在时附带独立 JointConstraint；其模型、标定、接口与硬件门禁不变。
 - Pose 始终 plan-only；执行前核对关节集合、限位、全段时序/速度/加速度、实测起点及 FK 终点（TCP 位置 ≤5 mm、姿态最短角 ≤0.02 rad）。姿态被规划器忽略时，即使 Action success 也拒绝 ExecuteTrajectory。
 - Action 结果、取消和心跳沿用点位协议。只有实测 TCP 位姿和计划关节到位、所有受控轴停稳持续 200 ms 才成功；姿态不达标报告失败。MoveIt 的关节空间路径不保证笛卡尔直线或逐点跟随鼠标。
+
+## 时钟同步健康
+
+桌面连接后每秒请求 `{"op":"clock_sync_info","request_id":"uuid"}`，同一时间最多一个请求。响应使用 Jetson 的 ROS 时间和单调接收帧龄，Mac 不计算两台主机的时钟偏差：
+
+```json
+{"op":"clock_sync_info","request_id":"uuid","supported":true,"state":"unsynchronized","message":"关节反馈时间超前，等待重新同步","source_topic":"/stm32/joint_states","source_offset_ms":15400,"feedback_age_ms":4,"generation":1}
+```
+
+- `state`：`waiting` 等待反馈，`synchronized` 时间已对齐，`unsynchronized` 时间异常，`stale` 反馈过期。`source_offset_ms` 是源 stamp 减去 Jetson 接收时 ROS 时间，正值表示超前；`feedback_age_ms` 使用单调接收时间。`generation` 标识时间基准代次，源时间大幅回拨或主机时钟跳变后更新。
+- 可选 `firmware` 包含 `supported`，以及可选 `synchronized`、`sync_age_ms`、`failure_count`、`last_sync_duration_ms`。旧固件缺少这些诊断时不得声称已验证固件同步状态。
+- Bridge 校验源时间不超前 50 ms、落后不足 1 秒；首次有效、长时间断流及大回拨后需连续 200 ms 有效反馈。v2 固件诊断读取 `/stm32/microros_diagnostics` 的 24 项 schema：索引 16 为同步状态、17 为距成功同步毫秒数、19 为失败数、20 为最近耗时、22 为固件时间代次；同步有效期 15 秒、诊断接收有效期 3 秒。未知或无效新 schema 不降级为同步成功。
+- 桌面请求期限 2 秒，成功状态超过 2.5 秒未刷新转为过期；断线和连接配置变化立即清除上一会话。未知操作或 `supported:false` 显示不支持并停止本会话重试。无效/非有限偏差、帧龄及不完整的成功状态不视为同步成功。

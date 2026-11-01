@@ -16,6 +16,7 @@ import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
+import { useClockSync } from "./clockSyncLogic";
 import { usePositionMotion } from "./positionMotionLogic";
 import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
@@ -632,6 +633,7 @@ export default function App() {
   }, []);
 
   const positionProfileKey = profileKeyFor(profile);
+  const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]));
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
     statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
       activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先激活 arm_trajectory_controller 轨迹控制" : "");
@@ -1816,6 +1818,7 @@ export default function App() {
       <div className="app-page-content">
       {appPage === "status" ? (
         <StatusPage
+          clockSync={clockSync}
           workflow={armWorkflow.workflow}
           stage={stage}
           sshOk={sshOk}
@@ -2043,6 +2046,7 @@ export default function App() {
         <div className="robot-view-pane" hidden={centerTab !== "robot"}>
           {(robotVisited || (appPage === "dashboard" && centerTab === "robot")) && (
             <UrdfViewer
+              clockSync={clockSync}
               active={appPage === "dashboard" && centerTab === "robot" && windowVisible}
               xml={urdf}
               jointState={jointState}
