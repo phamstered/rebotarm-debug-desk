@@ -69,6 +69,10 @@ if(BUILD_TESTING)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gripper_motion_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(gripper_motion_ros PROPERTIES
       ENVIRONMENT "ROS_DOMAIN_ID=213;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
+    add_test(NAME controller_health_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_controller_health_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(controller_health_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=214;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 120)
   endif()
 endif()
 ament_package()
