@@ -1,4 +1,3 @@
-import { ClockSyncStatus } from "./ClockSyncStatus";
 import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -180,6 +179,7 @@ export function StatusPage({
   const [supported, setSupported] = useState(false);
   const controlStopped = Boolean(workflow && ["stop", "disable-stop"].includes(workflow.mode) && workflow.stage === "ready" && !workflow.failed && hardwareStatus?.mode === 3 && hardwareStatus?.fault_code === 0);
   const cards = buildStatusCards({
+    clockSync,
     controlStopped,
     stage,
     sshOk,
@@ -278,11 +278,10 @@ export function StatusPage({
         {zones.map((zone) => {
           const isControl = zone.id === "control";
           const zoneCards = isControl
-            ? zone.cards.filter((card) => card.id === activeMode)
+            ? zone.cards.filter((card) => card.id === activeMode || card.id === "ros2-control" || card.id === "ros-ready")
             : zone.cards;
           const body = (
             <>
-              {zone.id === "hardware" && clockSync && <ClockSyncStatus value={clockSync} />}
               {isControl && (
                 <section className="status-mode-strip" aria-label="控制模式启停">
                   <header className="status-mode-current" aria-live="polite">
@@ -330,7 +329,7 @@ export function StatusPage({
                   <StatusCard
                     key={card.id}
                     card={card}
-                    highlighted={!isControl && highlightCardId === card.id && selectedTab === zone.id}
+                    highlighted={highlightCardId === card.id && selectedTab === zone.id}
                     onAction={onCardAction}
                     compact={zone.id === "connection"}
                   />

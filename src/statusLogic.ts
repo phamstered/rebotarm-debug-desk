@@ -1,3 +1,4 @@
+import type { ClockSyncStatus } from "./clockSyncLogic";
 import type {
   AgentServiceStatus,
   ArmModeStatus,
@@ -60,7 +61,7 @@ export type StatusCardModel = {
   actions?: StatusCardAction[];
 };
 
-export type StatusZoneId = "connection" | "hardware" | "control" | "sensors";
+export type StatusZoneId = "connection" | "hardware" | "control";
 
 export type StatusZoneModel = {
   id: StatusZoneId;
@@ -87,9 +88,8 @@ export const STATUS_ZONE_META: Array<{
   cardIds: string[];
 }> = [
   { id: "connection", title: "连接", cardIds: ["ssh", "bridge", "agent"] },
-  { id: "hardware", title: "硬件健康", primary: true, cardIds: ["usb", "hardware", "ros2-control", "ros-ready"] },
-  { id: "control", title: "控制模式", cardIds: ["teleop", "trajectory", "vla"] },
-  { id: "sensors", title: "传感器", cardIds: ["realsense"] },
+  { id: "hardware", title: "硬件健康", primary: true, cardIds: ["usb", "hardware", "clock-sync", "realsense"] },
+  { id: "control", title: "控制模式", cardIds: ["ros2-control", "ros-ready", "teleop", "trajectory", "vla"] },
 ];
 
 export function toneLabel(tone: StatusTone): string {
@@ -379,7 +379,34 @@ export function buildUsbCard(input: {
   };
 }
 
+export function buildClockSyncCard(value: ClockSyncStatus): StatusCardModel {
+  const labels: Record<ClockSyncStatus["state"], string> = {
+    waiting: "等待同步", synchronized: "时间已对齐", unsynchronized: "时间失步",
+    stale: "状态过期", unsupported: "诊断不支持", disconnected: "未连接",
+  };
+  const tone: StatusTone = value.state === "synchronized" ? "ok"
+    : value.state === "unsynchronized" ? "fail"
+    : value.state === "stale" ? "warn"
+    : value.state === "disconnected" ? "idle" : "unknown";
+  const rows: StatusRow[] = [
+    { label: "相对 Jetson", value: value.source_offset_ms === undefined ? "—"
+      : `${value.source_offset_ms >= 0 ? "超前" : "落后"} ${Math.abs(value.source_offset_ms).toFixed(1)} ms` },
+    { label: "反馈源", value: value.source_topic || "等待反馈源" },
+    { label: "反馈接收帧龄", value: value.feedback_age_ms === undefined ? "—" : `${value.feedback_age_ms.toFixed(0)} ms` },
+    { label: "时间代次", value: String(value.generation) },
+  ];
+  if (value.firmware?.supported) {
+    rows.push({ label: "固件同步", value: value.firmware.synchronized === true ? "已同步" : value.firmware.synchronized === false ? "未同步" : "待确认" });
+    if (value.firmware.sync_age_ms !== undefined) rows.push({ label: "距成功同步", value: `${value.firmware.sync_age_ms.toFixed(0)} ms` });
+  }
+  return {
+    id: "clock-sync", title: "时钟同步", tone, summary: labels[value.state], rows,
+    ...(tone === "fail" ? { failureReason: value.message } : { detail: value.message }),
+  };
+}
+
 export function buildStatusCards(input: {
+  clockSync?: ClockSyncStatus;
   stage: string;
   sshOk: boolean;
   bridgeUp: boolean;
@@ -836,6 +863,7 @@ export function buildStatusCards(input: {
     trajectoryCard,
     vlaCard,
     realsenseCard,
+    ...(input.clockSync ? [buildClockSyncCard(input.clockSync)] : []),
   ];
 }
 
