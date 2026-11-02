@@ -127,7 +127,10 @@ All Pose requests use plan-only and the existing shared ExecuteTrajectory/cancel
 
 Topics (`dashboard` remains its persisted identifier) owns the topic list, Graph,
 Inspector and read-only controller cards. Motion (`motion`) owns Robot View, saved
-positions, a collapsible Controller management sidebar and their shared motion log.
+positions, a collapsible Controller management sidebar and a bounded shared output row
+with execution-log/report tabs. Reports retain the execution snapshot outside the
+editor and scroll within that row; new results do not change the selected output tab.
+Hidden or folded output pauses native planner-log reads.
 Status retains whole-stack lifecycle operations. Motion navigation is available before
 ROS readiness for inspection; command admission retains the existing safety gates.
 

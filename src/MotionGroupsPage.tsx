@@ -40,7 +40,8 @@ import "./motionGroups.css";
 import { MotionSyncEditor } from "./MotionSyncEditor";
 import { MotionPosePicker } from "./MotionPosePicker";
 import { MotionGroupDialog } from "./MotionGroupDialog";
-import { MotionGroupResult, motionGroupPhaseLabels } from "./MotionGroupResult";
+import { useMotionReport } from "./MotionOutput";
+import { motionGroupPhaseLabels } from "./MotionGroupResult";
 
 export type MotionGroupsPageProps = {
   profileKey: string;
@@ -178,7 +179,7 @@ function Editor({
   const live = useRef(true),
     locked = useRef(false),
     dragCleanup = useRef<(() => void) | null>(null);
-  const resultAnchor = useRef<HTMLDivElement>(null);
+  const openReport = useMotionReport(resultState, running);
   const scroll = useRef<HTMLDivElement>(null),
     layout = useMotionLayout();
   useEffect(() => {
@@ -1743,25 +1744,11 @@ function Editor({
       )}
       <footer className="motion-group-execution">
         {resultState && (
-          <div
-            className={`motion-group-result-summary result-${resultState.phase}`}
-          >
-            <strong>
-              最近执行的「
-              {running?.name || resultState.label || resultState.group?.id}
-              」动作组 · {motionGroupPhaseLabels[resultState.phase]}
+          <div className={`motion-group-result-summary result-${resultState.phase}`}>
+            <strong title={running?.name || resultState.label || resultState.group?.id}>
+              最近执行：{running?.name || resultState.label || resultState.group?.id} · {motionGroupPhaseLabels[resultState.phase]}
             </strong>
-            <span>{resultState.message || "当前任务未提供详细原因"}</span>
-            <button
-              onClick={() =>
-                resultAnchor.current?.scrollIntoView?.({
-                  block: "start",
-                  behavior: "smooth",
-                })
-              }
-            >
-              查看详细结果
-            </button>
+            {openReport && <button type="button" onClick={openReport}>查看执行报告</button>}
           </div>
         )}
         <label className="motion-safety-check">
@@ -1826,11 +1813,6 @@ function Editor({
           </>
         )}
       </footer>
-      {resultState && (
-        <div ref={resultAnchor} className="motion-group-result-anchor">
-          <MotionGroupResult state={resultState} snapshot={running} />
-        </div>
-      )}
     </section>
   );
   function changeStepAt(index: number, duration: number) {

@@ -2,12 +2,16 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { MotionLogEntry } from "./types";
+import { useMotionLogVisible } from "./MotionOutput";
 import { useMotionLayout } from "./MotionLayout";
 
 export function formatMotionLog(entry: MotionLogEntry) {
   return `${new Date(entry.timestamp_ms).toISOString()} [${entry.level.toUpperCase()}] [${entry.command_id || "system"}] [${entry.phase}] ${entry.message}`;
 }
-export function MotionTerminal({ logs, active, plannerLog }: { logs: MotionLogEntry[]; active: boolean; plannerLog?: ReactNode }) {
+export function MotionTerminal({ logs, active, plannerLog }: { logs: MotionLogEntry[]; active: boolean; plannerLog?: ReactNode | ((active: boolean) => ReactNode) }) {
+  const panelVisible = useMotionLogVisible();
+  const embedded = panelVisible !== null;
+  active = active && panelVisible !== false;
   const [collapsed, setCollapsed] = useState(false);
   const layoutReset = useMotionLayout()?.resetVersion;
   useEffect(() => { if (layoutReset !== undefined) setCollapsed(false); }, [layoutReset]);
@@ -32,11 +36,11 @@ export function MotionTerminal({ logs, active, plannerLog }: { logs: MotionLogEn
     finally { setSaving(false); }
   }
   return <section className={`motion-terminal${collapsed ? " collapsed" : ""}`} aria-label="规划执行终端">
-    <header><button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸" : "▾"} 规划执行日志</button>
+    <header>{embedded ? <span>规划执行过程</span> : <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸" : "▾"} 规划执行日志</button>}
       <span>{logs.length} 条 · 最近 5000 条 / 当前连接</span>
       {!collapsed && plannerLog && <select aria-label="规划日志来源" value={source} onChange={(event) => setSource(event.target.value)}><option value="audit">规划执行过程</option><option value="moveit">MoveIt 原始输出</option></select>}
     </header>
-    {!collapsed && (source === "moveit" && plannerLog ? plannerLog : <>
+    {!collapsed && (source === "moveit" && plannerLog ? (typeof plannerLog === "function" ? plannerLog(active && !collapsed) : plannerLog) : <>
       <div className="motion-terminal-tools"><input type="search" aria-label="搜索规划日志" placeholder="搜索命令、阶段或错误…" value={search} onChange={(e) => setSearch(e.target.value)} />
         <label><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />跟随最新</label>
         <button type="button" disabled={!logs.length || saving} onClick={() => void download()}>导出日志</button>

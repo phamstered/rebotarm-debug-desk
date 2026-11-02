@@ -9,13 +9,17 @@ import userEvent from "@testing-library/user-event";
 import { within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
-  MotionGroupsPage,
+  MotionGroupsPage as Editor,
   type MotionGroupsPageProps,
 } from "./MotionGroupsPage";
+import { MotionOutputPanel, MotionOutputProvider } from "./MotionOutput";
 import { MotionLayoutProvider } from "./MotionLayout";
 import type { CustomPosition } from "./positionLogic";
 import type { MotionGroup } from "./motionGroupsLogic";
 import type { PositionMotionControls } from "./positionMotionLogic";
+function MotionGroupsPage(props: MotionGroupsPageProps) {
+  return <MotionOutputProvider><Editor {...props} /><MotionOutputPanel log={<div>执行日志内容</div>} /></MotionOutputProvider>;
+}
 const position: CustomPosition = {
   id: "p",
   name: "A",
@@ -417,6 +421,7 @@ describe("MotionGroupsPage", () => {
       },
     };
     render(<MotionGroupsPage {...value} />);
+    await user.click(screen.getByRole("tab", { name: "执行报告" }));
     expect(
       screen.getByRole("status", { name: "最近动作组执行结果" }),
     ).toHaveTextContent("第 1/2 帧 · HOME · 首帧准备");
@@ -458,6 +463,7 @@ describe("MotionGroupsPage", () => {
         motion={{ ...value.motion, busy: true, state }}
       />,
     );
+    await user.click(screen.getByRole("tab", { name: "执行报告" }));
     await waitFor(() =>
       expect(
         screen.getByRole("status", { name: "最近动作组执行结果" }),
@@ -539,6 +545,7 @@ describe("MotionGroupsPage", () => {
     const view = render(
       <MotionGroupsPage {...value} motion={{ ...value.motion, state }} />,
     );
+    fireEvent.click(screen.getByRole("tab", { name: "执行报告" }));
     expect(
       screen.getByRole("status", { name: "最近动作组执行结果" }),
     ).toHaveTextContent("已取消");
@@ -573,7 +580,7 @@ describe("MotionGroupsPage", () => {
       screen.queryByRole("button", { name: "停止动作组" }),
     ).not.toBeInTheDocument();
   });
-  it("shows the result beside execution controls and scrolls to diagnostics only on an explicit request", async () => {
+  it("opens the bottom report only on request, without scrolling or replacing the editor", async () => {
     const scroll = vi.fn();
     const descriptor = Object.getOwnPropertyDescriptor(
       HTMLElement.prototype,
@@ -605,8 +612,8 @@ describe("MotionGroupsPage", () => {
       );
       expect(scroll).not.toHaveBeenCalled();
       expect(
-        screen.getByRole("button", { name: "查看详细结果" }).closest("footer"),
-      ).toHaveTextContent("最近执行的「取放」动作组 · 执行失败");
+        screen.getByRole("button", { name: "查看执行报告" }).closest("footer"),
+      ).toHaveTextContent("最近执行：取放 · 执行失败");
       view.rerender(
         <MotionGroupsPage
           {...value}
@@ -617,11 +624,15 @@ describe("MotionGroupsPage", () => {
         />,
       );
       expect(scroll).not.toHaveBeenCalled();
-      await user.click(screen.getByRole("button", { name: "查看详细结果" }));
-      expect(scroll).toHaveBeenCalledExactlyOnceWith({
-        block: "start",
-        behavior: "smooth",
-      });
+      expect(screen.getByRole("tab", { name: "执行日志" })).toHaveAttribute("aria-selected", "true");
+      await user.click(screen.getByRole("button", { name: "收起执行面板" }));
+      await user.click(screen.getByRole("button", { name: "查看执行报告" }));
+      expect(scroll).not.toHaveBeenCalled();
+      expect(screen.getByRole("tab", { name: "执行报告" })).toHaveAttribute("aria-selected", "true");
+      const report = screen.getByRole("status", { name: "最近动作组执行结果" });
+      expect(report.closest(".motion-groups-editor")).toBeNull();
+      expect(report.closest('[role="tabpanel"]')).toHaveAccessibleName("执行报告");
+      expect(screen.getByLabelText("动作组名称")).toHaveValue("取放");
     } finally {
       if (descriptor)
         Object.defineProperty(
