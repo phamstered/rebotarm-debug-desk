@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { MotionLogEntry } from "./types";
+import { useMotionLayout } from "./MotionLayout";
 
 export function formatMotionLog(entry: MotionLogEntry) {
   return `${new Date(entry.timestamp_ms).toISOString()} [${entry.level.toUpperCase()}] [${entry.command_id || "system"}] [${entry.phase}] ${entry.message}`;
 }
 export function MotionTerminal({ logs, active, plannerLog }: { logs: MotionLogEntry[]; active: boolean; plannerLog?: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const layoutReset = useMotionLayout()?.resetVersion;
+  useEffect(() => { if (layoutReset !== undefined) setCollapsed(false); }, [layoutReset]);
   const [source, setSource] = useState("audit");
   const [search, setSearch] = useState("");
   const [follow, setFollow] = useState(true);

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { MotionDivider } from "./MotionLayout";
 import { ArmModeWorkflow } from "./ArmModeWorkflow";
 import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { positionMotionBusy, type PositionMotionControls } from "./positionMotionLogic";
@@ -168,6 +169,8 @@ export function PositionPage({
           ))}
           {positions.length === 0 && <p className="position-empty">还没有自定义点位。</p>}
         </div>
+        <MotionDivider size="editorWidth" label="调整点位编辑区宽度" axis="x" edge="end" panel=".position-editor-pane" container=".position-workspace" maxFraction={.6} className="position-editor-width-divider" />
+        <MotionDivider size="editorHeight" label="调整点位编辑区高度" axis="y" edge="end" panel=".position-editor-pane" container=".position-workspace" maxFraction={.65} className="position-editor-height-divider" />
         <aside className="position-editor-pane" aria-label="点位编辑">
           {editorOpen ? (
             <form className="position-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>

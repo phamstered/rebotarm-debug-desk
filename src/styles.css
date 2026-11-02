@@ -1548,3 +1548,68 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 /* Keep the drawer toggle readable when the global toolbar uses icon-only buttons. */
 .motion-workspace-navigation .toolbar-action { font-size: 11px; }
 .motion-readiness > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+
+/* Motion owns its panel dimensions independently of Topics. */
+.motion-layout-root { display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; }
+.motion-layout-root[hidden] { display: none; }
+.motion-divider { position: relative; z-index: 8; background: #08141d; outline: none; touch-action: none; flex: 0 0 7px; }
+.motion-divider::after { content: ""; position: absolute; border-radius: 4px; background: #31515f; }
+.motion-divider:hover::after, .motion-divider:focus-visible::after { background: var(--cyan); }
+.motion-divider:focus-visible { box-shadow: inset 0 0 0 1px var(--cyan); }
+.motion-divider-x { width: 7px; cursor: col-resize; }
+.motion-divider-y { height: 7px; cursor: row-resize; }
+.motion-divider-x::after { width: 2px; height: 34px; left: 2px; top: calc(50% - 17px); }
+.motion-divider-y::after { height: 2px; width: 34px; top: 2px; left: calc(50% - 17px); }
+.motion-layout-root .motion-workspace { position: relative; grid-template-columns: min(var(--motion-controllersWidth), 45%) 7px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) 7px min(var(--motion-logHeight), 45%); grid-template-areas: "motion-header motion-header motion-header" "controllers controllers-divider content" "controllers controllers-divider log-divider" "controllers controllers-divider motion-log"; }
+.motion-layout-root .motion-workspace.controllers-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-areas: "motion-header" "content" "log-divider" "motion-log"; }
+.motion-controllers-divider { grid-area: controllers-divider; }
+.motion-log-divider { grid-area: log-divider; }
+.motion-layout-root .motion-workspace-log { max-height: none; overflow: hidden; display: flex; flex-direction: column; }
+.motion-workspace-log > .motion-terminal { flex: 1 1 0; min-height: 0; height: 100%; }
+.motion-workspace:has(.motion-workspace-log .collapsed) { grid-template-rows: auto minmax(0, 1fr) 0 34px; }
+.motion-workspace:has(.motion-workspace-log .collapsed) .motion-log-divider { visibility: hidden; }
+.motion-workspace-log .control-log-output { height: 100%; max-height: none; min-height: 0; resize: none; }
+.motion-workspace-log .control-log-viewer { display: flex; flex-direction: column; overflow: hidden; }
+
+/* Dock controls beside the canvas on wide views and below it on narrow views. */
+.motion-layout-root .viewer-layout { display: grid !important; grid-template-columns: min(var(--motion-statusWidth), 24%) 7px minmax(100px, 1fr) 7px min(var(--motion-controlsWidth), 37%); grid-template-rows: minmax(0, 1fr); gap: 0 !important; min-height: 0; }
+.motion-viewer-panels { display: contents !important; pointer-events: auto; }
+.motion-layout-root .viewer-canvas { grid-column: 3; grid-row: 1; min-width: 0; min-height: 0 !important; height: 100% !important; order: initial !important; }
+.motion-viewer-status { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: #091722; }
+.motion-state-details { flex: 1 1 0; min-height: 0; overflow: auto; padding: 10px; }
+.motion-viewer-status .motion-control-panel { max-width: none; width: 100%; }
+.motion-viewer-status .viewer-error { margin-top: 8px; }
+.motion-status-divider { grid-column: 2; grid-row: 1; }
+.motion-controls-divider { grid-column: 4; grid-row: 1; }
+.motion-tools-divider { display: none; }
+.motion-viewer-controls { grid-column: 5; grid-row: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #091722; }
+.motion-layout-root .viewer-overlay { flex: 1 1 0; width: 100% !important; max-width: none; min-height: 0; max-height: none; overflow: auto !important; align-content: start; border: 0; border-radius: 0; }
+.motion-rgbd-panel { flex: 0 1 var(--motion-rgbdHeight); max-height: 70%; min-height: 0; overflow: auto; padding: 8px 11px; color: #8fa9b9; font-size: 10px; }
+.motion-rgbd-panel .viewer-overlay-rgbd { margin: 0; padding: 0; border: 0; }
+.motion-rgbd-panel .viewer-overlay-row { flex-wrap: wrap; }
+.motion-layout-root .viewer-placeholder { max-width: 60%; }
+@container (max-width: 850px) {
+  .motion-layout-root .viewer-layout { grid-template-columns: min(var(--motion-statusWidth), 35%) 7px minmax(0, 1fr); grid-template-rows: minmax(80px, 1fr) 7px min(var(--motion-toolsHeight), 60%); }
+  .motion-layout-root .viewer-canvas { grid-column: 1 / -1; grid-row: 1; }
+  .motion-viewer-status { grid-column: 1; grid-row: 3; }
+  .motion-status-divider { grid-column: 2; grid-row: 3; }
+  .motion-controls-divider { display: none; }
+  .motion-tools-divider { display: block; grid-column: 1 / -1; grid-row: 2; }
+  .motion-viewer-controls { grid-column: 3; grid-row: 3; }
+}
+.motion-layout-root .motion-positions > .position-page { height: 100%; min-height: 0; overflow: auto; }
+.motion-layout-root .position-workspace { grid-template-columns: minmax(0, 1fr) 7px min(var(--motion-editorWidth), 55%); gap: 0; }
+.motion-layout-root .position-list { padding-right: 10px; }
+.motion-layout-root .position-editor-pane { padding-left: 10px; }
+.position-editor-height-divider { display: none; }
+@container (max-width: 760px) {
+  .motion-layout-root .position-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 7px min(var(--motion-editorHeight), 60%); }
+  .position-editor-width-divider { display: none; }
+  .position-editor-height-divider { display: block; }
+  .motion-layout-root .position-editor-pane { padding: 8px 0 0; }
+}
+@media (max-width: 980px) {
+  .motion-layout-root .motion-workspace:not(.controllers-collapsed) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "motion-header" "content" "log-divider" "motion-log"; }
+  .motion-layout-root .motion-controller-sidebar { width: min(var(--motion-controllersWidth), 70%); padding-right: 14px; }
+  .motion-controllers-divider { grid-area: content; position: absolute; left: calc(min(var(--motion-controllersWidth), 70%) - 7px); top: 0; bottom: 0; z-index: 11; }
+}

@@ -418,6 +418,7 @@ export default function App() {
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [motionTab, setMotionTab] = useState<MotionTab>(loadMotionTab);
   const [motionControllersOpen, setMotionControllersOpen] = useState(loadMotionSidebar);
+  const [motionLayoutReset, setMotionLayoutReset] = useState(0);
   const [managePositions, setManagePositions] = useState(false);
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
@@ -1339,7 +1340,7 @@ export default function App() {
   }
 
   function resetWorkspaceLayout() {
-    if (appPage === "motion") { setMotionControllersOpen(true); setToolbarNotice("Motion 布局已恢复默认值"); return; }
+    if (appPage === "motion") { setMotionLayoutReset((value) => value + 1); setMotionControllersOpen(true); setToolbarNotice("Motion 布局已恢复默认值"); return; }
     setLayout({ ...defaultLayoutSizes });
     setPanels({ ...defaultPanelState });
     setSidebars({ ...defaultSidebarState });
@@ -1942,7 +1943,7 @@ export default function App() {
       />}
       </TopicsPage>
       )}
-      <MotionPage active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
+      <MotionPage resetVersion={motionLayoutReset} active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
           onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}

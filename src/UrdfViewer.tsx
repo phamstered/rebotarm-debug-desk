@@ -419,7 +419,44 @@ export function UrdfViewer({
     <div className={`viewer${interaction === "joint" ? " joint-mode" : ""}`}>
       <div className="viewer-layout">
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
-      <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={motionInfo} />}>
+      <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={motionInfo} />} rgbd={rgbdStatus?.enabled !== false && (
+          <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
+            {clockSync && <ClockSyncStatus value={clockSync} />}
+            <div className="viewer-overlay-row">
+              <label><input type="checkbox" checked={rgbdVisible} onChange={(e) => onRgbdVisibleChange?.(e.target.checked)} /> 点云</label>
+              <select value={rgbdColorMode} onChange={(e) => onRgbdColorModeChange?.(e.target.value as RgbdColorMode)} aria-label="点云着色">
+                <option value="rgb">RGB</option>
+                <option value="depth">深度</option>
+              </select>
+            </div>
+            <div className="viewer-overlay-row">
+              <span>点大小</span>
+              <input type="range" min={0.002} max={0.03} step={0.001} value={rgbdPointSize}
+                onChange={(e) => onRgbdPointSizeChange?.(Number(e.target.value))} />
+            </div>
+            <div className="viewer-overlay-row">
+              <span>近/远 m</span>
+              <input type="number" step={0.05} value={rgbdNearM} aria-label="近距"
+                onChange={(e) => onRgbdNearFarChange?.(Number(e.target.value), rgbdFarM)} />
+              <input type="number" step={0.1} value={rgbdFarM} aria-label="远距"
+                onChange={(e) => onRgbdNearFarChange?.(rgbdNearM, Number(e.target.value))} />
+            </div>
+            <div className="viewer-overlay-row">
+              <span>RGBD</span>
+              <strong>
+                {(rgbdStatus?.fps ?? 0).toFixed(1)} Hz · {rgbdStatus?.pointCount ?? 0} pts
+                {rgbdStatus?.stampDiffNs != null ? ` · Δ${(rgbdStatus.stampDiffNs / 1e6).toFixed(1)}ms` : ""}
+                {rgbdStatus?.stale ? " · 过期" : ""}
+              </strong>
+            </div>
+            {!rgbdStatus?.tfOk && rgbdStatus?.tfError && (
+              <details className="error"><summary>RGBD 暂不可用，查看错误详情</summary><div style={{ overflowWrap: "anywhere" }}>{rgbdStatus.tfError}</div></details>
+            )}
+            {!rgbdStatus?.pointCount && !rgbdStatus?.tfError && (
+              <div className="viewer-overlay-row">等待 RGBD 帧；检查相机 Topic 和对齐深度</div>
+            )}
+          </div>
+        )}>
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-interaction" aria-label="Robot View 操作方式">
           <button type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("tcp"); }}>TCP 拖拽</button>
@@ -484,44 +521,7 @@ export function UrdfViewer({
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
         </>}
-        {rgbdStatus?.enabled !== false && (
-          <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
-            {clockSync && <ClockSyncStatus value={clockSync} />}
-            <div className="viewer-overlay-row">
-              <label><input type="checkbox" checked={rgbdVisible} onChange={(e) => onRgbdVisibleChange?.(e.target.checked)} /> 点云</label>
-              <select value={rgbdColorMode} onChange={(e) => onRgbdColorModeChange?.(e.target.value as RgbdColorMode)} aria-label="点云着色">
-                <option value="rgb">RGB</option>
-                <option value="depth">深度</option>
-              </select>
-            </div>
-            <div className="viewer-overlay-row">
-              <span>点大小</span>
-              <input type="range" min={0.002} max={0.03} step={0.001} value={rgbdPointSize}
-                onChange={(e) => onRgbdPointSizeChange?.(Number(e.target.value))} />
-            </div>
-            <div className="viewer-overlay-row">
-              <span>近/远 m</span>
-              <input type="number" step={0.05} value={rgbdNearM} aria-label="近距"
-                onChange={(e) => onRgbdNearFarChange?.(Number(e.target.value), rgbdFarM)} />
-              <input type="number" step={0.1} value={rgbdFarM} aria-label="远距"
-                onChange={(e) => onRgbdNearFarChange?.(rgbdNearM, Number(e.target.value))} />
-            </div>
-            <div className="viewer-overlay-row">
-              <span>RGBD</span>
-              <strong>
-                {(rgbdStatus?.fps ?? 0).toFixed(1)} Hz · {rgbdStatus?.pointCount ?? 0} pts
-                {rgbdStatus?.stampDiffNs != null ? ` · Δ${(rgbdStatus.stampDiffNs / 1e6).toFixed(1)}ms` : ""}
-                {rgbdStatus?.stale ? " · 过期" : ""}
-              </strong>
-            </div>
-            {!rgbdStatus?.tfOk && rgbdStatus?.tfError && (
-              <details className="error"><summary>RGBD 暂不可用，查看错误详情</summary><div style={{ overflowWrap: "anywhere" }}>{rgbdStatus.tfError}</div></details>
-            )}
-            {!rgbdStatus?.pointCount && !rgbdStatus?.tfError && (
-              <div className="viewer-overlay-row">等待 RGBD 帧；检查相机 Topic 和对齐深度</div>
-            )}
-          </div>
-        )}
+
       </ViewerHeadsUp>
       <Canvas className="viewer-canvas" frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
