@@ -125,6 +125,8 @@ describe("PositionPage", () => {
     );
     const folded = screen.getByLabelText("folded 姿态");
     const bent = screen.getByLabelText("bent 姿态");
+    expect(folded.querySelector('svg[data-renderer="simplified-3d"]')).toBeInTheDocument();
+    expect(bent.querySelector("svg")?.outerHTML).not.toBe(folded.querySelector("svg")?.outerHTML);
     expect(folded.getAttribute("data-tip")).not.toBe(bent.getAttribute("data-tip"));
     expect(screen.getByLabelText("HOME 姿态未同步")).toBeVisible();
   });
