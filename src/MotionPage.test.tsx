@@ -29,7 +29,7 @@ describe("Motion workspace", () => {
       positions: <div>Saved poses</div>, groups: <div>Action timeline</div>, log: <div>Shared motion log</div> };
     const user = userEvent.setup(); const { rerender } = render(<MotionPage {...props} />);
     const scene = screen.getByTestId("scene");
-    await user.click(screen.getByRole("tab", { name: "位置" }));
+    await user.click(screen.getByRole("tab", { name: "姿态库" }));
     expect(onTabChange).toHaveBeenCalledWith("positions");
     rerender(<MotionPage {...props} tab="positions" />);
     expect(scene).not.toBeVisible(); expect(screen.getByText("Saved poses")).toBeVisible();

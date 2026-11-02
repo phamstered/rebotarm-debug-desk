@@ -91,10 +91,10 @@ export function PositionPage({
   }
 
   return (
-    <section className="position-page" aria-label="位置">
+    <section className="position-page" aria-label="姿态库">
       <div className="position-toolbar">
         <div>
-          <h2>位置</h2>
+          <h2>姿态库</h2>
           <p>保存六个关节角和可选夹爪行程；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。</p>
         </div>
         <div className="position-toolbar-actions">

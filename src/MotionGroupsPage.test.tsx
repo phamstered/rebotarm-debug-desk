@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   MotionGroupsPage,
@@ -172,16 +173,17 @@ describe("MotionGroupsPage", () => {
       user = userEvent.setup();
     render(<MotionGroupsPage {...value} />);
     await user.click(screen.getByRole("button", { name: "新建动作组" }));
-    expect(screen.getByRole("button", { name: "保存动作组" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "添加 A" }));
-    await user.click(screen.getByRole("button", { name: "添加 A" }));
+    expect(screen.getByRole("button", { name: "创建动作组" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /A 姿态未同步/ }));
+    await user.click(screen.getByRole("button", { name: "创建动作组" }));
+    await user.click(screen.getByRole("button", { name: "＋ Pose" }));
+    await user.click(screen.getByRole("button", { name: /A 姿态未同步/ }));
+    await user.click(screen.getByRole("button", { name: "添加所选 Pose" }));
     expect(screen.getByLabelText("运动时长 (s)")).toHaveValue(5);
     fireEvent.change(screen.getByLabelText("运动时长 (s)"), {
       target: { value: "" },
     });
-    expect(
-      screen.getByRole("button", { name: "执行当前未保存快照" }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "执行前检查" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "保存动作组" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "撤销" }));
     await user.click(screen.getByRole("button", { name: "上移关键帧 2" }));
@@ -201,9 +203,13 @@ describe("MotionGroupsPage", () => {
       user = userEvent.setup();
     value.motion.armed = false;
     const view = render(<MotionGroupsPage {...value} />);
-    expect(screen.getByRole("button", { name: "执行动作组" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    expect(screen.getByRole("button", { name: "确认并执行" })).toBeDisabled();
     await user.click(
-      screen.getByRole("checkbox", { name: /已确认工作区安全/ }),
+      within(screen.getByRole("dialog", { name: "执行前检查" })).getByRole(
+        "checkbox",
+        { name: /已确认工作区安全/ },
+      ),
     );
     expect(value.motion.setArmed).toHaveBeenCalledWith(true);
     view.rerender(
@@ -212,14 +218,15 @@ describe("MotionGroupsPage", () => {
         motion={{ ...value.motion, armed: true, executeGroup: undefined }}
       />,
     );
-    expect(screen.getByRole("button", { name: "执行动作组" })).toBeDisabled();
-    expect(screen.getByText("当前连接不支持动作组执行")).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认并执行" })).toBeDisabled();
+    expect(screen.getAllByText("当前连接不支持动作组执行")[0]).toBeVisible();
   });
   it("executes a fixed copy and keeps editing other groups independent", async () => {
     const value = props(),
       user = userEvent.setup();
     render(<MotionGroupsPage {...value} />);
-    await user.click(screen.getByRole("button", { name: "执行动作组" }));
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    await user.click(screen.getByRole("button", { name: "确认并执行" }));
     await waitFor(() =>
       expect(value.motion.executeGroup).toHaveBeenCalledOnce(),
     );
@@ -340,7 +347,7 @@ describe("MotionGroupsPage", () => {
     expect(
       screen.queryByRole("button", { name: "恢复执行" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "执行动作组" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "执行前检查" })).toBeDisabled();
   });
   it("returns directly when clean and requires successful save or discard before leaving a dirty editor", async () => {
     let resolve!: () => void;
@@ -430,7 +437,8 @@ describe("MotionGroupsPage", () => {
     const value = props(),
       user = userEvent.setup();
     const view = render(<MotionGroupsPage {...value} />);
-    await user.click(screen.getByRole("button", { name: "执行动作组" }));
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    await user.click(screen.getByRole("button", { name: "确认并执行" }));
     const state = {
       commandId: "fixed-run",
       label: "取放",
@@ -534,7 +542,7 @@ describe("MotionGroupsPage", () => {
     expect(
       screen.getByRole("status", { name: "最近动作组执行结果" }),
     ).toHaveTextContent("已取消");
-    expect(screen.getByRole("button", { name: "执行动作组" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "执行前检查" })).toBeEnabled();
     view.rerender(
       <MotionGroupsPage
         {...value}
@@ -624,5 +632,213 @@ describe("MotionGroupsPage", () => {
       else
         delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
     }
+  });
+  it("creates from ordered Pose selection and inserts captures with immutable dependencies", async () => {
+    const value = props({
+      groups: [],
+      positions: [position, { ...position, id: "q", name: "B" }],
+    });
+    const user = userEvent.setup();
+    render(<MotionGroupsPage {...value} />);
+    await user.click(screen.getByRole("button", { name: "新建动作组" }));
+    const picker = within(
+      screen.getByRole("dialog", { name: "从姿态库新建动作组" }),
+    );
+    await user.click(picker.getByRole("button", { name: /B 姿态未同步/ }));
+    await user.click(picker.getByRole("button", { name: /A 姿态未同步/ }));
+    expect(picker.getByText("选入顺序：B → A")).toBeVisible();
+    await user.click(picker.getByRole("button", { name: "创建动作组" }));
+    expect(screen.getByRole("region", { name: "动作块时间轴" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "＋ Action" }));
+    expect(screen.getByLabelText("动作名称")).toHaveValue("拍照 1");
+    fireEvent.change(screen.getByLabelText("动作名称"), {
+      target: { value: "标定采集" },
+    });
+    fireEvent.change(screen.getByLabelText("图像 Topic"), {
+      target: { value: "/test/camera" },
+    });
+    await user.click(screen.getByRole("button", { name: "保存动作组" }));
+    const saved = vi.mocked(value.onSave).mock.calls[0][0];
+    expect(saved.steps.map((s) => s.positionName)).toEqual(["B", "A"]);
+    expect(saved.actions).toEqual([
+      expect.objectContaining({
+        name: "标定采集",
+        type: "camera_capture",
+        afterStepId: saved.steps[0].id,
+        topic: "/test/camera",
+        timeout: 5,
+      }),
+    ]);
+    expect(saved.tracks?.map((t) => t.kind)).toEqual(["arm", "camera"]);
+    expect(value.motion.executeGroup).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    expect(screen.getByRole("button", { name: "确认并执行" })).toBeDisabled();
+    expect(
+      within(screen.getByRole("dialog", { name: "执行前检查" })).getByRole(
+        "status",
+      ),
+    ).toHaveTextContent("不支持拍照 Action");
+  });
+  it("removes dependent Actions with a Pose and restores both on undo", async () => {
+    const user = userEvent.setup();
+    const value = props();
+    render(<MotionGroupsPage {...value} />);
+    await user.click(screen.getByRole("button", { name: "＋ Action" }));
+    expect(
+      screen.getByRole("button", { name: /Action · 拍照 1/ }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "关键帧 1 A" }));
+    await user.click(screen.getByRole("button", { name: "删除 Pose" }));
+    expect(
+      screen.queryByRole("button", { name: /Action · 拍照 1/ }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "撤销" }));
+    expect(
+      screen.getByRole("button", { name: /Action · 拍照 1/ }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "下移关键帧 1" }));
+    await user.click(screen.getByRole("button", { name: "保存动作组" }));
+    const saved = vi.mocked(value.onSave).mock.calls[0][0];
+    expect(saved.actions?.[0].afterStepId).toBe(saved.steps[1].id);
+  });
+  it("preserves future multi-arm device bindings while refusing unsupported execution", async () => {
+    const user = userEvent.setup();
+    const value = props();
+    render(<MotionGroupsPage {...value} />);
+    await user.click(screen.getByRole("button", { name: "设备轨道" }));
+    await user.click(screen.getByRole("button", { name: "添加机械臂轨道" }));
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    expect(screen.getByRole("button", { name: /机械臂 2/ })).toHaveTextContent(
+      "unbound",
+    );
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    expect(
+      screen.getByRole("button", { name: "执行当前未保存快照" }),
+    ).toBeDisabled();
+    expect(value.motion.executeGroup).not.toHaveBeenCalled();
+  });
+  it("locks only the running group and keeps cancellation available", async () => {
+    const value = props();
+    value.motion.busy = true;
+    value.motion.state = {
+      commandId: "run",
+      label: group.name,
+      phase: "waiting",
+      message: "采集中",
+      group: { id: group.id, index: 0, count: 2, phase: "holding", elapsed: 1 },
+    };
+    const user = userEvent.setup();
+    render(<MotionGroupsPage {...value} />);
+    expect(screen.getByLabelText("动作组名称")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "＋ Action" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "停止动作组" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "另一组 · 2 帧" }));
+    expect(screen.getByLabelText("动作组名称")).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "停止动作组" }));
+    expect(value.motion.cancel).toHaveBeenCalledOnce();
+  });
+  it("stops local playback when the group tab becomes inactive without sending commands", async () => {
+    const request = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockReturnValue(123);
+    const cancel = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => {});
+    try {
+      const value = props();
+      const user = userEvent.setup();
+      const view = render(<MotionGroupsPage {...value} active />);
+      await user.click(screen.getByRole("button", { name: "播放预览" }));
+      expect(request).toHaveBeenCalledOnce();
+      view.rerender(<MotionGroupsPage {...value} active={false} />);
+      expect(cancel).toHaveBeenCalledWith(123);
+      expect(screen.getByRole("button", { name: "播放预览" })).toBeVisible();
+      expect(value.motion.executeGroup).not.toHaveBeenCalled();
+    } finally {
+      request.mockRestore();
+      cancel.mockRestore();
+    }
+  });
+  it("never starts a physical group when save-and-execute fails", async () => {
+    const value = props({
+      onSave: vi.fn().mockRejectedValue(new Error("磁盘已满")),
+    });
+    const user = userEvent.setup();
+    render(<MotionGroupsPage {...value} />);
+    fireEvent.change(screen.getByLabelText("动作组名称"), {
+      target: { value: "修改稿" },
+    });
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    await user.click(screen.getByRole("button", { name: "保存并执行" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("磁盘已满");
+    expect(value.motion.executeGroup).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "执行前检查" })).toBeVisible();
+  });
+  it("cancels pending execution when the review is dismissed during saving", async () => {
+    let done!: () => void;
+    const value = props({
+      onSave: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            done = resolve;
+          }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<MotionGroupsPage {...value} />);
+    fireEvent.change(screen.getByLabelText("动作组名称"), {
+      target: { value: "保存中的草稿" },
+    });
+    await user.click(screen.getByRole("button", { name: "执行前检查" }));
+    await user.click(screen.getByRole("button", { name: "保存并执行" }));
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    await act(async () => done());
+    expect(value.onSave).toHaveBeenCalledOnce();
+    expect(value.motion.executeGroup).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "执行前检查" }),
+    ).not.toBeInTheDocument();
+  });
+  it("edits multi-arm synchronization points and removes dangling dependencies with undo", async () => {
+    const extended: MotionGroup = {
+      ...group,
+      tracks: [
+        { id: "arm", name: "机械臂 A", kind: "arm", deviceId: "current" },
+        { id: "arm-b", name: "机械臂 B", kind: "arm", deviceId: "robot-b" },
+      ],
+      steps: group.steps.map((s, i) => ({
+        ...s,
+        trackId: i ? "arm-b" : "arm",
+      })),
+    };
+    const value = props({ groups: [extended] });
+    const user = userEvent.setup();
+    render(<MotionGroupsPage {...value} />);
+    expect(screen.getByLabelText("动作组本地预览 机械臂 B 姿态未同步")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "同步点" }),
+    );
+    const dialog = within(screen.getByRole("dialog", { name: "添加同步点" }));
+    expect(dialog.getByRole("button", { name: "保存同步点" })).toBeDisabled();
+    await user.click(dialog.getByRole("checkbox", { name: /机械臂 A/ }));
+    await user.click(dialog.getByRole("checkbox", { name: /机械臂 B/ }));
+    await user.click(dialog.getByRole("button", { name: "保存同步点" }));
+    expect(screen.getByRole("button", { name: "同步点 同步点" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "保存动作组" }));
+    expect(vi.mocked(value.onSave).mock.calls[0][0].syncPoints).toEqual([
+      expect.objectContaining({ name: "同步点", afterStepIds: ["a", "b"] }),
+    ]);
+    await user.click(screen.getByRole("button", { name: "关键帧 1 A" }));
+    await user.click(screen.getByRole("button", { name: "删除 Pose" }));
+    expect(
+      screen.queryByRole("button", { name: "同步点 同步点" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "撤销" }));
+    expect(screen.getByRole("button", { name: "同步点 同步点" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "同步点 同步点" }));
+    await user.click(screen.getByRole("button", { name: "删除同步点" }));
+    expect(
+      screen.queryByRole("button", { name: "同步点 同步点" }),
+    ).not.toBeInTheDocument();
   });
 });

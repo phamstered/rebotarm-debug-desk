@@ -29,7 +29,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
           <button type="button" role="tab" aria-selected={tab === "robot"} aria-controls="motion-robot"
             className={tab === "robot" ? "active" : ""} onClick={() => onTabChange("robot")}>Robot View</button>
           <button type="button" role="tab" aria-selected={tab === "positions"} aria-controls="motion-positions"
-            className={tab === "positions" ? "active" : ""} onClick={() => onTabChange("positions")}>位置</button>
+            className={tab === "positions" ? "active" : ""} onClick={() => onTabChange("positions")}>姿态库</button>
           <button type="button" role="tab" aria-selected={tab === "groups"} aria-controls="motion-groups"
             className={tab === "groups" ? "active" : ""} onClick={() => onTabChange("groups")}>动作组</button>
         </div>

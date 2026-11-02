@@ -73,6 +73,9 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
                     "steps",
                     "createdAt",
                     "updatedAt",
+                    "tracks",
+                    "actions",
+                    "syncPoints",
                 ],
             )?;
             let id = text(g, "id", 128)?;
@@ -95,6 +98,28 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
             if steps.is_empty() || steps.len() > 100 {
                 return Err("关键帧数量须在 1..100".into());
             }
+            let mut tracks = std::collections::BTreeMap::new();
+            if let Some(track_list) = g.get("tracks") {
+                let track_list = track_list.as_array().ok_or("轨道必须为数组")?;
+                if track_list.is_empty() || track_list.len() > 16 {
+                    return Err("轨道数量须在 1..16".into());
+                }
+                for t in track_list {
+                    object(t, &["id", "name", "kind", "deviceId"])?;
+                    let id = text(t, "id", 128)?;
+                    text(t, "name", 512)?;
+                    text(t, "deviceId", 512)?;
+                    let kind = text(t, "kind", 16)?;
+                    if !["arm", "camera"].contains(&kind) || tracks.insert(id, kind).is_some() {
+                        return Err("设备轨道无效或重复".into());
+                    }
+                }
+            } else {
+                tracks.insert("arm", "arm");
+            }
+            if !tracks.values().any(|k| *k == "arm") {
+                return Err("至少需要一个机械臂轨道".into());
+            }
             let mut step_ids = BTreeSet::new();
             for (i, s) in steps.iter().enumerate() {
                 object(
@@ -108,10 +133,19 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
                         "gripperPosition",
                         "duration",
                         "hold",
+                        "trackId",
                     ],
                 )?;
                 if !step_ids.insert(text(s, "id", 128)?) {
                     return Err("关键帧 ID 重复".into());
+                }
+                let track = if s.get("trackId").is_some() {
+                    text(s, "trackId", 128)?
+                } else {
+                    "arm"
+                };
+                if tracks.get(track) != Some(&"arm") {
+                    return Err("Pose 必须归属机械臂轨道".into());
                 }
                 text(s, "positionId", 128)?;
                 text(s, "positionName", 512)?;
@@ -135,6 +169,95 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
                     return Err("运动/停留时长无效".into());
                 }
                 total += duration + hold;
+            }
+            if let Some(actions) = g.get("actions") {
+                let actions = actions.as_array().ok_or("Action 必须为数组")?;
+                if actions.len() > 100 {
+                    return Err("Action 数量不能超过 100".into());
+                }
+                let mut action_ids = step_ids.clone();
+                for a in actions {
+                    object(
+                        a,
+                        &[
+                            "id",
+                            "type",
+                            "name",
+                            "trackId",
+                            "afterStepId",
+                            "topic",
+                            "timeout",
+                        ],
+                    )?;
+                    let action_id = text(a, "id", 128)?;
+                    if !action_id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        || !action_ids.insert(action_id)
+                        || text(a, "type", 32)? != "camera_capture"
+                        || !step_ids.contains(text(a, "afterStepId", 128)?)
+                        || tracks.get(text(a, "trackId", 128)?) != Some(&"camera")
+                    {
+                        return Err("Action 类型、依赖或设备无效".into());
+                    }
+                    text(a, "name", 512)?;
+                    let topic = text(a, "topic", 256)?;
+                    if !topic.starts_with('/')
+                        || topic[1..].split('/').any(|part| {
+                            part.is_empty()
+                                || !part
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.is_ascii_alphabetic() || c == '_')
+                                    .unwrap_or(false)
+                                || !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        })
+                    {
+                        return Err("相机 Topic 无效".into());
+                    }
+                    let timeout = number(a, "timeout")?;
+                    if !(0.1..=60.).contains(&timeout) {
+                        return Err("采集超时须在 0.1..60 秒".into());
+                    }
+                    total += timeout;
+                }
+            }
+            if let Some(points) = g.get("syncPoints") {
+                let points = points.as_array().ok_or("同步点必须为数组")?;
+                if points.len() > 100 {
+                    return Err("同步点过多".into());
+                }
+                let mut point_ids = step_ids.clone();
+                if let Some(actions) = g.get("actions").and_then(Value::as_array) {
+                    for action in actions {
+                        point_ids.insert(text(action, "id", 128)?);
+                    }
+                }
+                for point in points {
+                    object(point, &["id", "name", "afterStepIds"])?;
+                    if !point_ids.insert(text(point, "id", 128)?) {
+                        return Err("同步点 ID 重复".into());
+                    }
+                    text(point, "name", 512)?;
+                    let participants = point["afterStepIds"]
+                        .as_array()
+                        .ok_or("同步点参与 Pose 无效")?;
+                    if participants.len() < 2 || participants.len() > 16 {
+                        return Err("同步点需至少两个机械臂".into());
+                    }
+                    let mut seen_tracks = BTreeSet::new();
+                    for participant in participants {
+                        let id = participant.as_str().ok_or("同步点参与 Pose ID 无效")?;
+                        let step = steps
+                            .iter()
+                            .find(|s| s["id"].as_str() == Some(id))
+                            .ok_or("同步点依赖 Pose 不存在")?;
+                        let track = step.get("trackId").and_then(Value::as_str).unwrap_or("arm");
+                        if !seen_tracks.insert(track) {
+                            return Err("同步点不能重复选择同一机械臂".into());
+                        }
+                    }
+                }
             }
             if !total.is_finite() || total > 604800. {
                 return Err("动作组总时长不能超过 7 天".into());
@@ -228,6 +351,55 @@ mod tests {
         let mut x = v.clone();
         x["profiles"]["p"]["groups"][0]["steps"][0]["gripperPosition"] = Value::Null;
         assert!(validate_motion_groups_json(&x.to_string()).is_err());
+    }
+    #[test]
+    fn validates_action_devices_and_dependencies_without_losing_legacy_files() {
+        let mut value = fixture();
+        let group = &mut value["profiles"]["p"]["groups"][0];
+        group["tracks"] = serde_json::json!([
+            {"id":"arm","name":"机械臂","kind":"arm","deviceId":"current"},
+            {"id":"camera","name":"相机","kind":"camera","deviceId":"current"}]);
+        group["actions"] = serde_json::json!([{"id":"photo","type":"camera_capture","name":"拍照","trackId":"camera","afterStepId":"s","topic":"/test/image","timeout":5}]);
+        assert!(validate_motion_groups_json(&value.to_string()).is_ok());
+        for (key, bad) in [
+            ("type", serde_json::json!("shell")),
+            ("topic", serde_json::json!("/a/../image")),
+            ("trackId", serde_json::json!("arm")),
+            ("afterStepId", serde_json::json!("deleted")),
+            ("timeout", serde_json::json!(0)),
+            ("id", serde_json::json!("../escape")),
+        ] {
+            let mut invalid = value.clone();
+            invalid["profiles"]["p"]["groups"][0]["actions"][0][key] = bad;
+            assert!(validate_motion_groups_json(&invalid.to_string()).is_err());
+        }
+    }
+    #[test]
+    fn validates_sync_points_and_rejects_single_arm_or_dangling_references() {
+        let mut value = fixture();
+        let group = &mut value["profiles"]["p"]["groups"][0];
+        group["tracks"] = serde_json::json!([
+            {"id":"arm","name":"A","kind":"arm","deviceId":"current"},
+            {"id":"b","name":"B","kind":"arm","deviceId":"other"}]);
+        let mut second = group["steps"][0].clone();
+        second["id"] = serde_json::json!("s2");
+        second["trackId"] = serde_json::json!("b");
+        second["duration"] = serde_json::json!(3);
+        group["steps"].as_array_mut().unwrap().push(second);
+        group["syncPoints"] =
+            serde_json::json!([{"id":"sync","name":"接应","afterStepIds":["s","s2"]}]);
+        assert!(validate_motion_groups_json(&value.to_string()).is_ok());
+        for participants in [
+            serde_json::json!(["s"]),
+            serde_json::json!(["s", "missing"]),
+            serde_json::json!(["s", "s"]),
+        ] {
+            let mut invalid = value.clone();
+            invalid["profiles"]["p"]["groups"][0]["syncPoints"][0]["afterStepIds"] = participants;
+            assert!(validate_motion_groups_json(&invalid.to_string()).is_err());
+        }
+        value["profiles"]["p"]["groups"][0]["steps"][1]["trackId"] = serde_json::json!("arm");
+        assert!(validate_motion_groups_json(&value.to_string()).is_err());
     }
     #[test]
     fn corrupt_file_is_preserved() {

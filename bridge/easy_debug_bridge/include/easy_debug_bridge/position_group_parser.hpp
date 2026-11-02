@@ -47,7 +47,7 @@ inline PositionGroupSpec read_position_group(const boost::property_tree::ptree &
   for (const auto &item : steps) {
     if (!item.first.empty()) throw std::runtime_error("动作组 steps 必须为数组");
     const auto &entry = item.second;
-    group_fields(entry, {"id", "label", "positions", "gripper_position", "motion_duration_s", "hold_duration_s"});
+    group_fields(entry, {"id", "label", "positions", "gripper_position", "motion_duration_s", "hold_duration_s", "captures"});
     PositionGroupStep step;
     step.id = group_string(entry, "id", 128); step.label = group_string(entry, "label", 512);
     if (!ids.insert(step.id).second) throw std::runtime_error("动作组步骤 id 重复");
@@ -71,6 +71,17 @@ inline PositionGroupSpec read_position_group(const boost::property_tree::ptree &
     } else validate_motion_duration(step.motion_duration_s);
     step.hold_duration_s = group_number(entry, "hold_duration_s");
     if (step.hold_duration_s < 0) throw std::runtime_error("动作组停留时长不能为负数");
+    if (const auto captures = entry.get_child_optional("captures")) {
+      if (!captures->data().empty() || captures->size() > 100) throw std::runtime_error("captures 必须为至多 100 项的数组");
+      for (const auto &item : *captures) {
+        if (!item.first.empty()) throw std::runtime_error("captures 必须为数组");
+        const auto &c = item.second;
+        group_fields(c, {"id", "label", "type", "topic", "timeout_s"});
+        CaptureSpec capture{group_string(c, "id", 128), group_string(c, "label", 512), group_string(c, "type", 32), group_string(c, "topic", 256), group_number(c, "timeout_s")};
+        validate_capture(capture); total += capture.timeout_s;
+        step.captures.push_back(std::move(capture));
+      }
+    }
     total += step.motion_duration_s + step.hold_duration_s;
     if (!std::isfinite(total) || total > 7 * 86400) throw std::runtime_error("动作组总时长超过 7 天");
     spec.steps.push_back(std::move(step));

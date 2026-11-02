@@ -263,7 +263,7 @@ export type BridgeEnvelope = {
   motion_group_supported?: boolean;
   group_id?: string;
   preparation_duration_s?: number;
-  steps?: Array<{ id: string; label: string; positions: number[]; gripper_position?: number; motion_duration_s: number; hold_duration_s: number }>;
+  steps?: Array<{ id: string; label: string; positions: number[]; gripper_position?: number; motion_duration_s: number; hold_duration_s: number; captures?: Array<{ id: string; label: string; type: "camera_capture"; topic: string; timeout_s: number }> }>;
   group_index?: number;
   group_count?: number;
   group_phase?: "preparing" | "moving" | "holding" | "paused";
@@ -284,6 +284,8 @@ export type BridgeEnvelope = {
   joint_position?: number;
   available?: boolean;
   busy?: boolean;
+  motion_capture_supported?: boolean;
+  capture_result?: { id: string; name: string; path: string; image_stamp: number; joint_stamp: number; thumbnail?: string };
   /** Present on Bridge `hello` replies. */
   bridge_version?: string;
   bridge_build_id?: string;

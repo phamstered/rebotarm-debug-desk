@@ -4,7 +4,7 @@ export const MOTION_LAYOUT_KEY = "robot-console-motion-layout";
 export const defaultMotionLayout = {
   controllersWidth: 280, logHeight: 190, statusWidth: 200, controlsWidth: 300,
   toolsHeight: 240, rgbdHeight: 190, editorWidth: 340, editorHeight: 300,
-  groupListWidth: 220, groupPropertiesWidth: 280, groupPreviewHeight: 180, groupPropertiesHeight: 240,
+  groupListWidth: 220, groupPropertiesWidth: 280, groupPreviewHeight: 300, groupPropertiesHeight: 240,
 };
 export type MotionLayout = typeof defaultMotionLayout;
 export type MotionSize = keyof MotionLayout;

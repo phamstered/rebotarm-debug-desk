@@ -14,6 +14,10 @@
 #include "easy_debug_bridge/controller_registry.hpp"
 #include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 #include <microros_stm32h723_bridge/msg/hardware_status.hpp>
 #include <deque>
 #include <mutex>
@@ -39,6 +43,11 @@ using Tree = boost::property_tree::ptree;
 const std::string controller = "arm_trajectory_controller";
 const std::string gripper_controller = "gripper_trajectory_controller";
 std::string quote(const std::string &value) { return position_json_quote(value); }
+std::string capture_names(const std::vector<std::string> &names) {
+  std::string result = "[";
+  for (size_t i = 0; i < names.size(); ++i) { if (i) result += ','; result += quote(names[i]); }
+  return result + ']';
+}
 std::string numbers(const std::vector<double> &values) {
   std::ostringstream out; out << '[' << std::setprecision(17);
   for (size_t i = 0; i < values.size(); ++i) { if (i) out << ','; out << values[i]; }
@@ -85,6 +94,12 @@ struct PositionMotion::Impl {
     std::string model_signature;
     uint64_t clock_generation{};
     bool done{false}, failed{false};
+    std::string last_capture;
+  };
+  struct CaptureJob {
+    std::atomic<bool> canceled{false}, started{false}, done{false};
+    std::mutex mutex;
+    std::string result, error;
   };
   struct Motion {
     uint64_t owner{}; std::string id, label, phase{"validating"}, message;
@@ -104,6 +119,10 @@ struct PositionMotion::Impl {
     std::optional<std::vector<MotionArrivalError>> arrival_errors;
     GroupHoldRecovery hold_recovery;
     std::optional<GroupHoldFailure> hold_failure;
+    size_t capture_index{};
+    Clock::time_point capture_started{};
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr capture_sub;
+    std::shared_ptr<CaptureJob> capture_job;
   };
   rclcpp::Node &node;
   rclcpp::CallbackGroup::SharedPtr callback_group;
@@ -164,6 +183,7 @@ struct PositionMotion::Impl {
     gripper_state_sub = node.create_subscription<State>("/" + gripper_controller + "/controller_state", qos, [this](State::ConstSharedPtr m) { gripper_state = *m; gripper_state_at = Clock::now(); }, options);
     timer = node.create_wall_timer(std::chrono::milliseconds(100), [this] { tick(); }, callback_group);
   }
+  ~Impl() { if (current && current->capture_job) current->capture_job->canceled.store(true); }
   std::string event(const Motion &m) const {
     std::string group_fields;
     if (m.group) {
@@ -178,7 +198,7 @@ struct PositionMotion::Impl {
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
         ",\"position_error_check_enforced\":false" + (m.arrival_errors ? ",\"arrival_errors\":" + motion_arrival_json(*m.arrival_errors) : "") +
         (m.hold_failure ? ",\"hold_failure\":" + group_hold_failure_json(*m.hold_failure) : "") +
-        ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + group_fields + "}";
+        ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + group_fields + (m.group && !m.group->last_capture.empty() ? ",\"capture_result\":" + m.group->last_capture : "") + "}";
   }
   static double steady_seconds() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
   static bool at_group_boundary(const std::shared_ptr<Motion> &m) { return m->group && !m->hold_reference.empty(); }
@@ -396,6 +416,8 @@ struct PositionMotion::Impl {
   void cancel(const std::shared_ptr<Motion> &m, const std::string &message) {
     if (m->terminal || m->cancel_requested) return;
     m->cancel_requested = true; m->cancel_at = Clock::now();
+    if (m->capture_job) m->capture_job->canceled.store(true);
+    m->capture_sub.reset();
     m->settled_at = {};
     if (at_group_boundary(m)) m->result_at = Clock::now();
     update(m, "canceling", message);
@@ -765,7 +787,88 @@ struct PositionMotion::Impl {
     m->group->failed = true;
     cancel(m, reason == "position_drift" ? "动作组偏离停留/暂停时的实测保持基准，取消后续步骤" : "停留/暂停反馈持续 5 秒未重新停稳，取消后续步骤");
   }
+  // Return true only after a fresh image and matching actual feedback have been
+  // committed. Encoding and disk I/O never run on the motion callback group.
+  bool capture_group_action(const std::shared_ptr<Motion> &m) {
+    const auto &captures = m->group->spec.steps.at(m->group->timeline.index).captures;
+    if (m->capture_index >= captures.size()) return true;
+    const auto spec = captures[m->capture_index];
+    if (m->capture_job) {
+      auto job = m->capture_job;
+      if (std::chrono::duration<double>(Clock::now() - m->capture_started).count() >= spec.timeout_s) {
+        job->canceled.store(true); throw std::runtime_error("拍照 Action「" + spec.label + "」超时，未继续后续步骤");
+      }
+      if (!job->done.load()) return false;
+      std::lock_guard<std::mutex> lock(job->mutex);
+      if (!job->error.empty()) throw std::runtime_error("拍照失败：" + job->error);
+      m->group->last_capture = job->result;
+      log(m->owner, m->id, "capture", job->result.substr(0, job->result.find(",\"thumbnail\"")) + "}");
+      m->capture_job.reset(); m->capture_sub.reset(); ++m->capture_index;
+      update(m, "waiting", "拍照「" + spec.label + "」图像及实际姿态已保存");
+      return m->capture_index == captures.size();
+    }
+    auto job = std::make_shared<CaptureJob>(); m->capture_job = job; m->capture_started = Clock::now();
+    const double requested_stamp = node.now().seconds();
+    rclcpp::SubscriptionOptions options; options.callback_group = callback_group;
+    m->capture_sub = node.create_subscription<sensor_msgs::msg::Image>(spec.topic, rclcpp::SensorDataQoS(),
+      [this, weak = std::weak_ptr<Motion>(m), job, spec, requested_stamp](sensor_msgs::msg::Image::ConstSharedPtr image) {
+        const auto task = weak.lock();
+        if (!task || task != current || task->terminal || task->cancel_requested || job->canceled.load() || job->started.load() || job->done.load()) return;
+        const double image_stamp = double(image->header.stamp.sec) + image->header.stamp.nanosec / 1e9;
+        const double joint_stamp = double(joints.header.stamp.sec) + joints.header.stamp.nanosec / 1e9;
+        if (image_stamp < requested_stamp || !capture_stamp_valid(node.now().seconds(), image_stamp, joint_stamp) ||
+            !fresh(joints_at, .5) || !clock_snapshot().healthy() || !task->hold_recovery.ready) return;
+        try {
+          const auto actual = measured(task->model, false, &task->calibration), velocity = measured(task->model, true, &task->calibration);
+          if (!motion_stopped(task->model.joint_names, velocity) || !group_hold_position_valid(task->model.joint_names, task->hold_reference, actual)) return;
+          if (image->data.size() > 64 * 1024 * 1024) throw std::runtime_error("图像超过 64 MiB");
+          const auto home = std::getenv("HOME");
+          if (!home || !*home) throw std::runtime_error("Jetson HOME 未配置，无法保存采集结果");
+          const auto folder = std::filesystem::path(home) / ".local/share/robot-console/captures" / task->id / spec.id;
+          const auto metadata = "{\"action_id\":" + quote(spec.id) + ",\"name\":" + quote(spec.label) + ",\"topic\":" + quote(spec.topic) +
+              ",\"image_stamp\":" + std::to_string(image_stamp) + ",\"joint_stamp\":" + std::to_string(joint_stamp) +
+              ",\"frame_id\":" + quote(image->header.frame_id) + ",\"joint_names\":" + capture_names(task->model.joint_names) +
+              ",\"positions\":" + numbers(actual) + ",\"velocities\":" + numbers(velocity) + "}";
+          // Own the message, metadata and job only: late writes cannot touch a
+          // destroyed node or continue a canceled/reconnected motion session.
+          job->started.store(true);
+          std::thread([job, image, folder, metadata, spec, image_stamp, joint_stamp] {
+            auto temporary = folder; temporary += ".pending";
+            bool owns_temporary = false;
+            try {
+              CaptureImage source{image->width, image->height, image->step, image->encoding, image->data};
+              const auto png = capture_png(source), thumbnail = capture_png(source, 120);
+              if (job->canceled.load()) return;
+              std::filesystem::create_directories(folder.parent_path());
+              if (std::filesystem::exists(folder) || !std::filesystem::create_directory(temporary)) throw std::runtime_error("采集目录已存在，拒绝覆盖");
+              owns_temporary = true;
+              const auto write = [](const std::filesystem::path &path, const char *data, size_t size) {
+                std::ofstream file(path, std::ios::binary | std::ios::out); file.exceptions(std::ios::badbit | std::ios::failbit);
+                file.write(data, std::streamsize(size)); file.flush(); file.close();
+              };
+              write(temporary / "image.png", reinterpret_cast<const char *>(png.data()), png.size());
+              write(temporary / "pose.json", metadata.data(), metadata.size());
+              if (job->canceled.load()) { std::filesystem::remove_all(temporary); return; }
+              std::filesystem::rename(temporary, folder);
+              std::lock_guard<std::mutex> lock(job->mutex);
+              job->result = "{\"id\":" + quote(spec.id) + ",\"name\":" + quote(spec.label) + ",\"path\":" + quote((folder / "image.png").string()) +
+                  ",\"image_stamp\":" + std::to_string(image_stamp) + ",\"joint_stamp\":" + std::to_string(joint_stamp) + ",\"thumbnail\":" + quote(capture_base64(thumbnail)) + "}";
+            } catch (const std::exception &e) {
+              std::error_code ignored; if (owns_temporary) std::filesystem::remove_all(temporary, ignored);
+              std::lock_guard<std::mutex> lock(job->mutex); job->error = e.what();
+            }
+            job->done.store(true);
+          }).detach();
+        } catch (const std::exception &e) {
+          std::lock_guard<std::mutex> lock(job->mutex); job->error = e.what(); job->done.store(true);
+        }
+      }, options);
+    update(m, "waiting", "正在采集「" + spec.label + "」，等待有效图像及实际姿态保存");
+    return false;
+  }
   void advance_group(const std::shared_ptr<Motion> &m) {
+    try { if (!capture_group_action(m)) return; }
+    catch (const std::exception &e) { m->group->failed = true; cancel(m, e.what()); return; }
     auto &group = *m->group;
     auto &timeline = group.timeline;
     if (timeline.index + 1 == group.spec.steps.size()) { update(m, "succeeded", "动作组全部步骤 Action 成功、已停稳并完成停留（关节目标误差仅诊断）", true); return; }
@@ -818,7 +921,7 @@ struct PositionMotion::Impl {
       const auto after = r.data.get<std::string>("motion_log_session", "") == log_session ? r.data.get<uint64_t>("motion_log_after", 0) : 0;
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
-          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true,\"tcp_pose_supported\":true,\"motion_group_supported\":true" +
+          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true,\"tcp_pose_supported\":true,\"motion_group_supported\":true,\"motion_capture_supported\":true" +
           ",\"position_error_check_enforced\":false" +
           ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +

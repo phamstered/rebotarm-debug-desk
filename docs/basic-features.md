@@ -50,7 +50,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
-- 页面导航只保留在左侧 Navigation，**Status** 为第一项，其后为 Topics、Motion、Monitor、数据采集、Motor、Calibration 和重力辨识。Topics 集中 Graph / Inspector、Topic 列表与 Controller 只读浏览；Motion 提供 Robot View / 位置 / 动作组 三个局部 Tab、可折叠 Controllers 管理侧栏和共享运动日志。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
+- 页面导航只保留在左侧 Navigation，**Status** 为第一项，其后为 Topics、Motion、Monitor、数据采集、Motor、Calibration 和重力辨识。Topics 集中 Graph / Inspector、Topic 列表与 Controller 只读浏览；Motion 提供 Robot View / 姿态库 / 动作组 三个局部 Tab、可折叠 Controllers 管理侧栏和共享运动日志。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
 - **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；Teleop / Trajectory / RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；启动前读取新鲜 HardwareStatus，拒绝未恢复的锁存故障；停止旧 Teleop / Trajectory 前调用现有硬件 safe_stop（按当前增益执行 RETURN → DISABLE），等待 STM32 DISABLE 确认后仅通知启动脚本清理，不发送孤立 HOLD；安全停止被拒绝或确认超时时保留命令进程并报错；SSH 侧互斥保护并等待脚本完整自检与非零命令确认后才报告启动成功，超时保留 PID 供「停止」处理）。回零停不下来时可选择「解除输出并停止」，确认现场支撑后由控制器 `~/disable` 服务持续发送零输出 DISABLE，收到 STM32 回执后才停进程（需要支持该服务的 ROS 控制插件）；服务缺失或回执失败时不会改用外部发布者或强杀。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。一键 Trajectory 执行 `scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true --clean=false`，并按新鲜硬件使能掩码的 bit0x40 选择 `--gripper=true/false`，默认同时启用独立的 `gravity_compensation_controller`；仍等待启动脚本完成控制器状态自检后才报告成功。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；启动时与 Teleop/Trajectory 一样，先安全回零、确认 DISABLE、清理并核验旧模式，再以 Trajectory+gravity 初始化新控制环境，在同一原生互斥锁内切到 VLA；不复用旧命令状态，初始化/清理失败则中止；成功后校验 controller active（及可用时的 TRACK）；`fault_code=11` 禁用启动类按钮。可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。完整用法见 [VLA 使用指南](./vla)。无一键升级全部或自动刷写 STM32。
 - Status 分为「连接 / 硬件健康 / 控制模式」三个 Tab；硬件健康包含 USB、Hardware、时钟同步和 RealSense，控制模式包含 ros2_control、ROS 就绪及当前运行模式卡片（未启用模式时仍显示前两张）；默认打开连接。Tab 按卡片状态聚合，异常优先于注意、未知、正常、空闲，隐藏分区仍持续更新汇总；支持左右方向键、Home/End。Fault 芯片会自动打开硬件 Tab 并高亮 Hardware，HOLD / 故障提示在所有 Tab 保留。
 - 控制模式 Tab 保留互斥模式条与停止/解除输出确认，并提供实时日志：默认按当前模式选 Teleop、Trajectory 或 ROS 控制器/VLA，也可选择 RealSense。通过 Tauri `read_control_log` 走只读 SSH，每轮完成后间隔 1 秒刷新，仅在控制 Tab 和窗口可见、SSH 可用时工作；搜索不区分大小写并移除终端控制字符。关闭「跟随最新」或向上滚动后保留阅读位置，刷新不覆盖搜索内容。
@@ -73,17 +73,17 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 - Motion 可在 ROS 未就绪时进入，查看已保存位置及就绪原因；执行继续要求连接、MoveIt、active 控制器、新鲜反馈、时钟和既有安全确认。
 - Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际 Activate / Deactivate 只在 Motion 侧栏，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。Status 保留整栈启动、模式切换、安全退出与解除输出。
-- Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、位置与动作组共用底部规划执行日志。左侧 Controllers 默认展开，可收起以扩展画布。
-- Controllers 宽度、日志高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄位置页改为列表/编辑上下分区。
+- Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、姿态库与动作组共用底部规划执行日志。左侧 Controllers 默认展开，可收起以扩展画布。
+- Controllers 宽度、日志高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄姿态库页改为列表/编辑上下分区。
 - Robot View 画布铺满内容区；「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」作为画布内三个独立浮窗。拖动标题移动，右下角手柄调整大小；标题和缩放手柄也支持方向键每次 10px、Shift 每次 40px。每个浮窗可折叠，画布顶部按钮可重新展开并置于最前；「重置浮窗」恢复默认位置、大小和展开状态。折叠保留当前编辑内容，不改变点云订阅或执行状态。面板内滚动/点击不操作相机，拖动浮窗不下发运动。
 - 分隔尺寸独立保存于 `robot-console-motion-layout`；浮窗位置、大小和折叠状态保存于 `robot-console-viewer-floating-panels-v1`，重启恢复。缩小窗口限制浮窗及其标题在画布内，面板内容独立滚动；仅显示尺寸约束不覆盖宽屏偏好。在 Motion 点击全局“重置布局”恢复分隔尺寸和所有浮窗并展开 Controllers，保留当前 Tab。
 - 导航页、Motion Tab 与 Controllers 展开状态独立记忆。Motion 默认 Robot View；旧 `dashboard` 导航标识继续表示 Topics。连接后默认跳 Status 的既有独立设置继续适用。
-- RGBD 仅在 Motion → Robot View、窗口可见、实时显示和 RGBD 配置开启时订阅；位置 Tab、Topics 和其他页释放当前客户端兴趣并清空点云。已加载的 Robot View 场景仍保留，隐藏时停止绘制并取消未结束的拖拽。
+- RGBD 仅在 Motion → Robot View、窗口可见、实时显示和 RGBD 配置开启时订阅；姿态库 Tab、Topics 和其他页释放当前客户端兴趣并清空点云。已加载的 Robot View 场景仍保留，隐藏时停止绘制并取消未结束的拖拽。
 
 ## 4. Topic Graph、Inspector 与 Monitor
 
-- Motion 集中 Robot View、「位置」和「动作组」Tab；Topics 中心固定展示 Topic Graph，数值图表使用 Monitor 导航页。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「位置」保存当前连接（SSH 主机、用户、端口）下的六轴及可选夹爪点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链和保存关节值显示简化 3D 姿态：立体连杆、关节、基座地面网格及末端红 X / 绿 Y / 蓝 Z 方向轴，保存夹爪目标时展示手指开度。HOME、编辑和动作组预览共用这一展示；使用固定斜视角并自动取景，不加载 mesh 或为每张卡片占用 WebGL 上下文。缺失或无效姿态显示「无姿态」，预览不下发运动；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理位置」打开同一份数据。自定义点可以新增、编辑和删除。
-- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。若轨迹控制器已运行但规划器未启动，可在位置页点击“启动 MoveIt”；随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
+- Motion 集中 Robot View、「姿态库」和「动作组」Tab；Topics 中心固定展示 Topic Graph，数值图表使用 Monitor 导航页。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「姿态库」保存当前连接（SSH 主机、用户、端口）下的六轴及可选夹爪点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链和保存关节值显示简化 3D 姿态：立体连杆、关节、基座地面网格及末端红 X / 绿 Y / 蓝 Z 方向轴，保存夹爪目标时展示手指开度。HOME、编辑和动作组预览共用这一展示；使用固定斜视角并自动取景，不加载 mesh 或为每张卡片占用 WebGL 上下文。缺失或无效姿态显示「无姿态」，预览不下发运动；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理姿态库」打开同一份数据。自定义点可以新增、编辑和删除。
+- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。若轨迹控制器已运行但规划器未启动，可在姿态库页点击“启动 MoveIt”；随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
 - MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。支持 `arm` 六关节及可选 `gripper` / `arm_with_gripper`，通过独立夹爪 JTC 协调执行；执行请求不自动切换控制器。速度与加速度缩放为 1.0（不缩放）；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤2 rad/s 与加速度 ≤2 rad/s²（真实入口采用 2/2、缩放 1/1、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
 - Bridge 在规划前及执行期间校验控制器 active、三类反馈 <1 秒、TRACK/故障/使能掩码、反馈一致性、完整有限关节值和模型限位。跨连接只允许一个点位运动，`command_id` 去重；规划/执行超过 180 秒、故障、反馈丢失、配置变化、连接断开或会话心跳超过 5 秒会请求取消。手动 MIT（DISABLE 除外）、旧拖拽轨迹及重力辨识不能覆盖正在运行的点位运动。
 - 启动点位前核对 active JTC 实际认领六关节 `position+velocity` 接口，并要求实测关节速度 ≤0.05 rad/s。已移除独立的启动连续性检查：不再校验 JTC desired/reference 的位置偏差、参考速度或字段完整性，也不等待参考连续稳定 200 ms。MoveIt 仍以新鲜实测关节状态作为规划起点，保留自身起点容差与碰撞检查；JTC actual 与 STM32 实测位置仍须相差 ≤0.02 rad。此变更不改变低速跟踪或重力补偿。旧 position-only JTC 仍不可执行点位。
@@ -224,7 +224,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | 面板 | 默认/持久化状态、三个内容面板与左右侧栏收起、宽高分隔条和尺寸边界、已连接工具条与 Status 卡片的网格区域隔离 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx`、`src/styles.test.ts` |
 | 导航偏好 | 旧 dashboard/新 motion 恢复、Motion Tab 与侧栏独立存储、未知或不可读存储回退、无 ROS 时 Motion 可进入而动作门禁保留 | `src/AppNav.test.tsx`、`src/appNavigationLogic.test.ts`、`src/App.test.tsx` |
 | Motion 可调布局 | 尺寸持久化与坏数据回退、鼠标/键盘边界、拖拽隐藏/卸载清理、局部与整体复位、日志复位、场景保留 | `src/motionLayoutLogic.test.ts`、`src/MotionLayout.test.tsx`、`src/MotionPage.test.tsx` |
-| 工具栏 | 导航职责分离、Topics 与 Motion 分区、Motion 局部 Tab（Robot View / 位置 / 动作组）及偏好恢复、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts`、`src/PositionPage.test.tsx` |
+| 工具栏 | 导航职责分离、Topics 与 Motion 分区、Motion 局部 Tab（Robot View / 姿态库 / 动作组）及偏好恢复、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts`、`src/PositionPage.test.tsx` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→会话→Bridge→Agent、状态灯/步骤/可读错误/最近主机、JointState 冒烟、实际端口、基础订阅、重连会话数据清理、版本检查与升级提示 | `src/App.test.tsx`、`src/appLogic.test.ts`、`src/bridge.test.ts` |
 | Agent | systemd 属性解析、异常 PID、restart 命令 | `src-tauri/src/lib.rs` |
@@ -303,14 +303,14 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 ## MoveIt 一键启动
 
 - Trajectory 自检通过后启动真实 MoveIt，流程图增加“启动 MoveIt”阶段；Teleop/VLA 不启动规划器。仅启动规划器不会执行点位，不会自动勾选安全解锁，也不会创建或切换硬件控制器。
-- 位置页的“启动 MoveIt”复用同一个原生入口。需要连接 Jetson、已有 active `arm_trajectory_controller`、无其他操作或点位运动；原生再次读取新鲜无故障 TRACK 并查询真实控制器状态。未启动轨迹控制时提示先在 Status 启动 Trajectory。
+- 姿态库页的“启动 MoveIt”复用同一个原生入口。需要连接 Jetson、已有 active `arm_trajectory_controller`、无其他操作或点位运动；原生再次读取新鲜无故障 TRACK 并查询真实控制器状态。未启动轨迹控制时提示先在 Status 启动 Trajectory。
 - 在配置的 ROS 域内等待 `/move_action`、`/move_group/get_parameters`、`/get_planning_scene` 就绪。已有就绪规划器直接复用；已有但未就绪的节点只等待，不重复启动。重复的 Action 服务端、启动器提前退出或超时均报错；MoveIt 自身的同名内部节点不会被误判为多套规划器。点位是否可执行继续由 Bridge 的模型、碰撞、起点和硬件安全门判断。
 - 本应用启动的规划器保存 Linux PID、启动标识、用户与 ROS 域；切换或退出在 DISABLE 和旧 arm 清理通过后向已核验的启动器发送一次退出信号并等待其进程组退出，避免向启动器与子节点重复广播信号。归属不可读、PID 复用、未知残留或退出超时会阻止后续步骤，不强杀、不接管外部启动的规划器。失败时保留必要进程与日志；重试不会中断机械臂命令流。
 - MoveIt 输出记录在 Jetson `~/.cache/robot-console/arm-moveit.log`，Status 日志来源可选“MoveIt 规划器”，支持既有搜索、下载与跟随。旧日志保留在 `history/`。手动兼容启动仍可执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`。
 
 ## Motion 规划执行终端
 
-- Motion 的 Robot View / 位置 / 动作组共用底部独立日志区域，支持折叠、关键词搜索、跟随最新、手动滚动暂停跟随及导出 `.log`。不遮挡 3D 画布；切换这三个 Tab 后仍可查看同一份点位记录。
+- Motion 的 Robot View / 姿态库 / 动作组共用底部独立日志区域，支持折叠、关键词搜索、跟随最新、手动滚动暂停跟随及导出 `.log`。不遮挡 3D 画布；切换这三个 Tab 后仍可查看同一份点位记录。
 - 规划执行过程记录命令 ID、时间、阶段、目标/实测关节、指定/推荐时长、轨迹点数、MoveIt Action 结果和错误码，以及拒绝、取消、反馈故障和停止/到位确认。TCP 拖拽另记录本地位姿预览与 IK 收敛结果，确认后共用规划/执行日志；受理 ACK 不表示到位。
 - 下拉切换“MoveIt 原始输出”可查看真实规划器日志（含 OMPL、碰撞和执行报错），复用既有 SSH 搜索/下载入口。只有选择该来源且窗口可见时读取文件。
 - 过程窗口在当前连接中保留最近 5000 条，重连清空；导出包含保留的全部记录，不受搜索影响（32 MiB 上限）。Bridge 最近 2048 条用于增量同步，每批最多 256 条；窗口溢出有提示。Bridge 端过程记录也写入 ROS 日志与进程输出（常规启动为 `/tmp/easy_debug_bridge.log`，Bridge 重启会替换该输出文件）；长期保留请在重启前导出，非永久无限存储。
@@ -351,6 +351,18 @@ RGBD 图像使用独立 ROS Context / DDS participant 接收，避免大图像�
 - 执行先以准备时长到首姿态，确认到位后逐段 MoveIt 规划、指定时长执行、反馈停稳及停留；名义总时长不含准备、规划和停稳额外耗时。各段均受既有安全确认、反馈、时钟、控制器、模型/关节/夹爪限位及故障门禁约束，指定时长超出速度/加速度能力则失败，不自动改时长。
 - Jetson Bridge 拥有整组调度与运动锁，停留和暂停也不能被其他控制任务插入。暂停在当前段停稳后生效，继续前重检；停止使用既有取消与停止确认。失败、取消、断线或心跳失效后不执行后续帧，也不自动重试或续跑。
 - 编辑和本地预览不要求连接；执行要求新版 Bridge 广告动作组能力。数据和编排边界、来源快照、保存失败与原子落盘、全组互斥、暂停/取消/失败及断线行为均由单元或隔离 ROS 测试覆盖，真实机器人验收不由一般代码测试触发。
+
+### Pose / Action 动作块工作台
+
+- 「位置」Tab 改名为「姿态库」，原位置文件、连接隔离、HOME 与安全门保持兼容。新建动作组先从姿态库搜索、多选 Pose，按选择顺序创建快照；编辑中可在选中 Pose 后插入，拖入来源姿态也按相同插入规则处理。
+- 左侧为动作组与姿态库，中间上方为根据当前 URDF（离线使用内置模型）生成的简化 3D 姿态预览，下方时间轴持续显示；右侧按当前 Pose / Action 展示属性，底部为执行入口与当前结果。多机械臂轨道按各自 Pose 独立预览，不跨轨道插值；未绑定设备模型时明确标注使用当前模型示意，不表示真实安装位姿或联合碰撞场景。各分隔尺寸继续独立记忆；窄窗口属性区移至下方并单独滚动。
+- Pose 块区分移动/停留，可拖动排序、用时长手柄或秒数输入修改，支持撤销/重做、缩放、横滚、0.1 秒吸附及完整显示。首姿态独立于名义时间零点；准备时长仍单独配置。播放、0.5×/1×/2×速度和播放头只展示关节线性插值，不请求真实运动或保证规划路径；隐藏页面、窗口不可见或开始实机运动即停止本地播放。
+- 「＋ Action」在所选 Pose 后添加相机拍照，可自定义名称、相机轨道、图像 Topic、依赖 Pose 和 0.1–60 秒超时。琥珀色 Action 块与相机轨道、依赖连线持续可见；其宽度表示超时预算而非承诺的采集耗时，总编排时间明确包含该预算。删除 Pose 同时移除依赖 Action，撤销可恢复两者。
+- 拍照由 Bridge 在对应 Pose Action 成功、连续停稳及停留完成后订阅新的 `sensor_msgs/msg/Image`。仅接受请求之后采集、相对 Jetson 不超过 500 ms（最多超前 50 ms）、与最新关节反馈时间差不超过 100 ms 的图像；持续检查控制器、时钟、反馈、故障和实测保持基准。原始图像不经过桌面 JSON 传输；编码写盘在独立线程执行，保存成功后才推进下一段。
+- 当前支持 rgb8 / bgr8 / rgba8 / bgra8 / mono8，最大 4096×4096、64 MiB。PNG 与实际姿态 `pose.json` 一起提交到 Jetson `$HOME/.local/share/robot-console/captures/<command-id>/<action-id>/`，已有结果不覆盖；界面显示最近采集缩略图和路径。文件包含源图像时间、关节反馈时间、相机 frame、Topic、实际关节位置和速度，便于后续手眼标定；本功能不计算手眼标定结果。
+- 未支持拍照的旧 Bridge 明确阻止含 Action 的动作组执行；相机缺帧、过期帧、格式错误、写盘失败、超时、取消和断线均不推进后续 Pose。仍使用 Bridge 整组锁及既有停止核验，桌面不通过定时器调度采集或运动。
+- 执行先进入「执行前检查」，检查失败原因直接可见，现场安全确认仍必需。未保存稿明确区分「保存并执行」和「执行当前未保存快照」；保存失败不执行。正在运行的组锁定编辑，其他组仍可独立编排；暂停/继续/停止与结果诊断持续保留。
+- 设备轨道保存 ID、名称、类型及设备绑定；旧动作组自动使用当前机械臂轨道。可添加未来机械臂轨道并分配 Pose、删除未使用轨道。「同步点」可选择至少两个不同机械臂的 Pose，保存参与 ID 并在时间轴标记名义等待位置；支持编辑、删除和撤销，删除参与 Pose 时移除对应同步点。当前仅执行一个绑定 `current` 的机械臂及当前 Bridge 的相机；多臂轨道或外部设备明确阻止执行，不把时间轴对齐宣称为多臂联合规划/同步。
 
 动作组配套 Bridge 升级保留连接 Profile 的 JointState、JointCommand 和 HardwareStatus Topic；命令行部署可用 `--joint-state-topic` / `--command-topic` / `--status-topic` 或对应 `BRIDGE_DEPLOY_*_TOPIC` 覆盖，重启前校验为绝对 ROS Topic。现场 `/stm32/status` 不会被升级脚本默认 `/stm32/hardware_status` 替代。
 部署构建固定对所选 Bridge 包使用 `--cmake-clean-first`，避免 rsync 保留的源文件 mtime 让内容已变化的文件复用旧对象。其余包和扩展不清理；构建完成仍须分别核对安装二进制、运行进程及 hello 的 build ID。

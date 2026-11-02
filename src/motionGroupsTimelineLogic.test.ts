@@ -100,3 +100,11 @@ describe("group timeline editing", () => {
     expect(step.positions[0]).toBe(0);
   });
 });
+
+it("does not interpolate one robot track from another robot's joint values", () => {
+  const g = group();
+  g.steps[0].trackId = "arm"; g.steps[1].trackId = "other";
+  expect(previewGroupPose(g, 3, "arm")?.positions).toEqual(g.steps[0].positions);
+  expect(previewGroupPose(g, 3, "other")?.positions).toEqual(g.steps[1].positions);
+  expect(previewGroupPose(g, 3, "missing")).toBeNull();
+});
