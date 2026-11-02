@@ -64,7 +64,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态。桌面每秒经现有 WebSocket 读取 Bridge 共享缓存，不再为列表刷新启动 SSH/ROS CLI；Topics 自动刷新间隔单独设置。
 - ROS Control 标题栏提供手动刷新按钮，与展开/收起按钮并列；手动与自动刷新具有并发保护。手动刷新及控制器操作前后等待请求进入后新发起的 ROS 查询，切换期间发起的查询不能充当切换后核验。
 - Topics 的 Controller 卡片提供「查看 Graph」聚焦关联节点、Topic 和连线，以及「管理」跳转 Motion；本页只读。Motion 中确认 Activate / Deactivate 后，通过 SSH 调用 Humble `ros2 control switch_controllers --strict`，完成后共享刷新列表并展示成功或错误信息。
-- Controller 名称和操作类型在 Tauri/Rust 后端校验，拒绝包含 shell 特殊字符的输入。列表与运动健康检查共用单个常驻 ROS 客户端，沿用 2 秒请求上限、3.1 秒状态有效期和失败退避，保留既有 active、接口认领和故障门禁。缺少 MoveIt 支持时仍可查询列表；缺少 Controller Manager 消息支持或旧 Bridge 时明确提示升级，不回退到冷启动 CLI 查询。
+- Controller 名称和操作类型在 Tauri/Rust 后端校验，拒绝包含 shell 特殊字符的输入。列表与运动健康检查共用单个常驻 ROS 客户端，沿用 2 秒请求上限、3.1 秒状态有效期和失败退避，保留既有 active、接口认领和故障门禁。新鲜成功结果不显示“重试等待”，仅失效状态显示退避等待时间。缺少 MoveIt 支持时仍可查询列表；缺少 Controller Manager 消息支持或旧 Bridge 时明确提示升级，不回退到冷启动 CLI 查询。
 - 兼容 Jetson 当前 Humble `ros2controlcli` 的超时参数类型缺陷：不显式传入 `--switch-timeout`，使用其内部浮点默认值，并由外层进程提供 10 秒超时保护。
 - Controller 列表区分首次等待、查询中、服务不可用、查询超时、数据过期及 Bridge 不支持。失败后保留同会话最后成功列表并标明年龄/错误，只供查看；不再把一次查询失败直接显示成控制器离线。成功空列表明确显示暂无 Controller。连接代变化清除旧列表，过期数据禁止 Controller 切换及当前模式确认。
 - Bridge 可订阅 Jetson 当前 ROS 环境中已安装类型支持的消息类型。已知的基础消息保留原有字段格式；其余类型通过 ROS 2 运行时字段描述递归转换为 JSON，包括 `control_msgs/msg/JointTrajectoryControllerState` 的嵌套字段和数组。类型支持缺失或请求类型与已发现的 Topic 不符时显示具体错误。
