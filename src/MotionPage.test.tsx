@@ -23,16 +23,21 @@ describe("Motion workspace", () => {
   });
   it("preserves the scene across tabs/navigation with independent controller visibility", async () => {
     const onTabChange = vi.fn(), onToggleControllers = vi.fn();
-    const props = { active: true, tab: "robot" as "robot" | "positions", onTabChange,
+    const props = { active: true, tab: "robot" as "robot" | "positions" | "groups", onTabChange,
       controllersOpen: true, onToggleControllers, controllers: <div>Controller operations</div>,
       readiness: <span>等待新鲜反馈</span>, robot: <div data-testid="scene">Retained scene</div>,
-      positions: <div>Saved poses</div>, log: <div>Shared motion log</div> };
+      positions: <div>Saved poses</div>, groups: <div>Action timeline</div>, log: <div>Shared motion log</div> };
     const user = userEvent.setup(); const { rerender } = render(<MotionPage {...props} />);
     const scene = screen.getByTestId("scene");
     await user.click(screen.getByRole("tab", { name: "位置" }));
     expect(onTabChange).toHaveBeenCalledWith("positions");
     rerender(<MotionPage {...props} tab="positions" />);
     expect(scene).not.toBeVisible(); expect(screen.getByText("Saved poses")).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "动作组" }));
+    expect(onTabChange).toHaveBeenCalledWith("groups");
+    rerender(<MotionPage {...props} tab="groups" />);
+    expect(scene).not.toBeVisible(); expect(screen.getByText("Action timeline")).toBeVisible();
+    expect(screen.getByText("Saved poses")).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "收起 Controllers" }));
     expect(onToggleControllers).toHaveBeenCalledOnce();
     rerender(<MotionPage {...props} active={false} controllersOpen={false} />);

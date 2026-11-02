@@ -2,6 +2,7 @@
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/position_group_parser.hpp"
 #include "easy_debug_bridge/tcp_pose_model.hpp"
 #include <shape_msgs/msg/solid_primitive.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -77,6 +78,13 @@ std::vector<double> read_values(const Tree &request) {
 
 struct PositionMotion::Impl {
   struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; };
+  struct GroupRun {
+    PositionGroupSpec spec;
+    PositionGroupTimeline timeline;
+    std::string model_signature;
+    uint64_t clock_generation{};
+    bool done{false}, failed{false};
+  };
   struct Motion {
     uint64_t owner{}; std::string id, label, phase{"validating"}, message;
     uint64_t clock_generation{};
@@ -89,7 +97,8 @@ struct PositionMotion::Impl {
     double duration{0}, recommended_duration{0};
     Clock::time_point started{Clock::now()}, lease_at{Clock::now()}, result_at{}, settled_at{}, cancel_at{};
     bool cancel_requested{false}, terminal{false};
-    int code{0}; bool failed_result{false};
+    int code{0}; bool failed_result{false}, planning_finished{false};
+    std::shared_ptr<GroupRun> group;
   };
   rclcpp::Node &node;
   rclcpp::CallbackGroup::SharedPtr callback_group;
@@ -152,10 +161,19 @@ struct PositionMotion::Impl {
     timer = node.create_wall_timer(std::chrono::milliseconds(100), [this] { tick(); }, callback_group);
   }
   std::string event(const Motion &m) const {
+    std::string group_fields;
+    if (m.group) {
+      auto timeline = m.group->timeline;
+      if (!m.group->done) timeline.advance(steady_seconds());
+      group_fields = ",\"group_id\":" + quote(m.group->spec.id) + ",\"group_index\":" + std::to_string(timeline.index) +
+          ",\"group_count\":" + std::to_string(m.group->spec.steps.size()) + ",\"group_phase\":" + quote(timeline.phase) +
+          ",\"group_elapsed_s\":" + std::to_string(timeline.elapsed_s);
+    }
     return "{\"op\":\"position_motion\",\"command_id\":" + quote(m.id) + ",\"label\":" + quote(m.label) +
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
-        ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + "}";
+        ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + group_fields + "}";
   }
+  static double steady_seconds() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
   void log(uint64_t owner, const std::string &id, const std::string &phase, const std::string &message, const std::string &level = "info") {
     logs.append(owner, id, phase, message, level);
     RCLCPP_INFO(node.get_logger(), "[motion][%s][%s][%s] %s", level.c_str(), id.c_str(), phase.c_str(), message.c_str());
@@ -164,6 +182,7 @@ struct PositionMotion::Impl {
     if (m->phase != phase || m->message != message)
       log(m->owner, m->id, phase, m->label + " · " + message, phase == "failed" || phase == "stop_failed" ? "error" : phase == "canceling" ? "warn" : "info");
     m->phase = phase; m->message = message; m->terminal = terminal;
+    if (terminal && m->group) { m->group->timeline.advance(steady_seconds()); m->group->done = true; }
     m->send(event(*m));
     if (terminal && current == m) in_motion.store(false);
   }
@@ -304,8 +323,10 @@ struct PositionMotion::Impl {
         } catch (const std::exception &e) { gripper_error = std::string("夹爪配置不可用：") + e.what(); }
         std::string signature;
         for (const auto &value : p) signature += value.value_to_string();
-        if (current && !current->terminal && !model_signature.empty() && signature != model_signature)
+        if (current && !current->terminal && !model_signature.empty() && signature != model_signature) {
+          if (current->group) current->group->failed = true;
           cancel(current, "MoveIt 模型或配置改变，已请求取消");
+        }
         start_tolerance = configured_start_tolerance;
         model = std::move(parsed); model_signature = std::move(signature); model_urdf = p[0].as_string(); model_error.clear(); model_at = Clock::now();
       } catch (const std::exception &e) { model_error = std::string("MoveIt 配置不可用：") + e.what(); model_at = {}; }
@@ -383,22 +404,28 @@ struct PositionMotion::Impl {
   void cancel(const std::shared_ptr<Motion> &m, const std::string &message) {
     if (m->terminal || m->cancel_requested) return;
     m->cancel_requested = true; m->cancel_at = Clock::now();
+    m->settled_at = {};
+    if (m->group && (m->phase == "waiting" || m->phase == "paused")) m->result_at = Clock::now();
     update(m, "canceling", message);
     request_cancel_handle(m);
   }
-  void move(const Request &r) {
+  void move(const Request &r, const std::shared_ptr<GroupRun> &group = nullptr) {
     const auto id = r.data.get<std::string>("command_id", "");
     if (id.empty() || id.size() > 80 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
       throw std::runtime_error("command_id 无效");
     if (r.data.get<std::string>("confirmation", "") != "ARMED") throw std::runtime_error("请先确认工作区安全并解锁点位执行");
-    for (const auto &old : seen) if (old.first == id) {
-      if (current && current->id == id && current->owner == r.owner) {
+    for (const auto &old : seen) if (!group && old.first == id) {
+      if (current && !current->group && current->id == id && current->owner == r.owner) {
         r.send("{\"op\":\"position_move_ack\",\"accepted\":true,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) + ",\"command_id\":" + quote(id) + "}");
         r.send(event(*current)); return;
       }
       throw std::runtime_error("重复的运动 command_id，未重复执行");
     }
-    if (current && !current->terminal) throw std::runtime_error("已有点位运动，等待完成或取消确认后再试");
+    if (current && !current->terminal && !group) throw std::runtime_error("已有点位运动，等待完成或取消确认后再试");
+    if (group && (group->done || (current && current->group == group && current->cancel_requested)))
+      throw std::runtime_error("动作组已取消或结束");
+    if (group && (group->model_signature != model_signature || group->clock_generation != clock_snapshot().generation))
+      throw std::runtime_error("动作组模型或时钟基准改变，禁止继续");
     const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
     const auto rotation_joint = r.data.get_optional<std::string>("joint_name");
     const auto joint_targets = r.data.get_child_optional("joint_targets");
@@ -449,18 +476,20 @@ struct PositionMotion::Impl {
     }
     validate_position_target(target, motion_model);
     auto m = std::make_shared<Motion>(); m->owner = r.owner; m->id = id;
-    m->clock_generation = clock_snapshot().generation;
+    m->clock_generation = group ? group->clock_generation : clock_snapshot().generation;
+    m->group = group;
     m->label = r.data.get<bool>("home", false) ? "HOME" : r.data.get<std::string>("label", "位置");
     if (m->label.size() > 512) throw std::runtime_error("点位名称过长");
     m->target = target; m->model = motion_model; m->gripper = has_gripper; m->calibration = gripper_calibration;
     m->velocity_limits = has_arm ? velocity_limits : std::vector<double>{};
     m->acceleration_limits = has_arm ? acceleration_limits : std::vector<double>{};
     if (has_gripper) { m->velocity_limits.push_back(gripper_velocity_limit); m->acceleration_limits.push_back(gripper_acceleration_limit); }
-    m->send = r.send; m->duration = duration; m->plan_only = duration > 0 || has_gripper || bool(pose_field);
+    m->send = r.send; m->duration = duration; m->plan_only = bool(group) || duration > 0 || has_gripper || bool(pose_field);
     m->tcp = bool(pose_field); m->tcp_model = std::move(pose_model); m->tcp_target = pose_target;
     if (m->plan_only && !execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
+    if (group && current && current->group == group) m->lease_at = current->lease_at;
     current = m; in_motion.store(true);
-    seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front();
+    if (!group || group->timeline.index == 0) { seen.emplace_back(id, r.owner); if (seen.size() > 256) seen.pop_front(); }
     Group::Goal goal;
     goal.request.group_name = has_gripper ? (has_arm ? "arm_with_gripper" : "gripper") : "arm"; goal.request.pipeline_id = "ompl";
     goal.request.allowed_planning_time = 5; goal.request.num_planning_attempts = 1;
@@ -500,8 +529,10 @@ struct PositionMotion::Impl {
       if (m->tcp && motion_model.joint_names[i] != gripper_motion_joint()) continue;
       moveit_msgs::msg::JointConstraint c; c.joint_name = motion_model.joint_names[i]; c.position = target[i];
       c.tolerance_above = c.tolerance_below = motion_goal_tolerance(c.joint_name); c.weight = 1; constraints.joint_constraints.push_back(c);
-      if ((joint_targets || rotation_joint) && std::none_of(edits.begin(), edits.end(),
-          [&](const auto &edit) { return edit.first == c.joint_name; })) {
+      const bool group_gripper_hold = group && group->spec.uses_gripper && c.joint_name == gripper_motion_joint() &&
+          !group->spec.steps.at(group->timeline.index).gripper_position;
+      if (group_gripper_hold || ((joint_targets || rotation_joint) && std::none_of(edits.begin(), edits.end(),
+          [&](const auto &edit) { return edit.first == c.joint_name; }))) {
         c.position = actual[i];
         c.tolerance_above = c.tolerance_below = motion_hold_tolerance(c.joint_name);
         goal.request.path_constraints.joint_constraints.push_back(c);
@@ -514,22 +545,29 @@ struct PositionMotion::Impl {
     goal.planning_options.plan_only = m->plan_only; goal.planning_options.replan = false;
     goal.planning_options.planning_scene_diff.is_diff = true;
     goal.planning_options.planning_scene_diff.robot_state.is_diff = true;
-    r.send("{\"op\":\"position_move_ack\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
-        ",\"command_id\":" + quote(id) + "}");
+    if (!group || group->timeline.index == 0)
+      r.send("{\"op\":" + quote(group ? "position_group_start_ack" : "position_move_ack") + ",\"accepted\":true,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
+          ",\"command_id\":" + quote(id) + "}");
     update(m, "planning", "MoveIt2 正在规划（自碰撞和已知环境碰撞检查）");
     rclcpp_action::Client<Group>::SendGoalOptions options;
     options.goal_response_callback = [this, m](Handle::SharedPtr handle) {
+      if (m->terminal || current != m || m->planning_finished) {
+        if (handle) try { action->async_cancel_goal(handle); } catch (...) {}
+        return;
+      }
       m->handle = handle;
-      if (!handle) { update(m, "failed", "MoveIt 拒绝目标", true); return; }
+      if (!handle) { finish_result(m, rclcpp_action::ResultCode::ABORTED, 0); return; }
       log(m->owner, m->id, "planning", "MoveGroup 已受理目标");
       if (m->cancel_requested) request_cancel_handle(m);
     };
     options.feedback_callback = [this, m](Handle::SharedPtr, const std::shared_ptr<const Group::Feedback> f) {
-      if (m->terminal || m->cancel_requested) return;
+      if (m->terminal || m->cancel_requested || m->planning_finished || current != m || m->result_at != Clock::time_point{}) return;
       const bool executing = !m->plan_only && (f->state.find("MONITOR") != std::string::npos || f->state.find("EXECUT") != std::string::npos);
       update(m, executing ? "executing" : "planning", "MoveIt：" + f->state);
     };
     options.result_callback = [this, m](const Handle::WrappedResult &result) {
+      if (m->terminal || current != m || m->planning_finished || m->result_at != Clock::time_point{}) return;
+      m->planning_finished = true;
       m->handle.reset();
       log(m->owner, m->id, "result", "MoveGroup result=" + std::to_string(static_cast<int>(result.code)) +
           " error_code=" + std::to_string(result.result ? result.result->error_code.val : 0) +
@@ -543,10 +581,13 @@ struct PositionMotion::Impl {
       finish_result(m, result.code, result.result ? result.result->error_code.val : 0);
     };
     try { action->async_send_goal(goal, options); }
-    catch (const std::exception &e) { update(m, "failed", e.what(), true); }
+    catch (const std::exception &e) {
+      m->cancel_requested = true; m->cancel_at = Clock::now();
+      update(m, "stop_failed", std::string("规划受理状态未确认，保持锁定：") + e.what());
+    }
   }
   void finish_result(const std::shared_ptr<Motion> &m, rclcpp_action::ResultCode code, int error_code) {
-      if (m->terminal) return;
+      if (m->terminal || current != m || m->result_at != Clock::time_point{}) return;
       log(m->owner, m->id, "result", "Action result=" + std::to_string(static_cast<int>(code)) + " error_code=" + std::to_string(error_code),
           code == rclcpp_action::ResultCode::SUCCEEDED && error_code == 1 ? "info" : "warn");
       m->result_at = Clock::now(); m->code = error_code;
@@ -579,6 +620,7 @@ struct PositionMotion::Impl {
     if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，未执行规划轨迹");
     if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
     if (m->gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
+    if (m->group && m->group->spec.uses_gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
     if (!same_motion_joints(plan.joint_trajectory.joint_names, m->model.joint_names) || !plan.multi_dof_joint_trajectory.points.empty() ||
         !plan.multi_dof_joint_trajectory.joint_names.empty()) throw std::runtime_error("规划轨迹关节集合与请求不匹配");
     const auto &names = plan.joint_trajectory.joint_names;
@@ -626,12 +668,17 @@ struct PositionMotion::Impl {
     }
     rclcpp_action::Client<Execute>::SendGoalOptions options;
     options.goal_response_callback = [this, m](ExecuteHandle::SharedPtr handle) {
+      if (m->terminal || current != m || m->result_at != Clock::time_point{}) {
+        if (handle) try { execute_action->async_cancel_goal(handle); } catch (...) {}
+        return;
+      }
       m->execution_handle = handle;
       if (!handle) { finish_result(m, rclcpp_action::ResultCode::ABORTED, 0); return; }
       if (m->cancel_requested) request_cancel_handle(m);
       else update(m, "executing", "按指定运动时长执行：" + std::to_string(m->duration) + " 秒");
     };
     options.result_callback = [this, m](const ExecuteHandle::WrappedResult &result) {
+      if (m->terminal || current != m) return;
       m->execution_handle.reset();
       finish_result(m, result.code, result.result ? result.result->error_code.val : 0);
     };
@@ -642,6 +689,86 @@ struct PositionMotion::Impl {
       m->cancel_requested = true; m->cancel_at = Clock::now();
       update(m, "stop_failed", std::string("轨迹受理状态未确认，保持锁定：") + e.what());
     }
+  }
+  void dispatch_group_step(const Request &request, const std::shared_ptr<GroupRun> &group) {
+    const auto &step = group->spec.steps.at(group->timeline.index);
+    Request r{request.owner, {}, request.send};
+    r.data.put("op", "position_move"); r.data.put("command_id", request.data.get<std::string>("command_id"));
+    r.data.put("request_id", request.data.get<std::string>("request_id", "")); r.data.put("confirmation", "ARMED");
+    r.data.put("label", group->spec.label);
+    r.data.put("motion_duration_s", group->timeline.index == 0 ? group->spec.preparation_duration_s : step.motion_duration_s);
+    Tree positions;
+    for (const auto value : step.positions) { Tree entry; entry.put_value(value); positions.push_back({"", entry}); }
+    r.data.add_child("positions", positions);
+    if (group->spec.uses_gripper) r.data.put("gripper_position", step.gripper_position.value_or(
+        calibrated_gripper_value(joints.name, joints.position, gripper_calibration)));
+    move(r, group);
+  }
+  void start_group(const Request &r) {
+    const auto id = r.data.get<std::string>("command_id", "");
+    if (id.empty() || id.size() > 80 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
+      throw std::runtime_error("command_id 无效");
+    if (r.data.get<std::string>("confirmation", "") != "ARMED") throw std::runtime_error("请先确认工作区安全并解锁动作组执行");
+    for (const auto &old : seen) if (old.first == id) {
+      if (current && current->group && current->owner == r.owner && current->id == id && current->group->spec.id == r.data.get<std::string>("group_id", "")) {
+        r.send("{\"op\":\"position_group_start_ack\",\"accepted\":true,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) + ",\"command_id\":" + quote(id) + "}");
+        r.send(event(*current)); return;
+      }
+      throw std::runtime_error("重复的运动 command_id，未重复执行");
+    }
+    if (current && !current->terminal) throw std::runtime_error("已有运动或动作组，等待完成或取消确认后再试");
+    const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
+    if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
+    auto group = std::make_shared<GroupRun>();
+    group->spec = read_position_group(r.data, model, gripper_supported, gripper_calibration.lower, gripper_calibration.upper);
+    if (group->spec.uses_gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
+    group->model_signature = model_signature; group->clock_generation = clock_snapshot().generation;
+    group->timeline.last_s = steady_seconds();
+    dispatch_group_step(r, group);
+  }
+  void pause_group(const Request &r, bool resume) {
+    const auto id = r.data.get<std::string>("command_id", "");
+    const auto m = current;
+    if (!m || m->owner != r.owner || m->id != id || !m->group || m->terminal || m->cancel_requested || m->failed_result)
+      throw std::runtime_error("本会话没有可暂停/继续的动作组");
+    auto &timeline = m->group->timeline;
+    if (resume) {
+      if (timeline.phase != "paused") throw std::runtime_error("动作组尚未在安全边界暂停");
+      const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
+      if (m->group->spec.uses_gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
+      if (m->group->model_signature != model_signature || m->clock_generation != clock_snapshot().generation)
+        throw std::runtime_error("动作组模型或时钟基准已改变，禁止继续");
+      if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，禁止继续动作组");
+      const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
+      if (!motion_target_reached(m->model.joint_names, m->target, actual, velocity)) throw std::runtime_error("暂停期间实测位置改变，禁止继续");
+      if (m->group->spec.uses_gripper && !motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}))
+        throw std::runtime_error("暂停期间夹爪尚未停稳，禁止继续");
+      timeline.resume(steady_seconds());
+      update(m, "waiting", "动作组已继续，等待本项停留时间结束");
+    } else {
+      timeline.pause(steady_seconds());
+      if (timeline.phase == "paused") update(m, "paused", "动作组已在停稳边界暂停，保留运动锁");
+    }
+    r.send("{\"op\":" + quote(resume ? "position_group_resume_ack" : "position_group_pause_ack") +
+        ",\"accepted\":true,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) + ",\"command_id\":" + quote(id) +
+        ",\"pending\":" + (timeline.phase == "paused" || resume ? "false" : "true") + "}");
+    if (!resume && timeline.phase != "paused") m->send(event(*m));
+  }
+  void group_wait(const std::shared_ptr<Motion> &m) {
+    auto &group = *m->group;
+    auto &timeline = group.timeline;
+    timeline.advance(steady_seconds());
+    const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
+    if (!motion_target_reached(m->model.joint_names, m->target, actual, velocity) ||
+        (group.spec.uses_gripper && !motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}))) {
+      group.failed = true; cancel(m, "动作组停留/暂停期间偏离目标或未停稳，取消后续步骤"); return;
+    }
+    if (timeline.phase == "paused" || timeline.hold_remaining_s > 0) return;
+    if (timeline.index + 1 == group.spec.steps.size()) { update(m, "succeeded", "动作组全部步骤已到位、停稳并完成停留", true); return; }
+    timeline.next(steady_seconds());
+    Request r{m->owner, {}, m->send}; r.data.put("command_id", m->id);
+    try { dispatch_group_step(r, m->group); }
+    catch (const std::exception &e) { group.failed = true; cancel(current, std::string("动作组下一段校验失败：") + e.what()); }
   }
   void process(const Request &r) {
     if (r.disconnect) { if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
@@ -662,7 +789,7 @@ struct PositionMotion::Impl {
       const auto after = r.data.get<std::string>("motion_log_session", "") == log_session ? r.data.get<uint64_t>("motion_log_after", 0) : 0;
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
-          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true,\"tcp_pose_supported\":true" +
+          ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true,\"tcp_pose_supported\":true,\"motion_group_supported\":true" +
           ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
@@ -677,6 +804,8 @@ struct PositionMotion::Impl {
           ",\"motion_log_session\":" + quote(log_session) + "," + logs.page(r.owner, after) + "}");
       if (current && current->owner == r.owner) r.send(event(*current));
     } else if (op == "position_move") move(r);
+    else if (op == "position_group_start") start_group(r);
+    else if (op == "position_group_pause" || op == "position_group_resume") pause_group(r, op == "position_group_resume");
     else if (op == "position_cancel") {
       if (!current || current->owner != r.owner || current->id != r.data.get<std::string>("command_id", ""))
         throw std::runtime_error("本会话没有对应的运动");
@@ -704,8 +833,9 @@ struct PositionMotion::Impl {
     { std::lock_guard<std::mutex> lock(queue_mutex); pending.swap(requests); }
     for (const auto &r : pending) try { process(r); } catch (const std::exception &e) {
       log(r.owner, r.data.get<std::string>("command_id", ""), "rejected", e.what(), "error");
-      if (r.data.get<std::string>("op", "") == "position_move")
-        r.send("{\"op\":\"position_move_ack\",\"accepted\":false,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
+      const auto op = r.data.get<std::string>("op", "");
+      if (op == "position_move" || op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume")
+        r.send("{\"op\":" + quote(op + "_ack") + ",\"accepted\":false,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"command_id\":" + quote(r.data.get<std::string>("command_id", "")) + ",\"message\":" + quote(e.what()) + "}");
       else error(r, e.what());
     }
@@ -715,19 +845,29 @@ struct PositionMotion::Impl {
       auto reason = readiness(false);
       if (reason.empty() && clock_snapshot().generation != m->clock_generation) reason = "运动期间时钟基准改变";
       if (reason.empty() && m->gripper) reason = gripper_readiness(false);
-      if (!reason.empty()) cancel(m, reason + "，已请求取消");
-      if (!fresh(m->started, std::max(180.,m->duration+60.))) cancel(m, "运动超时，已请求取消");
+      if (reason.empty() && m->group && m->group->spec.uses_gripper) reason = gripper_readiness(false);
+      if (!reason.empty()) { if (m->group) m->group->failed = true; cancel(m, reason + "，已请求取消"); }
+      if ((!m->group || (m->phase != "waiting" && m->phase != "paused")) && !fresh(m->started, std::max(180.,m->duration+60.))) {
+        if (m->group) m->group->failed = true;
+        cancel(m, "运动超时，已请求取消");
+      }
       if (!fresh(m->lease_at, 5)) cancel(m, "会话心跳超过 5 秒，已请求取消");
     }
     if (m->cancel_requested && !fresh(m->cancel_at, 5) && m->phase != "stop_failed")
       update(m, "stop_failed", "停止未确认；保留控制进程，请检查现场并使用既有安全停机入口");
-    if (!m->result_at.time_since_epoch().count() || !fresh(joints_at) || joints_at < m->result_at) return;
-    if (!clock_snapshot().healthy()) return;
-    if (m->gripper && (!fresh(gripper_state_at) || gripper_state_at < m->result_at)) return;
+    if (m->group && !m->cancel_requested && (m->phase == "waiting" || m->phase == "paused")) {
+      try { group_wait(m); } catch (const std::exception &e) { m->group->failed = true; cancel(m, e.what()); }
+      return;
+    }
+    if (!m->result_at.time_since_epoch().count() || !fresh(joints_at) || joints_at < m->result_at || !clock_snapshot().healthy() ||
+        ((m->gripper || (m->group && m->group->spec.uses_gripper)) && (!fresh(gripper_state_at) || gripper_state_at < m->result_at))) {
+      m->settled_at = {}; return;
+    }
     try {
       const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
       // A gripper-only goal still requires the complete arm to be stopped before releasing the shared motion lock.
-      const bool stopped = motion_stopped(m->model.joint_names, velocity) && motion_stopped(arm_motion_joints(), ordered_arm_values(joints.name, joints.velocity));
+      const bool stopped = motion_stopped(m->model.joint_names, velocity) && motion_stopped(arm_motion_joints(), ordered_arm_values(joints.name, joints.velocity)) &&
+          (!(m->group && m->group->spec.uses_gripper) || motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}));
       bool pose_reached = true;
       if (m->tcp) {
         const auto measured_pose = tcp_forward_pose(m->tcp_model, ordered_arm_values(joints.name, joints.position));
@@ -738,8 +878,13 @@ struct PositionMotion::Impl {
         if (m->settled_at == Clock::time_point{}) m->settled_at = Clock::now();
         if (!fresh(m->settled_at, 0.2)) {
           log(m->owner, m->id, "feedback", "target=" + numbers(m->target) + " actual=" + numbers(actual) + " velocity=" + numbers(velocity));
-          update(m, m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
-            m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : m->gripper ? "已到达目标（机械臂误差 ≤0.02 rad、夹爪误差 ≤1 mm，已停稳）" : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）"), true);
+          if (m->group && !m->cancel_requested && !m->failed_result) {
+            m->group->timeline.segment_complete(steady_seconds(), m->group->spec.steps.at(m->group->timeline.index).hold_duration_s);
+            update(m, m->group->timeline.phase == "paused" ? "paused" : "waiting", m->group->timeline.phase == "paused" ? "动作组已在停稳边界暂停，保留运动锁" : "本项已到位并停稳，正在停留");
+            return;
+          }
+          update(m, m->group && m->group->failed ? "failed" : m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
+            m->group && m->group->failed ? "动作组失败，后续步骤未执行；" + m->message + "；已确认停稳" : m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : m->gripper ? "已到达目标（机械臂误差 ≤0.02 rad、夹爪误差 ≤1 mm，已停稳）" : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）"), true);
         }
       } else {
         m->settled_at = {};
@@ -749,7 +894,7 @@ struct PositionMotion::Impl {
           else cancel(m, "Action 已结束但仍未停稳，请检查现场停止状态");
         }
       }
-    } catch (...) {}
+    } catch (...) { m->settled_at = {}; }
   }
 };
 
@@ -759,7 +904,10 @@ PositionMotion::~PositionMotion() = default;
 void PositionMotion::request(uint64_t owner, const Tree &data, Send send) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);
   if (impl_->requests.size() >= 64) {
-    send("{\"op\":\"error\",\"request_id\":" + quote(data.get<std::string>("request_id", "")) + ",\"message\":\"运动请求队列已满\"}"); return;
+    const auto op = data.get<std::string>("op", "");
+    const bool group_op = op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume";
+    send("{\"op\":" + quote(group_op ? op + "_ack" : "error") + ",\"request_id\":" + quote(data.get<std::string>("request_id", "")) +
+        (group_op ? ",\"accepted\":false,\"command_id\":" + quote(data.get<std::string>("command_id", "")) : "") + ",\"message\":\"运动请求队列已满\"}"); return;
   }
   impl_->requests.push_back({owner, data, std::move(send), false});
 }

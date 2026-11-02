@@ -57,7 +57,9 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 | 重力辨识（Bridge/UI；stack #24 FULL_ARM；Jetson E2E pending） | [§8](docs/features.md#8-重力辨识) · [设计/实现说明](docs/gravity-identification.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/gravity-identification) |
 | 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
 
-Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、位置管理和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
+Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、位置管理、动作组和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
+
+动作组用时间轴编排已保存位置的姿态快照、过渡时长和停留，支持独立保存、修改和删除。Jetson Bridge 先准备到首姿态，再逐段 MoveIt 规划执行与实际停稳确认，支持段间暂停和整组取消；桌面端不使用定时器派发下一段。名义时间轴不包含准备、规划及停稳的额外耗时。详见 [基本功能](docs/basic-features.md#motion-动作组)。
 
 Motion 的 Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐藏时暂停渲染并取消未完成加载；资源使用二进制传输（兼容旧 Base64）。图像仅发送给订阅它的连接，Inspector 隐藏时释放图像订阅。RGBD 仅在 Motion → Robot View、窗口可见且实时显示开启时订阅；切到位置或其他页即释放当前客户端兴趣。断开重连后重新获取资源，详见 [架构](docs/architecture.md#urdf-assets)。
 
@@ -167,3 +169,5 @@ node scripts/smoke-bridge.mjs 18765
 ### Teleop 的 Graph / DDS 故障
 
 Topic Graph 的「显示调试 Bridge」只控制本控制台节点，不会隐藏 STM32 或相机节点。Bridge 与一键 arm 启动使用进程级 Fast DDS UDP profile，避免损坏的 SHM 锁影响 ROS 发现；显式 DDS XML 环境变量可覆盖，详见 [架构](docs/architecture.md#console-managed-ros-transport)。升级此修复需要更新桌面、部署 Bridge，并更新/构建控制栈的 `joint_state_relay`；不需要改写外部 Star Arm 驱动。
+
+Bridge 部署构建对所选包使用 `--cmake-clean-first`，避免 rsync 保留的源文件时间早于旧远端对象时漏编；不清理其他包。重启 Topic 可用 `--joint-state-topic` / `--command-topic` / `--status-topic` 配置，应用内升级自动使用连接 Profile 的值。

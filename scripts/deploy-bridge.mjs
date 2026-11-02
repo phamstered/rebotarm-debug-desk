@@ -117,6 +117,15 @@ export function parseArgs(argv, env = process.env) {
       case "--ros-domain-id":
         flags.rosDomainId = Number(requireValue(token, args.shift()));
         break;
+      case "--joint-state-topic":
+        flags.jointStateTopic = requireValue(token, args.shift());
+        break;
+      case "--command-topic":
+        flags.commandTopic = requireValue(token, args.shift());
+        break;
+      case "--status-topic":
+        flags.statusTopic = requireValue(token, args.shift());
+        break;
       case "--local-package":
         flags.localPackage = requireValue(token, args.shift());
         break;
@@ -189,6 +198,16 @@ export function resolveConfig(flags, env = process.env) {
     }
   }
 
+  const topics = {
+    jointStateTopic: String(flags.jointStateTopic ?? env.BRIDGE_DEPLOY_JOINT_STATE_TOPIC ?? DEFAULTS.jointStateTopic),
+    commandTopic: String(flags.commandTopic ?? env.BRIDGE_DEPLOY_COMMAND_TOPIC ?? DEFAULTS.commandTopic),
+    statusTopic: String(flags.statusTopic ?? env.BRIDGE_DEPLOY_STATUS_TOPIC ?? DEFAULTS.statusTopic),
+  };
+  for (const [key, topic] of Object.entries(topics)) {
+    if (!/^\/[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/.test(topic)) {
+      throw new DeployStageError("config", `Invalid ${key}: ${topic}`);
+    }
+  }
   return {
     host,
     remoteRoot: remoteRoot.replace(/\/$/, ""),
@@ -200,9 +219,7 @@ export function resolveConfig(flags, env = process.env) {
     identityFile,
     packageName: DEFAULTS.packageName,
     localPackage,
-    jointStateTopic: DEFAULTS.jointStateTopic,
-    commandTopic: DEFAULTS.commandTopic,
-    statusTopic: DEFAULTS.statusTopic,
+    ...topics,
     dryRun: Boolean(flags.dryRun),
     compareOnly: Boolean(flags.compareOnly),
     backup: Boolean(flags.backup),
@@ -326,7 +343,9 @@ export function buildRemoteBuildScript(config) {
     `if [ -f ${remotePathWord(config.rosSetup)} ]; then source ${remotePathWord(config.rosSetup)}; fi`,
     `cd ${remotePathWord(config.remoteRoot)}`,
     "mkdir -p src",
-    `colcon build --symlink-install --packages-select ${shellQuote(config.packageName)} --event-handlers console_direct+`,
+    // rsync keeps source mtimes, which can predate objects from an older long build.
+    // Rebuild only this package so changed content never reuses those objects.
+    `colcon build --symlink-install --packages-select ${shellQuote(config.packageName)} --event-handlers console_direct+ --cmake-clean-first`,
     'echo "BUILD_OK"',
   ].join("\n");
 }
@@ -468,6 +487,9 @@ Options:
   --ros-setup <path>      Robot overlay setup.bash (default: ${DEFAULTS.rosSetup})
   --port <n>              Bridge listen port (default: ${DEFAULTS.remotePort})
   --ros-domain-id <n>     ROS_DOMAIN_ID for --restart (default: ${DEFAULTS.rosDomainId})
+  --joint-state-topic <t> Joint feedback Topic for --restart
+  --command-topic <t>     Joint command Topic for --restart
+  --status-topic <t>      Hardware status Topic for --restart
   --local-package <path>  Local package path (default: bridge/${DEFAULTS.packageName})
   --ssh-port <n>          SSH port (default: ssh config / 22; BRIDGE_DEPLOY_SSH_PORT)
   --identity-file <path>  SSH identity file (BRIDGE_DEPLOY_IDENTITY_FILE)
@@ -483,7 +505,8 @@ Options:
 
 Environment overrides: BRIDGE_DEPLOY_HOST, BRIDGE_DEPLOY_REMOTE,
 BRIDGE_DEPLOY_ROS_SETUP, BRIDGE_DEPLOY_PORT, BRIDGE_DEPLOY_ROS_DOMAIN_ID,
-BRIDGE_DEPLOY_LOCAL.
+BRIDGE_DEPLOY_LOCAL, BRIDGE_DEPLOY_JOINT_STATE_TOPIC,
+BRIDGE_DEPLOY_COMMAND_TOPIC, BRIDGE_DEPLOY_STATUS_TOPIC.
 
 Built-in defaults are generic; override them with the flags/env above.
 Relative --remote/--ros-setup paths are resolved against the remote user's

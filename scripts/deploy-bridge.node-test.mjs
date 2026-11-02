@@ -117,6 +117,7 @@ test("remote build/verify/backup/restart scripts source overlay and mark stages"
   assert.match(build, /source \/opt\/ros\/humble\/setup\.bash/);
   assert.match(build, /Project\/rebotarm-ros2-stack\/install\/setup\.bash/);
   assert.match(build, /colcon build --symlink-install --packages-select 'easy_debug_bridge'/);
+  assert.match(build, /colcon build[^\n]*--cmake-clean-first/);
   assert.match(build, /BUILD_OK/);
 
   const verify = buildRemoteVerifyScript(config);
@@ -368,4 +369,15 @@ test("remote ROS setup tolerates Humble's unset setup variables while retaining 
     assert.match(script, /^set -eo pipefail/);
     assert.doesNotMatch(script, /set -euo/);
   }
+});
+
+test("restart preserves the selected feedback, command and status Topics", () => {
+  const config = parseArgs(["--status-topic", "/stm32/status", "--command-topic", "/test/commands", "--joint-state-topic", "/test/joints"], {});
+  const script = buildRemoteRestartScript(config);
+  assert.match(script, /status_topic:='\/stm32\/status'/);
+  assert.match(script, /command_topic:='\/test\/commands'/);
+  assert.match(script, /joint_state_topic:='\/test\/joints'/);
+  assert.equal(resolveConfig({}, { BRIDGE_DEPLOY_STATUS_TOPIC: "/stm32/status" }).statusTopic, "/stm32/status");
+  for (const topic of ["", "relative", "/a//b", "/a;id", "/$(id)", "/a/1bad", "/a/"])
+    assert.throws(() => resolveConfig({ statusTopic: topic }, {}), DeployStageError);
 });

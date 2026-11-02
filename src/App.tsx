@@ -4,6 +4,9 @@ import { ControllerList } from "./ControllerList";
 import { MotionControllersPanel } from "./MotionControllersPanel";
 import { useRosControllers } from "./useRosControllers";
 import { MotionTerminal } from "./MotionTerminal";
+import { MotionGroupsPage } from "./MotionGroupsPage";
+import { useMotionGroups } from "./useMotionGroups";
+import { MotionLayoutProvider } from "./MotionLayout";
 import { loadAppPage, loadMotionTab, loadMotionSidebar } from "./appNavigationLogic";
 import type { MotionTab } from "./appNavigationLogic";
 import { DeployProgressLog } from "./DeployProgressLog";
@@ -420,6 +423,7 @@ export default function App() {
   const [motionControllersOpen, setMotionControllersOpen] = useState(loadMotionSidebar);
   const [motionLayoutReset, setMotionLayoutReset] = useState(0);
   const [managePositions, setManagePositions] = useState(false);
+  const [manageMotionGroups, setManageMotionGroups] = useState(false);
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
   const [windowVisible, setWindowVisible] = useState(!document.hidden);
@@ -594,6 +598,7 @@ export default function App() {
   }, []);
 
   const positionProfileKey = profileKeyFor(profile);
+  const motionGroups = useMotionGroups(positionProfileKey);
   const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]));
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
     controllerAction ? "Controller 切换进行中，请等待完成" : statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
@@ -1559,6 +1564,19 @@ export default function App() {
     start: () => { void runStatusRestart("moveit-start", "moveit"); },
   };
 
+  const renderGroupEditor = (offline = false) => <MotionGroupsPage profileKey={positionProfileKey} groups={motionGroups.groups}
+    positions={positionStore.profiles[positionProfileKey]?.positions ?? []}
+    ready={motionGroups.ready} saving={motionGroups.saving} error={motionGroups.error}
+    urdfXml={urdf || previewUrdf} homePositions={positionMotion.homePositions}
+    onSave={motionGroups.saveGroup} onDelete={motionGroups.deleteGroup} motion={positionMotion}
+    onBack={offline ? () => setManageMotionGroups(false) : undefined} />;
+
+  if (stage !== "connected" && manageMotionGroups) {
+    return <main className="connect-shell"><section className="offline-motion-groups">
+      <MotionLayoutProvider active>{renderGroupEditor(true)}</MotionLayoutProvider>
+    </section></main>;
+  }
+
   if (stage !== "connected" && managePositions) {
     return (
       <main className="connect-shell">
@@ -1620,6 +1638,7 @@ export default function App() {
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
               <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理位置</button>
+              <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
             </div>
           </div>
           {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
@@ -1700,7 +1719,7 @@ export default function App() {
       </header>
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
-        <button type="button" onClick={() => setAppPage("motion")}>返回 Motion</button>
+        <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>
         {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
       </div>}
       <div className="app-page-content">
@@ -2006,6 +2025,7 @@ export default function App() {
             planner={positionPlanner}
           />
 </> : null}
+        groups={renderGroupEditor()}
         log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
           plannerLog={<ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible} connected={stage === "connected"} preferredSource="moveit" />} />}
       />

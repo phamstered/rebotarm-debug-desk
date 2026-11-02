@@ -68,6 +68,10 @@ if(BUILD_TESTING)
   add_test(NAME topic_json COMMAND test_topic_json)
   if(moveit_msgs_FOUND AND control_msgs_FOUND AND controller_manager_msgs_FOUND)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME position_group_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_position_group_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(position_group_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=217;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 120)
     add_test(NAME gripper_motion_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gripper_motion_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(gripper_motion_ros PROPERTIES

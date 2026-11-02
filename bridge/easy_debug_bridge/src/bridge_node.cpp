@@ -540,7 +540,13 @@ class BridgeNode : public rclcpp::Node {
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true}");
       } else if (op == "clock_sync_info") {
         send_clock_sync_info(session, request_id);
-      } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel") {
+      } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel" ||
+                 op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume") {
+        if (op == "position_group_start" && payload.size() > 256 * 1024) {
+          session->send("{\"op\":\"position_group_start_ack\",\"request_id\":" + json_quote(request_id) +
+              ",\"command_id\":" + json_quote(request.get<std::string>("command_id", "")) + ",\"accepted\":false,\"message\":\"动作组请求超过 256 KiB\"}");
+          return;
+        }
         const std::weak_ptr<WebSocketSession> weak = session;
         position_motion_->request(session->id(), request, [weak](const std::string &reply) {
           if (const auto target = weak.lock()) target->send(reply);
