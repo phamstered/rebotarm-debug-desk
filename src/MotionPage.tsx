@@ -3,7 +3,7 @@ import { MotionDivider, MotionLayoutProvider } from "./MotionLayout";
 import type { MotionTab } from "./appNavigationLogic";
 
 export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggleControllers,
-  controllers, readiness, robot, positions, log, resetVersion }: {
+  controllers, readiness, robot, positions, groups, log, resetVersion }: {
   resetVersion?: number;
   active: boolean;
   tab: MotionTab;
@@ -14,6 +14,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
   readiness: ReactNode;
   robot: ReactNode;
   positions: ReactNode;
+  groups?: ReactNode;
   log: ReactNode;
 }) {
   return <MotionLayoutProvider active={active} resetVersion={resetVersion}><main className={`motion-workspace${controllersOpen ? "" : " controllers-collapsed"}`} hidden={!active} aria-label="Motion">
@@ -29,6 +30,8 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
             className={tab === "robot" ? "active" : ""} onClick={() => onTabChange("robot")}>Robot View</button>
           <button type="button" role="tab" aria-selected={tab === "positions"} aria-controls="motion-positions"
             className={tab === "positions" ? "active" : ""} onClick={() => onTabChange("positions")}>位置</button>
+          <button type="button" role="tab" aria-selected={tab === "groups"} aria-controls="motion-groups"
+            className={tab === "groups" ? "active" : ""} onClick={() => onTabChange("groups")}>动作组</button>
         </div>
       </div>
       <div className="motion-readiness" aria-label="运动就绪状态">{readiness}</div>
@@ -38,6 +41,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
     <section className="motion-content">
       <div id="motion-robot" className="robot-view-pane" hidden={tab !== "robot"}>{robot}</div>
       <div id="motion-positions" className="motion-positions" hidden={tab !== "positions"}>{positions}</div>
+      <div id="motion-groups" className="motion-groups" hidden={tab !== "groups"}>{groups}</div>
     </section>
     <MotionDivider size="logHeight" label="调整 Motion 日志高度" axis="y" edge="end" panel=".motion-workspace-log" container=".motion-workspace" maxFraction={.5} className="motion-log-divider" />
     <section className="motion-workspace-log" aria-label="Motion 日志">{log}</section>

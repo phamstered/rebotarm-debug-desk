@@ -1613,3 +1613,6 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
   .motion-layout-root .motion-controller-sidebar { width: min(var(--motion-controllersWidth), 70%); padding-right: 14px; }
   .motion-controllers-divider { grid-area: content; position: absolute; left: calc(min(var(--motion-controllersWidth), 70%) - 7px); top: 0; bottom: 0; z-index: 11; }
 }
+
+.offline-motion-groups { width: min(1400px, calc(100% - 48px)); height: calc(100vh - 48px); min-height: 0; min-width: 0; display: flex; align-self: center; justify-self: center; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.offline-motion-groups .motion-groups-editor { flex: 1 1 0; width: 100%; }

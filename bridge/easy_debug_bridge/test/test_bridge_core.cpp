@@ -1,6 +1,7 @@
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/position_group_core.hpp"
 #include "easy_debug_bridge/gripper_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
 #include "easy_debug_bridge/controller_health.hpp"
@@ -14,6 +15,44 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    PositionMotionModel model; model.lower = std::vector<double>(6, -1); model.upper = std::vector<double>(6, 1);
+    PositionGroupSpec spec{"group", "test", 2, {{"a", "A", std::vector<double>(6, 0), {}, 0, 1}, {"b", "B", std::vector<double>(6, .1), .03, 3, 2}}, true};
+    validate_position_group(spec, model, true, 0, .05);
+    auto rejects = [&](auto mutate) {
+      auto invalid = spec; mutate(invalid); bool rejected = false;
+      try { validate_position_group(invalid, model, true, 0, .05); } catch (const std::exception &) { rejected = true; }
+      assert(rejected);
+    };
+    rejects([](auto &s) { s.steps[1].positions[5] = 2; }); // Future steps validated before preparation.
+    rejects([](auto &s) { s.steps[1].gripper_position = .06; });
+    rejects([](auto &s) { s.steps[0].motion_duration_s = 1; });
+    rejects([](auto &s) { s.steps[1].motion_duration_s = 0; });
+    rejects([](auto &s) { s.steps[1].hold_duration_s = -1; });
+    rejects([](auto &s) { s.steps[1].hold_duration_s = std::numeric_limits<double>::infinity(); });
+    rejects([](auto &s) { s.preparation_duration_s = std::numeric_limits<double>::quiet_NaN(); });
+    rejects([](auto &s) { s.steps[1].id = "a"; });
+    rejects([](auto &s) { s.steps[1].label = std::string(513, 'x'); });
+    rejects([](auto &s) { s.steps.resize(101, s.steps[0]); });
+    rejects([](auto &s) { s.steps.clear(); });
+    rejects([](auto &s) { s.steps[0].hold_duration_s = 7 * 86400; });
+    bool rejected = false;
+    try { validate_position_group(spec, model, false, 0, .05); } catch (...) { rejected = true; }
+    assert(rejected);
+    PositionGroupTimeline t; t.last_s = 10;
+    t.pause(11); assert(t.phase == "preparing" && t.pause_requested);
+    t.segment_complete(12, 3); assert(t.phase == "paused" && t.elapsed_s == 0);
+    t.advance(100); assert(t.elapsed_s == 0 && t.hold_remaining_s == 3);
+    t.resume(101); t.advance(102); assert(t.elapsed_s == 1 && t.hold_remaining_s == 2);
+    t.pause(103); assert(t.elapsed_s == 2 && t.hold_remaining_s == 1);
+    t.advance(110); assert(t.elapsed_s == 2 && t.hold_remaining_s == 1);
+    t.resume(111); t.advance(112); assert(t.elapsed_s == 3 && t.hold_remaining_s == 0);
+    t.next(112); assert(t.index == 1 && t.phase == "moving");
+    t.pause(113); assert(t.phase == "moving");
+    t.segment_complete(114, 0); assert(t.phase == "paused" && t.elapsed_s == 5);
+    t.resume(120); assert(t.hold_remaining_s == 0 && t.elapsed_s == 5);
+  }
   {
     using easy_debug_bridge::closest_rgbd_pair;
     // Prefer the synchronized older pair over a 33ms cross-frame match; when

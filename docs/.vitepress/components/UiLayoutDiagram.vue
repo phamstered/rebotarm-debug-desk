@@ -3,7 +3,7 @@
     <p id="rdd-ui-title" class="rdd-diagram__title">界面结构 · UI layout</p>
     <p id="rdd-ui-desc" class="rdd-diagram__sr">
       左侧 Navigation 含 Status、Topics、Motion、Monitor 等页面。Topics 展示 Topic Graph、Inspector 与只读 Controller；
-      Motion 提供 Robot View、位置、可折叠 Controller 管理与共享日志；Status 保留整栈模式管理。
+      Motion 提供 Robot View、位置、动作组、可折叠 Controller 管理与共享日志；Status 保留整栈模式管理。
     </p>
 
     <div class="rdd-panels rdd-panels--3" aria-hidden="true">
@@ -24,7 +24,7 @@
         <p class="rdd-panel__title">工作区职责</p>
         <div class="rdd-panel__items">
           <div class="rdd-panel__item">Topics · Graph / Inspector</div>
-          <div class="rdd-panel__item">Motion · Robot View / 位置</div>
+          <div class="rdd-panel__item">Motion · Robot View / 位置 / 动作组</div>
           <div class="rdd-panel__item">Status · 整栈模式</div>
         </div>
       </div>

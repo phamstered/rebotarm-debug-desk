@@ -416,3 +416,22 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 - 可选 `firmware` 包含 `supported`，以及可选 `synchronized`、`sync_age_ms`、`failure_count`、`last_sync_duration_ms`。旧固件缺少这些诊断时不得声称已验证固件同步状态。
 - Bridge 校验源时间不超前 50 ms、落后不足 1 秒；首次有效、长时间断流及大回拨后需连续 200 ms 有效反馈。v2 固件诊断读取 `/stm32/microros_diagnostics` 的 24 项 schema：索引 16 为同步状态、17 为距成功同步毫秒数、19 为失败数、20 为最近耗时、22 为固件时间代次；同步有效期 15 秒、诊断接收有效期 3 秒。未知或无效新 schema 不降级为同步成功。
 - 桌面请求期限 2 秒，成功状态超过 2.5 秒未刷新转为过期；断线和连接配置变化立即清除上一会话。未知操作或 `supported:false` 显示不支持并停止本会话重试。无效/非有限偏差、帧龄及不完整的成功状态不视为同步成功。
+
+## Motion 动作组（逐点到位）
+
+`position_motion_info` 的 `motion_group_supported:true` 表示支持 Bridge 执行动作组；字段缺失或 false 时桌面端禁用组执行，不能降级为浏览器定时发送单点。
+
+开始请求：
+
+```json
+{"op":"position_group_start","request_id":"...","command_id":"UUID","label":"动作组 · 取放","confirmation":"ARMED","group_id":"group-1","preparation_duration_s":2,"steps":[{"id":"a","label":"A","positions":[0,-0.2,-0.3,0,0,0],"motion_duration_s":0,"hold_duration_s":0},{"id":"b","label":"B","positions":[0,-0.1,-0.2,0,0,0],"motion_duration_s":5,"hold_duration_s":2}]}
+```
+
+每帧是已保存位置的六轴快照，可选 `gripper_position` 为米制夹爪目标。整组只要包含夹爪目标，各段都使用七轴校验；缺失该字段的段在前段到位停稳后捕获新鲜实测开度，并在该段运动、停留及暂停期间保持它，不重新修正上一段的名义目标。第一帧 `motion_duration_s` 固定 0，Bridge 以独立 `preparation_duration_s` 从实测姿态准备到第一帧；实际到位并停稳后才开始组计时。后续帧的正 `motion_duration_s` 指前帧停留结束到该帧的运动轨迹时长，`hold_duration_s` 为该帧到位后的非负停留时长。名义时间轴包含运动与停留，准备、逐段规划及停稳确认单独计时，因此整组实际耗时可能超过名义时长。
+
+- 完整原始 JSON（包含空白）限 256 KiB。`steps` 限 1–100 项，所有 ID 唯一、非空且最长 128 UTF-8 字节；标签最长 512 字节。准备、所有运动与停留合计不超过 604800 秒，所有数值须有限。入组校验所有后续帧的模型/关节及可选夹爪目标，当前段下发前继续复核实时门禁。
+- 返回 `position_group_start_ack`，`accepted` 明确表示受理与否；失败包含 `message`。ACK 不代表准备完成、规划成功或实际到位。组内始终沿用同一 `command_id`，去重、会话归属、心跳和断线取消沿用现有运动入口。
+- 复用 `position_motion` 推送，增加 `group_id`、从 0 开始的 `group_index`、`group_count`、`group_phase`（`preparing` / `moving` / `holding` / `paused`）及 `group_elapsed_s`。后者是准备完成后的实际累计时间，包含规划与停稳，暂停期间冻结。停留使用 `motion_phase:"waiting"`，实际暂停使用 `motion_phase:"paused"`；这两种状态继续持有全局运动锁。
+- `position_group_pause` / `position_group_resume` 请求携带同一 `command_id`，仅允许拥有者操作；对应 `_ack` 的 `accepted` 表示请求是否受理。运动中暂停只预约在本段确认停稳后生效（ACK 可带 `pending:true`），以 `paused` 事件作为实际暂停证明。暂停冻结剩余停留时间，继续前重新校验门禁。
+- `position_cancel` 取消整个动作组，包括准备、运动、停留与暂停。暂停或停留期间同样保留反馈/控制器/时钟/模型/租约检查；任一段失败或取消后均不得开始下一段。取消 ACK 仍不等于已停稳，`stop_failed` 保持锁定。
+- 每段复用 MoveIt 规划、指定时长的完整轨迹校验与实际停稳确认；不会自动拉长不可行的指定时长，也不保证沿姿态间的笛卡尔直线运动。未编译 MoveIt 支持时返回对应拒绝 ACK 并广告不支持。

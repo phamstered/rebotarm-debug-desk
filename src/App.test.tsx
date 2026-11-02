@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXPECTED_BRIDGE_BUILD_ID } from "./bridgeVersion";
+import type { MotionGroup } from "./motionGroupsLogic";
 
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -1329,6 +1330,51 @@ describe("App workflow", () => {
     await user.click(await screen.findByRole("tab", { name: "位置" }));
     expect(screen.getByRole("region", { name: "位置" })).toBeVisible();
     expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
+  });
+
+  it("opens action group editing offline and returns without connecting", async () => {
+    const user = userEvent.setup(); render(<App />);
+    await user.click(screen.getByRole("button", { name: "管理动作组" }));
+    expect(await screen.findByRole("region", { name: "动作组编辑器" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "执行动作组" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "返回连接" }));
+    expect(screen.getByRole("button", { name: "连接 Jetson" })).toBeVisible();
+    expect(doubles.connect).not.toHaveBeenCalled();
+  });
+
+  it("runs a stored action group and retains its owner/stop controls across navigation", async () => {
+    localStorage.setItem("easy-debug-profile", JSON.stringify({ host: "group-robot", username: "operator", sshPort: 22 }));
+    const group: MotionGroup = { id: "group-1", name: "装配动作", note: "", preparationDuration: 2, createdAt: 0, updatedAt: 0,
+      steps: [0, 1].map(index => ({ id: `frame-${index}`, positionId: `pose-${index}`, positionName: index ? "B" : "A", positionUpdatedAt: 0, positions: [0, -.2, -.3, 0, 0, .1 * index], duration: index ? 5 : 0, hold: 0 })) };
+    const baseInvoke = doubles.invoke.getMockImplementation()!;
+    doubles.invoke.mockImplementation((command, args) => {
+      if (command === "motion_groups_load") return Promise.resolve(JSON.stringify({ schemaVersion: 1, profiles: { "group-robot|operator|22": { groups: [group] } } }));
+      if (command === "check_ros_controllers") return Promise.resolve({ manager: "/controller_manager", available: true,
+        controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });
+      return baseInvoke(command, args);
+    });
+    doubles.request.mockImplementation(async (message) => message.op === "position_motion_info"
+      ? { op: message.op, available: true, busy: false, motion_group_supported: true, motion_duration_supported: true }
+      : { op: `${message.op}_ack`, accepted: true, command_id: message.command_id });
+    try {
+      const user = userEvent.setup(); render(<App />);
+      await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+      await user.click(await screen.findByRole("button", { name: "Motion" }));
+      await user.click(screen.getByRole("tab", { name: "动作组" }));
+      expect(await screen.findByRole("region", { name: "动作组编辑器" })).toBeVisible();
+      await user.click(screen.getByRole("checkbox", { name: /允许机械臂及夹爪运动/ }));
+      const start = screen.getByRole("button", { name: "执行动作组" });
+      await waitFor(() => expect(start).toBeEnabled()); await user.click(start);
+      const request = doubles.request.mock.calls.find(([message]) => message.op === "position_group_start")![0];
+      expect(request).toMatchObject({ group_id: "group-1", preparation_duration_s: 2, steps: [{ motion_duration_s: 0 }, { motion_duration_s: 5 }] });
+      act(() => doubles.listener?.({ op: "position_motion", command_id: request.command_id, label: group.name, motion_phase: "waiting", group_id: group.id, group_index: 1, group_count: 2, group_phase: "holding", group_elapsed_s: 5.5 }));
+      await user.click(screen.getByRole("button", { name: "Topics" }));
+      const task = screen.getByRole("status", { name: "当前运动任务" }); expect(task).toHaveTextContent(group.name);
+      await user.click(within(task).getByRole("button", { name: "返回 Motion" }));
+      expect(screen.getByRole("tab", { name: "动作组" })).toHaveAttribute("aria-selected", "true");
+      await user.click(screen.getByRole("button", { name: "停止动作组" }));
+      expect(doubles.request).toHaveBeenCalledWith({ op: "position_cancel", command_id: request.command_id }, 5000);
+    } finally { doubles.request.mockResolvedValue({ op: "joint_command_ack", sequence: 1 }); }
   });
 
   it("dispatches saved positions through MoveIt and captures fresh monotonic feedback", async () => {

@@ -3,9 +3,11 @@ import type { BridgeClient } from "./bridge";
 import type { BridgeEnvelope, MotionLogEntry, TcpPose } from "./types";
 import type { CustomPosition } from "./positionLogic";
 import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME } from "./positionLogic";
+import { validateMotionGroup, type MotionGroup } from "./motionGroupsLogic";
 
-export type PositionMotionPhase = "idle" | "validating" | "planning" | "executing" | "verifying" | "canceling" | "stopping" | "stop_failed" | "succeeded" | "failed" | "canceled";
-export type PositionMotionState = { commandId: string; label: string; phase: PositionMotionPhase; message: string; code?: number; recommendedDuration?: number };
+export type PositionMotionPhase = "idle" | "validating" | "planning" | "executing" | "verifying" | "waiting" | "paused" | "canceling" | "stopping" | "stop_failed" | "succeeded" | "failed" | "canceled";
+export type MotionGroupProgress = { id: string; index: number; count: number; phase: "preparing" | "moving" | "holding" | "paused"; elapsed: number };
+export type PositionMotionState = { commandId: string; label: string; phase: PositionMotionPhase; message: string; code?: number; recommendedDuration?: number; group?: MotionGroupProgress };
 export const positionMotionBusy = (phase: PositionMotionPhase) => !["idle", "succeeded", "failed", "canceled"].includes(phase);
 export type PositionMotionControls = {
   logs: MotionLogEntry[];
@@ -24,10 +26,15 @@ export type PositionMotionControls = {
   executeJoints(targets: Record<string, number>, duration: number): Promise<void>;
   tcpPoseReason?: string;
   executeTcpPose?(pose: TcpPose, duration?: number, gripperPosition?: number): Promise<void>;
+  groupReason?: string;
+  groupActionBusy?: boolean;
+  executeGroup?(group: MotionGroup): Promise<void>;
+  pauseGroup?(): Promise<void>;
+  resumeGroup?(): Promise<void>;
   cancel(): Promise<void>;
 };
 const idle: PositionMotionState = { commandId: "", label: "", phase: "idle", message: "" };
-const phases: PositionMotionPhase[] = ["validating", "planning", "executing", "verifying", "canceling", "stopping", "stop_failed", "succeeded", "failed", "canceled"];
+const phases: PositionMotionPhase[] = ["validating", "planning", "executing", "verifying", "waiting", "paused", "canceling", "stopping", "stop_failed", "succeeded", "failed", "canceled"];
 
 export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMessage">, connected: boolean, profileKey: string, localBlock: string): PositionMotionControls {
   const [logs, setLogs] = useState<MotionLogEntry[]>([]);
@@ -43,18 +50,22 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     setLogs((value) => [...value, entry].slice(-5000));
   }, [logContext]);
   const [state, setState] = useState<PositionMotionState>(idle);
-  const initialInfo = { available: false, message: "等待 MoveIt 状态", home: [] as number[], busy: false, tcpPose: false, jointRotation: false, jointTargets: false, duration: false, durationMessage: "", gripper: { supported: false, available: false, message: "当前 Bridge 不支持夹爪，请更新 Bridge", lower: 0, upper: 0, position: undefined as number | undefined, fresh: false } };
+  const initialInfo = { available: false, message: "等待 MoveIt 状态", home: [] as number[], busy: false, tcpPose: false, jointRotation: false, jointTargets: false, duration: false, group: false, durationMessage: "", gripper: { supported: false, available: false, message: "当前 Bridge 不支持夹爪，请更新 Bridge", lower: 0, upper: 0, position: undefined as number | undefined, fresh: false } };
   const [info, setInfo] = useState(initialInfo);
   const [armed, setArmed] = useState(false);
   const generation = useRef(0);
   const active = useRef("");
   const locked = useRef(false);
+  const activeGroup = useRef<MotionGroup | null>(null);
+  const groupAction = useRef(false);
+  const [groupActionBusy, setGroupActionBusy] = useState(false);
   const context = useRef({ connected, profileKey, localBlock, armed, info });
   context.current = { connected, profileKey, localBlock, armed, info };
 
   useEffect(() => {
     const current = ++generation.current;
     active.current = ""; locked.current = false;
+    activeGroup.current = null; groupAction.current = false; setGroupActionBusy(false);
     setArmed(false); setState(idle); setInfo(initialInfo); setLogs([]);
     let logSession = "", logCursor = 0;
     if (!connected) return;
@@ -115,7 +126,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
         }, remaining);
         const home = Array.isArray(reply.home_positions) && reply.home_positions.length === 6 && reply.home_positions.every(Number.isFinite) ? reply.home_positions : [];
         setInfo({ available: reply.available === true, message: reply.message || "", home, busy: reply.busy === true,
-          tcpPose: reply.tcp_pose_supported === true, jointRotation: reply.joint_rotation_supported === true, jointTargets: reply.joint_targets_supported === true, duration: reply.motion_duration_supported === true, durationMessage: reply.motion_duration_message || "",
+          tcpPose: reply.tcp_pose_supported === true, jointRotation: reply.joint_rotation_supported === true, jointTargets: reply.joint_targets_supported === true, duration: reply.motion_duration_supported === true, group: reply.motion_group_supported === true, durationMessage: reply.motion_duration_message || "",
           gripper: { supported: reply.gripper_supported === true && reply.gripper_joint_name === GRIPPER_JOINT_NAME,
             available: reply.gripper_supported === true && reply.gripper_joint_name === GRIPPER_JOINT_NAME && reply.gripper_available === true && gripperFresh &&
               Number.isFinite(reply.gripper_lower) && Number.isFinite(reply.gripper_upper) && reply.gripper_lower! < reply.gripper_upper!,
@@ -159,10 +170,19 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
         return;
       }
       if (message.op !== "position_motion" || message.command_id !== active.current) return;
+      const eventId = active.current;
       const phase = message.motion_phase as PositionMotionPhase;
       if (!phases.includes(phase)) return;
-      setState({ commandId: active.current, label: message.label || "位置", phase, message: message.message || "", code: message.code, recommendedDuration: message.recommended_duration_s });
+      const expected = activeGroup.current;
+      const group = expected && message.group_id === expected.id && message.group_count === expected.steps.length &&
+        Number.isInteger(message.group_index) && message.group_index! >= 0 && message.group_index! < expected.steps.length &&
+        ["preparing", "moving", "holding", "paused"].includes(message.group_phase ?? "") &&
+        typeof message.group_elapsed_s === "number" && Number.isFinite(message.group_elapsed_s) && message.group_elapsed_s >= 0
+        ? { id: expected.id, index: message.group_index!, count: expected.steps.length, phase: message.group_phase!, elapsed: message.group_elapsed_s } : undefined;
+      if (expected && !group) return; // An unrelated or malformed terminal event cannot release a group lock.
+      setState((previous) => ({ commandId: eventId, label: message.label || "位置", phase, message: message.message || "", code: message.code, recommendedDuration: message.recommended_duration_s, group: group ?? (expected ? previous.group : undefined) }));
       locked.current = positionMotionBusy(phase);
+      if (expected && !locked.current) { active.current = ""; activeGroup.current = null; groupAction.current = false; setGroupActionBusy(false); }
       if (!locked.current) void poll();
     });
     void poll();
@@ -170,14 +190,20 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     return () => { generation.current++; abort.abort(); window.clearInterval(timer); if (gripperExpiry !== undefined) window.clearTimeout(gripperExpiry); if (liveExpiry !== undefined) window.clearTimeout(liveExpiry); off(); };
   }, [bridge, connected, profileKey]);
 
-  async function execute(position: CustomPosition | "home" | { kind: "joint"; jointName: string; position: number } | { kind: "joints"; targets: Record<string, number>; duration: number } | { kind: "tcp"; pose: TcpPose; duration?: number; gripperPosition?: number }) {
+  async function execute(position: CustomPosition | "home" | { kind: "joint"; jointName: string; position: number } | { kind: "joints"; targets: Record<string, number>; duration: number } | { kind: "tcp"; pose: TcpPose; duration?: number; gripperPosition?: number } | { kind: "group"; group: MotionGroup }) {
     const value = context.current;
     if (locked.current || value.info.busy) { recordLog("rejected", "已有运动任务，未重复下发", "warn"); return; }
+    const groupInput = typeof position === "object" && "kind" in position && position.kind === "group" ? position.group : undefined;
+    if (typeof position === "object" && "kind" in position && position.kind === "group") {
+      const why = validateMotionGroup(groupInput);
+      if (why) { recordLog("rejected", why, "error"); setState({ ...idle, phase: "failed", message: why }); return; }
+    }
     const joint = typeof position === "object" && "kind" in position && position.kind === "joint" ? position : null;
     const multi = typeof position === "object" && "kind" in position && position.kind === "joints" ? position : null;
     const tcp = typeof position === "object" && "kind" in position && position.kind === "tcp" ? position : null;
+    const group = groupInput ? { ...groupInput, steps: groupInput.steps.map((step) => ({ ...step, positions: [...step.positions] })) } : null;
     const saved = typeof position === "object" && !("kind" in position) ? position : null;
-    const label = joint ? joint.jointName === GRIPPER_JOINT_NAME ? `夹爪（joint7） → ${(joint.position * 1000).toFixed(2)} mm` : `${joint.jointName} → ${(joint.position * 180 / Math.PI).toFixed(2)}°` : multi ? `关节联合调整 · ${multi.duration} s` : tcp ? "TCP 位姿目标" : saved?.name ?? "HOME";
+    const label = group ? group.name : joint ? joint.jointName === GRIPPER_JOINT_NAME ? `夹爪（joint7） → ${(joint.position * 1000).toFixed(2)} mm` : `${joint.jointName} → ${(joint.position * 180 / Math.PI).toFixed(2)}°` : multi ? `关节联合调整 · ${multi.duration} s` : tcp ? "TCP 位姿目标" : saved?.name ?? "HOME";
     const fail = (message: string) => {
       recordLog("rejected", `${label} · ${message}`, "error");
       setState({ ...idle, label, phase: "failed", message });
@@ -188,8 +214,19 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
       (joint && !value.info.jointRotation ? "当前 Bridge 不支持单关节旋转，请更新 Bridge" : "") ||
       (multi && (!value.info.jointTargets || !value.info.duration) ? "当前 Bridge 不支持联合关节及指定时长，请更新 Bridge" : "") ||
       (multi ? value.info.durationMessage : "") ||
+      (group && (!value.info.group || !value.info.duration) ? "当前 Bridge 不支持动作组，请更新 Bridge" : "") ||
+      (group ? value.info.durationMessage : "") ||
       (!value.armed ? "请先确认工作区安全并解锁点位执行" : "");
     if (block) { fail(block); return; }
+    if (group) {
+      const why = validateMotionGroup(group);
+      if (why) { fail(why); return; }
+      for (const step of group.steps) if (step.gripperPosition !== undefined) {
+        const g = value.info.gripper;
+        if (!g.supported || !g.available || !g.fresh) { fail(g.message); return; }
+        if (step.gripperPosition < g.lower || step.gripperPosition > g.upper) { fail(`${step.positionName}：夹爪目标超过标定限位`); return; }
+      }
+    }
     if (position === "home" && value.info.home.length !== 6) { fail("HOME 尚未从 MoveIt SRDF 同步"); return; }
     if (joint && (!(joint.jointName === GRIPPER_JOINT_NAME || ARM_JOINT_NAMES.some((name) => name === joint.jointName)) || !Number.isFinite(joint.position))) {
       fail("单关节目标无效"); return;
@@ -213,30 +250,36 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     recordLog("request", `${label} · ${JSON.stringify(position)}`, "info", id);
     // Lock synchronously: two click events before React commits cannot send twice.
     locked.current = true; active.current = id;
-    setState({ commandId: id, label, phase: "validating", message: "正在校验执行条件…" });
+    groupAction.current = false; setGroupActionBusy(false);
+    activeGroup.current = group;
+    setState({ commandId: id, label, phase: "validating", message: "正在校验执行条件…", group: group ? { id: group.id, index: 0, count: group.steps.length, phase: "preparing", elapsed: 0 } : undefined });
     try {
       const reply = await bridge.request({
-        op: "position_move", command_id: id, label, confirmation: "ARMED",
+        op: group ? "position_group_start" : "position_move", command_id: id, label, confirmation: "ARMED",
+        group_id: group?.id, preparation_duration_s: group?.preparationDuration,
+        steps: group?.steps.map((step) => ({ id: step.id, label: step.positionName, positions: [...step.positions], gripper_position: step.gripperPosition, motion_duration_s: step.duration, hold_duration_s: step.hold })),
         tcp_pose: tcp ? { ...tcp.pose, position: [...tcp.pose.position], orientation: [...tcp.pose.orientation] } : undefined,
         gripper_position: tcp?.gripperPosition ?? saved?.gripperPosition,
-        home: tcp ? undefined : position === "home", positions: saved ? [...saved.positions] : undefined,
+        home: tcp || group ? undefined : position === "home", positions: saved ? [...saved.positions] : undefined,
         joint_name: joint?.jointName, joint_position: joint?.position,
         joint_targets: multi ? { ...multi.targets } : undefined, motion_duration_s: tcp?.duration ?? multi?.duration,
       }, 5000);
       if (generation.current !== current || active.current !== id) return;
-      if (reply.op === "position_move_ack" && reply.accepted === false) {
+      const ack = group ? "position_group_start_ack" : "position_move_ack";
+      if (reply.op === ack && reply.accepted === false) {
         locked.current = false;
+        if (group) { active.current = ""; activeGroup.current = null; }
         recordLog("rejected", reply.message || "未通过执行校验", "error", id);
         setState({ commandId: id, label, phase: "failed", message: reply.message || "未通过执行校验" });
         return;
       }
-      if (reply.op !== "position_move_ack" && reply.op !== "position_motion") throw new Error("Bridge 未确认点位运动");
+      if (reply.op !== ack && reply.op !== "position_motion") throw new Error("Bridge 未确认运动");
     } catch (e) {
       if (generation.current !== current || active.current !== id) return;
       recordLog("ack", `运动受理未确认：${e instanceof Error ? e.message : String(e)}`, "error", id);
       // An ACK timeout does not prove the robot rejected a goal. Keep the
       // lock and query status until a terminal event or explicit cancel arrives.
-      setState({ commandId: id, label, phase: "stop_failed", message: `运动受理状态未确认：${e instanceof Error ? e.message : String(e)}；请查询状态或取消` });
+      setState((previous) => ({ ...previous, commandId: id, label, phase: "stop_failed", message: `运动受理状态未确认：${e instanceof Error ? e.message : String(e)}；请查询状态或取消` }));
       try { await bridge.request({ op: "position_motion_info" }); } catch { /* watchdog remains on Jetson */ }
     }
   }
@@ -253,6 +296,29 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
       }
     }
   }
+  async function controlGroup(action: "pause" | "resume") {
+    const id = active.current, current = generation.current, value = context.current;
+    if (!value.connected || !id || !activeGroup.current || !locked.current || groupAction.current) return;
+    if (action === "resume") {
+      const why = value.localBlock || (!value.info.available ? value.info.message : "") || (!value.armed ? "请先确认工作区安全并解锁点位执行" : "");
+      if (why) { recordLog("rejected", why, "warn", id); return; }
+    }
+    groupAction.current = true; setGroupActionBusy(true);
+    const op = `position_group_${action}`;
+    try {
+      const reply = await bridge.request({ op, command_id: id }, 5000);
+      if (generation.current !== current || active.current !== id) return;
+      if (reply.op !== `${op}_ack` || reply.accepted !== true) throw new Error(reply.message || "Bridge 未确认动作组操作");
+      recordLog(action, action === "pause" ? "已请求在当前段停稳后暂停，以服务端状态为准" : "已请求继续动作组，以服务端状态为准", "info", id);
+    } catch (error) {
+      if (generation.current !== current || active.current !== id) return;
+      const message = `动作组${action === "pause" ? "暂停" : "继续"}未确认：${error instanceof Error ? error.message : String(error)}`;
+      recordLog(action, message, "warn", id);
+      setState((previous) => ({ ...previous, message }));
+    } finally {
+      if (generation.current === current && active.current === id) { groupAction.current = false; setGroupActionBusy(false); }
+    }
+  }
   return {
     logs, recordLog, state, homePositions: info.home, gripper: info.gripper, armed, setArmed,
     busy: positionMotionBusy(state.phase) || info.busy,
@@ -262,6 +328,10 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     jointTargetsReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") ||
       (!info.jointTargets || !info.duration ? "当前 Bridge 不支持联合关节及指定时长，请更新 Bridge" : "") || info.durationMessage,
     tcpPoseReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") || (!info.tcpPose ? "当前 Bridge 不支持 TCP 位姿规划，请更新 Bridge" : ""),
+    groupReason: !connected ? "请先连接 Jetson" : localBlock || (!info.available ? info.message : "") || (!info.group || !info.duration ? "当前 Bridge 不支持动作组，请更新 Bridge" : "") || info.durationMessage,
+    groupActionBusy,
+    executeGroup: (group) => execute({ kind: "group", group }),
+    pauseGroup: () => controlGroup("pause"), resumeGroup: () => controlGroup("resume"),
     executeTcpPose: (pose, duration, gripperPosition) => execute({ kind: "tcp", pose: { ...pose, position: [...pose.position], orientation: [...pose.orientation] }, duration, gripperPosition }),
     executeJoints: (targets, duration) => execute({ kind: "joints", targets: { ...targets }, duration }),
     execute, executeJoint: (jointName, position) => execute({ kind: "joint", jointName, position }), cancel,

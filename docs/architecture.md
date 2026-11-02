@@ -143,3 +143,23 @@ of this session's command; other sessions remain read-only. Robot View rendering
 RGBD interest are page-scoped: only visible Motion/Robot View acquires RGBD while live
 updates are enabled. Switching to positions or another page releases its client interest
 and clears the cloud without losing the retained robot scene or stopping a remote camera.
+
+## Motion group persistence and execution
+
+The Motion `groups` tab stores profile-scoped motion groups in a separate local
+`motion-groups.v1.json` through constrained Tauri load/save commands. Steps contain
+immutable six-joint and optional calibrated-gripper snapshots plus source position
+identity/version. Updating a source position never silently changes an existing group.
+Native validation, serialized updates and atomic file replacement preserve the prior
+file when a read, validation or write fails.
+
+The desktop submits one complete group snapshot to `PositionMotion` in the Bridge.
+The ROS motion callback group owns preparation, per-step planning/execution,
+feedback verification, monotonic holds, boundary pause/resume and group cancellation.
+A group keeps one owner and command ID and retains the existing global motion lock
+through every transition, hold and pause. Each segment uses a new internal motion
+instance so a late action callback cannot complete a newer segment. Existing health,
+model, controller, heartbeat and stopping gates continue between segments.
+The editor's nominal timeline sums motion and hold durations; Bridge elapsed time
+also includes per-segment planning and settling after preparation, and excludes pauses.
+Neither a browser timer nor navigation changes dispatch another motion segment.

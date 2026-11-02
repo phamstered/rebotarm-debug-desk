@@ -18,6 +18,7 @@ describe("navigation preferences", () => {
     expect(loadMotionTab()).toBe("positions");
     expect(loadMotionSidebar()).toBe(false);
     expect(loadMotionTab(stored("robot-console-motion-tab", "robot"))).toBe("robot");
+    expect(loadMotionTab(stored("robot-console-motion-tab", "groups"))).toBe("groups");
     expect(loadMotionSidebar(stored("robot-console-motion-controllers", "true"))).toBe(true);
   });
   it.each([null, "", "graph", "unknown"])("defaults invalid Motion preference %s safely", (value) => {

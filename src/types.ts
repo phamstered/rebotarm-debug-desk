@@ -207,6 +207,14 @@ export type BridgeEnvelope = {
   joint_targets_supported?: boolean;
   motion_duration_supported?: boolean;
   motion_duration_message?: string;
+  motion_group_supported?: boolean;
+  group_id?: string;
+  preparation_duration_s?: number;
+  steps?: Array<{ id: string; label: string; positions: number[]; gripper_position?: number; motion_duration_s: number; hold_duration_s: number }>;
+  group_index?: number;
+  group_count?: number;
+  group_phase?: "preparing" | "moving" | "holding" | "paused";
+  group_elapsed_s?: number;
   joint_targets?: Record<string, number>;
   motion_log_session?: string;
   motion_log_after?: number;

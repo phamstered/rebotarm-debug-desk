@@ -1,6 +1,6 @@
 const APP_PAGES = ["status", "dashboard", "motion", "monitor", "collection", "motor", "calibration", "gravity"] as const;
 export type AppPage = typeof APP_PAGES[number];
-export type MotionTab = "robot" | "positions";
+export type MotionTab = "robot" | "positions" | "groups";
 type NavigationStorage = Pick<Storage, "getItem">;
 
 function readPreference(storage: NavigationStorage, key: string): string | null {
@@ -14,7 +14,8 @@ export function loadAppPage(storage: NavigationStorage = localStorage): AppPage 
 }
 
 export function loadMotionTab(storage: NavigationStorage = localStorage): MotionTab {
-  return readPreference(storage, "robot-console-motion-tab") === "positions" ? "positions" : "robot";
+  const saved = readPreference(storage, "robot-console-motion-tab");
+  return saved === "positions" || saved === "groups" ? saved : "robot";
 }
 
 export function loadMotionSidebar(storage: NavigationStorage = localStorage): boolean {

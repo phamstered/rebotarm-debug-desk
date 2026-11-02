@@ -132,7 +132,7 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ## Motion 工作区
 
-Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View / 位置**，左侧 Controllers
+Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View / 位置 / 动作组**，左侧 Controllers
 负责单个控制器管理，底部为两者共享的规划执行日志。顶部可查看机械臂/夹爪控制器、MoveIt、
 关节反馈和时钟就绪状态。缺少反馈仍可进入页面查看原因；实际执行保留现有全部安全门。
 

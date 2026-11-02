@@ -10,6 +10,7 @@ use tokio::time::{sleep, Duration};
 mod data_collection;
 mod control_logs;
 mod positions;
+mod motion_groups;
 mod arm_workflow;
 mod node_runtime;
 
@@ -1370,6 +1371,9 @@ fn looks_like_project_root(path: &Path) -> bool {
 }
 
 fn deploy_bridge_args(profile: &ConnectionProfile) -> Result<Vec<String>, String> {
+    if !valid_topic(&profile.joint_state_topic) || !valid_topic(&profile.command_topic) || !valid_topic(&profile.status_topic) {
+        return Err("Bridge Topic 配置无效".into());
+    }
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
     }
@@ -1387,6 +1391,12 @@ fn deploy_bridge_args(profile: &ConnectionProfile) -> Result<Vec<String>, String
         profile.ros_domain_id.to_string(),
         "--ros-setup".into(),
         profile.ros_setup_script.clone(),
+        "--joint-state-topic".into(),
+        profile.joint_state_topic.clone(),
+        "--command-topic".into(),
+        profile.command_topic.clone(),
+        "--status-topic".into(),
+        profile.status_topic.clone(),
         "--restart".into(),
     ];
     if profile.ssh_port != 0 {
@@ -1669,6 +1679,8 @@ pub fn run() {
             stop_session,
             deploy_bridge,
             positions::positions_load,
+            motion_groups::motion_groups_load,
+            motion_groups::motion_groups_save,
             positions::positions_save
         ])
         .run(tauri::generate_context!())
@@ -2015,6 +2027,9 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--ssh-port", "2222"]));
         assert!(args.windows(2).any(|w| w == ["--identity-file", "/tmp/id_ed25519"]));
         assert!(args.windows(2).any(|w| w == ["--ros-domain-id", "3"]));
+        assert!(args.windows(2).any(|w| w == ["--status-topic", "/stm32/status"]));
+        assert!(args.windows(2).any(|w| w == ["--joint-state-topic", "/stm32/joint_states"]));
+        assert!(args.windows(2).any(|w| w == ["--command-topic", "/stm32/joint_commands"]));
         assert!(args.iter().any(|a| a == "--restart"));
         assert!(deploy_bridge_args(&profile("")).is_ok());
         let mut bad = profile("");
