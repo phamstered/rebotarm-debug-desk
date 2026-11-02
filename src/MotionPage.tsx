@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
+import { MotionDivider, MotionLayoutProvider } from "./MotionLayout";
 import type { MotionTab } from "./appNavigationLogic";
 
 export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggleControllers,
-  controllers, readiness, robot, positions, log }: {
+  controllers, readiness, robot, positions, log, resetVersion }: {
+  resetVersion?: number;
   active: boolean;
   tab: MotionTab;
   onTabChange(tab: MotionTab): void;
@@ -14,7 +16,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
   positions: ReactNode;
   log: ReactNode;
 }) {
-  return <main className={`motion-workspace${controllersOpen ? "" : " controllers-collapsed"}`} hidden={!active} aria-label="Motion">
+  return <MotionLayoutProvider active={active} resetVersion={resetVersion}><main className={`motion-workspace${controllersOpen ? "" : " controllers-collapsed"}`} hidden={!active} aria-label="Motion">
     <header className="motion-workspace-header">
       <div className="motion-workspace-navigation">
         <strong>Motion</strong>
@@ -32,10 +34,12 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
       <div className="motion-readiness" aria-label="运动就绪状态">{readiness}</div>
     </header>
     <aside id="motion-controllers" className="motion-controller-sidebar" hidden={!controllersOpen} aria-label="Motion Controllers">{active ? controllers : null}</aside>
+    {controllersOpen && <MotionDivider size="controllersWidth" label="调整 Controllers 宽度" axis="x" panel=".motion-controller-sidebar" container=".motion-workspace" maxFraction={.5} className="motion-controllers-divider" />}
     <section className="motion-content">
       <div id="motion-robot" className="robot-view-pane" hidden={tab !== "robot"}>{robot}</div>
       <div id="motion-positions" className="motion-positions" hidden={tab !== "positions"}>{positions}</div>
     </section>
+    <MotionDivider size="logHeight" label="调整 Motion 日志高度" axis="y" edge="end" panel=".motion-workspace-log" container=".motion-workspace" maxFraction={.5} className="motion-log-divider" />
     <section className="motion-workspace-log" aria-label="Motion 日志">{log}</section>
-  </main>;
+  </main></MotionLayoutProvider>;
 }

@@ -74,6 +74,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Motion 可在 ROS 未就绪时进入，查看已保存位置及就绪原因；执行继续要求连接、MoveIt、active 控制器、新鲜反馈、时钟和既有安全确认。
 - Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际 Activate / Deactivate 只在 Motion 侧栏，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。Status 保留整栈启动、模式切换、安全退出与解除输出。
 - Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View 与位置共用底部规划执行日志。左侧 Controllers 默认展开，可收起以扩展画布。
+- Controllers 宽度、日志高度、Robot View 的运动状态/RGBD、画布、TCP 或关节操作区，以及点位列表/编辑区均可拖动分隔条调整；状态与 RGBD 之间也可上下分割。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄画布将状态/操作区移到画布下方，并支持调整下方面板高度；窄位置页改为列表/编辑上下分区。面板独立滚动，拖拽不会下发运动。
+- 尺寸独立保存于 `robot-console-motion-layout`，重启恢复。缩小窗口按可用空间限制显示，不覆盖宽屏偏好；在 Motion 点击全局“重置布局”恢复所有尺寸并展开 Controllers，保留当前 Tab。
 - 导航页、Motion Tab 与 Controllers 展开状态独立记忆。Motion 默认 Robot View；旧 `dashboard` 导航标识继续表示 Topics。连接后默认跳 Status 的既有独立设置继续适用。
 - RGBD 仅在 Motion → Robot View、窗口可见、实时显示和 RGBD 配置开启时订阅；位置 Tab、Topics 和其他页释放当前客户端兴趣并清空点云。已加载的 Robot View 场景仍保留，隐藏时停止绘制并取消未结束的拖拽。
 
@@ -211,7 +213,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
 - rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Rebotarm Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
 - “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
-- 在 Motion 点击“重置布局”重新展开 Controllers 侧栏并保留当前 Tab；其他页沿用 Topics 默认左右宽度、Topics/ROS Control 分割比例及侧栏/面板展开状态的重置；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
+- 在 Motion 点击“重置布局”恢复所有面板尺寸、展开 Controllers 侧栏和规划日志并保留当前 Tab；其他页沿用 Topics 默认左右宽度、Topics/ROS Control 分割比例及侧栏/面板展开状态的重置；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
 
 ## 13. 单元测试覆盖矩阵
 
@@ -220,6 +222,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | 配置 | 默认值、损坏数据回退、旧路径/Topic 迁移 | `src/appLogic.test.ts` |
 | 面板 | 默认/持久化状态、三个内容面板与左右侧栏收起、宽高分隔条和尺寸边界、已连接工具条与 Status 卡片的网格区域隔离 | `src/appLogic.test.ts`、`src/layoutLogic.test.ts`、`src/App.test.tsx`、`src/styles.test.ts` |
 | 导航偏好 | 旧 dashboard/新 motion 恢复、Motion Tab 与侧栏独立存储、未知或不可读存储回退、无 ROS 时 Motion 可进入而动作门禁保留 | `src/AppNav.test.tsx`、`src/appNavigationLogic.test.ts`、`src/App.test.tsx` |
+| Motion 可调布局 | 尺寸持久化与坏数据回退、鼠标/键盘边界、拖拽隐藏/卸载清理、局部与整体复位、日志复位、场景保留 | `src/motionLayoutLogic.test.ts`、`src/MotionLayout.test.tsx`、`src/MotionPage.test.tsx` |
 | 工具栏 | 导航职责分离、Topics 与 Motion 分区、Motion 局部 Tab（Robot View / 位置）及偏好恢复、全部刷新、实时暂停/恢复、连接配置、设置和布局重置 | `src/App.test.tsx`、`src/toolbarLogic.test.ts`、`src/PositionPage.test.tsx` |
 | rosbag/诊断 | 安全命令生成、PID/状态解析、录制启停、诊断脱敏/预览上限/文件校验与导出 | `src-tauri/src/lib.rs`、`src/toolbarLogic.test.ts`、`src/App.test.tsx` |
 | 连接流程 | SSH→会话→Bridge→Agent、状态灯/步骤/可读错误/最近主机、JointState 冒烟、实际端口、基础订阅、重连会话数据清理、版本检查与升级提示 | `src/App.test.tsx`、`src/appLogic.test.ts`、`src/bridge.test.ts` |

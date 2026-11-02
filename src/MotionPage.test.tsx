@@ -2,8 +2,25 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MotionPage } from "./MotionPage";
+import { MotionTerminal } from "./MotionTerminal";
+import { defaultMotionLayout, MOTION_LAYOUT_KEY } from "./motionLayoutLogic";
 
 describe("Motion workspace", () => {
+  it("restores saved sizes and resets geometry plus folded logs without remounting the scene", async () => {
+    localStorage.setItem(MOTION_LAYOUT_KEY, JSON.stringify({ controllersWidth: 400, logHeight: 320 }));
+    const props = { active: true, tab: "robot" as const, onTabChange: vi.fn(), controllersOpen: true,
+      onToggleControllers: vi.fn(), controllers: <div>Controllers</div>, readiness: null,
+      robot: <div data-testid="retained-model" />, positions: null, log: <MotionTerminal active logs={[]} /> };
+    const user = userEvent.setup(); const { rerender } = render(<MotionPage {...props} />);
+    const scene = screen.getByTestId("retained-model");
+    expect(screen.getByRole("separator", { name: "调整 Controllers 宽度" })).toHaveAttribute("aria-valuenow", "400");
+    await user.click(screen.getByRole("button", { name: /规划执行日志/ }));
+    expect(screen.queryByRole("searchbox", { name: "搜索规划日志" })).not.toBeInTheDocument();
+    rerender(<MotionPage {...props} resetVersion={1} />);
+    expect(screen.getByRole("searchbox", { name: "搜索规划日志" })).toBeVisible();
+    expect(JSON.parse(localStorage.getItem(MOTION_LAYOUT_KEY)!)).toEqual(defaultMotionLayout);
+    expect(screen.getByTestId("retained-model")).toBe(scene);
+  });
   it("preserves the scene across tabs/navigation with independent controller visibility", async () => {
     const onTabChange = vi.fn(), onToggleControllers = vi.fn();
     const props = { active: true, tab: "robot" as "robot" | "positions", onTabChange,
