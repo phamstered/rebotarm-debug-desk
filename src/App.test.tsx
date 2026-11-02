@@ -6,6 +6,8 @@ import type { MotionGroup } from "./motionGroupsLogic";
 
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
+  controllers: vi.fn(),
+  controllerSequence: 0,
   listen: vi.fn(),
   deployListener: undefined as ((event: { payload: string }) => void) | undefined,
   deployUnlisten: vi.fn(),
@@ -14,6 +16,7 @@ const doubles = vi.hoisted(() => ({
     bridge_version: "0.1.0",
     bridge_build_id: "bddd7fcc6d04",
     ros_distro: "humble",
+    controllers_info_supported: true,
   }),
   listTopics: vi.fn().mockResolvedValue([
     { name: "/robot_description", types: ["std_msgs/msg/String"] },
@@ -47,7 +50,13 @@ vi.mock("./bridge", () => ({
     getTopicInfo = doubles.getTopicInfo;
     getNodeInfo = doubles.getNodeInfo;
     send = doubles.send;
-    request = doubles.request;
+    request = (message: {op:string;refresh?:boolean}, ...args: unknown[]) => {
+      if(message.op !== "controllers_info") return doubles.request(message,...args);
+      return Promise.resolve(doubles.controllers(message)).then(status => {
+        if(status?.op === "controllers_info") return status;
+        return {op:"controllers_info",supported:true,manager:"/controller_manager",available:status?.available === true,fresh:status?.available === true,has_snapshot:true,snapshot_sequence:++doubles.controllerSequence,snapshot_age_ms:0,snapshot_time_ms:Date.now(),query_state:status?.available?"ready":"unavailable",query_pending:false,retry_after_ms:0,request_wait_ms:0,controllers:(status?.controllers ?? []).map((c:{name:string;typeName:string;state:string})=>({name:c.name,type_name:c.typeName,state:c.state})),message:status?.message ?? ""};
+      });
+    };
     close = doubles.close;
     onMessage(listener: (message: unknown) => void) {
       doubles.listeners.add(listener);
@@ -110,6 +119,7 @@ describe("App workflow", () => {
     // Keep legacy workflow tests on Topics after connect; dedicated cases cover Status default.
     localStorage.setItem("easy-debug-navigate-status-on-connect", "false");
     vi.clearAllMocks();
+    doubles.controllerSequence = 0;
     doubles.deployListener = undefined;
     doubles.listen.mockImplementation(async (event: string, handler: (value: { payload: string }) => void) => {
       if (event === "bridge-deploy-progress") { doubles.deployListener = handler; return doubles.deployUnlisten; }
@@ -117,6 +127,15 @@ describe("App workflow", () => {
     });
     doubles.save.mockResolvedValue("/tmp/robot-console-diagnostics.json");
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({
+        manager: "/controller_manager",
+        fresh: true, available: true,
+        controllers: [
+          { name: "joint_state_broadcaster", typeName: "joint_state_broadcaster/JointStateBroadcaster", state: "active" },
+          { name: "arm_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "inactive" },
+        ],
+        message: "",
+      });});
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "data_collection_action") return Promise.resolve({
@@ -138,15 +157,7 @@ describe("App workflow", () => {
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
-      if (command === "check_ros_controllers") return Promise.resolve({
-        manager: "/controller_manager",
-        available: true,
-        controllers: [
-          { name: "joint_state_broadcaster", typeName: "joint_state_broadcaster/JointStateBroadcaster", state: "active" },
-          { name: "arm_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "inactive" },
-        ],
-        message: "",
-      });
+
       if (command === "switch_ros_controller") return Promise.resolve(
         `${args?.controllerName} ${args?.action} complete`,
       );
@@ -228,6 +239,9 @@ describe("App workflow", () => {
         bridge_build_id: EXPECTED_BRIDGE_BUILD_ID,
         ros_distro: "humble",
       });
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({
+        manager: "/controller_manager", fresh: true, available: true, controllers: [], message: "",
+      });});
     doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "check_micro_ros_agent") return Promise.resolve({
@@ -245,9 +259,7 @@ describe("App workflow", () => {
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
-      if (command === "check_ros_controllers") return Promise.resolve({
-        manager: "/controller_manager", available: true, controllers: [], message: "",
-      });
+
       if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
       if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
       if (command === "start_session") return Promise.resolve(19001);
@@ -339,6 +351,16 @@ describe("App workflow", () => {
   it("does not let a delayed controller response from the old session repopulate state", async () => {
     let resolveOldControllers!: (value: unknown) => void;
     let controllerRequest = 0;
+    doubles.controllers.mockImplementation(() => {
+        controllerRequest += 1;
+        if (controllerRequest === 1) {
+          return new Promise((resolve) => { resolveOldControllers = resolve; });
+        }
+        return Promise.resolve({
+          manager: "/controller_manager", fresh: true, available: true,
+          controllers: [{ name: "new_controller", typeName: "test/New", state: "active" }], message: "",
+        });
+      });
     doubles.invoke.mockImplementation((command: string) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "check_micro_ros_agent") return Promise.resolve({
@@ -357,16 +379,7 @@ describe("App workflow", () => {
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
-      if (command === "check_ros_controllers") {
-        controllerRequest += 1;
-        if (controllerRequest === 1) {
-          return new Promise((resolve) => { resolveOldControllers = resolve; });
-        }
-        return Promise.resolve({
-          manager: "/controller_manager", available: true,
-          controllers: [{ name: "new_controller", typeName: "test/New", state: "active" }], message: "",
-        });
-      }
+
       return Promise.resolve(undefined);
     });
     const user = userEvent.setup();
@@ -379,7 +392,7 @@ describe("App workflow", () => {
 
     await act(async () => {
       resolveOldControllers({
-        manager: "/controller_manager", available: true,
+        manager: "/controller_manager", fresh: true, available: true,
         controllers: [{ name: "old_controller", typeName: "test/Old", state: "active" }], message: "",
       });
       await Promise.resolve();
@@ -417,7 +430,8 @@ describe("App workflow", () => {
     expect(control).toHaveTextContent("active");
     expect(control).toHaveTextContent("arm_controller");
     expect(control).toHaveTextContent("inactive");
-    expect(doubles.invoke).toHaveBeenCalledWith("check_ros_controllers", expect.objectContaining({ profile: expect.any(Object) }));
+    expect(doubles.controllers).toHaveBeenCalledWith({op:"controllers_info",refresh:false});
+    expect(doubles.invoke.mock.calls.some(([command])=>command==="check_ros_controllers")).toBe(false);
   });
 
   it("collapses and restores both outer sidebars", async () => {
@@ -447,9 +461,10 @@ describe("App workflow", () => {
   it("keeps Topics read-only and confirms verified Controller switches only in Motion", async () => {
     const baseInvoke = doubles.invoke.getMockImplementation()!;
     const states = { joint_state_broadcaster: "active", arm_controller: "inactive" };
+    doubles.controllers.mockImplementation(() => {return { manager: "/controller_manager", fresh: true, available: true,
+        controllers: Object.entries(states).map(([name,state]) => ({name,state,typeName: name === "arm_controller" ? "joint_trajectory_controller/JointTrajectoryController" : "joint_state_broadcaster/JointStateBroadcaster"})), message: "" };});
     doubles.invoke.mockImplementation(async (command, args) => {
-      if (command === "check_ros_controllers") return { manager: "/controller_manager", available: true,
-        controllers: Object.entries(states).map(([name,state]) => ({name,state,typeName: name === "arm_controller" ? "joint_trajectory_controller/JointTrajectoryController" : "joint_state_broadcaster/JointStateBroadcaster"})), message: "" };
+
       if (command === "switch_ros_controller") {
         states[args.controllerName as keyof typeof states] = args.action === "activate" ? "active" : "inactive";
         return `${args.controllerName} ${args.action} complete`;
@@ -463,12 +478,12 @@ describe("App workflow", () => {
     expect(screen.queryByRole("button", {name:"激活 arm_controller"})).not.toBeInTheDocument();
     expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
     await user.click(screen.getByRole("button", {name:"Motion"}));
-    const before = doubles.invoke.mock.calls.filter(([c]) => c === "check_ros_controllers").length;
+    const before = doubles.controllers.mock.calls.length;
     await user.click(screen.getByRole("button",{name:"停用 joint_state_broadcaster"}));
     expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
     await user.click(screen.getByRole("button",{name:"确认停用"}));
     await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", { profile:expect.any(Object), controllerName:"joint_state_broadcaster", action:"deactivate" }));
-    await waitFor(() => expect(doubles.invoke.mock.calls.filter(([c]) => c === "check_ros_controllers").length).toBeGreaterThanOrEqual(before+2));
+    await waitFor(() => expect(doubles.controllers.mock.calls.length).toBeGreaterThanOrEqual(before+2));
     expect(await screen.findByText("joint_state_broadcaster deactivate complete")).toBeVisible();
     await user.click(screen.getByRole("button",{name:"激活 arm_controller"}));
     await user.click(screen.getByRole("button",{name:"确认激活"}));
@@ -476,7 +491,7 @@ describe("App workflow", () => {
     expect(await screen.findByText("arm_controller activate complete")).toBeVisible();
   });
 
-  it("manually refreshes Topics and ROS Control and executes both 30-second pollers", async () => {
+  it("refreshes Controllers from the Bridge every second independently of the Topics interval", async () => {
     const intervalSpy = vi.spyOn(window, "setInterval");
     try {
       const user = userEvent.setup();
@@ -485,7 +500,7 @@ describe("App workflow", () => {
       await screen.findByText("joint_state_broadcaster");
 
       const topicCalls = doubles.listTopics.mock.calls.length;
-      const controllerCalls = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
+      const controllerCalls = doubles.controllers.mock.calls.length;
       const refreshTopics = screen.getByRole("button", { name: "刷新Topics" });
       const refreshControllers = screen.getByRole("button", { name: "刷新ROS Control" });
       expect(refreshTopics).toBeEnabled();
@@ -495,29 +510,34 @@ describe("App workflow", () => {
       await user.click(refreshControllers);
       await waitFor(() => expect(doubles.listTopics).toHaveBeenCalledTimes(topicCalls + 1));
       await waitFor(() => expect(
-        doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers"),
+        doubles.controllers.mock.calls,
       ).toHaveLength(controllerCalls + 1));
 
       const automaticRefreshes = intervalSpy.mock.calls
         .filter(([, delay]) => delay === 30_000)
         .map(([callback]) => callback as () => void);
-      expect(automaticRefreshes).toHaveLength(3); // Topics Graph adds its own visible-page poller.
+      expect(automaticRefreshes).toHaveLength(2); // Topics Graph adds its own visible-page poller.
       const topicsBeforeAutoRefresh = doubles.listTopics.mock.calls.length;
-      const controllersBeforeAutoRefresh = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
+      const controllersBeforeAutoRefresh = doubles.controllers.mock.calls.length;
       await act(async () => {
         automaticRefreshes.forEach((refresh) => refresh());
+        intervalSpy.mock.calls.filter(([, delay])=>delay===1000).forEach(([callback])=>(callback as ()=>void)());
         await Promise.resolve();
       });
       await waitFor(() => expect(doubles.listTopics).toHaveBeenCalledTimes(topicsBeforeAutoRefresh + 1));
       await waitFor(() => expect(
-        doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers"),
+        doubles.controllers.mock.calls,
       ).toHaveLength(controllersBeforeAutoRefresh + 1));
     } finally {
       intervalSpy.mockRestore();
     }
   });
 
-  it("shows ROS Control as offline without blocking the connected workspace", async () => {
+  it("shows ROS Control query failure without blocking the connected workspace", async () => {
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({
+        manager: "/controller_manager", available: false, controllers: [],
+        message: "controller_manager 服务不可用或查询超时",
+      });});
     doubles.invoke.mockImplementation((command: string) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "check_micro_ros_agent") return Promise.resolve({
@@ -535,10 +555,7 @@ describe("App workflow", () => {
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
-      if (command === "check_ros_controllers") return Promise.resolve({
-        manager: "/controller_manager", available: false, controllers: [],
-        message: "controller_manager 服务不可用或查询超时",
-      });
+
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -546,7 +563,8 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     const control = await screen.findByRole("region", { name: "ROS Control Controllers" });
-    expect(control).toHaveTextContent("离线");
+    expect(control).toHaveTextContent("服务不可用");
+    expect(control).not.toHaveTextContent("离线");
     expect(control).toHaveTextContent("controller_manager 服务不可用或查询超时");
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
@@ -758,6 +776,15 @@ describe("App workflow", () => {
   });
 
   it("sends a JointTrajectory to the active trajectory controller's topic", async () => {
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({
+        manager: "/controller_manager",
+        fresh: true, available: true,
+        controllers: [
+          { name: "joint_state_broadcaster", typeName: "joint_state_broadcaster/JointStateBroadcaster", state: "active" },
+          { name: "arm/trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" },
+        ],
+        message: "",
+      });});
     doubles.invoke.mockImplementation((command: string) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "check_micro_ros_agent") return Promise.resolve({
@@ -775,15 +802,7 @@ describe("App workflow", () => {
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
-      if (command === "check_ros_controllers") return Promise.resolve({
-        manager: "/controller_manager",
-        available: true,
-        controllers: [
-          { name: "joint_state_broadcaster", typeName: "joint_state_broadcaster/JointStateBroadcaster", state: "active" },
-          { name: "arm/trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" },
-        ],
-        message: "",
-      });
+
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -856,11 +875,11 @@ describe("App workflow", () => {
     expect(screen.getByRole("button", { name: "Motion" })).toBeVisible();
 
     const topicCalls = doubles.listTopics.mock.calls.length;
-    const controllerCalls = doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length;
+    const controllerCalls = doubles.controllers.mock.calls.length;
     await user.click(screen.getByRole("button", { name: "刷新全部状态" }));
     await waitFor(() => expect(doubles.listTopics.mock.calls.length).toBe(topicCalls + 1));
     await waitFor(() => expect(
-      doubles.invoke.mock.calls.filter(([command]) => command === "check_ros_controllers").length,
+      doubles.controllers.mock.calls.length,
     ).toBe(controllerCalls + 1));
 
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
@@ -937,7 +956,7 @@ describe("App workflow", () => {
 
     await user.click(screen.getByRole("button", { name: /设置/ }));
     const settingsDialog = screen.getByRole("dialog", { name: "应用设置" });
-    const interval = within(settingsDialog).getByLabelText("Topics / Controller 自动刷新间隔（秒）");
+    const interval = within(settingsDialog).getByLabelText("Topics 自动刷新间隔（秒）");
     await user.clear(interval);
     await user.type(interval, "45");
     await user.click(within(settingsDialog).getByRole("button", { name: "保存设置" }));
@@ -1275,6 +1294,9 @@ describe("App workflow", () => {
     expect((await screen.findAllByText(/SSH 认证失败/)).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "重试" })).toBeVisible();
     expect(screen.getByLabelText("上次连接记录")).toHaveTextContent(/失败/);
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({
+        manager: "/controller_manager", fresh: true, available: true, controllers: [], message: "",
+      });});
     doubles.invoke.mockImplementation((command: string) => {
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "start_session") return Promise.resolve(19001);
@@ -1293,9 +1315,7 @@ describe("App workflow", () => {
       });
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
-      if (command === "check_ros_controllers") return Promise.resolve({
-        manager: "/controller_manager", available: true, controllers: [], message: "",
-      });
+
       if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "" });
       if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "" });
       return Promise.resolve(undefined);
@@ -1347,10 +1367,11 @@ describe("App workflow", () => {
     const group: MotionGroup = { id: "group-1", name: "装配动作", note: "", preparationDuration: 2, createdAt: 0, updatedAt: 0,
       steps: [0, 1].map(index => ({ id: `frame-${index}`, positionId: `pose-${index}`, positionName: index ? "B" : "A", positionUpdatedAt: 0, positions: [0, -.2, -.3, 0, 0, .1 * index], duration: index ? 5 : 0, hold: 0 })) };
     const baseInvoke = doubles.invoke.getMockImplementation()!;
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({ manager: "/controller_manager", fresh: true, available: true,
+        controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });});
     doubles.invoke.mockImplementation((command, args) => {
       if (command === "motion_groups_load") return Promise.resolve(JSON.stringify({ schemaVersion: 1, profiles: { "group-robot|operator|22": { groups: [group] } } }));
-      if (command === "check_ros_controllers") return Promise.resolve({ manager: "/controller_manager", available: true,
-        controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });
+
       return baseInvoke(command, args);
     });
     doubles.request.mockImplementation(async (message) => message.op === "position_motion_info"
@@ -1379,9 +1400,10 @@ describe("App workflow", () => {
 
   it("dispatches saved positions through MoveIt and captures fresh monotonic feedback", async () => {
     const baseInvoke = doubles.invoke.getMockImplementation()!;
+    doubles.controllers.mockImplementation(() => {return Promise.resolve({ manager: "/controller_manager", fresh: true, available: true,
+        controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });});
     doubles.invoke.mockImplementation((command, args) => {
-      if (command === "check_ros_controllers") return Promise.resolve({ manager: "/controller_manager", available: true,
-        controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });
+
       return baseInvoke(command, args);
     });
     doubles.request.mockImplementation(async (message: { op: string; command_id?: string }) => {
@@ -1415,5 +1437,48 @@ describe("App workflow", () => {
     } finally { doubles.request.mockResolvedValue({ op: "joint_command_ack", sequence: 1 }); }
   });
 
+
+  it("keeps stale Controller rows read-only and hides Robot View controller readiness",async()=>{
+    doubles.controllers.mockResolvedValue({op:"controllers_info",supported:true,manager:"/controller_manager",available:false,fresh:false,has_snapshot:true,snapshot_sequence:1,snapshot_age_ms:3500,snapshot_time_ms:Date.now(),query_state:"timeout",query_pending:false,retry_after_ms:1000,request_wait_ms:0,controllers:[{name:"arm_trajectory_controller",type_name:"joint_trajectory_controller/JointTrajectoryController",state:"active"}],message:"ListControllers >2s"});
+    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
+    const list=await screen.findByRole("region",{name:"ROS Control Controllers"});expect(list).toHaveTextContent("查询超时");expect(list).not.toHaveTextContent("离线");expect(list).toHaveTextContent("active（上次）");
+    await user.click(screen.getByRole("button",{name:"Motion"}));expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("none");
+    expect(screen.getByRole("button",{name:"停用 arm_trajectory_controller"})).toBeDisabled();
+    expect(doubles.invoke.mock.calls.some(([command])=>command==="check_ros_controllers")).toBe(false);
+  });
+  it("requires a supported Bridge before native mode startup while preserving safe stop",async()=>{
+    const connect=doubles.connect.getMockImplementation()!;
+    doubles.connect.mockResolvedValue({bridge_version:"0.1.0",bridge_build_id:EXPECTED_BRIDGE_BUILD_ID,ros_distro:"humble",controllers_info_supported:false});
+    try{
+      const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
+      expect(await screen.findByText(/当前 Bridge 不支持常驻 Controller 查询/)).toBeVisible();
+      await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("tab",{name:/控制模式/}));emitRosReady();
+      await user.click(screen.getByRole("button",{name:"启动所选模式"}));
+      await waitFor(()=>expect(screen.getByRole("button",{name:"Teleop"})).toBeEnabled());
+      expect(doubles.invoke.mock.calls.some(([command,args])=>command==="start_arm_mode"&&args.mode==="teleop")).toBe(false);
+      expect(doubles.controllers).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button",{name:"回零并退出控制"}));
+      await waitFor(()=>expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode",expect.objectContaining({mode:"stop"})));
+    }finally{doubles.connect.mockImplementation(connect);}
+  });
+  it("permits controlled cold-stack recovery and confirms fresh controllers after native startup",async()=>{
+    let started=false;const base=doubles.invoke.getMockImplementation()!;
+    doubles.controllers.mockImplementation(()=>({manager:"/controller_manager",available:started,controllers:started?[{name:"arm_teleop_controller",typeName:"test/Controller",state:"active"}]:[],message:started?"":"等待 Controller Manager 启动"}));
+    doubles.invoke.mockImplementation((command,args)=>{if(command==="start_arm_mode"&&args.mode==="teleop")started=true;return base(command,args);});
+    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("tab",{name:/控制模式/}));emitRosReady();
+    expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");
+    await user.click(screen.getByRole("button",{name:"启动所选模式"}));
+    await waitFor(()=>expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Teleop"));
+    expect(doubles.controllers.mock.calls.filter(([message])=>message.refresh===true).length).toBeGreaterThanOrEqual(2);
+    expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode",expect.objectContaining({mode:"teleop"}));
+    expect(doubles.invoke.mock.calls.some(([command])=>command==="check_ros_controllers")).toBe(false);
+  });
+  it("does not claim native mode startup is confirmed when the post-query is unavailable",async()=>{
+    doubles.controllers.mockResolvedValue({manager:"/controller_manager",available:false,controllers:[],message:"Manager 暂不可用"});
+    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("tab",{name:/控制模式/}));emitRosReady();
+    await user.click(screen.getByRole("button",{name:"启动所选模式"}));
+    expect(await screen.findByText(/模式启动后 Controller 状态未确认/)).toBeVisible();
+    expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");
+  });
 
 });

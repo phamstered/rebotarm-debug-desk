@@ -28,7 +28,7 @@ import {
 function ros(controllers: RosControlStatus["controllers"]): RosControlStatus {
   return {
     manager: "/controller_manager",
-    available: true,
+    fresh: true, available: true,
     controllers,
     message: "",
   };

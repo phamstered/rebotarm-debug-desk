@@ -100,6 +100,16 @@ export type ControllerInfo = {
 };
 
 export type RosControlStatus = {
+  supported?: boolean;
+  fresh?: boolean;
+  hasSnapshot?: boolean;
+  snapshotSequence?: number;
+  snapshotAgeMs?: number;
+  snapshotTimeMs?: number;
+  queryState?: import("./controllersInfoLogic").ControllerQueryState;
+  queryPending?: boolean;
+  retryAfterMs?: number;
+  requestWaitMs?: number;
   manager: string;
   available: boolean;
   controllers: ControllerInfo[];
@@ -172,6 +182,19 @@ export type MotionArrivalError = {
 };
 
 export type BridgeEnvelope = {
+  controllers_info_supported?: boolean;
+  refresh?: boolean;
+  manager?: string;
+  fresh?: boolean;
+  has_snapshot?: boolean;
+  snapshot_sequence?: number;
+  snapshot_age_ms?: number;
+  snapshot_time_ms?: number;
+  query_state?: import("./controllersInfoLogic").ControllerQueryState;
+  query_pending?: boolean;
+  retry_after_ms?: number;
+  request_wait_ms?: number;
+  controllers?: Array<{name:string; type_name:string; state:string}>;
   subscription_id?: string;
   frame_age_ms?: number;
   rgbd_subscription_id_supported?: boolean;

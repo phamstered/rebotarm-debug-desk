@@ -1,3 +1,4 @@
+import { controllerStatusFresh, controllerStatusLabel } from "./controllersInfoLogic";
 import type { ClockSyncStatus } from "./clockSyncLogic";
 import type {
   AgentServiceStatus,
@@ -27,6 +28,7 @@ import {
 export type StatusTone = "ok" | "warn" | "fail" | "idle" | "unknown";
 
 export type BridgeHelloInfo = {
+  controllersInfoSupported?: boolean;
   rgbdSubscriptionIdSupported?: boolean;
   bridgeVersion?: string;
   bridgeBuildId?: string;
@@ -194,22 +196,21 @@ export function formatLastCommandSequence(status: HardwareStatus | null | undefi
 /**
  * Prefer active position controller from list_controllers when available
  * (VLA / Teleop / Trajectory), so strip selection stays consistent after
- * switch_controllers without stopping scripts (#106). Fall back to script
- * PID flags only when ros2_control data is missing.
+ * switch_controllers without stopping scripts (#106). Script PID flags
+ * alone cannot confirm controller outputs while the snapshot is stale.
  */
 export function resolveActiveControlMode(input: {
   armMode?: ArmModeStatus | null;
   rosControl?: RosControlStatus | null;
 }): ActiveControlMode {
   const rosControl = input.rosControl ?? null;
-  if (rosControl?.available) {
+  if (controllerStatusFresh(rosControl)) {
     if (isVlaControllerActive(rosControl)) return "vla";
     if (isArmTeleopControllerActive(rosControl)) return "teleop";
     if (isArmTrajectoryControllerActive(rosControl)) return "trajectory";
     return null;
   }
-  if (input.armMode?.teleopRunning) return "teleop";
-  if (input.armMode?.trajectoryRunning) return "trajectory";
+  // Running scripts alone cannot confirm controller state or outputs.
   return null;
 }
 
@@ -222,7 +223,7 @@ export function gravityCompensationRow(input: {
   if (!rosControl) {
     return { label: "Gravity", value: "—", tone: "idle" };
   }
-  if (!rosControl.available) {
+  if (!controllerStatusFresh(rosControl)) {
     return { label: "Gravity", value: "不可用", tone: "fail" };
   }
   const gravityOn = isGravityCompensationActive(rosControl);
@@ -234,7 +235,7 @@ export function gravityCompensationRow(input: {
 }
 
 export function gravityInactiveWarning(modeActive: boolean, rosControl: RosControlStatus | null | undefined): string | undefined {
-  if (!modeActive || !rosControl?.available) return undefined;
+  if (!modeActive || !controllerStatusFresh(rosControl)) return undefined;
   if (isGravityCompensationActive(rosControl)) return undefined;
   return `${GRAVITY_COMPENSATION_CONTROLLER} 未激活（建议与位置控制器并行；Trajectory bring-up 尤其需要）`;
 }
@@ -291,7 +292,7 @@ export function formatAgentSummary(agent: AgentServiceStatus | null, agentError:
 }
 
 export function activeControllers(rosControl: RosControlStatus | null): string[] {
-  if (!rosControl?.available) return [];
+  if (!controllerStatusFresh(rosControl)) return [];
   return rosControl.controllers.filter((controller) => controller.state === "active").map((controller) => controller.name);
 }
 
@@ -625,7 +626,7 @@ export function buildStatusCards(input: {
   const actives = controlStopped ? [] : activeControllers(rosControl);
   const rosControlTone: StatusTone = controlStopped || !rosControl
     ? "idle"
-    : !rosControl.available
+    : !controllerStatusFresh(rosControl)
       ? "fail"
       : actives.length > 0
         ? "ok"
@@ -636,40 +637,41 @@ export function buildStatusCards(input: {
     tone: rosControlTone,
     summary: controlStopped ? "控制环境已退出（预期）" : !rosControl
       ? "检查中…"
-      : !rosControl.available
-        ? "Controller Manager 离线"
+      : !controllerStatusFresh(rosControl)
+        ? controllerStatusLabel(rosControl)
         : actives.length > 0
           ? `${actives.length} 个 active`
           : "无 active Controller",
     detail: actives.length > 0 ? actives.join(", ") : undefined,
-    failureReason: !controlStopped && rosControl && !rosControl.available ? rosControl.message || "Controller Manager 不可用" : undefined,
+    failureReason: !controlStopped && rosControl && !controllerStatusFresh(rosControl) ? rosControl.message || "Controller Manager 不可用" : undefined,
     rows: [
       { label: "Manager", value: rosControl?.manager ?? "/controller_manager" },
-      { label: "可用", value: controlStopped ? "否（已按请求退出）" : rosControl ? (rosControl.available ? "是" : "否") : "—", tone: controlStopped ? "idle" : rosControl?.available ? "ok" : rosControl ? "fail" : "idle" },
+      { label: "可用", value: controlStopped ? "否（已按请求退出）" : rosControl ? (controllerStatusFresh(rosControl) ? "是" : "否") : "—", tone: controlStopped ? "idle" : controllerStatusFresh(rosControl) ? "ok" : rosControl ? "fail" : "idle" },
       { label: "Active", value: actives.length > 0 ? actives.join(", ") : "—", tone: actives.length > 0 ? "ok" : "idle" },
-      { label: "全部", value: rosControl?.available ? String(rosControl.controllers.length) : "—" },
+      { label: "全部", value: controllerStatusFresh(rosControl) ? String(rosControl.controllers.length) : "—" },
     ],
     note: controlStopped ? "输出关闭、旧控制环境清理均已核验；Controller Manager 此时离线属预期。" : rosControl?.message || undefined,
   };
 
   const usbCard = buildUsbCard({ sshOk, usbProbe, usbChecked });
 
-  const teleopScriptRunning = Boolean(armMode?.teleopRunning);
+
+  const modeKnown = controlStopped || controllerStatusFresh(rosControl);
   const teleopControllerActive = isArmTeleopControllerActive(rosControl);
-  const teleopActive = !controlStopped && (rosControl?.available ? teleopControllerActive : teleopScriptRunning);
+  const teleopActive = !controlStopped && teleopControllerActive;
   const teleopGravityWarn = gravityInactiveWarning(teleopActive, rosControl);
   const teleopCard: StatusCardModel = {
     id: "teleop",
     title: "Teleop",
     tone: !sshOk ? "idle" : teleopActive ? (teleopGravityWarn ? "warn" : "ok") : "idle",
-    summary: !sshOk ? "SSH 未就绪" : teleopActive ? "运行中" : "未运行",
+    summary: !sshOk ? "SSH 未就绪" : !modeKnown ? "待确认" : teleopActive ? "运行中" : "未运行",
     detail: teleopActive
       ? (armMode?.teleopPid
         ? `PID ${armMode.teleopPid} · ${ARM_TELEOP_CONTROLLER}`
         : ARM_TELEOP_CONTROLLER)
       : undefined,
     rows: [
-      { label: "状态", value: teleopActive ? "运行中" : "未运行", tone: teleopActive ? "ok" : "idle" },
+      { label: "状态", value: !modeKnown ? "待确认" : teleopActive ? "运行中" : "未运行", tone: teleopActive ? "ok" : "idle" },
       { label: "PID", value: armMode?.teleopPid ? String(armMode.teleopPid) : "—" },
       { label: "脚本", value: "scripts/start_arm_teleop.sh" },
       { label: "控制器", value: ARM_TELEOP_CONTROLLER, tone: teleopControllerActive ? "ok" : teleopActive ? "warn" : "idle" },
@@ -679,20 +681,20 @@ export function buildStatusCards(input: {
     warning: teleopGravityWarn,
   };
 
-  const trajScriptRunning = Boolean(armMode?.trajectoryRunning);
+
   const trajControllerActive = isArmTrajectoryControllerActive(rosControl);
-  const trajActive = !controlStopped && (rosControl?.available ? trajControllerActive : trajScriptRunning);
+  const trajActive = !controlStopped && trajControllerActive;
   const trajGravityWarn = gravityInactiveWarning(trajActive, rosControl);
   const trajectoryCard: StatusCardModel = {
     id: "trajectory",
     title: "Trajectory / MoveIt",
     tone: !sshOk ? "idle" : trajActive ? (trajGravityWarn ? "warn" : "ok") : "idle",
-    summary: !sshOk ? "SSH 未就绪" : trajActive ? "运行中" : "未运行",
+    summary: !sshOk ? "SSH 未就绪" : !modeKnown ? "待确认" : trajActive ? "运行中" : "未运行",
     detail: trajActive
       ? `PID ${armMode?.trajectoryPid || "—"} · ${ARM_TRAJECTORY_CONTROLLER}`
       : undefined,
     rows: [
-      { label: "状态", value: trajActive ? "运行中" : "未运行", tone: trajActive ? "ok" : "idle" },
+      { label: "状态", value: !modeKnown ? "待确认" : trajActive ? "运行中" : "未运行", tone: trajActive ? "ok" : "idle" },
       { label: "PID", value: armMode?.trajectoryPid ? String(armMode.trajectoryPid) : "—" },
       { label: "启动", value: "Trajectory 一键启动：JTC + gravity + MoveIt" },
       { label: "控制器", value: ARM_TRAJECTORY_CONTROLLER, tone: trajControllerActive ? "ok" : trajActive ? "warn" : "idle" },
@@ -777,10 +779,10 @@ export function buildStatusCards(input: {
     vlaSummary = "SSH 未就绪";
   } else if (!rosControl) {
     vlaTone = "idle";
-    vlaSummary = "检查中…";
-  } else if (!rosControl.available) {
+    vlaSummary = "待确认";
+  } else if (!controllerStatusFresh(rosControl)) {
     vlaTone = "fail";
-    vlaSummary = "Controller Manager 离线";
+    vlaSummary = controllerStatusLabel(rosControl);
     vlaFailure = rosControl.message || "无法查询控制器，无法判断 VLA 状态";
   } else if (vlaActive) {
     if (fwTrack) {
@@ -821,7 +823,7 @@ export function buildStatusCards(input: {
   const vlaRows: StatusRow[] = [
     {
       label: "控制器",
-      value: vlaActive ? "active" : rosControl?.available ? "inactive" : "—",
+      value: vlaActive ? "active" : controllerStatusFresh(rosControl) ? "inactive" : controlStopped ? "inactive" : "待确认",
       tone: vlaActive ? "ok" : "idle",
     },
     { label: "名称", value: VLA_POSITION_CONTROLLER },

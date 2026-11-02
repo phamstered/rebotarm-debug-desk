@@ -7,6 +7,7 @@
 #include "easy_debug_bridge/gripper_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
 #include "easy_debug_bridge/controller_health.hpp"
+#include "easy_debug_bridge/controller_registry_core.hpp"
 
 #include "easy_debug_bridge/motion_log.hpp"
 #include <cassert>
@@ -17,6 +18,59 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    using namespace std::chrono_literals;
+    ControllerRegistryCore registry;
+    ControllerRequestBudget budget;
+    for (uint64_t owner = 1; owner <= 8; ++owner) {
+      for (int i = 0; i < 8; ++i) assert(budget.reserve(owner));
+      assert(!budget.reserve(owner));
+    }
+    assert(budget.count() == 64 && !budget.reserve(9));
+    // Dequeuing for slow native sends changes no budget; only send completion
+    // or cancellation of queued work releases capacity.
+    assert(!budget.reserve(1));
+    budget.release(1); assert(budget.count() == 63 && budget.reserve(9));
+    assert(!budget.reserve(1));
+    budget.release(9); assert(budget.reserve(1));
+    const auto zero = ControllerHealthPoll::Time{};
+    assert(!registry.snapshot(zero).fresh && registry.snapshot(zero).query_state == "waiting");
+    const auto first = registry.start(zero);
+    const auto barrier = registry.snapshot(zero).started_query + 1; // Force arrives during query 1.
+    assert(registry.snapshot(zero).query_pending && registry.snapshot(zero).query_state == "pending");
+    registry.success(zero + 100ms, 1000000, {{"arm", "JTC", "active", {"joint1/position"}}});
+    assert(registry.snapshot(zero + 100ms).fresh && registry.snapshot(zero + 100ms).completed_query < barrier);
+    assert(!registry.poll.due(zero + 500ms));
+    registry.poll.expedite_success(zero + 500ms);
+    assert(registry.poll.due(zero + 500ms));
+    registry.start(zero + 500ms);
+    registry.success(zero + 600ms, 1000500, {}); // Empty successful result is still a fresh snapshot.
+    auto empty = registry.snapshot(zero + 600ms);
+    assert(empty.fresh && empty.has_snapshot && empty.controllers.empty() && empty.sequence == 2 && empty.completed_query == barrier);
+    assert(!registry.snapshot(zero + 3700ms).fresh && registry.snapshot(zero + 3700ms).query_state == "stale");
+    registry.poll.expedite_success(zero + 1600ms);
+    const auto second = registry.start(zero + 1600ms);
+    auto expired = registry.snapshot(zero + 3600ms); // Timer has not run yet; old success remains within TTL.
+    assert(!expired.fresh && expired.query_state == "timeout" && expired.has_snapshot && expired.sequence == 2);
+    registry.fail(zero + 3600ms, "timeout", "timeout");
+    assert(!registry.matches(first) && !registry.matches(second));
+    assert(!registry.snapshot(zero + 3600ms).fresh && registry.snapshot(zero + 3600ms).retry_after_ms == 1000);
+    registry.poll.expedite_success(zero + 3600ms); // A force request never bypasses failure backoff.
+    assert(!registry.poll.due(zero + 3600ms));
+    registry.start(zero + 4600ms);
+    registry.success(zero + 4700ms, 1004600, {{"arm", "JTC", "inactive", {}}});
+    const auto inactive = registry.snapshot(zero + 4700ms);
+    assert(inactive.fresh && inactive.controllers.front().state == "inactive" && inactive.sequence == 3);
+    registry.fail(zero + 4800ms, "unavailable", "service lost");
+    const auto failed = registry.snapshot(zero + 4800ms);
+    assert(!failed.fresh && failed.has_snapshot && failed.controllers.front().state == "inactive" && failed.sequence == 3);
+    const auto json = controller_registry_json(failed, "test");
+    assert(json.find("\"available\":false") != std::string::npos && json.find("\"type_name\":\"JTC\"") != std::string::npos);
+    ControllerRegistryCore unsupported; unsupported.cache.supported = false;
+    assert(unsupported.snapshot(zero).query_state == "unsupported");
+    assert(controller_registry_json(unsupported.snapshot(zero), "test").find("snapshot_age_ms") == std::string::npos);
+  }
   {
     using namespace easy_debug_bridge;
     GroupHoldRecovery recovery;

@@ -1,5 +1,6 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <boost/asio.hpp>
+#include "easy_debug_bridge/controller_registry.hpp"
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/property_tree/json_parser.hpp>
@@ -427,7 +428,8 @@ class BridgeNode : public rclcpp::Node {
           if (firmware_clock_.observe(message->data, std::chrono::steady_clock::now()))
             clock_monitor_.new_epoch();
         }, safety_options);
-    position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_);
+    controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
+    position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_);
     rgbd_receiver_ = std::thread([this] {
       while (rclcpp::ok() && !rgbd_receiver_stop_.load()) {
         rgbd_receiver_executor_->spin_some(std::chrono::milliseconds(5));
@@ -490,6 +492,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void remove_session(uint64_t client) {
+    controller_registry_->disconnected(client);
     position_motion_->disconnected(client);
     {
       std::lock_guard<std::mutex> lock(subscription_mutex_);
@@ -537,7 +540,17 @@ class BridgeNode : public rclcpp::Node {
       if (op == "hello") {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
-                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true}");
+                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
+                     (controller_registry_->supported() ? "true}" : "false}"));
+      } else if (op == "controllers_info") {
+        const std::weak_ptr<WebSocketSession> weak = session;
+        if (const auto field = request.get_child_optional("refresh")) {
+          if (!field->empty() || (field->data() != "true" && field->data() != "false"))
+            throw std::runtime_error("controllers_info refresh 必须为 boolean");
+        }
+        controller_registry_->request(session->id(), request_id, request.get<bool>("refresh", false), [weak](const std::string &reply) {
+          if (const auto target = weak.lock()) target->send(reply);
+        });
       } else if (op == "clock_sync_info") {
         send_clock_sync_info(session, request_id);
       } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel" ||
@@ -1852,6 +1865,7 @@ class BridgeNode : public rclcpp::Node {
     return publisher;
   }
 
+  std::shared_ptr<easy_debug_bridge::ControllerRegistry> controller_registry_;
   std::unique_ptr<easy_debug_bridge::PositionMotion> position_motion_;
   int port_;
   std::string command_topic_;
