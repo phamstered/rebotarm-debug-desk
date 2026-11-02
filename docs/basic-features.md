@@ -1,12 +1,12 @@
 # Rebotarm Debug Desk 基本功能与测试覆盖
 
-更新日期：2026-10-16
+更新日期：2026-11-02
 
 产品名：**Rebotarm Debug Desk** · 仓库：[`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)。npm 包名为 `rebotarm-debug-desk`；Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`），文档不在此处静默改代码侧显示名。
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
-面向操作的模块说明与流程图见 [功能概览](./features)；本文保留测试覆盖矩阵与更细的行为边界。
+面向操作的模块说明与流程图见 [功能概览](./features)。姿态库的保存、锁定 HOME 与 MoveIt 执行见 [姿态库与 MoveIt2](./positions)；只读抖动采集见 [运动诊断](./motion-diagnostics)。本文保留测试覆盖矩阵与更细的行为边界。左腕 RGBD、姿态执行和诊断脚本均已按当前代码计入下文，不再标为草案。
 
 macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 `Robot Console.app` 安装到 `/Applications`，更新失败时恢复原安装。
