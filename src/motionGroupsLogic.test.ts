@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   emptyMotionGroupStore,
+  groupDeviceReason,
   groupTimeline,
   parseMotionGroupStore,
   serializeMotionGroupStore,
@@ -98,4 +99,21 @@ it("validates timing, finite joints, gripper, IDs and aggregate boundaries", () 
     expect(validateMotionGroup(g)).not.toBe("");
   }
   expect(validateMotionGroup(group())).toBe("");
+});
+
+it("validates and round-trips Pose tracks and camera Action dependencies", () => {
+  const g = group();
+  g.tracks = [{ id: "arm", kind: "arm", name: "机械臂", deviceId: "current" }, { id: "camera", kind: "camera", name: "相机", deviceId: "current" }];
+  g.actions = [{ id: "photo", type: "camera_capture", name: "拍照", trackId: "camera", afterStepId: "s", topic: "/test/image", timeout: 5 }];
+  expect(validateMotionGroup(g)).toBe(""); expect(groupDeviceReason(g)).toBe("");
+  const store = { schemaVersion: 1 as const, profiles: { p: { groups: [g] } } };
+  expect(parseMotionGroupStore(serializeMotionGroupStore(store))).toEqual(store);
+  expect(groupTimeline(g)[1].start).toBe(7);
+  for (const changes of [{ topic: "/bad//path" }, { topic: "/a/../image" }, { timeout: 0 }, { timeout: Infinity }, { afterStepId: "deleted" }, { trackId: "arm" }, { type: "shell" }, { id: "s2" }]) {
+    const bad = structuredClone(g); Object.assign(bad.actions![0], changes); expect(validateMotionGroup(bad)).not.toBe("");
+  }
+  const remote = structuredClone(g); remote.tracks![1].deviceId = "other-robot";
+  expect(groupDeviceReason(remote)).toContain("当前 Bridge");
+  g.tracks.push({ id: "arm2", name: "机械臂 B", kind: "arm", deviceId: "robot-b" });
+  expect(validateMotionGroup(g)).toBe(""); expect(groupDeviceReason(g)).toContain("多臂");
 });

@@ -6,10 +6,10 @@ import type { MotionGroup } from "./motionGroupsLogic";
 const group = (): MotionGroup => ({ id: "g1", name: "取放", note: "", preparationDuration: 2,
   steps: [0, 1, 2].map((n) => ({ id: `s${n}`, positionId: `p${n}`, positionName: `姿态${n}`, positionUpdatedAt: 0,
     positions: [0, -.2, -.3, 0, 0, n * .1], duration: n === 0 ? 0 : n === 1 ? 5 : 3, hold: n === 1 ? 2 : 0 })), createdAt: 0, updatedAt: 0 });
-function setup(supported = true) {
+function setup(supported = true, captureSupported = false) {
   let listener = (_m: BridgeEnvelope) => {};
   const request = vi.fn(async (m: BridgeEnvelope): Promise<BridgeEnvelope> => m.op === "position_motion_info"
-    ? { op: m.op, available: true, busy: false, motion_group_supported: supported, motion_duration_supported: true }
+    ? { op: m.op, available: true, busy: false, motion_group_supported: supported, motion_capture_supported: captureSupported, motion_duration_supported: true }
     : { op: `${m.op}_ack`, accepted: true, command_id: m.command_id });
   const bridge = { request, onMessage: vi.fn((fn: typeof listener) => { listener = fn; return () => {}; }) };
   const hook = renderHook(({ profile, connected, block }) => usePositionMotion(bridge, connected, profile, block),
@@ -134,4 +134,30 @@ describe("Bridge-owned motion groups", () => {
     h.emit({ op: "position_motion", command_id: id, motion_phase: "executing", group_id: "g1" });
     expect(h.result.current.state.phase).toBe("idle"); expect(h.result.current.state.group).toBeUndefined(); expect(h.result.current.armed).toBe(false);
   });
+  it("requires capture capability and submits Actions in the Bridge-owned group snapshot", async () => {
+    const g = group(); g.tracks = [{ id: "arm", kind: "arm", name: "机械臂", deviceId: "current" }, { id: "camera", kind: "camera", name: "相机", deviceId: "current" }];
+    g.actions = [{ id: "photo", type: "camera_capture", name: "采集", trackId: "camera", afterStepId: "s0", topic: "/test/image", timeout: 5 }];
+    const old = setup(); await waitFor(() => expect(old.result.current.groupReason).toBe("")); act(() => old.result.current.setArmed(true));
+    await act(async () => old.result.current.executeGroup!(g));
+    expect(old.result.current.state.message).toContain("不支持拍照");
+    expect(old.request.mock.calls.some(([m]) => m.op === "position_group_start")).toBe(false); old.unmount();
+    const h = setup(true, true); await waitFor(() => expect(h.result.current.captureSupported).toBe(true)); act(() => h.result.current.setArmed(true));
+    await act(async () => h.result.current.executeGroup!(g));
+    const start = h.request.mock.calls.find(([m]) => m.op === "position_group_start")![0];
+    expect(start.steps?.[0].captures).toEqual([{ id: "photo", label: "采集", type: "camera_capture", topic: "/test/image", timeout_s: 5 }]);
+    g.actions[0].topic = "/changed"; expect(start.steps?.[0].captures?.[0].topic).toBe("/test/image");
+    h.emit({ op: "position_motion", command_id: start.command_id, motion_phase: "waiting", group_id: g.id, group_count: 3, group_index: 0, group_phase: "holding", group_elapsed_s: 1,
+      capture_result: { id: "photo", name: "采集", path: "/captures/image.png", image_stamp: 1, joint_stamp: 1, thumbnail: "AQID" } });
+    expect(h.result.current.state.capture?.path).toBe("/captures/image.png"); expect(h.result.current.busy).toBe(true);
+    h.rerender({ profile: "other", connected: false, block: "" }); expect(h.result.current.state.capture).toBeUndefined();
+  });
+
+  it("omits capture fields for empty Action lists to retain old Bridge compatibility", async () => {
+    const h = setup(); await waitFor(() => expect(h.result.current.groupReason).toBe(""));
+    act(() => h.result.current.setArmed(true)); const g = group(); g.actions = [];
+    await act(async () => h.result.current.executeGroup!(g));
+    const start = h.request.mock.calls.find(([m]) => m.op === "position_group_start")![0];
+    expect(JSON.parse(JSON.stringify(start)).steps.every((s: { captures?: unknown }) => !("captures" in s))).toBe(true);
+  });
+
 });

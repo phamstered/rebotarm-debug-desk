@@ -163,3 +163,10 @@ model, controller, heartbeat and stopping gates continue between segments.
 The editor's nominal timeline sums motion and hold durations; Bridge elapsed time
 also includes per-segment planning and settling after preparation, and excludes pauses.
 Neither a browser timer nor navigation changes dispatch another motion segment.
+
+
+## Pose / Action 工作台采集路径
+
+动作组编辑数据按连接 Profile 保存在 Mac，并继续由 Tauri 验证和原子写入。Pose 快照、设备轨道和依赖 Action 由前端独立逻辑处理；目前单臂执行请求将依赖相机 Action 嵌入对应 Pose 步骤。多机械臂轨道用于后续编排扩展，当前不具备多设备联合执行能力。
+
+Jetson `PositionMotion` 仍拥有整组调度与全局运动锁。Pose 停稳/停留后创建相机订阅，检查源时间与实际关节反馈；独立线程编码 PNG、写入图像和反馈元数据后原子提交目录，运动回调只轮询结果，不执行编码/磁盘 I/O。下一段需确认保存成功并保持所有现有运动门禁。结果只传输路径与 120 像素 PNG 缩略图；原图留在固定的 Jetson 用户采集目录，不经桌面 Base64 大消息，也不运行任意远端命令。取消及断线令牌使迟到的保存结果无法驱动下一段。

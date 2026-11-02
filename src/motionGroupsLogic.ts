@@ -1,5 +1,67 @@
-import type { CustomPosition } from "./positionLogic";
+import {
+  ARM_JOINT_NAMES,
+  GRIPPER_JOINT_NAME,
+  type CustomPosition,
+} from "./positionLogic";
+export function motionPoseThumbnailProps(
+  positions?: number[],
+  gripperPosition?: number,
+) {
+  return {
+    jointNames: [
+      ...ARM_JOINT_NAMES,
+      ...(gripperPosition === undefined ? [] : [GRIPPER_JOINT_NAME]),
+    ],
+    positions: positions
+      ? [
+          ...positions,
+          ...(gripperPosition === undefined ? [] : [gripperPosition]),
+        ]
+      : undefined,
+  };
+}
+export type MotionTrack = {
+  id: string;
+  name: string;
+  kind: "arm" | "camera";
+  deviceId: string;
+};
+export type MotionCaptureAction = {
+  id: string;
+  type: "camera_capture";
+  name: string;
+  trackId: string;
+  afterStepId: string;
+  topic: string;
+  timeout: number;
+};
+export const DEFAULT_ARM_TRACK: MotionTrack = {
+  id: "arm",
+  name: "机械臂",
+  kind: "arm",
+  deviceId: "current",
+};
+export const groupTracks = (group: MotionGroup): MotionTrack[] =>
+  group.tracks ?? [DEFAULT_ARM_TRACK];
+export const stepActions = (group: MotionGroup, stepId: string) =>
+  (group.actions ?? []).filter((a) => a.afterStepId === stepId);
+export function groupDeviceReason(group: MotionGroup): string {
+  if (
+    groupTracks(group).some(
+      (t) =>
+        t.kind === "camera" &&
+        t.deviceId !== "current" &&
+        group.actions?.some((a) => a.trackId === t.id),
+    )
+  )
+    return "相机轨道必须绑定当前 Bridge 连接";
+  const arms = groupTracks(group).filter((t) => t.kind === "arm");
+  return arms.length !== 1 || arms[0].deviceId !== "current"
+    ? "当前 Bridge 仅支持当前连接的单机械臂执行；多臂轨道可编排，协同执行尚未就绪"
+    : "";
+}
 export type MotionGroupStep = {
+  trackId?: string;
   id: string;
   positionId: string;
   positionName: string;
@@ -15,6 +77,8 @@ export type MotionGroup = {
   note: string;
   preparationDuration: number;
   steps: MotionGroupStep[];
+  tracks?: MotionTrack[];
+  actions?: MotionCaptureAction[];
   createdAt: number;
   updatedAt: number;
 };
@@ -53,6 +117,8 @@ export function validateMotionGroup(value: unknown): string {
       "steps",
       "createdAt",
       "updatedAt",
+      "tracks",
+      "actions",
     ])
   )
     return "动作组结构无效";
@@ -83,6 +149,25 @@ export function validateMotionGroup(value: unknown): string {
     value.steps.length > MOTION_GROUP_LIMITS.steps
   )
     return "动作组需要 1–100 个关键帧";
+  const trackIds = new Map<string, string>();
+  const tracks =
+    value.tracks === undefined ? [DEFAULT_ARM_TRACK] : value.tracks;
+  if (!Array.isArray(tracks) || !tracks.length || tracks.length > 16)
+    return "轨道数量须在 1–16";
+  for (const t of tracks) {
+    if (
+      !object(t) ||
+      !fields(t, ["id", "name", "kind", "deviceId"]) ||
+      !text(t.id, 128) ||
+      !text(t.name, 512) ||
+      !text(t.deviceId, 512) ||
+      !["arm", "camera"].includes(String(t.kind)) ||
+      trackIds.has(t.id)
+    )
+      return "设备轨道无效或重复";
+    trackIds.set(t.id, String(t.kind));
+  }
+  if (![...trackIds.values()].includes("arm")) return "至少需要一个机械臂轨道";
   const ids = new Set<string>();
   let total = value.preparationDuration;
   for (const [index, s] of value.steps.entries()) {
@@ -97,6 +182,7 @@ export function validateMotionGroup(value: unknown): string {
         "gripperPosition",
         "duration",
         "hold",
+        "trackId",
       ]) ||
       !text(s.id, 128) ||
       !text(s.positionId, 128) ||
@@ -105,6 +191,8 @@ export function validateMotionGroup(value: unknown): string {
       s.positionUpdatedAt < 0
     )
       return "关键帧点位快照无效";
+    if (trackIds.get(String(s.trackId ?? DEFAULT_ARM_TRACK.id)) !== "arm")
+      return "Pose 必须归属有效机械臂轨道";
     if (ids.has(s.id)) return "关键帧 ID 重复";
     ids.add(s.id);
     if (
@@ -127,6 +215,43 @@ export function validateMotionGroup(value: unknown): string {
     total += s.duration + s.hold;
     if (!Number.isFinite(total) || total > 604800)
       return "动作组总时长不能超过 7 天";
+  }
+  if (value.actions !== undefined) {
+    if (!Array.isArray(value.actions) || value.actions.length > 100)
+      return "Action 数量不能超过 100";
+    for (const a of value.actions) {
+      if (
+        !object(a) ||
+        !fields(a, [
+          "id",
+          "type",
+          "name",
+          "trackId",
+          "afterStepId",
+          "topic",
+          "timeout",
+        ]) ||
+        !text(a.id, 128) ||
+        !/^[A-Za-z0-9_-]+$/.test(a.id) ||
+        !text(a.name, 512) ||
+        a.type !== "camera_capture" ||
+        ids.has(a.id) ||
+        !text(a.afterStepId, 128) ||
+        !value.steps.some((s) => (s as MotionGroupStep).id === a.afterStepId) ||
+        trackIds.get(String(a.trackId)) !== "camera" ||
+        !text(a.topic, 256) ||
+        !/^\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*[A-Za-z_][A-Za-z0-9_]*$/.test(
+          a.topic,
+        ) ||
+        !finite(a.timeout) ||
+        a.timeout < 0.1 ||
+        a.timeout > 60
+      )
+        return "拍照 Action 类型、设备、依赖、Topic 或超时无效";
+      ids.add(a.id);
+      total += a.timeout;
+    }
+    if (total > 604800) return "动作组总时长不能超过 7 天";
   }
   return "";
 }
@@ -174,9 +299,7 @@ export function serializeMotionGroupStore(store: MotionGroupStore): string {
   parseMotionGroupStore(text);
   return text;
 }
-export function groupTimeline(
-  group: MotionGroup,
-): {
+export function groupTimeline(group: MotionGroup): {
   step: MotionGroupStep;
   start: number;
   arrival: number;
@@ -188,7 +311,10 @@ export function groupTimeline(
   return group.steps.map((step, i) => {
     const start = end,
       arrival = i === 0 ? 0 : start + step.duration;
-    end = arrival + step.hold;
+    end =
+      arrival +
+      step.hold +
+      stepActions(group, step.id).reduce((n, a) => n + a.timeout, 0);
     return { step, start, arrival, departure: end };
   });
 }

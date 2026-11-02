@@ -1,8 +1,14 @@
-import type { MotionGroup, MotionGroupStep } from "./motionGroupsLogic";
+import {
+  stepActions,
+  type MotionGroup,
+  type MotionGroupStep,
+} from "./motionGroupsLogic";
 export const GROUP_HISTORY_LIMIT = 50;
 export function cloneMotionGroup(group: MotionGroup): MotionGroup {
   return {
     ...group,
+    ...(group.tracks ? { tracks: group.tracks.map((t) => ({ ...t })) } : {}),
+    ...(group.actions ? { actions: group.actions.map((a) => ({ ...a })) } : {}),
     steps: group.steps.map((step) => ({
       ...step,
       positions: [...step.positions],
@@ -18,8 +24,15 @@ export function editorTimeline(group: MotionGroup) {
       (index > 0 && Number.isFinite(step.duration)
         ? Math.max(0, step.duration)
         : 0);
-    end = arrival + (Number.isFinite(step.hold) ? Math.max(0, step.hold) : 0);
-    return { step, start, arrival, departure: end };
+    const poseDeparture =
+      arrival + (Number.isFinite(step.hold) ? Math.max(0, step.hold) : 0);
+    const actions = stepActions(group, step.id).map((action) => {
+      const start = (end = Math.max(end, poseDeparture));
+      end += Number.isFinite(action.timeout) ? Math.max(0, action.timeout) : 0;
+      return { action, start, end };
+    });
+    end = Math.max(end, poseDeparture);
+    return { step, start, arrival, poseDeparture, departure: end, actions };
   });
 }
 export function reorderGroupStep(
@@ -55,9 +68,12 @@ export function snappedArrival(
 export function previewGroupPose(
   group: MotionGroup,
   time: number,
+  trackId?: string,
 ): { positions: number[]; gripperPosition?: number; index: number } | null {
   if (!group.steps.length || !Number.isFinite(time)) return null;
-  const rows = editorTimeline(group);
+  const rows = editorTimeline(group).filter(
+    (row) => !trackId || (row.step.trackId ?? "arm") === trackId,
+  );
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index],
       previous = rows[Math.max(0, index - 1)].step;
@@ -83,7 +99,7 @@ export function previewGroupPose(
     return {
       positions,
       ...(gripperPosition === undefined ? {} : { gripperPosition }),
-      index,
+      index: group.steps.indexOf(row.step),
     };
   }
   return null;

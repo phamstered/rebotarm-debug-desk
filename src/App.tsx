@@ -1564,12 +1564,13 @@ export default function App() {
     start: () => { void runStatusRestart("moveit-start", "moveit"); },
   };
 
-  const renderGroupEditor = (offline = false) => <MotionGroupsPage profileKey={positionProfileKey} groups={motionGroups.groups}
+  const renderGroupEditor = (offline = false) => <MotionGroupsPage active={offline || appPage === "motion" && motionTab === "groups" && windowVisible} profileKey={positionProfileKey} groups={motionGroups.groups}
     positions={positionStore.profiles[positionProfileKey]?.positions ?? []}
     ready={motionGroups.ready} saving={motionGroups.saving} error={motionGroups.error}
     urdfXml={urdf || previewUrdf} homePositions={positionMotion.homePositions}
     onSave={motionGroups.saveGroup} onDelete={motionGroups.deleteGroup} motion={positionMotion}
-    onBack={offline ? () => setManageMotionGroups(false) : undefined} />;
+    onBack={offline ? () => setManageMotionGroups(false) : undefined}
+    onOpenPoseLibrary={() => { if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
   if (stage !== "connected" && manageMotionGroups) {
     return <main className="connect-shell"><section className="offline-motion-groups">
@@ -1637,7 +1638,7 @@ export default function App() {
                 </button>
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
-              <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理位置</button>
+              <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理姿态库</button>
               <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
             </div>
           </div>

@@ -2,6 +2,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
 #include <optional>
+#include "easy_debug_bridge/capture_core.hpp"
 #include <set>
 
 namespace easy_debug_bridge {
@@ -10,6 +11,7 @@ struct PositionGroupStep {
   std::vector<double> positions;
   std::optional<double> gripper_position;
   double motion_duration_s{}, hold_duration_s{};
+  std::vector<CaptureSpec> captures;
 };
 struct PositionGroupSpec {
   std::string id, label;
@@ -25,6 +27,7 @@ inline void validate_position_group(const PositionGroupSpec &spec, const Positio
   if (spec.steps.empty() || spec.steps.size() > 100) throw std::runtime_error("动作组须包含 1–100 个步骤");
   double total = spec.preparation_duration_s;
   std::set<std::string> ids;
+  size_t capture_count = 0;
   for (size_t i = 0; i < spec.steps.size(); ++i) {
     const auto &step = spec.steps[i];
     if (step.id.empty() || step.id.size() > 128 || !ids.insert(step.id).second || step.label.empty() || step.label.size() > 512)
@@ -38,6 +41,13 @@ inline void validate_position_group(const PositionGroupSpec &spec, const Positio
       if (step.motion_duration_s != 0) throw std::runtime_error("动作组首项 motion_duration_s 必须为 0");
     } else validate_motion_duration(step.motion_duration_s);
     if (!std::isfinite(step.hold_duration_s) || step.hold_duration_s < 0) throw std::runtime_error("动作组停留时长无效");
+    capture_count += step.captures.size();
+    if (capture_count > 100) throw std::runtime_error("拍照 Action 过多");
+    for (const auto &capture : step.captures) {
+      validate_capture(capture);
+      if (!ids.insert(capture.id).second) throw std::runtime_error("Action ID 重复");
+      total += capture.timeout_s;
+    }
     total += step.motion_duration_s + step.hold_duration_s;
     if (!std::isfinite(total) || total > 7 * 86400) throw std::runtime_error("动作组总时长超过 7 天");
   }

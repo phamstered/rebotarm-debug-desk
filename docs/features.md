@@ -132,16 +132,16 @@ Bridge 可解析其 ROS 环境中已安装类型支持的 Topic 消息，包含 
 
 ## Motion 工作区
 
-Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View / 位置 / 动作组**，左侧 Controllers
+Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View / 姿态库 / 动作组**，左侧 Controllers
 负责单个控制器管理，底部为两者共享的规划执行日志。顶部可查看机械臂/夹爪控制器、MoveIt、
 关节反馈和时钟就绪状态。缺少反馈仍可进入页面查看原因；实际执行保留现有全部安全门。
 
-- Robot View 用于 TCP、关节和夹爪预览，点击确认后经 MoveIt 执行；位置 Tab 管理和执行保存点位。
+- Robot View 用于 TCP、关节和夹爪预览，点击确认后经 MoveIt 执行；姿态库 Tab 管理和执行保存点位。
 - Controllers 默认展开，可收起；Activate / Deactivate 需在提示中确认，状态改变或有冲突任务时禁止切换。
 - Status 继续负责 Teleop / Trajectory / VLA 的整栈启动、模式切换、安全停止和解除输出。
 - 运动过程中切到其他页，全局任务条仍显示阶段，可返回 Motion 或取消本会话的运动；切页本身不视为任务完成。
 - Motion Tab 与侧栏展开偏好独立记忆；默认 Robot View 和展开侧栏。导航记忆兼容旧 Topics `dashboard` 标识。
-- RGBD 仅在可见的 Motion → Robot View 且实时显示开启时订阅，切到位置或其他页会释放当前客户端兴趣并清空点云。
+- RGBD 仅在可见的 Motion → Robot View 且实时显示开启时订阅，切到姿态库或其他页会释放当前客户端兴趣并清空点云。
 
 ## Monitor
 

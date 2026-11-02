@@ -451,3 +451,26 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 ```
 
 `reason` 为 `position_drift` 或 `velocity_timeout`；`phase` 为失败时的 `holding` / `paused`。`captured_at_ms` 是 Jetson Unix 毫秒，`feedback_age_ms` 是该反馈的单调时钟年龄；可选的 `stable_for_ms` / `required_stable_ms` 描述恢复期限内有效的连续停稳确认时长。`samples` 沿用 `arrival_errors` 的有限值、关节及单位规则，但 `target` 是进入保持时的实测基准，`position_tolerance` 是实际漂移门槛。快照冻结后随取消和终态事件重放，与后续 `arrival_errors`（本帧名义目标与停止核验反馈）分别展示。持续停稳未满足时，触发快照中的瞬时速度也可能已低于阈值，不能据此断言某轴当时超速。缺失或无效时前端不沿用旧触发快照。
+
+
+## 动作组相机 Action 与编辑轨道
+
+`position_motion_info.motion_capture_supported:true` 广告拍照能力。缺失时桌面仍可编辑/保存，但不得发送含拍照 Action 的动作组。每个 `position_group_start.steps[]` 可附带 `captures`，在该 Pose 停稳且停留结束后按数组顺序采集：
+
+```json
+{"id":"pose-a","label":"标定姿态 01","positions":[0,0,0,0,0,0],"motion_duration_s":0,"hold_duration_s":1,"captures":[{"id":"capture-a","label":"拍照 01","type":"camera_capture","topic":"/camera/color/image_raw","timeout_s":5}]}
+```
+
+Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符，与全组 Pose/Action ID 不重复；类型必须为 `camera_capture`，名称至多 512 字节，Topic 为无空段的绝对 ROS Topic，超时为有限 0.1–60 秒。全组至多 100 个 Pose、100 个 Action，含准备、移动、停留及采集超时预算的总时间不超过 7 天。Bridge 在首次运动前验证全部字段；未知类型/字段、重复 ID 和无效参数明确拒绝。未提供 `captures` 的旧请求保持兼容。
+
+采集期间 `motion_phase:"waiting"`、`group_phase:"holding"`，保留同一 command ID、租约和运动锁。只消费启动采集之后的新图像，图像及反馈源时间对 Jetson 时钟须在 -50..500 ms 内且彼此相差不超过 100 ms；格式和实际停稳/保持核验通过后异步编码。PNG 与反馈元数据先写入同一临时目录，再整体改名提交，已有采集目录拒绝覆盖。返回成功表示保存完成，不等同于手眼标定完成。
+
+组事件可附带最近一次已提交的 `capture_result`，终态及后续状态查询可重放：
+
+```json
+{"id":"capture-a","name":"拍照 01","path":"/home/operator/.local/share/robot-console/captures/<command-id>/capture-a/image.png","image_stamp":1793613261.062,"joint_stamp":1793613261.060,"thumbnail":"<PNG base64>"}
+```
+
+缩略图最大边为 120 像素，仅用于结果预览；源图像保留在 Jetson，原有高频 Image 二进制路径不变。失败/取消不伪造成功结果，也不推进下一段。心跳、暂停、取消及所有既有门禁继续作用于采集阶段。
+
+桌面动作组文件仍为 `motion-groups.v1.json`，兼容扩展 `tracks?:[{id,name,kind:"arm"|"camera",deviceId}]`、`steps[].trackId?`、`actions?:[{id,type:"camera_capture",name,trackId,afterStepId,topic,timeout}]`。省略轨道时使用 `{id:"arm",name:"机械臂",kind:"arm",deviceId:"current"}`。轨道及依赖在 TypeScript/Rust 两侧验证，序列化请求按依赖 Pose 转换为 `captures`；轨道本身不作为多臂执行指令发送。当前多臂/非当前设备执行在客户端拒绝，Bridge 仍只有单机械臂调度能力。

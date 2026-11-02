@@ -609,14 +609,14 @@ describe("App workflow", () => {
     const viewer = await screen.findByTestId("urdf");
     expect(viewer).toBeVisible();
     expect(doubles.send).toHaveBeenCalledWith(expect.objectContaining({ op: "subscribe_rgbd" }));
-    await user.click(screen.getByRole("tab", { name: "位置" }));
+    await user.click(screen.getByRole("tab", { name: "姿态库" }));
     expect(viewer).not.toBeVisible();
     expect(doubles.send).toHaveBeenCalledWith({ op: "unsubscribe_rgbd" });
     await user.click(screen.getByRole("tab", { name: "Robot View" }));
     expect(screen.getByTestId("urdf")).toBe(viewer);
     await user.click(screen.getByRole("button", { name: "Topics" }));
     expect(viewer).not.toBeVisible();
-    expect(screen.queryByRole("tab", { name: "位置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "姿态库" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Motion" }));
     expect(screen.getByTestId("urdf")).toBe(viewer);
     expect(viewer).toBeVisible();
@@ -1321,14 +1321,14 @@ describe("App workflow", () => {
   it("opens saved positions from the connect page and from the center tab", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: "管理位置" }));
+    await user.click(screen.getByRole("button", { name: "管理姿态库" }));
     expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
     expect(screen.getByText("待同步")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "返回连接" }));
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await user.click(await screen.findByRole("button", { name: "Motion" }));
-    await user.click(await screen.findByRole("tab", { name: "位置" }));
-    expect(screen.getByRole("region", { name: "位置" })).toBeVisible();
+    await user.click(await screen.findByRole("tab", { name: "姿态库" }));
+    expect(screen.getByRole("region", { name: "姿态库" })).toBeVisible();
     expect(screen.getByRole("article", { name: "HOME" })).toBeVisible();
   });
 
@@ -1336,7 +1336,7 @@ describe("App workflow", () => {
     const user = userEvent.setup(); render(<App />);
     await user.click(screen.getByRole("button", { name: "管理动作组" }));
     expect(await screen.findByRole("region", { name: "动作组编辑器" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "执行动作组" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "执行前检查" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "返回连接" }));
     expect(screen.getByRole("button", { name: "连接 Jetson" })).toBeVisible();
     expect(doubles.connect).not.toHaveBeenCalled();
@@ -1363,8 +1363,9 @@ describe("App workflow", () => {
       await user.click(screen.getByRole("tab", { name: "动作组" }));
       expect(await screen.findByRole("region", { name: "动作组编辑器" })).toBeVisible();
       await user.click(screen.getByRole("checkbox", { name: /允许机械臂及夹爪运动/ }));
-      const start = screen.getByRole("button", { name: "执行动作组" });
+      const start = screen.getByRole("button", { name: "执行前检查" });
       await waitFor(() => expect(start).toBeEnabled()); await user.click(start);
+      await user.click(screen.getByRole("button", { name: "确认并执行" }));
       const request = doubles.request.mock.calls.find(([message]) => message.op === "position_group_start")![0];
       expect(request).toMatchObject({ group_id: "group-1", preparation_duration_s: 2, steps: [{ motion_duration_s: 0 }, { motion_duration_s: 5 }] });
       act(() => doubles.listener?.({ op: "position_motion", command_id: request.command_id, label: group.name, motion_phase: "waiting", group_id: group.id, group_index: 1, group_count: 2, group_phase: "holding", group_elapsed_s: 5.5 }));
@@ -1393,9 +1394,9 @@ describe("App workflow", () => {
       const user = userEvent.setup(); render(<App />);
       await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await user.click(await screen.findByRole("button", { name: "Motion" }));
-      await screen.findByRole("tab", { name: "位置" });
+      await screen.findByRole("tab", { name: "姿态库" });
       act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"], position: [0, -.2, -.3, 0, 0, 0] } }));
-      await user.click(screen.getByRole("tab", { name: "位置" }));
+      await user.click(screen.getByRole("tab", { name: "姿态库" }));
       expect(screen.getByRole("button", { name: "保存当前姿态" })).toBeEnabled();
       await user.click(screen.getByRole("button", { name: "保存当前姿态" }));
       await user.click(screen.getByRole("button", { name: "保存点位" }));
