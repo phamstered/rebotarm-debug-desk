@@ -141,6 +141,25 @@ export type ClockSyncInfo = {
   firmware?: { supported: boolean; synchronized?: boolean; sync_age_ms?: number; failure_count?: number; last_sync_duration_ms?: number };
 };
 
+export type MotionHoldFailure = {
+  reason: "position_drift" | "velocity_timeout";
+  phase: "holding" | "paused";
+  capturedAtMs: number;
+  feedbackAgeMs: number;
+  samples: MotionArrivalError[];
+  stableForMs?: number;
+  requiredStableMs?: number;
+};
+export type MotionHoldFailureEnvelope = {
+  reason: MotionHoldFailure["reason"];
+  phase: MotionHoldFailure["phase"];
+  captured_at_ms: number;
+  feedback_age_ms: number;
+  samples: MotionArrivalError[];
+  stable_for_ms?: number;
+  required_stable_ms?: number;
+};
+
 export type MotionArrivalError = {
   joint_name: string;
   target: number;
@@ -228,6 +247,7 @@ export type BridgeEnvelope = {
   group_elapsed_s?: number;
   group_step_label?: string;
   arrival_errors?: MotionArrivalError[];
+  hold_failure?: MotionHoldFailureEnvelope;
   position_error_check_enforced?: boolean;
   joint_targets?: Record<string, number>;
   motion_log_session?: string;
