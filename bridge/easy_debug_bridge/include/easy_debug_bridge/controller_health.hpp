@@ -20,6 +20,8 @@ class ControllerHealthPoll {
   }
   bool matches(uint64_t generation) const { return pending_ && generation == generation_; }
   double latency(Time now) const { return std::chrono::duration<double>(now - requested_).count(); }
+  double retry_after_ms(Time now) const { return std::max(0., std::chrono::duration<double, std::milli>(next_ - now).count()); }
+  void expedite_success(Time now) { if (!pending_ && failures_ == 0) next_ = std::min(next_, now); }
   uint64_t start(Time now) {
     if (!due(now)) throw std::logic_error("Controller health query already pending or in backoff");
     pending_ = true;

@@ -11,7 +11,7 @@
 #include <rclcpp/parameter_client.hpp>
 #include <moveit_msgs/action/move_group.hpp>
 #include <moveit_msgs/action/execute_trajectory.hpp>
-#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include "easy_debug_bridge/controller_registry.hpp"
 #include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <microros_stm32h723_bridge/msg/hardware_status.hpp>
@@ -32,7 +32,6 @@ using Group = moveit_msgs::action::MoveGroup;
 using Handle = rclcpp_action::ClientGoalHandle<Group>;
 using Execute = moveit_msgs::action::ExecuteTrajectory;
 using ExecuteHandle = rclcpp_action::ClientGoalHandle<Execute>;
-using Controllers = controller_manager_msgs::srv::ListControllers;
 using Joints = sensor_msgs::msg::JointState;
 using State = control_msgs::msg::JointTrajectoryControllerState;
 using Hardware = microros_stm32h723_bridge::msg::HardwareStatus;
@@ -114,7 +113,7 @@ struct PositionMotion::Impl {
   rclcpp_action::Client<Execute>::SharedPtr execute_action;
   double start_tolerance{.01};
   std::vector<double> velocity_limits, acceleration_limits;
-  rclcpp::Client<Controllers>::SharedPtr controllers;
+  std::shared_ptr<ControllerRegistry> controller_registry;
   std::shared_ptr<rclcpp::AsyncParametersClient> parameters;
   rclcpp::Subscription<Joints>::SharedPtr joints_sub;
   rclcpp::Subscription<State>::SharedPtr state_sub, gripper_state_sub;
@@ -131,8 +130,7 @@ struct PositionMotion::Impl {
   double gripper_velocity_limit{}, gripper_acceleration_limit{};
   Clock::time_point joints_at{}, state_at{}, hardware_at{}, controller_at{}, model_at{}, model_request_at{};
   bool controller_active{false}, model_pending{false}, controller_slow{false};
-  ControllerHealthPoll controller_poll;
-  int64_t controller_request_id{0}; uint64_t model_generation{0};
+  uint64_t controller_sequence{0}, model_generation{0};
   std::string model_error{"等待 MoveIt 模型"}, model_signature, model_urdf;
   std::string controller_error{"arm_trajectory_controller 未激活或状态已过期"};
   MotionLog logs;
@@ -143,13 +141,13 @@ struct PositionMotion::Impl {
   std::shared_ptr<Motion> current;
   std::deque<std::pair<std::string, uint64_t>> seen;
 
-  Impl(rclcpp::Node &n, const std::string &joint_topic, const std::string &status_topic) : node(n) {
-    callback_group = node.create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  Impl(rclcpp::Node &n, const std::string &joint_topic, const std::string &status_topic, std::shared_ptr<ControllerRegistry> registry)
+      : node(n), controller_registry(std::move(registry)) {
+    callback_group = controller_registry->callback_group();
     action = rclcpp_action::create_client<Group>(node.get_node_base_interface(), node.get_node_graph_interface(),
         node.get_node_logging_interface(), node.get_node_waitables_interface(), "/move_action", callback_group);
     execute_action = rclcpp_action::create_client<Execute>(node.get_node_base_interface(), node.get_node_graph_interface(),
         node.get_node_logging_interface(), node.get_node_waitables_interface(), "/execute_trajectory", callback_group);
-    controllers = node.create_client<Controllers>("/controller_manager/list_controllers", rmw_qos_profile_services_default, callback_group);
     parameters = std::make_shared<rclcpp::AsyncParametersClient>(&node, "/move_group", rmw_qos_profile_parameters, callback_group);
     const auto qos = rclcpp::QoS(10).best_effort();
     rclcpp::SubscriptionOptions options; options.callback_group = callback_group;
@@ -208,69 +206,40 @@ struct PositionMotion::Impl {
   void error(const Request &r, const std::string &message) {
     r.send("{\"op\":\"error\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) + ",\"message\":" + quote(message) + "}");
   }
-  void controller_failed(const std::string &reason) {
-    controller_poll.failed(Clock::now());
-    controller_active = false; gripper_controller_active = false; controller_at = {};
-    controller_error = reason;
-  }
   void poll_controllers() {
-    if (controller_poll.pending()) {
-      if (!controller_poll.expired(Clock::now()) && controllers->service_is_ready()) return;
-      controllers->remove_pending_request(controller_request_id);
-      controller_failed(controllers->service_is_ready()
-          ? "arm_trajectory_controller 状态查询超时（ListControllers ≥2s）"
-          : "ControllerManager ListControllers 服务不可用");
-      return; // Never issue an immediate replacement for a failed request.
-    }
-    if (!controller_poll.due(Clock::now())) return;
-    if (!controllers->service_is_ready()) {
-      controller_failed("ControllerManager ListControllers 服务不可用");
+    const auto snapshot = controller_registry->snapshot();
+    if (!snapshot.fresh) {
+      controller_active = false; gripper_controller_active = false; controller_at = {};
+      controller_error = snapshot.message.empty() ? "等待 ControllerManager 有效快照" : snapshot.message;
       return;
     }
-    const auto generation = controller_poll.start(Clock::now());
-    try {
-      controller_request_id = controllers->async_send_request(std::make_shared<Controllers::Request>(), [this, generation](rclcpp::Client<Controllers>::SharedFuture future) {
-        if (!controller_poll.matches(generation)) return;
-        // Enforce the same deadline even if the response callback runs before the timer.
-        if (controller_poll.expired(Clock::now())) {
-          controller_failed("arm_trajectory_controller 状态查询超时（ListControllers ≥2s）");
-          return;
-        }
-        const auto latency = controller_poll.latency(Clock::now());
-        controller_active = false; gripper_controller_active = false;
-        try {
-          controller_error = "arm_trajectory_controller 未激活、缺失或类型不匹配";
-          bool gripper_conflict = false;
-          size_t gripper_count = 0;
-          for (const auto &c : future.get()->controller) {
-            if (c.name == gripper_controller && c.state == "active" && c.type == "joint_trajectory_controller/JointTrajectoryController") {
-              ++gripper_count;
-              gripper_controller_active = same_motion_joints(c.claimed_interfaces,
-                  {gripper_motion_joint() + "/position", gripper_motion_joint() + "/velocity"});
-            } else if (c.state == "active") {
-              for (const auto &claim : c.claimed_interfaces)
-                if (claim.rfind(gripper_motion_joint() + "/", 0) == 0) gripper_conflict = true;
-            }
-            if (c.name != controller || c.state != "active" || c.type != "joint_trajectory_controller/JointTrajectoryController") continue;
-            if (!arm_position_velocity_claimed(c.claimed_interfaces))
-              controller_error = "轨迹控制器必须认领六关节 position+velocity 接口，请更新控制栈并重新启用轨迹控制";
-            else { controller_active = true; controller_error.clear(); }
-          }
-          gripper_controller_active = gripper_controller_active && !gripper_conflict && gripper_count == 1;
-          controller_at = Clock::now();
-          controller_poll.succeeded(controller_at);
-          const bool slow = latency > .8;
-          if (slow != controller_slow) {
-            log(0, "", "controller", slow ? "ListControllers 响应较慢（" + std::to_string(latency) + " s），保持单请求轮询"
-                : "ListControllers 响应耗时已恢复正常", slow ? "warn" : "info");
-            controller_slow = slow;
-          }
-        } catch (const std::exception &e) {
-          controller_failed(std::string("ControllerManager 查询失败：") + e.what());
-        }
-      }).request_id;
-    } catch (const std::exception &e) {
-      controller_failed(std::string("ControllerManager 查询发送失败：") + e.what());
+    if (snapshot.sequence == controller_sequence) return;
+    controller_sequence = snapshot.sequence;
+    controller_active = false; gripper_controller_active = false;
+    controller_error = "arm_trajectory_controller 未激活、缺失或类型不匹配";
+    bool gripper_conflict = false;
+    size_t gripper_count = 0;
+    for (const auto &c : snapshot.controllers) {
+      if (c.name == gripper_controller && c.state == "active" && c.type_name == "joint_trajectory_controller/JointTrajectoryController") {
+        ++gripper_count;
+        gripper_controller_active = same_motion_joints(c.claimed_interfaces,
+            {gripper_motion_joint() + "/position", gripper_motion_joint() + "/velocity"});
+      } else if (c.state == "active") {
+        for (const auto &claim : c.claimed_interfaces)
+          if (claim.rfind(gripper_motion_joint() + "/", 0) == 0) gripper_conflict = true;
+      }
+      if (c.name != controller || c.state != "active" || c.type_name != "joint_trajectory_controller/JointTrajectoryController") continue;
+      if (!arm_position_velocity_claimed(c.claimed_interfaces))
+        controller_error = "轨迹控制器必须认领六关节 position+velocity 接口，请更新控制栈并重新启用轨迹控制";
+      else { controller_active = true; controller_error.clear(); }
+    }
+    gripper_controller_active = gripper_controller_active && !gripper_conflict && gripper_count == 1;
+    controller_at = snapshot.received_at;
+    const bool slow = snapshot.latency_s > .8;
+    if (slow != controller_slow) {
+      log(0, "", "controller", slow ? "ListControllers 响应较慢（" + std::to_string(snapshot.latency_s) + " s），保持单请求轮询"
+          : "ListControllers 响应耗时已恢复正常", slow ? "warn" : "info");
+      controller_slow = slow;
     }
   }
   std::vector<std::string> model_keys() {
@@ -350,6 +319,9 @@ struct PositionMotion::Impl {
     });
   }
   std::string controller_readiness() const {
+    const auto latest = controller_registry->snapshot();
+    if (!latest.fresh) return latest.message.empty() ? "等待 ControllerManager 有效快照" : latest.message;
+    if (latest.sequence != controller_sequence) return "等待验证 ControllerManager 最新快照";
     if (!controller_active) return controller_error;
     if (!fresh(controller_at, ControllerHealthPoll::validity_seconds))
       return "arm_trajectory_controller 状态已过期（ListControllers >3.1s）";
@@ -362,6 +334,7 @@ struct PositionMotion::Impl {
     return snapshot;
   }
   std::string readiness(bool starting = true) {
+    poll_controllers();
     if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
     if (!fresh(model_at, 10) || !model_error.empty()) return model_error.empty() ? "MoveIt 模型信息已过期" : model_error;
     const auto controller_reason = controller_readiness();
@@ -384,6 +357,8 @@ struct PositionMotion::Impl {
     return "";
   }
   std::string gripper_readiness(bool starting = true) {
+    poll_controllers();
+    const auto registry_reason = controller_readiness(); if (!registry_reason.empty()) return registry_reason;
     if (!execute_action->action_server_is_ready()) return "MoveIt /execute_trajectory 未启动";
     if (!gripper_supported || !fresh(model_at, 10) || !model_error.empty()) return gripper_error.empty() ? "夹爪模型已过期" : gripper_error;
     if (!gripper_controller_active || !fresh(controller_at, ControllerHealthPoll::validity_seconds)) return "夹爪轨迹控制器未激活或未认领 position+velocity 接口";
@@ -957,8 +932,8 @@ struct PositionMotion::Impl {
   }
 };
 
-PositionMotion::PositionMotion(rclcpp::Node &n, const std::string &joints, const std::string &status)
-    : impl_(std::make_unique<Impl>(n, joints, status)) {}
+PositionMotion::PositionMotion(rclcpp::Node &n, const std::string &joints, const std::string &status, std::shared_ptr<ControllerRegistry> controllers)
+    : impl_(std::make_unique<Impl>(n, joints, status, std::move(controllers))) {}
 PositionMotion::~PositionMotion() = default;
 void PositionMotion::request(uint64_t owner, const Tree &data, Send send) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);

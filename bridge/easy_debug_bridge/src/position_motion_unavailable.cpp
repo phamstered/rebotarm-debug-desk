@@ -2,7 +2,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 namespace easy_debug_bridge {
 struct PositionMotion::Impl {};
-PositionMotion::PositionMotion(rclcpp::Node &, const std::string &, const std::string &) : impl_(std::make_unique<Impl>()) {}
+PositionMotion::PositionMotion(rclcpp::Node &, const std::string &, const std::string &, std::shared_ptr<ControllerRegistry>) : impl_(std::make_unique<Impl>()) {}
 PositionMotion::~PositionMotion() = default;
 void PositionMotion::request(uint64_t, const boost::property_tree::ptree &data, Send send) {
   const auto id = position_json_quote(data.get<std::string>("request_id", ""));

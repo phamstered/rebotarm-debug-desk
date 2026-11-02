@@ -13,7 +13,7 @@ Messages are UTF-8 JSON WebSocket text frames.
 Hello response (sent immediately after the request):
 
 ```json
-{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"dc8f3b4c126c","ros_distro":"humble"}
+{"op":"hello","bridge_version":"0.1.0","bridge_build_id":"dc8f3b4c126c","ros_distro":"humble","controllers_info_supported":true}
 ```
 
 `bridge_version` comes from `bridge/easy_debug_bridge/package.xml`. `bridge_build_id` is a short content hash of the Bridge package sources (generated into `bridge_build_id.hpp` / `src/bridgeVersion.ts` by `npm run generate:bridge-build-id`). Older Bridges may omit `bridge_build_id`.
@@ -96,6 +96,27 @@ JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint
 
 桌面端通过现有通用 `subscribe` 读取 active 控制器的 `control_msgs/msg/JointTrajectoryControllerState`（`~/controller_state`，旧版兼容 `~/state`），按其中的 `joint_names` 构造完整关节集合和顺序，不能直接复制可能含夹爪等额外关节的 JointState。下发前要求 JointState 与控制器反馈均在 1 秒内。`trajectory_command_ack` 仅确认 Bridge 已发布消息，不是 FollowJointTrajectory action 的接受/执行结果。
 
+
+### Controller 列表与查询状态
+
+`hello.controllers_info_supported` 表示是否编译了 Controller Manager 消息支持，独立于 MoveIt 功能。缺少或为 false 时，新桌面明确提示升级/补全 Bridge，不回退到每次启动 ROS CLI 的查询路径。
+
+```json
+{"op":"controllers_info","request_id":"uuid","refresh":false}
+```
+
+省略 `refresh` 或为 false 时立即读取共享缓存，不额外发起 ROS 请求。Bridge 的常驻 `/controller_manager/list_controllers` 客户端同时为列表与运动健康检查提供数据：最多一个在途请求，响应上限 2 秒，成功后间隔 1 秒轮询，失败后按 1/2/4/8 秒退避，迟到响应不能覆盖新状态。列表查询不改变 Controller/硬件状态，也不续期运动任务的拥有者租约。
+
+```json
+{"op":"controllers_info","request_id":"uuid","supported":true,"manager":"/controller_manager","available":true,"fresh":true,"has_snapshot":true,"snapshot_sequence":12,"snapshot_age_ms":84,"snapshot_time_ms":1793623704000,"query_state":"ready","query_pending":false,"retry_after_ms":0,"request_wait_ms":0,"controllers":[{"name":"arm_trajectory_controller","type_name":"joint_trajectory_controller/JointTrajectoryController","state":"active"}],"message":""}
+```
+
+- `controllers` 保留服务最近一次成功返回的完整列表；`snapshot_sequence` 只随成功快照递增。成功的空列表也有有效快照；从未成功时 `has_snapshot:false`、序号 0、列表为空，省略两个时间字段。
+- `snapshot_time_ms` 是 Jetson 保存快照时的 Unix 毫秒；`snapshot_age_ms` 由单调时钟计算。`available` 与 `fresh` 相等，仅在最近查询未失败且快照年龄 <3100 ms 时为 true；在途查询可在此期限内保留有效的前次快照。
+- 查询超时、服务不可用或其他失败立即失效，但保留最后成功的行供只读查看；旧行不能作为当前控制状态或执行许可。`request_wait_ms` 是本请求进入 Registry 到生成同一份快照响应之间的单调等待时长，范围 0–5000 ms；缓存/立即响应可为 0，之后的发送队列等待不计入它。前端把 `max(0, 请求往返耗时 − request_wait_ms)` 保守加到快照年龄，再按本机单调时钟累计，覆盖传输、发送排队及界面调度延迟；超期自动失效，断线/重连清除旧会话数据。
+- `query_state` 为 `waiting`（初始等待）、`ready`、`pending`、`timeout`、`unavailable`（ROS 服务不可用）、`error`、`stale` 或 `unsupported`；`query_pending` 表示是否有在途请求，`retry_after_ms` 给出下一次允许查询前的剩余退避时间。WebSocket 断开或请求失败由桌面单独标记，不能据此认定 Controller 已停用。
+- `refresh:true` 为强制核验：只能由本请求进入之后才发起的 ROS 查询完成，不能用旧缓存或预先在途的响应证明刷新成功。多个等待者合并后续请求；既有请求先结束或超时，再进行新查询，显式强制查询可跳过成功后的轮询间隔，失败退避仍有效。每个等待者最长 5 秒，全局最多 64 个、每连接最多 8 个；断开清理该连接等待者。
+- 桌面每秒读取缓存；手动刷新和 Controller 切换前后使用强制核验。切换后先排空操作期间发起的界面查询，再请求新的核验，避免用切换前的状态确认结果。Controller 类型、active/interface、硬件、时钟、反馈及运动门禁继续独立校验。
 
 ### GravityIdentification（`/StartGravityID`）
 

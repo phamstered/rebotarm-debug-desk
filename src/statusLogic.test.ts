@@ -47,7 +47,7 @@ const baseCardInput = {
   jointStateTopic: "/stm32/joint_states",
   rosControl: {
     manager: "/controller_manager",
-    available: true,
+    fresh: true, available: true,
     controllers: [{ name: "joint_trajectory_controller", typeName: "t", state: "active" }],
     message: "",
   },
@@ -99,7 +99,7 @@ describe("statusLogic", () => {
     expect(activeControllers(null)).toEqual([]);
     expect(activeControllers({
       manager: "/controller_manager",
-      available: true,
+      fresh: true, available: true,
       controllers: [
         { name: "a", typeName: "t", state: "active" },
         { name: "b", typeName: "t", state: "inactive" },
@@ -206,7 +206,7 @@ describe("statusLogic", () => {
       },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [{ name: "vla_position_controller", typeName: "t", state: "inactive" }],
         message: "",
       },
@@ -223,7 +223,7 @@ describe("statusLogic", () => {
       armMode: { ...baseCardInput.armMode, teleopRunning: false },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [{ name: "vla_position_controller", typeName: "t", state: "active" }],
         message: "",
       },
@@ -233,7 +233,7 @@ describe("statusLogic", () => {
   it("prefers list_controllers position controller over script PID flags for strip selection", () => {
     const teleopCtrl = {
       manager: "/controller_manager",
-      available: true,
+      fresh: true, available: true,
       controllers: [
         { name: "arm_teleop_controller", typeName: "t", state: "active" },
         { name: "gravity_compensation_controller", typeName: "t", state: "active" },
@@ -249,7 +249,7 @@ describe("statusLogic", () => {
       armMode: { ...baseCardInput.armMode, teleopRunning: true, trajectoryRunning: false },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "arm_trajectory_controller", typeName: "t", state: "active" },
           { name: "arm_teleop_controller", typeName: "t", state: "inactive" },
@@ -258,15 +258,15 @@ describe("statusLogic", () => {
       },
     })).toBe("trajectory");
 
-    // When ros2_control unavailable, fall back to script flags
+    // Script PID flags cannot confirm active mode when the registry snapshot is unavailable.
     expect(resolveActiveControlMode({
       armMode: { ...baseCardInput.armMode, teleopRunning: true },
       rosControl: { manager: "/controller_manager", available: false, controllers: [], message: "offline" },
-    })).toBe("teleop");
+    })).toBeNull();
     expect(resolveActiveControlMode({
       armMode: { ...baseCardInput.armMode, teleopRunning: false, trajectoryRunning: true },
       rosControl: null,
-    })).toBe("trajectory");
+    })).toBeNull();
   });
 
   it("shows real controller names and Gravity row on all three mode details", () => {
@@ -275,7 +275,7 @@ describe("statusLogic", () => {
       armMode: { ...baseCardInput.armMode, mode: "teleop", teleopRunning: true, teleopPid: 99 },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "arm_teleop_controller", typeName: "t", state: "active" },
           { name: "gravity_compensation_controller", typeName: "t", state: "inactive" },
@@ -293,7 +293,7 @@ describe("statusLogic", () => {
       armMode: { ...baseCardInput.armMode, mode: "trajectory", teleopRunning: false, teleopPid: 0, trajectoryRunning: true, trajectoryPid: 55 },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "arm_trajectory_controller", typeName: "t", state: "active" },
           { name: "gravity_compensation_controller", typeName: "t", state: "active" },
@@ -313,7 +313,7 @@ describe("statusLogic", () => {
       hardwareStatus: { mode: 1, mode_name: "TRACK", fault_code: 0 },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "vla_position_controller", typeName: "t", state: "active" },
           { name: "gravity_compensation_controller", typeName: "t", state: "inactive" },
@@ -385,7 +385,7 @@ describe("statusLogic", () => {
       hardwareStatus: null,
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "vla_position_controller", typeName: "microros_stm32h723_bridge/VlaPositionController", state: "inactive" },
           { name: "gravity_compensation_controller", typeName: "t", state: "active" },
@@ -405,7 +405,7 @@ describe("statusLogic", () => {
       hardwareStatus: { mode: 1, mode_name: "TRACK", fault_code: 0 },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "vla_position_controller", typeName: "t", state: "active" },
           { name: "gravity_compensation_controller", typeName: "t", state: "active" },
@@ -426,7 +426,7 @@ describe("statusLogic", () => {
       hardwareStatus: { mode: 0, mode_name: "HOLD", fault_code: 0 },
       rosControl: {
         manager: "/controller_manager",
-        available: true,
+        fresh: true, available: true,
         controllers: [
           { name: "vla_position_controller", typeName: "t", state: "active" },
           { name: "gravity_compensation_controller", typeName: "t", state: "active" },
@@ -522,4 +522,14 @@ describe("clock synchronization health card", () => {
       { label: "距成功同步", value: "120 ms" },
     ]));
   });
+  it("does not confirm stale active rows or running process flags as an active mode",()=>{
+    const rosControl={...baseCardInput.rosControl,available:false,fresh:false,controllers:[{name:"arm_trajectory_controller",typeName:"test",state:"active"}],queryState:"stale" as const};
+    expect(resolveActiveControlMode({armMode:{...baseCardInput.armMode,trajectoryRunning:true},rosControl})).toBeNull();
+    expect(activeControllers(rosControl)).toEqual([]);
+    const cards=buildStatusCards({...baseCardInput,rosControl,armMode:{...baseCardInput.armMode,trajectoryRunning:true}});
+    for(const id of ["teleop","trajectory"]){expect(cards.find(c=>c.id===id)?.summary).toBe("待确认");expect(cards.find(c=>c.id===id)?.rows.find(r=>r.label==="状态")?.value).toBe("待确认");}
+    expect(cards.find(c=>c.id==="vla")?.summary).not.toBe("未运行");
+    expect(cards.find(c=>c.id==="ros2-control")?.summary).toBe("已过期");
+  });
+
 });

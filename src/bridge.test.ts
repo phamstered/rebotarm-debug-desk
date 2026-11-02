@@ -39,11 +39,13 @@ describe("BridgeClient", () => {
       bridge_version: "0.1.0",
       bridge_build_id: "abc1234def56",
       ros_distro: "humble",
+      controllers_info_supported: true,
     });
     await expect(connected).resolves.toEqual({
       bridge_version: "0.1.0",
       bridge_build_id: "abc1234def56",
       ros_distro: "humble",
+      controllers_info_supported: true,
     });
     expect(socket.binaryType).toBe("arraybuffer");
   });

@@ -1,3 +1,4 @@
+import { controllerStatusFresh } from "./controllersInfoLogic";
 /** Desk-side VLA scheme B — aligned with rebotarm-ros2-stack PR #15 / docs/vla-integration.md.
  *
  * Path: external inference → /vla/joint_chunk (VlaJointChunk) → vla_position_controller
@@ -79,7 +80,7 @@ export function findController(
   rosControl: RosControlStatus | null | undefined,
   predicate: (controller: ControllerInfo) => boolean,
 ): ControllerInfo | undefined {
-  if (!rosControl?.available) return undefined;
+  if (!controllerStatusFresh(rosControl)) return undefined;
   return rosControl.controllers.find(predicate);
 }
 
@@ -115,7 +116,7 @@ export function isGravityCompensationActive(rosControl: RosControlStatus | null 
 
 /** Active position controllers to deactivate when starting VLA. */
 export function listActiveVlaExclusiveControllers(rosControl: RosControlStatus | null | undefined): string[] {
-  if (!rosControl?.available) return [];
+  if (!controllerStatusFresh(rosControl)) return [];
   return rosControl.controllers
     .filter((controller) => controller.state === "active" && isVlaExclusivePositionController(controller.name))
     .map((controller) => controller.name);
@@ -124,7 +125,7 @@ export function listActiveVlaExclusiveControllers(rosControl: RosControlStatus |
 /** Controllers to activate on VLA start (VLA + gravity if loaded but inactive). */
 export function listVlaStartActivate(rosControl: RosControlStatus | null | undefined): string[] {
   const activate: string[] = [VLA_POSITION_CONTROLLER];
-  if (!rosControl?.available) return activate;
+  if (!controllerStatusFresh(rosControl)) return activate;
   const gravity = findController(rosControl, (entry) => isGravityCompensationController(entry.name));
   // Only activate gravity when loaded and inactive — avoid --strict fail if unloaded.
   if (gravity && gravity.state !== "active") {
