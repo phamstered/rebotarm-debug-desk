@@ -442,4 +442,12 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 
 组事件附带 `group_step_label`，来自本次执行快照。`position_motion.arrival_errors` 可含 1–7 个关节核验快照：`joint_name`、`target`、`actual`、`position_error`（actual−target）、`position_tolerance`（原参考值，非完成门槛）、`velocity`、`velocity_tolerance`、`unit`（rad 或 m）。数值须有限，关节唯一且与单位匹配；无新鲜有效反馈时省略。终态保存当时的核验快照，后续查询重放不重新计算，不表示当前实时反馈。
 
-准备或一段执行完成后，停留/暂停以该时刻实测姿态为保持基准，仍检测相对漂移及速度；不重新使用名义目标位置差值作为转段门槛。
+准备或一段执行完成后，若 `hold_duration_s:0` 且没有暂停预约，直接复用本段已完成的连续停稳核验推进或完成，不再进入下一 tick 的保持检查。真实停留/暂停以该时刻实测姿态为保持基准，位置漂移超过原容差立即取消；不重新使用名义目标位置差值作为转段门槛。速度短暂超过停稳阈值时进入 `motion_phase:"verifying"`，继续持锁并冻结剩余停留时间，重新连续停稳 200 ms 才恢复。自首次波动起 5 秒内仍未恢复则取消后续步骤，继续沿用原停止确认流程。暂停预约和所有反馈/控制器/时钟/模型/租约门禁仍生效。
+
+相对保持基准漂移或持续未停稳失败时，`position_motion.hold_failure` 保存独立且不可变的触发快照：
+
+```json
+{"reason":"position_drift","phase":"holding","captured_at_ms":1793613261062,"feedback_age_ms":4,"stable_for_ms":0,"required_stable_ms":200,"samples":[{"joint_name":"joint3","target":-0.84,"actual":-0.81,"position_error":0.03,"position_tolerance":0.02,"velocity":0.04,"velocity_tolerance":0.03,"unit":"rad"}]}
+```
+
+`reason` 为 `position_drift` 或 `velocity_timeout`；`phase` 为失败时的 `holding` / `paused`。`captured_at_ms` 是 Jetson Unix 毫秒，`feedback_age_ms` 是该反馈的单调时钟年龄；可选的 `stable_for_ms` / `required_stable_ms` 描述恢复期限内有效的连续停稳确认时长。`samples` 沿用 `arrival_errors` 的有限值、关节及单位规则，但 `target` 是进入保持时的实测基准，`position_tolerance` 是实际漂移门槛。快照冻结后随取消和终态事件重放，与后续 `arrival_errors`（本帧名义目标与停止核验反馈）分别展示。持续停稳未满足时，触发快照中的瞬时速度也可能已低于阈值，不能据此断言某轴当时超速。缺失或无效时前端不沿用旧触发快照。

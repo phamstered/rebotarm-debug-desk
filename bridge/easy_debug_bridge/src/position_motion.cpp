@@ -3,6 +3,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
 #include "easy_debug_bridge/motion_arrival.hpp"
+#include "easy_debug_bridge/group_hold_core.hpp"
 #include "easy_debug_bridge/position_group_parser.hpp"
 #include "easy_debug_bridge/tcp_pose_model.hpp"
 #include <shape_msgs/msg/solid_primitive.hpp>
@@ -102,6 +103,8 @@ struct PositionMotion::Impl {
     std::shared_ptr<GroupRun> group;
     std::vector<double> hold_reference;
     std::optional<std::vector<MotionArrivalError>> arrival_errors;
+    GroupHoldRecovery hold_recovery;
+    std::optional<GroupHoldFailure> hold_failure;
   };
   rclcpp::Node &node;
   rclcpp::CallbackGroup::SharedPtr callback_group;
@@ -176,9 +179,11 @@ struct PositionMotion::Impl {
     return "{\"op\":\"position_motion\",\"command_id\":" + quote(m.id) + ",\"label\":" + quote(m.label) +
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
         ",\"position_error_check_enforced\":false" + (m.arrival_errors ? ",\"arrival_errors\":" + motion_arrival_json(*m.arrival_errors) : "") +
+        (m.hold_failure ? ",\"hold_failure\":" + group_hold_failure_json(*m.hold_failure) : "") +
         ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + group_fields + "}";
   }
   static double steady_seconds() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+  static bool at_group_boundary(const std::shared_ptr<Motion> &m) { return m->group && !m->hold_reference.empty(); }
   void log(uint64_t owner, const std::string &id, const std::string &phase, const std::string &message, const std::string &level = "info") {
     logs.append(owner, id, phase, message, level);
     RCLCPP_INFO(node.get_logger(), "[motion][%s][%s][%s] %s", level.c_str(), id.c_str(), phase.c_str(), message.c_str());
@@ -417,7 +422,7 @@ struct PositionMotion::Impl {
     if (m->terminal || m->cancel_requested) return;
     m->cancel_requested = true; m->cancel_at = Clock::now();
     m->settled_at = {};
-    if (m->group && (m->phase == "waiting" || m->phase == "paused")) m->result_at = Clock::now();
+    if (at_group_boundary(m)) m->result_at = Clock::now();
     update(m, "canceling", message);
     request_cancel_handle(m);
   }
@@ -744,6 +749,12 @@ struct PositionMotion::Impl {
     if (!m || m->owner != r.owner || m->id != id || !m->group || m->terminal || m->cancel_requested || m->failed_result)
       throw std::runtime_error("本会话没有可暂停/继续的动作组");
     auto &timeline = m->group->timeline;
+    if (at_group_boundary(m)) {
+      const auto reason = readiness(false); if (!reason.empty()) throw std::runtime_error(reason);
+      if (m->group->spec.uses_gripper) { const auto why = gripper_readiness(false); if (!why.empty()) throw std::runtime_error(why); }
+      group_wait(m, false);
+      if (m->cancel_requested) throw std::runtime_error("停留/暂停保持检查失败，已请求取消");
+    }
     if (resume) {
       if (timeline.phase != "paused") throw std::runtime_error("动作组尚未在安全边界暂停");
       const auto reason = readiness(); if (!reason.empty()) throw std::runtime_error(reason);
@@ -752,30 +763,36 @@ struct PositionMotion::Impl {
         throw std::runtime_error("动作组模型或时钟基准已改变，禁止继续");
       if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，禁止继续动作组");
       const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
-      if (!motion_target_reached(m->model.joint_names, m->hold_reference, actual, velocity)) throw std::runtime_error("偏离暂停时的实测保持基准或尚未停稳，禁止继续");
+      if (!m->hold_recovery.ready || !group_hold_position_valid(m->model.joint_names, m->hold_reference, actual) || !motion_stopped(m->model.joint_names, velocity))
+        throw std::runtime_error("暂停反馈尚未连续停稳 200 ms 或偏离实测保持基准，禁止继续");
       if (m->group->spec.uses_gripper && !motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}))
         throw std::runtime_error("暂停期间夹爪尚未停稳，禁止继续");
       timeline.resume(steady_seconds());
       update(m, "waiting", "动作组已继续，等待本项停留时间结束");
     } else {
       timeline.pause(steady_seconds());
-      if (timeline.phase == "paused") update(m, "paused", "动作组已在停稳边界暂停，保留运动锁");
+      if (timeline.phase == "paused") update(m, m->hold_recovery.ready ? "paused" : "verifying", m->hold_recovery.ready ? "动作组已在停稳边界暂停，保留运动锁" : "动作组已暂停推进，正在重新确认停稳，继续暂不可用");
     }
     r.send("{\"op\":" + quote(resume ? "position_group_resume_ack" : "position_group_pause_ack") +
         ",\"accepted\":true,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) + ",\"command_id\":" + quote(id) +
         ",\"pending\":" + (timeline.phase == "paused" || resume ? "false" : "true") + "}");
     if (!resume && timeline.phase != "paused") m->send(event(*m));
   }
-  void group_wait(const std::shared_ptr<Motion> &m) {
+  void fail_group_hold(const std::shared_ptr<Motion> &m, const std::string &reason,
+      const std::vector<double> &actual, const std::vector<double> &velocity) {
+    if (!m->hold_failure) {
+      m->hold_failure = GroupHoldFailure{reason, m->group->timeline.phase,
+        std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count(),
+        std::chrono::duration<double, std::milli>(Clock::now() - joints_at).count(), m->hold_recovery.stable_for_ms(),
+          motion_arrival_errors(m->model.joint_names, m->hold_reference, actual, velocity)};
+      log(m->owner, m->id, "hold_failure", group_hold_failure_json(*m->hold_failure), "error");
+    }
+    m->group->failed = true;
+    cancel(m, reason == "position_drift" ? "动作组偏离停留/暂停时的实测保持基准，取消后续步骤" : "停留/暂停反馈持续 5 秒未重新停稳，取消后续步骤");
+  }
+  void advance_group(const std::shared_ptr<Motion> &m) {
     auto &group = *m->group;
     auto &timeline = group.timeline;
-    timeline.advance(steady_seconds());
-    const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
-    if (!motion_target_reached(m->model.joint_names, m->hold_reference, actual, velocity) ||
-        (group.spec.uses_gripper && !motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}))) {
-      group.failed = true; cancel(m, "动作组偏离停留/暂停时的实测保持基准或未停稳，取消后续步骤"); return;
-    }
-    if (timeline.phase == "paused" || timeline.hold_remaining_s > 0) return;
     if (timeline.index + 1 == group.spec.steps.size()) { update(m, "succeeded", "动作组全部步骤 Action 成功、已停稳并完成停留（关节目标误差仅诊断）", true); return; }
     const auto previous = timeline;
     timeline.next(steady_seconds());
@@ -785,6 +802,27 @@ struct PositionMotion::Impl {
       if (current == m) timeline = previous; // Diagnostics still refer to this completed child.
       group.failed = true; cancel(current, std::string("动作组下一段校验失败：") + e.what());
     }
+  }
+  void group_wait(const std::shared_ptr<Motion> &m, bool allow_progress = true) {
+    auto &timeline = m->group->timeline;
+    const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
+    if (!group_hold_position_valid(m->model.joint_names, m->hold_reference, actual)) {
+      fail_group_hold(m, "position_drift", actual, velocity); return;
+    }
+    const bool stopped = motion_stopped(m->model.joint_names, velocity);
+    const auto result = m->hold_recovery.observe(steady_seconds(), std::chrono::duration<double>(joints_at.time_since_epoch()).count(), stopped);
+    // Freeze the entire interval containing an unstable sample. The interval
+    // ending the recovery window is also frozen; countdown resumes afterwards.
+    if (result != GroupHoldResult::ready) timeline.hold_blocked = true;
+    timeline.advance(steady_seconds());
+    timeline.hold_blocked = result != GroupHoldResult::ready;
+    if (result == GroupHoldResult::velocity_timeout) { fail_group_hold(m, "velocity_timeout", actual, velocity); return; }
+    if (result != GroupHoldResult::ready && m->phase != "verifying")
+      update(m, "verifying", "停留/暂停反馈正在重新确认停稳（需连续新鲜反馈 200 ms），剩余停留已冻结");
+    else if (result == GroupHoldResult::ready && m->phase == "verifying")
+      update(m, timeline.phase == "paused" ? "paused" : "waiting", "已重新确认连续停稳 200 ms，保留实测保持基准");
+    if (result != GroupHoldResult::ready || !allow_progress || timeline.phase == "paused" || timeline.hold_remaining_s > 0) return;
+    advance_group(m);
   }
   void process(const Request &r) {
     if (r.disconnect) { if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
@@ -864,7 +902,7 @@ struct PositionMotion::Impl {
       if (reason.empty() && m->gripper) reason = gripper_readiness(false);
       if (reason.empty() && m->group && m->group->spec.uses_gripper) reason = gripper_readiness(false);
       if (!reason.empty()) { if (m->group) m->group->failed = true; cancel(m, reason + "，已请求取消"); }
-      if ((!m->group || (m->phase != "waiting" && m->phase != "paused")) && !fresh(m->started, std::max(180.,m->duration+60.))) {
+      if (!at_group_boundary(m) && !fresh(m->started, std::max(180.,m->duration+60.))) {
         if (m->group) m->group->failed = true;
         cancel(m, "运动超时，已请求取消");
       }
@@ -872,7 +910,7 @@ struct PositionMotion::Impl {
     }
     if (m->cancel_requested && !fresh(m->cancel_at, 5) && m->phase != "stop_failed")
       update(m, "stop_failed", "停止未确认；保留控制进程，请检查现场并使用既有安全停机入口");
-    if (m->group && !m->cancel_requested && (m->phase == "waiting" || m->phase == "paused")) {
+    if (at_group_boundary(m) && !m->cancel_requested) {
       try { group_wait(m); } catch (const std::exception &e) { m->group->failed = true; cancel(m, e.what()); }
       return;
     }
@@ -898,6 +936,9 @@ struct PositionMotion::Impl {
           if (m->group && !m->cancel_requested && !m->failed_result) {
             m->hold_reference = actual;
             m->group->timeline.segment_complete(steady_seconds(), m->group->spec.steps.at(m->group->timeline.index).hold_duration_s);
+            if (m->group->timeline.hold_remaining_s == 0 && m->group->timeline.phase != "paused") {
+              advance_group(m); return;
+            }
             update(m, m->group->timeline.phase == "paused" ? "paused" : "waiting", m->group->timeline.phase == "paused" ? "动作组已在停稳边界暂停，保留运动锁" : "本项 Action 成功且已停稳，正在停留（关节目标误差仅诊断）");
             return;
           }

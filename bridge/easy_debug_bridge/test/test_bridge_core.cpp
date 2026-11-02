@@ -2,6 +2,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
 #include "easy_debug_bridge/motion_arrival.hpp"
+#include "easy_debug_bridge/group_hold_core.hpp"
 #include "easy_debug_bridge/position_group_core.hpp"
 #include "easy_debug_bridge/gripper_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
@@ -16,6 +17,57 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    GroupHoldRecovery recovery;
+    assert(recovery.observe(0, 0, true) == GroupHoldResult::ready); // Entry already verified 200ms.
+    assert(recovery.observe(1, 1, false) == GroupHoldResult::recovering);
+    assert(recovery.observe(1.1, 1.1, true) == GroupHoldResult::recovering);
+    assert(recovery.observe(1.4, 1.1, true) == GroupHoldResult::recovering); // Replaying a frame cannot prove stability.
+    assert(recovery.observe(1.41, 1.29, true) == GroupHoldResult::recovering);
+    assert(recovery.observe(1.42, 1.3, true) == GroupHoldResult::ready);
+    assert(recovery.observe(2, 2, false) == GroupHoldResult::recovering);
+    assert(recovery.observe(6.9, 6.9, true) == GroupHoldResult::recovering);
+    assert(recovery.observe(7, 7, true) == GroupHoldResult::velocity_timeout);
+    assert(recovery.stable_for_ms() > 99 && recovery.stable_for_ms() < 101);
+    GroupHoldRecovery jitter;
+    jitter.observe(0, 0, false);
+    jitter.observe(4.8, 4.8, true);
+    jitter.observe(4.9, 4.9, false);
+    assert(jitter.observe(5, 5, true) == GroupHoldResult::velocity_timeout);
+    GroupHoldRecovery late;
+    late.observe(0, 0, false); late.observe(4.9, 4.9, true);
+    assert(late.observe(5.1, 5.1, true) == GroupHoldResult::velocity_timeout);
+    assert(late.stable_for_ms() > 99 && late.stable_for_ms() < 101);
+    GroupHoldRecovery late_unstable;
+    late_unstable.observe(0, 0, false); late_unstable.observe(4.9, 4.9, true);
+    assert(late_unstable.observe(5.1, 5.1, false) == GroupHoldResult::velocity_timeout);
+    assert(late_unstable.stable_for_ms() == 0);
+    GroupHoldRecovery exact;
+    exact.observe(0, 0, false); exact.observe(4.8, 4.8, true);
+    assert(exact.observe(5, 5, true) == GroupHoldResult::ready);
+    GroupHoldRecovery gap;
+    gap.observe(0, 0, false); gap.observe(.1, .1, true);
+    assert(gap.observe(1.2, 1.2, true) == GroupHoldResult::recovering);
+    assert(gap.observe(1.4, 1.4, true) == GroupHoldResult::ready);
+    PositionGroupTimeline timeline; timeline.last_s = 0; timeline.segment_complete(0, 3);
+    timeline.hold_blocked = true; timeline.advance(1); assert(timeline.hold_remaining_s == 3);
+    timeline.pause(2); timeline.advance(10); assert(timeline.hold_remaining_s == 3);
+    timeline.resume(11); timeline.advance(12); assert(timeline.hold_remaining_s == 3);
+    timeline.hold_blocked = false; timeline.advance(13); assert(timeline.hold_remaining_s == 2);
+    assert(group_hold_position_valid({"joint4"}, {0}, {.02}));
+    assert(!group_hold_position_valid({"joint4"}, {0}, {.020001}));
+    assert(group_hold_position_valid({gripper_motion_joint()}, {0}, {.001}));
+    assert(!group_hold_position_valid({gripper_motion_joint()}, {0}, {.001001}));
+    assert(!group_hold_position_valid({"joint4"}, {0}, {NAN}));
+    assert(!group_hold_position_valid({"joint4"}, {}, {0}));
+    const auto failure = GroupHoldFailure{"velocity_timeout", "paused", 1000, 20, 100,
+        motion_arrival_errors({"joint4"}, {.04}, {.041}, {.05})};
+    const auto json = group_hold_failure_json(failure);
+    assert(json.find("\"reason\":\"velocity_timeout\"") != std::string::npos);
+    assert(json.find("\"target\":0.04") != std::string::npos);
+    assert(json.find("\"required_stable_ms\":200") != std::string::npos);
+  }
   {
     using namespace easy_debug_bridge;
     auto names = arm_motion_joints();

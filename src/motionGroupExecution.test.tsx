@@ -36,6 +36,24 @@ describe("Bridge-owned motion groups", () => {
     expect(h.result.current.state.group?.stepLabel).toBe("C（执行时快照）");
     expect(h.result.current.state.arrivalErrors).toEqual(errors); expect(h.result.current.state.positionErrorCheckEnforced).toBe(false);
   });
+  it("keeps trigger and later stop snapshots separate, clearing absent diagnostics on new events", async () => {
+    const h = setup(); await waitFor(() => expect(h.result.current.groupReason).toBe("")); act(() => h.result.current.setArmed(true));
+    await act(async () => h.result.current.executeGroup!(group())); const command_id = h.result.current.state.commandId;
+    const event: BridgeEnvelope = { op: "position_motion", command_id, motion_phase: "canceling", group_id: "g1", group_count: 3, group_index: 1, group_phase: "holding", group_elapsed_s: 7 };
+    const row = { joint_name: "joint3", target: -.84, actual: -.81, position_error: .03, position_tolerance: .02, velocity: .04, velocity_tolerance: .03, unit: "rad" as const };
+    const hold_failure = { reason: "position_drift" as const, phase: "holding" as const, captured_at_ms: 100, feedback_age_ms: 2, samples: [row] };
+    h.emit({ ...event, hold_failure });
+    expect(h.result.current.state.holdFailure?.samples[0].target).toBe(-.84);
+    h.emit({ ...event, motion_phase: "verifying" });
+    expect(h.result.current.state.holdFailure).toBeUndefined();
+    h.emit({ ...event, motion_phase: "failed", hold_failure, arrival_errors: [{ ...row, target: -.967, velocity: 0, position_error: .157 }] });
+    expect(h.result.current.state.holdFailure?.samples[0].velocity).toBe(.04);
+    expect(h.result.current.state.arrivalErrors?.[0].velocity).toBe(0);
+    expect(h.result.current.state.arrivalErrors?.[0].target).toBe(-.967);
+    row.target = 99;
+    expect(h.result.current.state.holdFailure?.samples[0].target).toBe(-.84);
+    expect(h.result.current.busy).toBe(false);
+  });
   it("ignores malformed group terminal events and late events after actual completion", async () => {
     const h = setup(); await waitFor(() => expect(h.result.current.groupReason).toBe(""));
     act(() => h.result.current.setArmed(true)); await act(async () => h.result.current.executeGroup!(group()));

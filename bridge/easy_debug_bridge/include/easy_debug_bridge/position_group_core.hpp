@@ -49,15 +49,16 @@ struct PositionGroupTimeline {
   size_t index{0};
   std::string phase{"preparing"};
   bool started{false}, pause_requested{false};
+  bool hold_blocked{false};
   double elapsed_s{}, hold_remaining_s{}, last_s{};
   void advance(double now) {
     const double delta = std::max(0., now - last_s);
     if (started && phase != "paused") elapsed_s += delta;
-    if (phase == "holding") hold_remaining_s = std::max(0., hold_remaining_s - delta);
+    if (phase == "holding" && !hold_blocked) hold_remaining_s = std::max(0., hold_remaining_s - delta);
     last_s = now;
   }
   void segment_complete(double now, double hold) {
-    advance(now); started = true; hold_remaining_s = hold;
+    advance(now); started = true; hold_remaining_s = hold; hold_blocked = false;
     phase = pause_requested ? "paused" : "holding";
   }
   void pause(double now) {

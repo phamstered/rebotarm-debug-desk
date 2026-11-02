@@ -437,3 +437,21 @@
   padding: 6px 9px;
   color: var(--muted, #9cb6c8);
 }
+.motion-group-trigger-snapshot,
+.motion-group-verification-snapshot {
+  min-width: 0;
+  padding-top: 8px;
+  margin-top: 10px;
+  border-top: 1px solid var(--line, #28404e);
+}
+.motion-group-trigger-snapshot h3,
+.motion-group-verification-snapshot h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.motion-group-trigger-snapshot {
+  border-top-color: #bfa259;
+}
+.motion-group-trigger-axis th {
+  color: #ffcf93;
+}

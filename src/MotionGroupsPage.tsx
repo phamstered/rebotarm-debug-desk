@@ -127,6 +127,7 @@ function Editor({
         ...state,
         group: { ...state.group! },
         arrivalErrors: state.arrivalErrors?.map((error) => ({ ...error })),
+        holdFailure: state.holdFailure ? { ...state.holdFailure, samples: state.holdFailure.samples.map((sample) => ({ ...sample })) } : undefined,
       },
       snapshot:
         pending?.id === state.group!.id

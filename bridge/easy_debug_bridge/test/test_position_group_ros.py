@@ -31,6 +31,7 @@ class GroupRobot(MockRobot):
         self.running_velocity = 0.
         self.pause_after_execute = False
         self.invalid_speed_plan = False
+        self.hardware_fault = 0
         self.set_parameters([Parameter('robot_description_planning.joint_limits.%s.%s' % (joint, name), value=2.)
                              for joint in ARM for name in ['max_velocity', 'max_acceleration']])
         publisher = self.joints_pub
@@ -40,6 +41,12 @@ class GroupRobot(MockRobot):
                 message.velocity[3] = robot.running_velocity
                 publisher.publish(message)
         self.joints_pub = FeedbackPublisher()
+        hardware = self.hardware_pub
+        class HardwarePublisher:
+            def publish(self, message):
+                message.fault_code = robot.hardware_fault
+                hardware.publish(message)
+        self.hardware_pub = HardwarePublisher()
 
     def plan(self, handle):
         self.starts.append(dict(zip(handle.request.request.start_state.joint_state.name,
@@ -86,6 +93,7 @@ class Client(WebSocket):
     def receive(self):
         message = super().receive()
         if message.get('op') == 'position_motion' and 'group_id' in message:
+            self.history = getattr(self, 'history', []) + [message]
             assert isinstance(message.get('group_step_label'), str) and message['group_step_label'], message
             assert message.get('position_error_check_enforced') is False, message
         return message
@@ -154,6 +162,12 @@ def main(binary):
             def terminal(phase, client=ws):
                 value = event(phase, client=client)
                 return value if value and not info(client)['busy'] else False
+            def observe_for(duration, check):
+                until = time.monotonic() + duration
+                while time.monotonic() < until:
+                    info()
+                    check()
+                    time.sleep(.05)
 
             # Every step is validated before the first plan, including future gripper targets.
             assert ws.oversized_group(command_id=str(uuid.uuid4()), confirmation='ARMED', **spec())['accepted'] is False
@@ -259,6 +273,92 @@ def main(binary):
             robot.pause = False
             wait_for(lambda: terminal('failed'))
 
+            # Zero hold does not emit an artificial single-sample waiting check.
+            value = spec(0.); value['steps'][1]['hold_duration_s'] = 0.
+            before = len(robot.groups)
+            assert start(value)['accepted'] is True
+            zero_command = ws.command_id
+            wait_for(lambda: terminal('succeeded'))
+            assert len(robot.groups) == before + 2
+            assert not [e for e in ws.history if e['command_id'] == zero_command and e['motion_phase'] == 'waiting']
+
+            # Temporary velocity excursions freeze hold until a fresh 200ms
+            # stable window; they do not cancel or consume remaining hold time.
+            assert start(spec(2.))['accepted'] is True
+            wait_for(lambda: event('waiting', 0))
+            before = len(robot.groups)
+            high_at = time.monotonic(); robot.running_velocity = .04
+            def no_advance():
+                assert len(robot.groups) == before and info()['busy'] is True
+                assert ws.events[ws.command_id]['motion_phase'] not in ('canceling', 'failed', 'canceled')
+            observe_for(.45, no_advance)
+            assert event()['motion_phase'] == 'verifying'
+            robot.running_velocity = 0.; low_at = time.monotonic()
+            observe_for(.15, no_advance)
+            wait_for(lambda: (info(), len(robot.groups) == before + 1)[1])
+            assert time.monotonic() - low_at > 1.5 and time.monotonic() - high_at > 2., 'Hold consumed during recovery'
+            wait_for(lambda: terminal('succeeded'))
+
+            # Pause/resume, including zero hold, cannot bypass recovery.
+            robot.hold_plan = True
+            assert start(spec(0.))['accepted'] is True
+            ws.request('position_group_pause', command_id=ws.command_id)
+            robot.hold_plan = False
+            wait_for(lambda: event('paused', 0))
+            before = len(robot.groups); robot.running_velocity = .04
+            observe_for(.2, lambda: None)
+            recovering = event('verifying', 0)
+            assert recovering and recovering['group_phase'] == 'paused'
+            assert ws.request('position_group_resume', command_id=ws.command_id)['accepted'] is False
+            robot.running_velocity = 0.
+            assert ws.request('position_group_resume', command_id=ws.command_id)['accepted'] is False
+            observe_for(.35, lambda: None)
+            assert len(robot.groups) == before
+            assert ws.request('position_group_resume', command_id=ws.command_id)['accepted'] is True
+            wait_for(lambda: terminal('succeeded'))
+
+            # A 5s velocity timeout freezes the triggering hold-reference sample
+            # separately from subsequent zero-velocity nominal arrival snapshots.
+            assert start(spec(1.))['accepted'] is True
+            wait_for(lambda: event('waiting', 0))
+            before = len(robot.groups); robot.running_velocity = .04
+            trigger = wait_for(lambda: (lambda e: e if e and e.get('hold_failure') else False)(event()), timeout=8)
+            failure = trigger['hold_failure']
+            assert failure['reason'] == 'velocity_timeout' and failure['phase'] == 'holding', failure
+            assert failure['feedback_age_ms'] < 1000 and failure['required_stable_ms'] == 200
+            assert next(e for e in failure['samples'] if e['joint_name'] == 'joint4')['velocity'] == .04
+            assert info()['busy'] is True and len(robot.groups) == before
+            robot.running_velocity = 0.
+            failed = wait_for(lambda: terminal('failed'))
+            assert failed['hold_failure'] == failure
+            assert next(e for e in failed['arrival_errors'] if e['joint_name'] == 'joint4')['velocity'] == 0.
+
+            # Explicit cancellation during recovery preserves fresh stop gating.
+            assert start(spec(2.))['accepted'] is True
+            wait_for(lambda: event('waiting', 0))
+            before = len(robot.groups); robot.running_velocity = .04
+            observe_for(.2, lambda: None)
+            ws.request('position_cancel', command_id=ws.command_id)
+            observe_for(.2, lambda: None)
+            assert info()['busy'] is True
+            robot.running_velocity = 0.
+            canceled = wait_for(lambda: terminal('canceled'))
+            assert 'hold_failure' not in canceled and len(robot.groups) == before
+
+            # Fault gates remain immediate while the 5s recovery window is open.
+            assert start(spec(2.))['accepted'] is True
+            wait_for(lambda: event('waiting', 0))
+            before = len(robot.groups); robot.running_velocity = .04
+            observe_for(.2, lambda: None)
+            robot.hardware_fault = 1
+            observe_for(.2, lambda: None)
+            assert info()['busy'] is True and len(robot.groups) == before
+            robot.running_velocity = 0.
+            failed = wait_for(lambda: terminal('failed'))
+            assert 'hold_failure' not in failed
+            robot.hardware_fault = 0
+            wait_for(lambda: info()['gripper_available'])
+
             # Missing gripper target holds fresh measured opening, with a full
             # seven-axis path/arrival/hold check rather than dropping joint7.
             # A's valid 0.8mm endpoint error must not cause B's 0.1mm path-hold
@@ -274,7 +374,15 @@ def main(binary):
             assert abs(last.points[-1].positions[last.joint_names.index(GRIPPER)] - .0258) < 1e-9
             before = len(robot.groups)
             robot.positions[GRIPPER] = .035
-            wait_for(lambda: terminal('failed'))
+            failed = wait_for(lambda: terminal('failed'))
+            failure = failed['hold_failure']
+            assert failure['reason'] == 'position_drift' and failure['phase'] == 'holding'
+            grip = next(e for e in failure['samples'] if e['joint_name'] == GRIPPER)
+            assert abs(grip['target'] - .0258) < 1e-9 and abs(grip['actual'] - .035) < 1e-9
+            assert abs(grip['position_error'] - .0092) < 1e-9
+            robot.positions[GRIPPER] = .0258
+            time.sleep(.15)
+            assert event('failed')['hold_failure'] == failure
             assert len(robot.groups) == before
 
             # Pause requested during planning is applied only after execute+200ms settle.
@@ -352,8 +460,12 @@ def main(binary):
             ws.request('position_group_pause', command_id=ws.command_id)
             wait_for(lambda: event('paused', 0))
             before = len(robot.groups)
+            robot.running_velocity = .04
             time.sleep(5.6)
-            wait_for(lambda: terminal('canceled'))
+            assert info()['busy'] is True
+            robot.running_velocity = 0.
+            expired = wait_for(lambda: terminal('canceled'))
+            assert 'hold_failure' not in expired
             assert len(robot.groups) == before
 
             # An unconfirmed Action cancellation remains locked in stop_failed,
@@ -384,6 +496,8 @@ def main(binary):
             robot.hold_execution = False
             time.sleep(.3)
             assert len(robot.groups) == before
+            with open('/tmp/position-group-192-bridge.log') as bridge_log:
+                assert bridge_log.read().count('[hold_failure]') == 2, 'Failure snapshots must log once, without replay duplicates'
             print(json.dumps(dict(ok=True, groups=len(robot.groups), executions=len(robot.executions))))
         finally:
             for client in clients:
