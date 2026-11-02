@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defaultProfile } from "./types";
 import {
   activeControllers,
+  buildClockSyncCard,
   buildHardwareStickyAlert,
   buildStatusCards,
   buildStatusQuickActions,
@@ -139,7 +140,7 @@ describe("statusLogic", () => {
     expect(ok.rows.some((row) => row.label.includes("RealSense"))).toBe(false);
   });
 
-  it("groups cards into four zones with USB under hardware health", () => {
+  it("groups cards into three zones with sensors under hardware health", () => {
     const cards = buildStatusCards(baseCardInput);
     expect(cards.map((card) => card.id)).toEqual([
       "ssh",
@@ -158,20 +159,19 @@ describe("statusLogic", () => {
     expect(cards.find((card) => card.id === "systemd")).toBeUndefined();
 
     const zones = groupStatusZones(cards);
-    expect(zones.map((zone) => zone.id)).toEqual(["connection", "hardware", "control", "sensors"]);
+    expect(zones.map((zone) => zone.id)).toEqual(["connection", "hardware", "control"]);
     expect(zones.find((zone) => zone.id === "hardware")?.primary).toBe(true);
     expect(zones.find((zone) => zone.id === "hardware")?.cards.map((card) => card.id)).toEqual([
       "usb",
       "hardware",
-      "ros2-control",
-      "ros-ready",
+      "realsense",
     ]);
     expect(zones.find((zone) => zone.id === "connection")?.cards.map((card) => card.id)).toEqual([
       "ssh",
       "bridge",
       "agent",
     ]);
-    expect(zones.find((zone) => zone.id === "sensors")?.cards.map((card) => card.id)).toEqual(["realsense"]);
+    expect(zones.find((zone) => zone.id === "control")?.cards.map((card) => card.id)).toEqual(["ros2-control", "ros-ready", "teleop", "trajectory", "vla"]);
 
     const hardware = cards.find((card) => card.id === "hardware")!;
     expect(hardware.detail).toContain("无故障");
@@ -496,7 +496,30 @@ describe("status tab summaries", () => {
     expect(summarizeStatusZone([card("idle")]).tone).toBe("idle");
     expect(summarizeStatusZone([]).tone).toBe("unknown");
     expect(statusZoneForCard("hardware")).toBe("hardware");
-    expect(statusZoneForCard("realsense")).toBe("sensors");
+    expect(statusZoneForCard("realsense")).toBe("hardware");
     expect(statusZoneForCard(null)).toBeUndefined();
+  });
+});
+
+describe("clock synchronization health card", () => {
+  it.each([
+    ["synchronized", "ok"], ["unsynchronized", "fail"], ["stale", "warn"],
+    ["waiting", "unknown"], ["unsupported", "unknown"], ["disconnected", "idle"],
+  ] as const)("maps %s to %s and includes it in hardware aggregation", (state, tone) => {
+    const value = { supported: true, state, message: "诊断原因", source_topic: "", generation: 0 };
+    const card = buildClockSyncCard(value);
+    expect(card.tone).toBe(tone);
+    expect(card.rows.find(row => row.label === "相对 Jetson")?.value).toBe("—");
+    expect(groupStatusZones(buildStatusCards({ ...baseCardInput, clockSync: value }))
+      .find(zone => zone.id === "hardware")?.cards).toContainEqual(card);
+  });
+  it("preserves offset direction and firmware diagnostics", () => {
+    const card = buildClockSyncCard({ supported: true, state: "synchronized", message: "正常", source_topic: "/stm32/joint_states", generation: 2, source_offset_ms: 4.2, feedback_age_ms: 5,
+      firmware: { supported: true, synchronized: true, sync_age_ms: 120 } });
+    expect(card.rows).toEqual(expect.arrayContaining([
+      { label: "相对 Jetson", value: "超前 4.2 ms" },
+      { label: "固件同步", value: "已同步" },
+      { label: "距成功同步", value: "120 ms" },
+    ]));
   });
 });
