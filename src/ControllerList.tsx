@@ -49,7 +49,7 @@ export function ControllerList({
           {!controllerStatusFresh(status) && (
             <p>{status.message || "等待新鲜 Controller 状态"}</p>
           )}
-          {!!status.retryAfterMs && (
+          {!controllerStatusFresh(status) && !!status.retryAfterMs && (
             <span>重试等待 {(status.retryAfterMs / 1000).toFixed(1)} s</span>
           )}
         </div>

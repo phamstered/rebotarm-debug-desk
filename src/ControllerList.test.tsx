@@ -19,5 +19,11 @@ it("keeps last-good rows visibly read-only with neutral badges, age and query fa
   expect(screen.getByRole("status")).toHaveTextContent("快照已过期");
   expect(screen.getByText("active（上次）")).toHaveClass("unknown");
   expect(screen.getByText("active（上次）")).not.toHaveClass("active");
+  expect(screen.getByRole("status")).toHaveTextContent("重试等待 1.0 s");
   expect(screen.getByRole("button",{name:"查看 arm_trajectory_controller Graph"})).toBeEnabled();
+});
+it("does not describe a healthy polling cooldown as a retry", () => {
+  render(<ControllerList status={{...status,hasSnapshot:true,snapshotAgeMs:100,queryState:"ready",retryAfterMs:1000}} onInspect={vi.fn()}/>);
+  expect(screen.getByRole("status")).toHaveTextContent("快照年龄 0.1 s");
+  expect(screen.queryByText(/重试等待/)).not.toBeInTheDocument();
 });
