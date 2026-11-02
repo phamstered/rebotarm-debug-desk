@@ -26,6 +26,11 @@ export type MotionTrack = {
   kind: "arm" | "camera";
   deviceId: string;
 };
+export type MotionSyncPoint = {
+  id: string;
+  name: string;
+  afterStepIds: string[];
+};
 export type MotionCaptureAction = {
   id: string;
   type: "camera_capture";
@@ -79,6 +84,7 @@ export type MotionGroup = {
   steps: MotionGroupStep[];
   tracks?: MotionTrack[];
   actions?: MotionCaptureAction[];
+  syncPoints?: MotionSyncPoint[];
   createdAt: number;
   updatedAt: number;
 };
@@ -119,6 +125,7 @@ export function validateMotionGroup(value: unknown): string {
       "updatedAt",
       "tracks",
       "actions",
+      "syncPoints",
     ])
   )
     return "动作组结构无效";
@@ -252,6 +259,36 @@ export function validateMotionGroup(value: unknown): string {
       total += a.timeout;
     }
     if (total > 604800) return "动作组总时长不能超过 7 天";
+  }
+  if (value.syncPoints !== undefined) {
+    if (!Array.isArray(value.syncPoints) || value.syncPoints.length > 100)
+      return "同步点数量不能超过 100";
+    for (const point of value.syncPoints) {
+      if (
+        !object(point) ||
+        !fields(point, ["id", "name", "afterStepIds"]) ||
+        !text(point.id, 128) ||
+        !text(point.name, 512) ||
+        ids.has(point.id) ||
+        !Array.isArray(point.afterStepIds) ||
+        point.afterStepIds.length < 2 ||
+        point.afterStepIds.length > 16 ||
+        new Set(point.afterStepIds).size !== point.afterStepIds.length
+      )
+        return "同步点结构或参与 Pose 无效";
+      const participants = point.afterStepIds.map(
+        (id) =>
+          (value.steps as MotionGroupStep[]).find((s) => s.id === id) as
+            MotionGroupStep | undefined,
+      );
+      if (
+        participants.some((s) => !s) ||
+        new Set(participants.map((s) => s?.trackId ?? "arm")).size !==
+          participants.length
+      )
+        return "同步点需选择至少两个不同机械臂轨道的 Pose";
+      ids.add(point.id);
+    }
   }
   return "";
 }

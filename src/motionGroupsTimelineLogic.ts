@@ -7,6 +7,14 @@ export const GROUP_HISTORY_LIMIT = 50;
 export function cloneMotionGroup(group: MotionGroup): MotionGroup {
   return {
     ...group,
+    ...(group.syncPoints
+      ? {
+          syncPoints: group.syncPoints.map((p) => ({
+            ...p,
+            afterStepIds: [...p.afterStepIds],
+          })),
+        }
+      : {}),
     ...(group.tracks ? { tracks: group.tracks.map((t) => ({ ...t })) } : {}),
     ...(group.actions ? { actions: group.actions.map((a) => ({ ...a })) } : {}),
     steps: group.steps.map((step) => ({

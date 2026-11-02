@@ -37,6 +37,7 @@ import {
   sourceSnapshotChanged,
 } from "./motionGroupsTimelineLogic";
 import "./motionGroups.css";
+import { MotionSyncEditor } from "./MotionSyncEditor";
 import { MotionPosePicker } from "./MotionPosePicker";
 import { MotionGroupDialog } from "./MotionGroupDialog";
 import { MotionGroupResult, motionGroupPhaseLabels } from "./MotionGroupResult";
@@ -120,6 +121,7 @@ function Editor({
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [trackEditor, setTrackEditor] = useState(false);
+  const [syncEditor, setSyncEditor] = useState<string | null>(null);
   const [selectedStep, setSelectedStep] = useState(0),
     [playhead, setPlayhead] = useState(0);
   const [zoom, setZoom] = useState(40),
@@ -212,10 +214,7 @@ function Editor({
     ? Math.min(total, 604800)
     : 604800;
   const effectiveZoom = Math.min(zoom, 499900 / Math.max(1, displayTotal));
-  const selected = draft?.steps[selectedStep],
-    preview = draft
-      ? previewGroupPose(draft, playhead, selected?.trackId ?? "arm")
-      : null;
+  const selected = draft?.steps[selectedStep];
   const sources: CustomPosition[] = [...positions];
   if (homePositions?.length === 6 && homePositions.every(Number.isFinite))
     sources.unshift({
@@ -626,6 +625,9 @@ function Editor({
   function removeStep(index: number) {
     edit((g) => ({
       ...g,
+      syncPoints: g.syncPoints?.filter(
+        (p) => !p.afterStepIds.includes(g.steps[index].id),
+      ),
       actions: g.actions?.filter((a) => a.afterStepId !== g.steps[index].id),
       steps: g.steps
         .filter((_, i) => i !== index)
@@ -840,19 +842,40 @@ function Editor({
               <span className="motion-preview-badge">
                 本地预览 · 不下发实机
               </span>
-              <UrdfPoseThumbnail
-                xml={urdfXml}
-                label="动作组本地预览"
-                {...motionPoseThumbnailProps(
-                  preview?.positions,
-                  preview?.gripperPosition,
-                )}
-              />
-              <span className="motion-preview-caption">
-                {selected
-                  ? `${tracks.find((t) => t.id === (selected.trackId ?? "arm"))?.name ?? "机械臂"} · ${preview ? draft?.steps[preview.index]?.positionName : "无姿态"}`
-                  : "从姿态库选择 Pose 开始编排"}
-              </span>
+              <div className="motion-preview-models">
+                {tracks
+                  .filter((t) => t.kind === "arm")
+                  .map((track, i) => {
+                    const pose = draft
+                      ? previewGroupPose(draft, playhead, track.id)
+                      : null;
+                    return (
+                      <div className="motion-preview-model" key={track.id}>
+                        <UrdfPoseThumbnail
+                          xml={urdfXml}
+                          label={
+                            i
+                              ? `动作组本地预览 ${track.name}`
+                              : "动作组本地预览"
+                          }
+                          {...motionPoseThumbnailProps(
+                            pose?.positions,
+                            pose?.gripperPosition,
+                          )}
+                        />
+                        <span className="motion-preview-caption">
+                          {track.name} ·{" "}
+                          {pose
+                            ? draft?.steps[pose.index]?.positionName
+                            : "未添加 Pose"}
+                          {tracks.filter((t) => t.kind === "arm").length > 1
+                            ? " · 当前模型示意"
+                            : ""}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
             </div>
             <div className="motion-preview-controls">
               <button
@@ -924,6 +947,17 @@ function Editor({
                 onClick={addCapture}
               >
                 ＋ Action
+              </button>
+              <button
+                disabled={
+                  !draft ||
+                  editingLocked ||
+                  tracks.filter((t) => t.kind === "arm").length < 2
+                }
+                title="为不同机械臂的 Pose 添加同步等待点"
+                onClick={() => setSyncEditor("new")}
+              >
+                同步点
               </button>
               <button
                 disabled={!draft || editingLocked}
@@ -1154,7 +1188,7 @@ function Editor({
                     return (
                       <div
                         key={`dependency-${a.id}`}
-                        className="motion-action-dependency"
+                        className={`motion-action-dependency${to < from ? " reverse" : ""}`}
                         aria-label={`${row.step.positionName} 完成后执行 ${a.name}`}
                         style={{
                           left: 260 + start * effectiveZoom,
@@ -1165,6 +1199,27 @@ function Editor({
                     );
                   }),
                 )}
+                {draft?.syncPoints?.map((point) => {
+                  const at = Math.max(
+                    0,
+                    ...rows
+                      .filter((row) => point.afterStepIds.includes(row.step.id))
+                      .map((row) => row.poseDeparture),
+                  );
+                  return (
+                    <button
+                      key={point.id}
+                      className="motion-sync-marker"
+                      aria-label={`同步点 ${point.name}`}
+                      title={`${point.name} · 等待 ${point.afterStepIds.length} 个机械臂 Pose 完成`}
+                      style={{ left: 260 + at * effectiveZoom }}
+                      disabled={editingLocked}
+                      onClick={() => setSyncEditor(point.id)}
+                    >
+                      <span>{point.name}</span>
+                    </button>
+                  );
+                })}
                 <div
                   className="motion-group-playhead"
                   style={{ left: 260 + playhead * effectiveZoom }}
@@ -1610,6 +1665,37 @@ function Editor({
             <button onClick={() => setTrackEditor(false)}>完成</button>
           </footer>
         </MotionGroupDialog>
+      )}
+      {syncEditor && draft && (
+        <MotionSyncEditor
+          key={syncEditor}
+          group={draft}
+          point={draft.syncPoints?.find((p) => p.id === syncEditor)}
+          onClose={() => setSyncEditor(null)}
+          onSave={(point) => {
+            edit((g) => ({
+              ...g,
+              syncPoints: [
+                ...(g.syncPoints ?? []).filter((p) => p.id !== point.id),
+                point,
+              ],
+            }));
+            setSyncEditor(null);
+          }}
+          onDelete={
+            syncEditor === "new"
+              ? undefined
+              : () => {
+                  edit((g) => ({
+                    ...g,
+                    syncPoints: g.syncPoints?.filter(
+                      (p) => p.id !== syncEditor,
+                    ),
+                  }));
+                  setSyncEditor(null);
+                }
+          }
+        />
       )}
       {review && draft && (
         <MotionGroupDialog title="执行前检查" onClose={closeReview}>

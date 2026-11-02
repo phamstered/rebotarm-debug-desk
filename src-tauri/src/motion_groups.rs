@@ -75,6 +75,7 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
                     "updatedAt",
                     "tracks",
                     "actions",
+                    "syncPoints",
                 ],
             )?;
             let id = text(g, "id", 128)?;
@@ -221,6 +222,43 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
                     total += timeout;
                 }
             }
+            if let Some(points) = g.get("syncPoints") {
+                let points = points.as_array().ok_or("同步点必须为数组")?;
+                if points.len() > 100 {
+                    return Err("同步点过多".into());
+                }
+                let mut point_ids = step_ids.clone();
+                if let Some(actions) = g.get("actions").and_then(Value::as_array) {
+                    for action in actions {
+                        point_ids.insert(text(action, "id", 128)?);
+                    }
+                }
+                for point in points {
+                    object(point, &["id", "name", "afterStepIds"])?;
+                    if !point_ids.insert(text(point, "id", 128)?) {
+                        return Err("同步点 ID 重复".into());
+                    }
+                    text(point, "name", 512)?;
+                    let participants = point["afterStepIds"]
+                        .as_array()
+                        .ok_or("同步点参与 Pose 无效")?;
+                    if participants.len() < 2 || participants.len() > 16 {
+                        return Err("同步点需至少两个机械臂".into());
+                    }
+                    let mut seen_tracks = BTreeSet::new();
+                    for participant in participants {
+                        let id = participant.as_str().ok_or("同步点参与 Pose ID 无效")?;
+                        let step = steps
+                            .iter()
+                            .find(|s| s["id"].as_str() == Some(id))
+                            .ok_or("同步点依赖 Pose 不存在")?;
+                        let track = step.get("trackId").and_then(Value::as_str).unwrap_or("arm");
+                        if !seen_tracks.insert(track) {
+                            return Err("同步点不能重复选择同一机械臂".into());
+                        }
+                    }
+                }
+            }
             if !total.is_finite() || total > 604800. {
                 return Err("动作组总时长不能超过 7 天".into());
             }
@@ -335,6 +373,33 @@ mod tests {
             invalid["profiles"]["p"]["groups"][0]["actions"][0][key] = bad;
             assert!(validate_motion_groups_json(&invalid.to_string()).is_err());
         }
+    }
+    #[test]
+    fn validates_sync_points_and_rejects_single_arm_or_dangling_references() {
+        let mut value = fixture();
+        let group = &mut value["profiles"]["p"]["groups"][0];
+        group["tracks"] = serde_json::json!([
+            {"id":"arm","name":"A","kind":"arm","deviceId":"current"},
+            {"id":"b","name":"B","kind":"arm","deviceId":"other"}]);
+        let mut second = group["steps"][0].clone();
+        second["id"] = serde_json::json!("s2");
+        second["trackId"] = serde_json::json!("b");
+        second["duration"] = serde_json::json!(3);
+        group["steps"].as_array_mut().unwrap().push(second);
+        group["syncPoints"] =
+            serde_json::json!([{"id":"sync","name":"接应","afterStepIds":["s","s2"]}]);
+        assert!(validate_motion_groups_json(&value.to_string()).is_ok());
+        for participants in [
+            serde_json::json!(["s"]),
+            serde_json::json!(["s", "missing"]),
+            serde_json::json!(["s", "s"]),
+        ] {
+            let mut invalid = value.clone();
+            invalid["profiles"]["p"]["groups"][0]["syncPoints"][0]["afterStepIds"] = participants;
+            assert!(validate_motion_groups_json(&invalid.to_string()).is_err());
+        }
+        value["profiles"]["p"]["groups"][0]["steps"][1]["trackId"] = serde_json::json!("arm");
+        assert!(validate_motion_groups_json(&value.to_string()).is_err());
     }
     #[test]
     fn corrupt_file_is_preserved() {

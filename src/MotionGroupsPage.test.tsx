@@ -799,4 +799,46 @@ describe("MotionGroupsPage", () => {
       screen.queryByRole("dialog", { name: "执行前检查" }),
     ).not.toBeInTheDocument();
   });
+  it("edits multi-arm synchronization points and removes dangling dependencies with undo", async () => {
+    const extended: MotionGroup = {
+      ...group,
+      tracks: [
+        { id: "arm", name: "机械臂 A", kind: "arm", deviceId: "current" },
+        { id: "arm-b", name: "机械臂 B", kind: "arm", deviceId: "robot-b" },
+      ],
+      steps: group.steps.map((s, i) => ({
+        ...s,
+        trackId: i ? "arm-b" : "arm",
+      })),
+    };
+    const value = props({ groups: [extended] });
+    const user = userEvent.setup();
+    render(<MotionGroupsPage {...value} />);
+    expect(screen.getByLabelText("动作组本地预览 机械臂 B 姿态未同步")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "同步点" }),
+    );
+    const dialog = within(screen.getByRole("dialog", { name: "添加同步点" }));
+    expect(dialog.getByRole("button", { name: "保存同步点" })).toBeDisabled();
+    await user.click(dialog.getByRole("checkbox", { name: /机械臂 A/ }));
+    await user.click(dialog.getByRole("checkbox", { name: /机械臂 B/ }));
+    await user.click(dialog.getByRole("button", { name: "保存同步点" }));
+    expect(screen.getByRole("button", { name: "同步点 同步点" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "保存动作组" }));
+    expect(vi.mocked(value.onSave).mock.calls[0][0].syncPoints).toEqual([
+      expect.objectContaining({ name: "同步点", afterStepIds: ["a", "b"] }),
+    ]);
+    await user.click(screen.getByRole("button", { name: "关键帧 1 A" }));
+    await user.click(screen.getByRole("button", { name: "删除 Pose" }));
+    expect(
+      screen.queryByRole("button", { name: "同步点 同步点" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "撤销" }));
+    expect(screen.getByRole("button", { name: "同步点 同步点" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "同步点 同步点" }));
+    await user.click(screen.getByRole("button", { name: "删除同步点" }));
+    expect(
+      screen.queryByRole("button", { name: "同步点 同步点" }),
+    ).not.toBeInTheDocument();
+  });
 });

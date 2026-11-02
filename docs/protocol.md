@@ -473,4 +473,4 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 
 缩略图最大边为 120 像素，仅用于结果预览；源图像保留在 Jetson，原有高频 Image 二进制路径不变。失败/取消不伪造成功结果，也不推进下一段。心跳、暂停、取消及所有既有门禁继续作用于采集阶段。
 
-桌面动作组文件仍为 `motion-groups.v1.json`，兼容扩展 `tracks?:[{id,name,kind:"arm"|"camera",deviceId}]`、`steps[].trackId?`、`actions?:[{id,type:"camera_capture",name,trackId,afterStepId,topic,timeout}]`。省略轨道时使用 `{id:"arm",name:"机械臂",kind:"arm",deviceId:"current"}`。轨道及依赖在 TypeScript/Rust 两侧验证，序列化请求按依赖 Pose 转换为 `captures`；轨道本身不作为多臂执行指令发送。当前多臂/非当前设备执行在客户端拒绝，Bridge 仍只有单机械臂调度能力。
+桌面动作组文件仍为 `motion-groups.v1.json`，兼容扩展 `tracks?:[{id,name,kind:"arm"|"camera",deviceId}]`、`steps[].trackId?`、`actions?:[{id,type:"camera_capture",name,trackId,afterStepId,topic,timeout}]`。省略轨道时使用 `{id:"arm",name:"机械臂",kind:"arm",deviceId:"current"}`。轨道及依赖在 TypeScript/Rust 两侧验证，序列化请求按依赖 Pose 转换为 `captures`；桌面另可保存 `syncPoints?:[{id,name,afterStepIds}]`；每个同步点需引用至少两个不同机械臂轨道的 Pose，ID 与 Pose/Action/同步点互不重复。时间轴位置表示参与 Pose 的名义完成时刻，不承诺真实同步。轨道与同步点均不作为多臂执行指令发送。当前多臂/非当前设备执行在客户端拒绝，Bridge 仍只有单机械臂调度能力。

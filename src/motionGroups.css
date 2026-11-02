@@ -817,3 +817,49 @@
   top: 0;
   z-index: 5;
 }
+.motion-groups-editor .motion-sync-marker {
+  position: absolute;
+  top: 26px;
+  bottom: 0;
+  width: 14px;
+  padding: 0;
+  z-index: 6;
+  background: transparent;
+  border: 0;
+  border-left: 2px dashed #b2a5de;
+  border-radius: 0;
+}
+.motion-sync-marker span {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 2px 5px;
+  background: #29283c;
+  color: #e2d8fa;
+}
+.motion-sync-choices {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.motion-preview-models {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.motion-preview-model {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+}
+
+.motion-action-dependency.reverse::after { top:-4px; bottom:auto; border-top:0; border-bottom:6px solid #d4b66d; }
+@container motiongroups (max-width:1050px) {
+  .motion-group-zoom { gap:5px; padding:7px; }
+  .motion-group-zoom button { padding:5px 7px; }
+}

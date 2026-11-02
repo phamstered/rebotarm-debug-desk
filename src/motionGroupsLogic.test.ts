@@ -117,3 +117,13 @@ it("validates and round-trips Pose tracks and camera Action dependencies", () =>
   g.tracks.push({ id: "arm2", name: "机械臂 B", kind: "arm", deviceId: "robot-b" });
   expect(validateMotionGroup(g)).toBe(""); expect(groupDeviceReason(g)).toContain("多臂");
 });
+
+it("validates synchronization participants by robot track and preserves their IDs", () => {
+  const g = group(); g.tracks = [{ id: "arm", kind: "arm", name: "A", deviceId: "current" }, { id: "b", kind: "arm", name: "B", deviceId: "other" }];
+  g.steps[1].trackId = "b"; g.syncPoints = [{ id: "sync", name: "接应", afterStepIds: ["s", "s2"] }];
+  expect(validateMotionGroup(g)).toBe("");
+  const store = { schemaVersion: 1 as const, profiles: { p: { groups: [g] } } };
+  expect(parseMotionGroupStore(serializeMotionGroupStore(store))).toEqual(store);
+  for (const ids of [["s"], ["s", "missing"], ["s", "s"]]) { const bad = structuredClone(g); bad.syncPoints![0].afterStepIds = ids; expect(validateMotionGroup(bad)).not.toBe(""); }
+  g.steps[1].trackId = "arm"; expect(validateMotionGroup(g)).toContain("不同机械臂");
+});
