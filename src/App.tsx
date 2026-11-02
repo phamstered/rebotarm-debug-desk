@@ -28,9 +28,10 @@ import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
+import { SavePoseDialog } from "./SavePoseDialog";
 import { useClockSync } from "./clockSyncLogic";
 import { positionMotionBusy, usePositionMotion } from "./positionMotionLogic";
-import { addPosition, captureCurrentArmPose, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
+import { addPosition, captureCurrentArmPose, nextCapturedPoseName, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
@@ -392,6 +393,8 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState("");
   const [topicSubscribeError, setTopicSubscribeError] = useState("");
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
+  const [poseToSave, setPoseToSave] = useState<PositionDraft | null>(null);
+  const [poseSaveError, setPoseSaveError] = useState("");
   const [positionStore, setPositionStore] = useState<PositionStore>(() => emptyPositionStore());
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
@@ -631,8 +634,14 @@ export default function App() {
     return "error" in captured ? captured.error : "";
   })();
 
-  function capturePose() {
-    return captureCurrentArmPose(captureSamples, performance.now(), profile.jointStateTopic);
+  function openSavePose() {
+    const captured = captureCurrentArmPose(captureSamples, performance.now(), profile.jointStateTopic);
+    if ("error" in captured) { setPoseSaveError(captured.error); return; }
+    const gripper = positionMotion.gripper;
+    setPoseSaveError("");
+    setPoseToSave({ name: nextCapturedPoseName(positionStore.profiles[positionProfileKey]?.positions ?? []),
+      positions: [...captured.positions], source: "feedback", note: "",
+      gripperPosition: gripper?.fresh ? gripper.position : undefined });
   }
 
   function persistPositions(next: PositionStore) {
@@ -735,11 +744,11 @@ export default function App() {
     "--left-top-size": `${Math.round(layout.leftTopRatio * 10_000) / 100}%`,
   } as CSSProperties;
 
-  const refreshTopics = useCallback(async () => {
+  const refreshTopics = useCallback(async (manual = true) => {
     if (topicRefreshInFlightRef.current) return;
     const generation = connectionGenerationRef.current;
     topicRefreshInFlightRef.current = true;
-    setTopicRefreshing(true);
+    if (manual) setTopicRefreshing(true);
     try {
       const discovered = await bridge.listTopics();
       if (generation !== connectionGenerationRef.current) return;
@@ -1092,13 +1101,15 @@ export default function App() {
 
   useEffect(() => {
     if (stage !== "connected") return;
-    const timer = window.setInterval(() => void refreshTopics(), settings.refreshIntervalSeconds * 1000);
+    const timer = window.setInterval(() => void refreshTopics(false), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [refreshTopics, settings.refreshIntervalSeconds, stage]);
 
 
 
   function clearConnectionData() {
+    setPoseToSave(null);
+    setPoseSaveError("");
     connectionGenerationRef.current += 1;
     setTopicsVisited(false);
     setRobotVisited(false);
@@ -1574,16 +1585,6 @@ export default function App() {
     void connect();
   }
 
-  const positionPlanner = {
-    busy: statusActionBusy === "moveit-start",
-    disabledReason: stage !== "connected" ? "请先连接 Jetson" : controllerAction ? "Controller 切换进行中" : statusActionBusy ? "控制模式操作进行中" :
-      positionMotion.busy ? "请等待点位运动结束或取消" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行" :
-      activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先在 Status 启动 Trajectory 模式" : "",
-    notice: armWorkflow.workflow?.mode === "moveit" ? statusActionNotice : "",
-    workflow: ["moveit", "trajectory"].includes(armWorkflow.workflow?.mode ?? "") ? armWorkflow.workflow : null,
-    start: () => { void runStatusRestart("moveit-start", "moveit"); },
-  };
-
   const renderGroupEditor = (offline = false) => <MotionGroupsPage active={offline || appPage === "motion" && motionTab === "groups" && windowVisible} profileKey={positionProfileKey} groups={motionGroups.groups}
     positions={positionStore.profiles[positionProfileKey]?.positions ?? []}
     ready={motionGroups.ready} saving={motionGroups.saving} error={motionGroups.error}
@@ -1604,14 +1605,10 @@ export default function App() {
         <PositionPage
           profileKey={positionProfileKey}
           store={positionStore}
-          captureError={captureError}
           urdfXml={urdf || previewUrdf}
-          onCreate={createPosition}
           onUpdate={editPosition}
           onDelete={removePosition}
-          onCapture={capturePose}
           motion={positionMotion}
-          planner={positionPlanner}
           onBack={() => setManagePositions(false)}
         />
       </main>
@@ -2011,6 +2008,9 @@ export default function App() {
               onSendTrajectory={sendTrajectory}
               jointMotion={positionMotion}
               showMotionTerminal={false}
+              onSavePose={openSavePose}
+              savePoseDisabledReason={captureError}
+              savePoseError={poseSaveError}
               rgbdCloud={rgbdSession.cloud}
               rgbdVisible={rgbdSession.visible}
               rgbdPointSize={rgbdSession.pointSize}
@@ -2036,14 +2036,10 @@ export default function App() {
         positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
             profileKey={positionProfileKey}
             store={positionStore}
-            captureError={captureError}
-          urdfXml={urdf || previewUrdf}
-            onCreate={createPosition}
+            urdfXml={urdf || previewUrdf}
             onUpdate={editPosition}
             onDelete={removePosition}
-            onCapture={capturePose}
             motion={positionMotion}
-            planner={positionPlanner}
           />
 </> : null}
         groups={renderGroupEditor()}
@@ -2053,6 +2049,8 @@ export default function App() {
 
       </div>
       </div>
+      {poseToSave && <SavePoseDialog key={positionProfileKey} initial={poseToSave} urdfXml={urdf || previewUrdf}
+        onClose={() => setPoseToSave(null)} onSave={createPosition} />}
       {versionDialogOpen && bridgeVersionCheck?.status === "mismatch" && (
         <ModalShell
           title="Bridge 版本不匹配"

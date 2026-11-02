@@ -66,10 +66,11 @@ export function MotionControllersPanel({
         <h2>Controller 管理</h2>
         <button
           type="button"
+          aria-busy={refreshing}
           disabled={Boolean(action) || refreshing || Boolean(disabledReason)}
           onClick={onRefresh}
         >
-          {refreshing ? "刷新中…" : "刷新 Controllers"}
+          刷新 Controllers
         </button>
       </header>
       {disabledReason && (

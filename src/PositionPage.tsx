@@ -1,37 +1,27 @@
 import { useState } from "react";
 import { MotionDivider } from "./MotionLayout";
-import { ArmModeWorkflow } from "./ArmModeWorkflow";
-import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { positionMotionBusy, type PositionMotionControls } from "./positionMotionLogic";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
-import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, homeRow, nextCapturedPoseName, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
+import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, homeRow, type CustomPosition, type PositionDraft, type PositionStore } from "./positionLogic";
 
 const blankJoints = () => ["0", "0", "0", "0", "0", "0"];
 
 export function PositionPage({
   profileKey,
   store,
-  captureError,
   urdfXml,
-  onCreate,
   onUpdate,
   onDelete,
-  onCapture,
   onBack,
   motion,
-  planner,
 }: {
   profileKey: string;
   store: PositionStore;
-  captureError: string;
   urdfXml: string;
-  onCreate(draft: PositionDraft): string;
   onUpdate(id: string, draft: PositionDraft): string;
   onDelete(id: string): void;
-  onCapture(): { positions: number[] } | { error: string };
   onBack?: () => void;
   motion?: PositionMotionControls;
-  planner?: { busy: boolean; disabledReason: string; notice: string; workflow: ArmWorkflow | null; start(): void };
 }) {
   const [name, setName] = useState("");
   const [joints, setJoints] = useState<string[]>(blankJoints);
@@ -49,38 +39,11 @@ export function PositionPage({
   const disabled = !motion || Boolean(moveReason) || motion.busy;
   const homeReady = motion?.homePositions.length === 6;
 
-  function openCreate() {
-    setIncludeGripper(false); setGripper("");
-    setEditingId(null);
-    setName("");
-    setJoints(blankJoints());
-    setNote("");
-    setSource("manual");
-    setEditorOpen(true);
-    setFormError("");
-  }
-
-  function saveCurrentPose() {
-    const captured = onCapture();
-    if ("error" in captured) {
-      setFormError(captured.error);
-      return;
-    }
-    setEditingId(null);
-    setName(nextCapturedPoseName(positions));
-    setIncludeGripper(Boolean(motion?.gripper?.fresh && motion.gripper.position !== undefined));
-    setGripper(motion?.gripper?.position === undefined ? "" : String(motion.gripper.position * 1000));
-    setJoints(captured.positions.map((value) => String(value)));
-    setSource("feedback");
-    setNote("");
-    setEditorOpen(true);
-    setFormError("");
-  }
-
   function save() {
     if (includeGripper && (!gripper.trim() || !Number.isFinite(Number(gripper)))) { setFormError("请输入有效的夹爪行程"); return; }
     const draft = { gripperPosition: includeGripper ? Number(gripper) / 1000 : undefined, name, positions: joints.map(Number), note, source };
-    const error = editingId ? onUpdate(editingId, draft) : onCreate(draft);
+    if (!editingId) return;
+    const error = onUpdate(editingId, draft);
     if (error) {
       setFormError(error);
       return;
@@ -99,20 +62,13 @@ export function PositionPage({
         </div>
         <div className="position-toolbar-actions">
           {onBack && <button type="button" className="position-quiet" onClick={onBack}>返回连接</button>}
-          <button type="button" className="position-primary" onClick={saveCurrentPose} disabled={Boolean(captureError)} title={captureError || "把当前关节角写入新点位"}>保存当前姿态</button>
-          <button type="button" className="position-quiet" onClick={openCreate}>手动新增</button>
+
         </div>
       </div>
       <section className="position-motion" aria-label="点位执行">
         <label><input type="checkbox" checked={motion?.armed ?? false} disabled={!motion || motion.busy}
           onChange={(event) => motion?.setArmed(event.target.checked)} />我已确认工作区安全，允许点位运动</label>
         {moveReason && <p>{moveReason}</p>}
-        {planner && <button type="button" className="position-quiet" disabled={planner.busy || Boolean(planner.disabledReason)}
-          title={planner.disabledReason || "启动或复用 MoveIt 规划器，不执行点位运动"}
-          onClick={planner.start}>{planner.busy ? "MoveIt 启动中…" : "启动 MoveIt"}</button>}
-        {planner?.disabledReason && planner.disabledReason !== moveReason && <p>{planner.disabledReason}</p>}
-        {planner?.notice && <output role="status">{planner.notice}</output>}
-        {planner && <ArmModeWorkflow workflow={planner.workflow} />}
         {motion?.busy && !positionMotionBusy(motion.state.phase) && <p>其他会话的点位运动尚未结束</p>}
         {motion && motion.state.phase !== "idle" && <div role="status" aria-live="polite">
           <strong>{motion.state.label}</strong> · {motion.state.message}
@@ -202,7 +158,7 @@ export function PositionPage({
               </div>
             </form>
           ) : (
-            <p className="position-editor-hint">选一个点位进行编辑，或新增一个。</p>
+            <p className="position-editor-hint">选一个点位进行编辑；新姿态请在 Robot View 的 TCP 操作区保存。</p>
           )}
         </aside>
       </div>

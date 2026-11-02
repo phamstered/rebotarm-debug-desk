@@ -11,12 +11,27 @@ vi.mock("@react-three/fiber", () => ({ Canvas: ({ frameloop, children }: { frame
 vi.mock("./urdfAssetLogic", () => ({ hydrateUrdfResources: doubles.hydrate, loadUrdfScene: doubles.load, disposeUrdfObject: doubles.dispose }));
 import * as trajectoryLogic from "./trajectoryLogic";
 import { UrdfViewer } from "./UrdfViewer";
+import { MotionLayoutProvider } from "./MotionLayout";
 const xml = '<robot name="test"><link name="base"/></robot>';
 const props = { xml, bridge: {} as BridgeClient, jointState: { name: ["j1"], position: [1] }, tcpLink: "base", trajectoryController: null, onSendTrajectory: vi.fn() };
 const robot = () => Object.assign(new Group(), { setJointValue: vi.fn() }) as unknown as URDFRobot;
 
 describe("Robot View lifecycle", () => {
   beforeEach(() => { vi.clearAllMocks(); doubles.hydrate.mockResolvedValue({ dispose: doubles.assetsDispose }); doubles.load.mockResolvedValue(robot()); });
+  it("places capture last in TCP operations and keeps it separate from motion confirmation", async () => {
+    const user = userEvent.setup(), save = vi.fn();
+    const view = render(<MotionLayoutProvider active><UrdfViewer {...props} onSavePose={save} /></MotionLayoutProvider>);
+    const button = screen.getByRole("button", {name:"保存当前姿态"});
+    expect(button.closest(".viewer-save-pose")?.nextElementSibling).toBeNull();
+    await user.click(button);
+    expect(save).toHaveBeenCalledOnce();
+    expect(props.onSendTrajectory).not.toHaveBeenCalled();
+    view.rerender(<MotionLayoutProvider active><UrdfViewer {...props} onSavePose={save} savePoseDisabledReason="没有新鲜反馈" /></MotionLayoutProvider>);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "没有新鲜反馈");
+    view.rerender(<MotionLayoutProvider active><UrdfViewer {...props} onSavePose={save} active={false} /></MotionLayoutProvider>);
+    expect(button).toBeDisabled();
+  });
   it("waits for the controller joint contract and displays subscription errors", async () => {
     const controller = { name: "arm", topic: "/arm/joint_trajectory" };
     const view = render(<UrdfViewer {...props} trajectoryController={controller} />);

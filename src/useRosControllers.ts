@@ -63,6 +63,7 @@ export function useRosControllers({
       valid: connected,
       revision: 0,
       pending: new Set<Promise<RosControlStatus>>(),
+      explicitPending: new Set<Promise<RosControlStatus>>(),
       cache: null as Promise<RosControlStatus> | null,
       force: null as Promise<RosControlStatus> | null,
       switching: false,
@@ -173,6 +174,7 @@ export function useRosControllers({
     context.abort.abort();
     context.abort = new AbortController();
     context.pending.clear();
+    context.explicitPending.clear();
     context.cache = null;
     context.force = null;
     context.status = null;
@@ -206,7 +208,7 @@ export function useRosControllers({
         return (context.force || context.cache)!;
       const revision = context.revision;
       const before = refresh ? [...context.pending] : [];
-      update((old) => ({ ...old, refreshing: true }), revision);
+      if (refresh) update((old) => ({ ...old, refreshing: true }), revision);
       const query = Promise.allSettled(before)
         .then(async () => {
           if (!context.valid || context.revision !== revision)
@@ -277,14 +279,16 @@ export function useRosControllers({
         })
         .finally(() => {
           context.pending.delete(query);
+          context.explicitPending.delete(query);
           if (context.cache === query) context.cache = null;
           if (context.force === query) context.force = null;
           update(
-            (old) => ({ ...old, refreshing: context.pending.size > 0 }),
+            (old) => ({ ...old, refreshing: context.explicitPending.size > 0 }),
             revision,
           );
         });
       context.pending.add(query);
+      if (refresh) context.explicitPending.add(query);
       if (refresh) context.force = query;
       else context.cache = query;
       return query;

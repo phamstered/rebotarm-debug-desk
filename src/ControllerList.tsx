@@ -33,7 +33,14 @@ export function ControllerList({
           role="status"
         >
           <strong>{controllerStatusLabel(status)}</strong>
-          {status.hasSnapshot && (
+          {controllerStatusFresh(status) && status.hasSnapshot && (
+            <details className="controller-query-details">
+              <summary>查询详情</summary>
+              <div>快照年龄 {((status.snapshotAgeMs ?? 0) / 1000).toFixed(1)} s</div>
+              {status.queryPending && <div>后台查询中</div>}
+            </details>
+          )}
+          {!controllerStatusFresh(status) && status.hasSnapshot && (
             <span>
               快照年龄 {((status.snapshotAgeMs ?? 0) / 1000).toFixed(1)} s
               {!controllerStatusFresh(status)
@@ -45,7 +52,7 @@ export function ControllerList({
             status.snapshotAgeMs >= CONTROLLER_SNAPSHOT_TTL_MS && (
               <span>快照已过期</span>
             )}
-          {status.queryPending && <span>后台查询中</span>}
+          {!controllerStatusFresh(status) && status.queryPending && <span>后台查询中</span>}
           {!controllerStatusFresh(status) && (
             <p>{status.message || "等待新鲜 Controller 状态"}</p>
           )}

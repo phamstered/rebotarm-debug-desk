@@ -151,6 +151,9 @@ export function UrdfViewer({
   jointMotion,
   plannerLog,
   showMotionTerminal = true,
+  onSavePose,
+  savePoseDisabledReason = "",
+  savePoseError = "",
   rgbdCloud = null,
   rgbdVisible = true,
   rgbdPointSize = 0.008,
@@ -169,6 +172,9 @@ export function UrdfViewer({
   jointMotion?: PositionMotionControls;
   plannerLog?: ReactNode;
   showMotionTerminal?: boolean;
+  onSavePose?(): void;
+  savePoseDisabledReason?: string;
+  savePoseError?: string;
   xml: string;
   jointState: JointState | null;
   bridge: BridgeClient;
@@ -520,6 +526,11 @@ export function UrdfViewer({
           </div>
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
+        {onSavePose && <div className="viewer-save-pose">
+          <button type="button" className="position-primary" disabled={!active || dragging || Boolean(savePoseDisabledReason)}
+            title={savePoseDisabledReason || "保存当前实测关节姿态，不保存未执行的 TCP 预览"} onClick={onSavePose}>保存当前姿态</button>
+          {savePoseError && <p role="alert" className="error">{savePoseError}</p>}
+        </div>}
         </>}
 
       </ViewerHeadsUp>
