@@ -1,57 +1,41 @@
-import { useMemo } from "react";
-import type { Vec3 } from "./kinematicsLogic";
-import { armPosePoints } from "./posePreviewLogic";
+import { useEffect, useMemo, useRef } from "react";
+import { poseThumbnail, renderPoseThumbnail } from "./poseThumbnailLogic";
 
-export function UrdfPoseThumbnail({
-  xml,
-  label,
-  jointNames,
-  positions,
-}: {
+export function UrdfPoseThumbnail({ xml, label, jointNames, positions }: {
   xml: string;
   label: string;
   jointNames?: string[];
   positions?: number[];
 }) {
-  const points = useMemo(() => {
+  // App telemetry can recreate equal arrays; retain the static scene until values change.
+  const namesKey = jointNames?.join("\0");
+  const valuesKey = positions?.join("\0");
+  const preview = useMemo(() => {
     if (!xml || !jointNames || !positions || positions.length === 0) return null;
     try {
-      return armPosePoints(xml, jointNames, positions);
+      const pose = poseThumbnail(xml, jointNames, positions);
+      return { pose, svg: renderPoseThumbnail(pose) };
     } catch {
       return null;
     }
-  }, [xml, jointNames, positions]);
+  }, [xml, namesKey, valuesKey]);
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!preview || !host.current) return;
+    const element = host.current;
+    element.replaceChildren(preview.svg);
+    return () => element.replaceChildren();
+  }, [preview]);
 
-  if (!points) {
+  if (!preview) {
     return <div className="position-thumb position-thumb-empty" aria-label={`${label} 姿态未同步`}>无姿态</div>;
   }
   return (
-    <div className="position-thumb" aria-label={`${label} 姿态`} data-tip={points[points.length - 1].map((value) => value.toFixed(3)).join(",")}>
-      <PoseSvg points={points} />
+    <div className="position-thumb" role="img" aria-label={`${label} 姿态`}
+      title="简化 3D 姿态 · 红 X / 绿 Y / 蓝 Z"
+      data-tip={preview.pose.points[preview.pose.points.length - 1].map(value => value.toFixed(3)).join(",")}>
+      <div ref={host} className="position-thumb-scene" />
+      <span className="position-thumb-badge" aria-hidden="true">3D</span>
     </div>
-  );
-}
-
-function PoseSvg({ points }: { points: Vec3[] }) {
-  const projected = points.map((point) => [point[0], point[2] - point[1] * 0.35] as const);
-  const xs = projected.map((point) => point[0]);
-  const ys = projected.map((point) => point[1]);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const scale = 68 / Math.max(maxX - minX, maxY - minY, 0.05);
-  const place = (point: readonly [number, number]) => [
-    18 + (point[0] - minX) * scale,
-    78 - (point[1] - minY) * scale,
-  ] as const;
-  const placed = projected.map(place);
-  const tip = placed[placed.length - 1];
-  return (
-    <svg viewBox="0 0 112 84" aria-hidden="true">
-      <polyline points={placed.map((point) => point.join(",")).join(" ")} />
-      {placed.map((point, index) => <circle key={index} cx={point[0]} cy={point[1]} r={index === placed.length - 1 ? 3.2 : 2} />)}
-      <circle className="position-thumb-tip" cx={tip[0]} cy={tip[1]} r="3.2" />
-    </svg>
   );
 }
