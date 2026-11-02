@@ -14,6 +14,7 @@ import {
 import {
   positionMotionBusy,
   type PositionMotionControls,
+  type PositionMotionState,
 } from "./positionMotionLogic";
 import {
   MOTION_GROUP_LIMITS,
@@ -31,6 +32,7 @@ import {
   sourceSnapshotChanged,
 } from "./motionGroupsTimelineLogic";
 import "./motionGroups.css";
+import { MotionGroupResult, motionGroupPhaseLabels } from "./MotionGroupResult";
 
 export type MotionGroupsPageProps = {
   profileKey: string;
@@ -104,10 +106,47 @@ function Editor({
     [pending, setPending] = useState<PendingNavigation | null>(null),
     [deleting, setDeleting] = useState(false),
     [working, setWorking] = useState(false);
-  const [running, setRunning] = useState<MotionGroup | null>(null);
+  const pendingSnapshot = useRef<MotionGroup | null>(null);
+  const [lastResult, setLastResult] = useState<{
+    state: PositionMotionState;
+    snapshot: MotionGroup | null;
+  } | null>(null);
+  useEffect(() => {
+    const state = motion.state;
+    if (state.phase === "idle" && !state.commandId) {
+      pendingSnapshot.current = null;
+      setLastResult(null);
+      return;
+    }
+    if (!state.group || !state.commandId) return;
+    const pending = pendingSnapshot.current;
+    if (pending && pending.id === state.group.id)
+      pendingSnapshot.current = null;
+    setLastResult((previous) => ({
+      state: {
+        ...state,
+        group: { ...state.group! },
+        arrivalErrors: state.arrivalErrors?.map((error) => ({ ...error })),
+      },
+      snapshot:
+        pending?.id === state.group!.id
+          ? cloneMotionGroup(pending)
+          : previous?.state.commandId === state.commandId
+            ? previous.snapshot
+            : null,
+    }));
+  }, [motion.state]);
+  const currentGroupState =
+    motion.state.group && motion.state.commandId ? motion.state : null;
+  const resultState = currentGroupState ?? lastResult?.state;
+  const running =
+    lastResult?.state.commandId === resultState?.commandId
+      ? lastResult?.snapshot
+      : null;
   const live = useRef(true),
     locked = useRef(false),
     dragCleanup = useRef<(() => void) | null>(null);
+  const resultAnchor = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null),
     layout = useMotionLayout();
   useEffect(() => {
@@ -485,6 +524,11 @@ function Editor({
           </button>
         </div>
       </header>
+      {resultState && (
+        <div ref={resultAnchor} className="motion-group-result-anchor">
+          <MotionGroupResult state={resultState} snapshot={running} />
+        </div>
+      )}
       {(error || notice) && <p role="alert">{error || notice}</p>}
       {pending !== null && (
         <div
@@ -948,6 +992,28 @@ function Editor({
         </div>
       </section>
       <footer className="motion-group-execution">
+        {resultState && (
+          <div
+            className={`motion-group-result-summary result-${resultState.phase}`}
+          >
+            <strong>
+              最近执行的「
+              {running?.name || resultState.label || resultState.group?.id}
+              」动作组 · {motionGroupPhaseLabels[resultState.phase]}
+            </strong>
+            <span>{resultState.message || "当前任务未提供详细原因"}</span>
+            <button
+              onClick={() =>
+                resultAnchor.current?.scrollIntoView?.({
+                  block: "start",
+                  behavior: "smooth",
+                })
+              }
+            >
+              查看详细结果
+            </button>
+          </div>
+        )}
         <label>
           <input
             type="checkbox"
@@ -962,7 +1028,7 @@ function Editor({
           onClick={() => {
             if (!draft || executeReason) return;
             const copy = cloneMotionGroup(draft);
-            setRunning(copy);
+            pendingSnapshot.current = copy;
             void action(() => motion.executeGroup!(copy));
           }}
         >
@@ -971,18 +1037,11 @@ function Editor({
         {executeReason && <span>{executeReason}</span>}
         {groupActive && (
           <>
-            <strong>
-              {running?.name ?? motion.state.label} · 第{" "}
-              {motion.state.group!.index + 1}/{motion.state.group!.count} 帧 ·{" "}
-              {motion.state.phase === "paused"
-                ? "已暂停"
-                : motion.state.message}
-            </strong>
             <span>
-              实际经过 {seconds(motion.state.group!.elapsed)}；名义{" "}
+              本会话动作组执行中；名义时长{" "}
               {running
                 ? seconds(editorTimeline(running).at(-1)?.departure ?? 0)
-                : "—"}
+                : "未提供"}
             </span>
             <button
               disabled={

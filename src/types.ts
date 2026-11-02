@@ -141,6 +141,17 @@ export type ClockSyncInfo = {
   firmware?: { supported: boolean; synchronized?: boolean; sync_age_ms?: number; failure_count?: number; last_sync_duration_ms?: number };
 };
 
+export type MotionArrivalError = {
+  joint_name: string;
+  target: number;
+  actual: number;
+  position_error: number;
+  position_tolerance: number;
+  velocity: number;
+  velocity_tolerance: number;
+  unit: "rad" | "m";
+};
+
 export type BridgeEnvelope = {
   subscription_id?: string;
   frame_age_ms?: number;
@@ -215,6 +226,9 @@ export type BridgeEnvelope = {
   group_count?: number;
   group_phase?: "preparing" | "moving" | "holding" | "paused";
   group_elapsed_s?: number;
+  group_step_label?: string;
+  arrival_errors?: MotionArrivalError[];
+  position_error_check_enforced?: boolean;
   joint_targets?: Record<string, number>;
   motion_log_session?: string;
   motion_log_after?: number;

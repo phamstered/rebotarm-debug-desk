@@ -26,12 +26,30 @@ class GroupRobot(MockRobot):
         self.fail_execution = False
         self.ignore_cancel = False
         self.gripper_bias_once = 0.
+        self.joint_bias_once = {}
+        self.velocity_after_execute = 0.
+        self.running_velocity = 0.
+        self.pause_after_execute = False
+        self.invalid_speed_plan = False
+        self.set_parameters([Parameter('robot_description_planning.joint_limits.%s.%s' % (joint, name), value=2.)
+                             for joint in ARM for name in ['max_velocity', 'max_acceleration']])
+        publisher = self.joints_pub
+        robot = self
+        class FeedbackPublisher:
+            def publish(self, message):
+                message.velocity[3] = robot.running_velocity
+                publisher.publish(message)
+        self.joints_pub = FeedbackPublisher()
 
     def plan(self, handle):
         self.starts.append(dict(zip(handle.request.request.start_state.joint_state.name,
                                     handle.request.request.start_state.joint_state.position)))
         assert handle.request.planning_options.plan_only, 'Groups must always validate full plans'
-        return super().plan(handle)
+        result = super().plan(handle)
+        if self.invalid_speed_plan and result.planned_trajectory.joint_trajectory.points:
+            index = result.planned_trajectory.joint_trajectory.joint_names.index('joint4')
+            result.planned_trajectory.joint_trajectory.points[0].velocities[index] = 2.01
+        return result
 
     def run(self, handle):
         self.executing = True
@@ -53,10 +71,25 @@ class GroupRobot(MockRobot):
         result = super().run(handle)
         self.positions[GRIPPER] += self.gripper_bias_once
         self.gripper_bias_once = 0.
+        for name, error in self.joint_bias_once.items():
+            self.positions[name] += error
+        self.joint_bias_once = {}
+        self.running_velocity = self.velocity_after_execute
+        self.velocity_after_execute = 0.
+        if self.pause_after_execute:
+            self.pause = True
+            self.pause_after_execute = False
         return result
 
 
 class Client(WebSocket):
+    def receive(self):
+        message = super().receive()
+        if message.get('op') == 'position_motion' and 'group_id' in message:
+            assert isinstance(message.get('group_step_label'), str) and message['group_step_label'], message
+            assert message.get('position_error_check_enforced') is False, message
+        return message
+
     def request(self, op, **fields):
         if op == 'position_group_start':
             self.command_id = fields['command_id']
@@ -100,6 +133,7 @@ def main(binary):
                 return client.request('position_motion_info')
             ready = wait_for(lambda: (lambda x: x if x.get('gripper_available') else None)(info()))
             assert ready['motion_group_supported'] is True, ready
+            assert ready['position_error_check_enforced'] is False, ready
             def spec(hold=.8):
                 return dict(group_id='test-group', label='动作组', preparation_duration_s=2., steps=[
                     dict(id='a', label='A', positions=[.05, 0., 0., 0., 0., 0.], gripper_position=.025,
@@ -164,6 +198,66 @@ def main(binary):
             assert robot.starts[1]['joint1'] == .05 and abs(robot.starts[1][GRIPPER] - .025) < 1e-9
             assert robot.executions[0].points[-1].time_from_start.sec == 2
             assert robot.executions[1].points[-1].time_from_start.sec == 3
+
+            # Even with 2/2 model limits, a trajectory above the hard limit is
+            # rejected before ExecuteTrajectory and cannot start a later step.
+            robot.invalid_speed_plan = True
+            before = len(robot.executions)
+            value = spec(); value['preparation_duration_s'] = 6.
+            assert start(value)['accepted'] is True
+            wait_for(lambda: terminal('failed'))
+            assert len(robot.executions) == before
+            robot.invalid_speed_plan = False
+
+            # Field HOME reproduction: successful Action + fresh stopped
+            # feedback progresses despite nominal arm/gripper endpoint errors.
+            value = spec(.3)
+            value['preparation_duration_s'] = 5.
+            value['steps'][0].update(label='HOME', positions=[0.] * 6)
+            robot.joint_bias_once = {'joint4': -.043679}
+            robot.gripper_bias_once = .002
+            before = len(robot.groups)
+            assert start(value)['accepted'] is True
+            home = wait_for(lambda: event('waiting', 0))
+            assert home['group_step_label'] == 'HOME' and home['group_phase'] == 'holding', home
+            assert home['position_error_check_enforced'] is False
+            errors = {e['joint_name']: e for e in home['arrival_errors']}
+            assert abs(errors['joint4']['actual'] + .043679) < 1e-9 and errors['joint4']['target'] == 0., errors
+            assert errors['joint4']['position_error'] < -.0436 and errors['joint4']['position_tolerance'] == .02
+            assert errors['joint4']['velocity_tolerance'] == .03 and errors['joint4']['unit'] == 'rad'
+            assert abs(errors[GRIPPER]['position_error'] - .002) < 1e-9
+            completed = wait_for(lambda: terminal('succeeded'))
+            assert len(robot.groups) == before + 2
+            assert abs(robot.starts[-1]['joint4'] + .043679) < 1e-9
+            frozen = completed['arrival_errors']
+            robot.positions['joint1'] += .1
+            time.sleep(.15)
+            assert wait_for(lambda: event('succeeded'))['arrival_errors'] == frozen
+            robot.positions['joint1'] -= .1
+
+            # Successful Action alone cannot advance until velocity is stopped.
+            robot.velocity_after_execute = .04
+            before = len(robot.groups)
+            assert start()['accepted'] is True
+            wait_for(lambda: event('verifying', 0))
+            time.sleep(.6)
+            assert info()['busy'] is True and len(robot.groups) == before + 1
+            ws.request('position_cancel', command_id=ws.command_id)
+            time.sleep(.3)
+            assert info()['busy'] is True and len(robot.groups) == before + 1
+            robot.running_velocity = 0.
+            wait_for(lambda: terminal('canceled'))
+
+            # No fresh post-result feedback means no arrival snapshot and no B.
+            robot.pause_after_execute = True
+            before = len(robot.groups)
+            assert start()['accepted'] is True
+            time.sleep(1.3)
+            assert info()['busy'] is True and len(robot.groups) == before + 1
+            value = event()
+            assert value.get('arrival_errors') is None, value
+            robot.pause = False
+            wait_for(lambda: terminal('failed'))
 
             # Missing gripper target holds fresh measured opening, with a full
             # seven-axis path/arrival/hold check rather than dropping joint7.

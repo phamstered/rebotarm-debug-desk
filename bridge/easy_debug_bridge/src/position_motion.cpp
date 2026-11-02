@@ -2,6 +2,7 @@
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/motion_arrival.hpp"
 #include "easy_debug_bridge/position_group_parser.hpp"
 #include "easy_debug_bridge/tcp_pose_model.hpp"
 #include <shape_msgs/msg/solid_primitive.hpp>
@@ -99,6 +100,8 @@ struct PositionMotion::Impl {
     bool cancel_requested{false}, terminal{false};
     int code{0}; bool failed_result{false}, planning_finished{false};
     std::shared_ptr<GroupRun> group;
+    std::vector<double> hold_reference;
+    std::optional<std::vector<MotionArrivalError>> arrival_errors;
   };
   rclcpp::Node &node;
   rclcpp::CallbackGroup::SharedPtr callback_group;
@@ -167,10 +170,12 @@ struct PositionMotion::Impl {
       if (!m.group->done) timeline.advance(steady_seconds());
       group_fields = ",\"group_id\":" + quote(m.group->spec.id) + ",\"group_index\":" + std::to_string(timeline.index) +
           ",\"group_count\":" + std::to_string(m.group->spec.steps.size()) + ",\"group_phase\":" + quote(timeline.phase) +
-          ",\"group_elapsed_s\":" + std::to_string(timeline.elapsed_s);
+          ",\"group_elapsed_s\":" + std::to_string(timeline.elapsed_s) +
+          ",\"group_step_label\":" + quote(m.group->spec.steps.at(timeline.index).label);
     }
     return "{\"op\":\"position_motion\",\"command_id\":" + quote(m.id) + ",\"label\":" + quote(m.label) +
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
+        ",\"position_error_check_enforced\":false" + (m.arrival_errors ? ",\"arrival_errors\":" + motion_arrival_json(*m.arrival_errors) : "") +
         ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + group_fields + "}";
   }
   static double steady_seconds() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
@@ -179,9 +184,18 @@ struct PositionMotion::Impl {
     RCLCPP_INFO(node.get_logger(), "[motion][%s][%s][%s] %s", level.c_str(), id.c_str(), phase.c_str(), message.c_str());
   }
   void update(const std::shared_ptr<Motion> &m, const std::string &phase, const std::string &message, bool terminal = false) {
-    if (m->phase != phase || m->message != message)
-      log(m->owner, m->id, phase, m->label + " · " + message, phase == "failed" || phase == "stop_failed" ? "error" : phase == "canceling" ? "warn" : "info");
-    m->phase = phase; m->message = message; m->terminal = terminal;
+    // Capture only at a transition using fresh, valid source feedback. Terminal
+    // events replay this checked snapshot, never later samples from another pose.
+    m->arrival_errors.reset();
+    if ((m->result_at != Clock::time_point{} || phase == "stop_failed") && fresh(joints_at) && clock_snapshot().healthy() &&
+        (m->result_at == Clock::time_point{} || joints_at >= m->result_at)) {
+      try { m->arrival_errors = motion_arrival_errors(m->model.joint_names, m->target,
+          measured(m->model, false, &m->calibration), measured(m->model, true, &m->calibration)); } catch (...) {}
+    }
+    const auto detail = phase == "stop_failed" && !m->arrival_errors ? message + "；当前无新鲜有效反馈，未提供误差快照" : message;
+    if (m->phase != phase || m->message != detail)
+      log(m->owner, m->id, phase, m->label + " · " + detail, phase == "failed" || phase == "stop_failed" ? "error" : phase == "canceling" ? "warn" : "info");
+    m->phase = phase; m->message = detail; m->terminal = terminal;
     if (terminal && m->group) { m->group->timeline.advance(steady_seconds()); m->group->done = true; }
     m->send(event(*m));
     if (terminal && current == m) in_motion.store(false);
@@ -301,9 +315,7 @@ struct PositionMotion::Impl {
           throw std::runtime_error("MoveIt 执行控制器 Action 配置不匹配");
         for (size_t i = 9; i < 33; i += 4) {
           const double velocity = p[i].as_double(), acceleration = p[i+1].as_double();
-          if (!std::isfinite(velocity) || velocity <= 0 || velocity > 1 || !std::isfinite(acceleration)
-              || acceleration <= 0 || acceleration > 1 || !p[i+2].as_bool() || !p[i+3].as_bool())
-            throw std::runtime_error("MoveIt 必须启用不超过 1 rad/s、1 rad/s² 的速度/加速度限幅，请使用 real_move_group.launch.py");
+          validate_arm_planning_limits(velocity, acceleration, p[i+2].as_bool(), p[i+3].as_bool());
         }
         velocity_limits.clear(); acceleration_limits.clear();
         for (size_t i=9;i<33;i+=4) { velocity_limits.push_back(p[i].as_double()); acceleration_limits.push_back(p[i+1].as_double()); }
@@ -740,7 +752,7 @@ struct PositionMotion::Impl {
         throw std::runtime_error("动作组模型或时钟基准已改变，禁止继续");
       if (!fresh(m->lease_at, 5)) throw std::runtime_error("会话心跳已过期，禁止继续动作组");
       const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
-      if (!motion_target_reached(m->model.joint_names, m->target, actual, velocity)) throw std::runtime_error("暂停期间实测位置改变，禁止继续");
+      if (!motion_target_reached(m->model.joint_names, m->hold_reference, actual, velocity)) throw std::runtime_error("偏离暂停时的实测保持基准或尚未停稳，禁止继续");
       if (m->group->spec.uses_gripper && !motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}))
         throw std::runtime_error("暂停期间夹爪尚未停稳，禁止继续");
       timeline.resume(steady_seconds());
@@ -759,16 +771,20 @@ struct PositionMotion::Impl {
     auto &timeline = group.timeline;
     timeline.advance(steady_seconds());
     const auto actual = measured(m->model, false, &m->calibration), velocity = measured(m->model, true, &m->calibration);
-    if (!motion_target_reached(m->model.joint_names, m->target, actual, velocity) ||
+    if (!motion_target_reached(m->model.joint_names, m->hold_reference, actual, velocity) ||
         (group.spec.uses_gripper && !motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, m->calibration, true)}))) {
-      group.failed = true; cancel(m, "动作组停留/暂停期间偏离目标或未停稳，取消后续步骤"); return;
+      group.failed = true; cancel(m, "动作组偏离停留/暂停时的实测保持基准或未停稳，取消后续步骤"); return;
     }
     if (timeline.phase == "paused" || timeline.hold_remaining_s > 0) return;
-    if (timeline.index + 1 == group.spec.steps.size()) { update(m, "succeeded", "动作组全部步骤已到位、停稳并完成停留", true); return; }
+    if (timeline.index + 1 == group.spec.steps.size()) { update(m, "succeeded", "动作组全部步骤 Action 成功、已停稳并完成停留（关节目标误差仅诊断）", true); return; }
+    const auto previous = timeline;
     timeline.next(steady_seconds());
     Request r{m->owner, {}, m->send}; r.data.put("command_id", m->id);
     try { dispatch_group_step(r, m->group); }
-    catch (const std::exception &e) { group.failed = true; cancel(current, std::string("动作组下一段校验失败：") + e.what()); }
+    catch (const std::exception &e) {
+      if (current == m) timeline = previous; // Diagnostics still refer to this completed child.
+      group.failed = true; cancel(current, std::string("动作组下一段校验失败：") + e.what());
+    }
   }
   void process(const Request &r) {
     if (r.disconnect) { if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
@@ -790,6 +806,7 @@ struct PositionMotion::Impl {
       r.send("{\"op\":\"position_motion_info\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"available\":" + (reason.empty() ? "true" : "false") + ",\"message\":" + quote(reason) +
           ",\"joint_rotation_supported\":true,\"joint_targets_supported\":true,\"motion_duration_supported\":true,\"tcp_pose_supported\":true,\"motion_group_supported\":true" +
+          ",\"position_error_check_enforced\":false" +
           ",\"motion_duration_message\":" + quote(execute_action->action_server_is_ready() ? "" : "MoveIt /execute_trajectory 未启动") +
           ",\"command_id\":" + quote(current && current->owner == r.owner ? current->id : "") +
           ",\"busy\":" + ((current && !current->terminal) ? "true" : "false") +
@@ -873,18 +890,19 @@ struct PositionMotion::Impl {
         const auto measured_pose = tcp_forward_pose(m->tcp_model, ordered_arm_values(joints.name, joints.position));
         pose_reached = tcp_pose_position_error(measured_pose, m->tcp_target) <= .005 && tcp_pose_orientation_error(measured_pose, m->tcp_target) <= .02;
       }
-      const bool reached = stopped && pose_reached && motion_target_reached(m->model.joint_names, m->target, actual, velocity);
+      const bool reached = stopped && pose_reached && motion_completion_stopped(m->model.joint_names, actual, velocity);
       if (((m->cancel_requested || m->failed_result) && stopped) || (m->phase == "verifying" && reached)) {
         if (m->settled_at == Clock::time_point{}) m->settled_at = Clock::now();
         if (!fresh(m->settled_at, 0.2)) {
           log(m->owner, m->id, "feedback", "target=" + numbers(m->target) + " actual=" + numbers(actual) + " velocity=" + numbers(velocity));
           if (m->group && !m->cancel_requested && !m->failed_result) {
+            m->hold_reference = actual;
             m->group->timeline.segment_complete(steady_seconds(), m->group->spec.steps.at(m->group->timeline.index).hold_duration_s);
-            update(m, m->group->timeline.phase == "paused" ? "paused" : "waiting", m->group->timeline.phase == "paused" ? "动作组已在停稳边界暂停，保留运动锁" : "本项已到位并停稳，正在停留");
+            update(m, m->group->timeline.phase == "paused" ? "paused" : "waiting", m->group->timeline.phase == "paused" ? "动作组已在停稳边界暂停，保留运动锁" : "本项 Action 成功且已停稳，正在停留（关节目标误差仅诊断）");
             return;
           }
           update(m, m->group && m->group->failed ? "failed" : m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
-            m->group && m->group->failed ? "动作组失败，后续步骤未执行；" + m->message + "；已确认停稳" : m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未到达目标，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : m->gripper ? "已到达目标（机械臂误差 ≤0.02 rad、夹爪误差 ≤1 mm，已停稳）" : "已到达目标点位（六关节误差 ≤0.02 rad，已停稳）"), true);
+            m->group && m->group->failed ? "动作组失败，后续步骤未执行；" + m->message + "；已确认停稳" : m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未满足 TCP 位姿精度，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : "Action 成功且已停稳（关节目标误差仅诊断）"), true);
         }
       } else {
         m->settled_at = {};
