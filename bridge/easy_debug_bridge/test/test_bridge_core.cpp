@@ -1,6 +1,7 @@
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/motion_arrival.hpp"
 #include "easy_debug_bridge/position_group_core.hpp"
 #include "easy_debug_bridge/gripper_motion_core.hpp"
 #include "easy_debug_bridge/rgbd_core.hpp"
@@ -15,6 +16,53 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    auto names = arm_motion_joints();
+    std::vector<double> target(6, 0), actual(6, 0), velocity(6, 0);
+    actual[3] = -.043679;
+    const auto errors = motion_arrival_errors(names, target, actual, velocity);
+    assert(errors[3].joint_name == "joint4" && errors[3].unit == "rad");
+    assert(errors[3].position_error == -.043679 && errors[3].position_tolerance == .02);
+    assert(errors[3].velocity_tolerance == .03 && errors[3].target == 0 && errors[3].actual == -.043679);
+    assert(motion_arrival_json(errors).find("\"joint_name\":\"joint4\"") != std::string::npos);
+    assert(motion_completion_stopped(names, actual, velocity)); // Endpoint error is diagnostic only.
+    assert(!motion_target_reached(names, target, actual, velocity)); // Original drift tolerance remains.
+    assert(motion_target_reached(names, actual, actual, velocity)); // Hold from measured endpoint.
+    auto drifted = actual; drifted[3] += .021;
+    assert(!motion_target_reached(names, actual, drifted, velocity));
+    velocity[3] = .03; assert(motion_completion_stopped(names, actual, velocity));
+    velocity[3] = .03001; assert(!motion_completion_stopped(names, actual, velocity));
+    velocity[3] = NAN; assert(!motion_completion_stopped(names, actual, velocity));
+    velocity[3] = 0; actual[3] = NAN; assert(!motion_completion_stopped(names, actual, velocity));
+    auto rejects = [](auto f) { try { f(); } catch (const std::exception &) { return true; } return false; };
+    assert(rejects([&] { motion_arrival_errors(names, target, actual, velocity); }));
+    actual[3] = 0; target[0] = INFINITY;
+    assert(rejects([&] { motion_arrival_errors(names, target, actual, velocity); }));
+    target[0] = 0; names[0] = "unknown";
+    assert(rejects([&] { motion_arrival_errors(names, target, actual, velocity); }));
+    names[0] = "joint2";
+    assert(rejects([&] { motion_arrival_errors(names, target, actual, velocity); }));
+    assert(rejects([&] { motion_arrival_errors(arm_motion_joints(), {}, actual, velocity); }));
+    const auto grip = motion_arrival_errors({gripper_motion_joint()}, {.02}, {.025}, {.001}).front();
+    assert(grip.unit == "m" && grip.position_tolerance == .001 && grip.velocity_tolerance == .001);
+    validate_arm_planning_limits(2, 2, true, true);
+    for (double invalid : {0., -1., 2.00001, double(NAN), double(INFINITY)}) {
+      assert(rejects([&] { validate_arm_planning_limits(invalid, 2, true, true); }));
+      assert(rejects([&] { validate_arm_planning_limits(2, invalid, true, true); }));
+    }
+    assert(rejects([&] { validate_arm_planning_limits(2, 2, false, true); }));
+    PositionMotionModel model; model.lower = std::vector<double>(6, -1); model.upper = std::vector<double>(6, 1);
+    std::vector<TimedMotionPoint> path{{std::vector<double>(6, 0), std::vector<double>(6, 2), {}, {}, 0},
+        {std::vector<double>(6, 1), std::vector<double>(6, 2), {}, {}, 500000000}};
+    assert(stretch_motion(path, .5, model).back().velocities[0] == 2);
+    path[0].velocities[0] = 2.01;
+    assert(rejects([&] { stretch_motion(path, .5, model); }));
+    path[0].velocities[0] = 2;
+    path[0].accelerations = std::vector<double>(6, 0); path[1].accelerations = std::vector<double>(6, 0);
+    path[0].accelerations[0] = 2.01;
+    assert(rejects([&] { stretch_motion(path, .5, model); }));
+  }
   {
     using namespace easy_debug_bridge;
     PositionMotionModel model; model.lower = std::vector<double>(6, -1); model.upper = std::vector<double>(6, 1);
@@ -203,7 +251,7 @@ int main() {
     assert(stretched.back().accelerations == std::vector<double>(6, .2));
     // Endpoint derivatives alone are insufficient: this spline exceeds the
     // limit inside the segment at its original duration.
-    assert(rejected([&] { stretch_motion(path, 2, model); }));
+    assert(rejected([&] { stretch_motion(path, 2, model, std::vector<double>(6, 1), std::vector<double>(6, 1)); }));
     const std::vector<TimedMotionPoint> safe_path{
         {model.home, model.home, model.home, {}, 0},
         {std::vector<double>(6,.1), model.home, model.home, {}, 2000000000}};

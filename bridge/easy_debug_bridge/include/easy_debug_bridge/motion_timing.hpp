@@ -46,8 +46,8 @@ inline void bounded_spline(const std::vector<double> &b, double h, double vmax, 
 // Preserve the planned path; compression must satisfy continuous spline bounds.
 inline std::vector<TimedMotionPoint> stretch_motion(std::vector<TimedMotionPoint> points,
     double seconds, const PositionMotionModel &model,
-    const std::vector<double> &velocity_limits = std::vector<double>(6,1.),
-    const std::vector<double> &acceleration_limits = std::vector<double>(6,1.)) {
+    const std::vector<double> &velocity_limits = std::vector<double>(6,2.),
+    const std::vector<double> &acceleration_limits = std::vector<double>(6,2.)) {
   validate_motion_duration(seconds);
   if (points.size() < 2 || points.size() > 10000) throw std::runtime_error("规划轨迹点数无效");
   int64_t previous = -1;

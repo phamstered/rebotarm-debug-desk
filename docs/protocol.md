@@ -337,7 +337,7 @@ Jetson 侧从各最多三帧的队列按时间戳配对 RGB/Depth（默认容差
 - 单关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","label":"joint2 旋转","confirmation":"ARMED","joint_name":"joint2","joint_position":-0.3}`，角度单位 rad。`joint_name` 支持 joint1–joint6（rad）及具备夹爪能力时的 `gripper_finger_left_joint`（m），`joint_position` 必须有限且在有效模型/标定限位内。不能与 `home:true` 或任何 `positions` 字段混用；缺少配对字段时拒绝。
 - 单关节受理时由 Bridge 从当前 STM32 JointState 取得其他五轴的目标值，在 MoveIt 请求 `path_constraints.joint_constraints` 中约束其围绕起点 ±0.001 rad；选中轴使用现有关节目标约束。保持原碰撞规划、速度/加速度缩放、会话和取消保护。此约束不构成物理跟踪误差为零的保证。
 - 联合关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","confirmation":"ARMED","joint_targets":{"joint1":0.1,"joint2":-0.3},"motion_duration_s":5}`。`joint_targets` 必须为包含 1–7 个唯一受控关节键的对象，六轴值为有限 rad，可选 `gripper_finger_left_joint` 值为有限 m，不能与 `positions`、`home:true` 或旧单关节字段混用。未编辑轴由 Bridge 实测反馈补齐，并添加 ±0.001 rad 路径保持约束；全部六轴指定时不加保持约束。旧 `joint_name` / `joint_position` 仍兼容。
-- `motion_duration_s` 可选，须为有限正数，精度至少 1 ns、最大 2147483647 秒（ROS 时间表示边界）；无 0.1–120 秒业务门禁。指定时 plan-only 规划的速度/加速度缩放为 1.0，原始时长通过 `position_motion.recommended_duration_s` 返回界面，仅供参考。时间可统一伸长或压缩，速度/加速度按倍率缩放；校验整段样条速度/加速度不超过当前每轴 MoveIt 上限（配置必须启用且不超过 1 rad/s、1 rad/s²），超限时 failed 并且不发送 ExecuteTrajectory。压缩时缺少导数数据不能验证则拒绝。省略且仅涉及六轴时保持原 MoveGroup 直接执行。含夹爪的请求始终先 plan-only，省略时长则采用规划推荐时长，再校验并通过 ExecuteTrajectory 执行。总运动 watchdog 为 max(180, 指定时长+60) 秒；心跳仍为 5 秒。
+- `motion_duration_s` 可选，须为有限正数，精度至少 1 ns、最大 2147483647 秒（ROS 时间表示边界）；无 0.1–120 秒业务门禁。指定时 plan-only 规划的速度/加速度缩放为 1.0，原始时长通过 `position_motion.recommended_duration_s` 返回界面，仅供参考。时间可统一伸长或压缩，速度/加速度按倍率缩放；校验整段样条速度/加速度不超过当前每轴 MoveIt 上限（配置必须启用且不超过 2 rad/s、2 rad/s²），超限时 failed 并且不发送 ExecuteTrajectory。压缩时缺少导数数据不能验证则拒绝。省略且仅涉及六轴时保持原 MoveGroup 直接执行。含夹爪的请求始终先 plan-only，省略时长则采用规划推荐时长，再校验并通过 ExecuteTrajectory 执行。总运动 watchdog 为 max(180, 指定时长+60) 秒；心跳仍为 5 秒。
 - `position_motion_info` 广告 `joint_targets_supported:true`、`motion_duration_supported:true`。客户端缺少任一能力时不能提交联合定时运动，不能静默丢弃时长或降级为旧点位请求。`motion_duration_message` 非空表示定时执行入口未就绪（例如 `/execute_trajectory` 缺失），客户端显示该原因。规划/执行两个阶段共享 command_id、互斥、心跳与取消状态；断线或取消后不启动下一阶段。
 - 执行前要求 active JTC 认领六关节 `position+velocity`、实测速度 ≤0.05 rad/s、JTC actual 与 STM32 实测位置偏差 ≤0.02 rad，并校验反馈新鲜、完整、有限、硬件 TRACK/无故障及六轴使能；不满足时 `available:false` / `accepted:false` 的 `message` 说明原因。点位与单关节请求均已移除启动连续性检查，不再以 JTC desired/reference 的位置偏差、参考速度、字段存在性或连续稳定 200 ms 作为门禁。MoveIt 仍使用真实实测起点，自身起点容差、限位与碰撞检查保持有效。
 - 成功受理返回 `position_move_ack` 与 `command_id`；门禁拒绝返回同一 ACK、`accepted:false` 与 `message`。Bridge 缓存最近 256 个已受理指令的 command_id，缓存内重复请求不重复执行；不同会话不能抢占运动。ACK 不代表规划成功或到达。
@@ -379,7 +379,7 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 
 仅夹爪目标选择 `gripper` 组，六轴加夹爪选择 `arm_with_gripper`，其余选择 `arm`。夹爪不参与 TCP 位置 IK。Bridge 不接受 `joint7` 别名或 mimic 手指为独立目标。
 
-夹爪目标额外要求新鲜 TRACK/无故障/bit0x40、专用 JTC active 且认领 position+velocity、控制器米制实测与标定原始反馈差 ≤1 mm，以及启动时速度 ≤1 mm/s。MoveIt 参数须提供与硬件相同的 scale/offset 和有效范围（首版最大 0–0.05 m），启用 ≤0.02 m/s、≤0.04 m/s² 限幅。目标容差 0.5 mm；执行前起点差 ≤1 mm。Action 成功后夹爪误差 ≤1 mm、速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才报告完成；取消也等待新鲜停止反馈。遇阻未到位不视为抓取成功。
+夹爪目标额外要求新鲜 TRACK/无故障/bit0x40、专用 JTC active 且认领 position+velocity、控制器米制实测与标定原始反馈差 ≤1 mm，以及启动时速度 ≤1 mm/s。MoveIt 参数须提供与硬件相同的 scale/offset 和有效范围（首版最大 0–0.05 m），启用 ≤0.02 m/s、≤0.04 m/s² 限幅。目标容差 0.5 mm；执行前起点差 ≤1 mm。Action 成功后夹爪速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才报告执行完成，最终位置误差改为诊断；取消也等待新鲜停止反馈。执行完成不表示夹持成功。
 
 ## TCP XYZ/RPY 完整位姿扩展
 
@@ -402,7 +402,7 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 - `tcp_pose` 不能与任何 `home`（包括 false）、`positions`、`joint_targets`、`joint_name`、`joint_position` 字段混用。可附带现有 `gripper_position`（m）与 `motion_duration_s`；省略夹爪保持当前，省略时长采用 MoveIt 推荐时长。
 - Bridge 将 TCP fixed 偏移转换为机械臂求解器 tip 的位置与姿态约束，位置球半径 3 mm、旋转向量分量容差 0.005 rad。夹爪存在时附带独立 JointConstraint；其模型、标定、接口与硬件门禁不变。
 - Pose 始终 plan-only；执行前核对关节集合、限位、全段时序/速度/加速度、实测起点及 FK 终点（TCP 位置 ≤5 mm、姿态最短角 ≤0.02 rad）。姿态被规划器忽略时，即使 Action success 也拒绝 ExecuteTrajectory。
-- Action 结果、取消和心跳沿用点位协议。只有实测 TCP 位姿和计划关节到位、所有受控轴停稳持续 200 ms 才成功；姿态不达标报告失败。MoveIt 的关节空间路径不保证笛卡尔直线或逐点跟随鼠标。
+- Action 结果、取消和心跳沿用点位协议。实测 TCP 位姿仍须达标、所有受控轴停稳持续 200 ms 才成功；计划关节最终位置误差不再作为额外完成门槛；姿态不达标报告失败。MoveIt 的关节空间路径不保证笛卡尔直线或逐点跟随鼠标。
 
 ## 时钟同步健康
 
@@ -427,7 +427,7 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 {"op":"position_group_start","request_id":"...","command_id":"UUID","label":"动作组 · 取放","confirmation":"ARMED","group_id":"group-1","preparation_duration_s":2,"steps":[{"id":"a","label":"A","positions":[0,-0.2,-0.3,0,0,0],"motion_duration_s":0,"hold_duration_s":0},{"id":"b","label":"B","positions":[0,-0.1,-0.2,0,0,0],"motion_duration_s":5,"hold_duration_s":2}]}
 ```
 
-每帧是已保存位置的六轴快照，可选 `gripper_position` 为米制夹爪目标。整组只要包含夹爪目标，各段都使用七轴校验；缺失该字段的段在前段到位停稳后捕获新鲜实测开度，并在该段运动、停留及暂停期间保持它，不重新修正上一段的名义目标。第一帧 `motion_duration_s` 固定 0，Bridge 以独立 `preparation_duration_s` 从实测姿态准备到第一帧；实际到位并停稳后才开始组计时。后续帧的正 `motion_duration_s` 指前帧停留结束到该帧的运动轨迹时长，`hold_duration_s` 为该帧到位后的非负停留时长。名义时间轴包含运动与停留，准备、逐段规划及停稳确认单独计时，因此整组实际耗时可能超过名义时长。
+每帧是已保存位置的六轴快照，可选 `gripper_position` 为米制夹爪目标。整组只要包含夹爪目标，各段都使用七轴校验；缺失该字段的段在前段执行成功并停稳后捕获新鲜实测开度，并在该段运动、停留及暂停期间保持它，不重新修正上一段的名义目标。第一帧 `motion_duration_s` 固定 0，Bridge 以独立 `preparation_duration_s` 从实测姿态准备到第一帧；首段执行成功并停稳后才开始组计时。后续帧的正 `motion_duration_s` 指前帧停留结束到该帧的运动轨迹时长，`hold_duration_s` 为该帧执行完成且停稳后的非负停留时长。名义时间轴包含运动与停留，准备、逐段规划及停稳确认单独计时，因此整组实际耗时可能超过名义时长。
 
 - 完整原始 JSON（包含空白）限 256 KiB。`steps` 限 1–100 项，所有 ID 唯一、非空且最长 128 UTF-8 字节；标签最长 512 字节。准备、所有运动与停留合计不超过 604800 秒，所有数值须有限。入组校验所有后续帧的模型/关节及可选夹爪目标，当前段下发前继续复核实时门禁。
 - 返回 `position_group_start_ack`，`accepted` 明确表示受理与否；失败包含 `message`。ACK 不代表准备完成、规划成功或实际到位。组内始终沿用同一 `command_id`，去重、会话归属、心跳和断线取消沿用现有运动入口。
@@ -435,3 +435,11 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 - `position_group_pause` / `position_group_resume` 请求携带同一 `command_id`，仅允许拥有者操作；对应 `_ack` 的 `accepted` 表示请求是否受理。运动中暂停只预约在本段确认停稳后生效（ACK 可带 `pending:true`），以 `paused` 事件作为实际暂停证明。暂停冻结剩余停留时间，继续前重新校验门禁。
 - `position_cancel` 取消整个动作组，包括准备、运动、停留与暂停。暂停或停留期间同样保留反馈/控制器/时钟/模型/租约检查；任一段失败或取消后均不得开始下一段。取消 ACK 仍不等于已停稳，`stop_failed` 保持锁定。
 - 每段复用 MoveIt 规划、指定时长的完整轨迹校验与实际停稳确认；不会自动拉长不可行的指定时长，也不保证沿姿态间的笛卡尔直线运动。未编译 MoveIt 支持时返回对应拒绝 ACK 并广告不支持。
+
+### 执行完成诊断
+
+`position_motion_info` 及 `position_motion` 的 `position_error_check_enforced:false` 表示最终关节位置差值仅作诊断。Action 成功、反馈新鲜且机械臂/夹爪按既有速度阈值连续停稳 200 ms 才报告完成；独立 TCP Pose 检查保持有效。
+
+组事件附带 `group_step_label`，来自本次执行快照。`position_motion.arrival_errors` 可含 1–7 个关节核验快照：`joint_name`、`target`、`actual`、`position_error`（actual−target）、`position_tolerance`（原参考值，非完成门槛）、`velocity`、`velocity_tolerance`、`unit`（rad 或 m）。数值须有限，关节唯一且与单位匹配；无新鲜有效反馈时省略。终态保存当时的核验快照，后续查询重放不重新计算，不表示当前实时反馈。
+
+准备或一段执行完成后，停留/暂停以该时刻实测姿态为保持基准，仍检测相对漂移及速度；不重新使用名义目标位置差值作为转段门槛。

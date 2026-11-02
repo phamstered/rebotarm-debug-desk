@@ -387,4 +387,242 @@ describe("MotionGroupsPage", () => {
     expect(screen.getByLabelText("动作组名称")).toHaveValue("取放");
     expect(screen.getByText("已保存")).toBeVisible();
   });
+  it("keeps the owned failed result visible while editing another group, without exposing controls for external busy", async () => {
+    const value = props(),
+      user = userEvent.setup();
+    value.motion = {
+      ...value.motion,
+      busy: true,
+      state: {
+        commandId: "failed-home",
+        label: "取放",
+        phase: "failed",
+        message: "Action 异常中止",
+        group: {
+          id: "g",
+          index: 0,
+          count: 2,
+          phase: "preparing",
+          elapsed: 5,
+          stepLabel: "HOME",
+        },
+        positionErrorCheckEnforced: false,
+      },
+    };
+    render(<MotionGroupsPage {...value} />);
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("第 1/2 帧 · HOME · 首帧准备");
+    expect(screen.getByText(/后续关键帧未执行/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "另一组 · 2 帧" }));
+    expect(screen.getByLabelText("动作组名称")).toHaveValue("另一组");
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("最近执行的「取放」动作组");
+    expect(
+      screen.queryByRole("button", { name: "停止动作组" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "预约段间暂停" }),
+    ).not.toBeInTheDocument();
+  });
+  it("binds a result to the fixed execution snapshot and keeps it after a subsequent non-group task", async () => {
+    const value = props(),
+      user = userEvent.setup();
+    const view = render(<MotionGroupsPage {...value} />);
+    await user.click(screen.getByRole("button", { name: "执行动作组" }));
+    const state = {
+      commandId: "fixed-run",
+      label: "取放",
+      phase: "executing" as const,
+      message: "运动中",
+      group: {
+        id: "g",
+        index: 0,
+        count: 2,
+        phase: "preparing" as const,
+        elapsed: 1,
+      },
+    };
+    view.rerender(
+      <MotionGroupsPage
+        {...value}
+        motion={{ ...value.motion, busy: true, state }}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("status", { name: "最近动作组执行结果" }),
+      ).toHaveTextContent("第 1/2 帧 · A · 首帧准备"),
+    );
+    await user.click(screen.getByRole("button", { name: "另一组 · 2 帧" }));
+    fireEvent.change(screen.getByLabelText("动作组名称"), {
+      target: { value: "正在编辑的新组名" },
+    });
+    const success = {
+      ...state,
+      phase: "succeeded" as const,
+      message: "Action 成功且已停稳",
+      positionErrorCheckEnforced: false,
+    };
+    view.rerender(
+      <MotionGroupsPage
+        {...value}
+        motion={{ ...value.motion, busy: false, state: success }}
+      />,
+    );
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("最近执行的「取放」动作组");
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("执行成功");
+    expect(screen.getByLabelText("动作组名称")).toHaveValue("正在编辑的新组名");
+    view.rerender(
+      <MotionGroupsPage
+        {...value}
+        motion={{
+          ...value.motion,
+          busy: true,
+          state: {
+            commandId: "single-joint",
+            label: "joint4",
+            phase: "executing",
+            message: "单关节运动",
+          },
+        }}
+      />,
+    );
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("执行成功");
+    expect(
+      screen.queryByRole("button", { name: "停止动作组" }),
+    ).not.toBeInTheDocument();
+    view.rerender(
+      <MotionGroupsPage
+        {...value}
+        motion={{
+          ...value.motion,
+          state: { commandId: "", label: "", phase: "idle", message: "" },
+        }}
+      />,
+    );
+    expect(
+      screen.queryByRole("status", { name: "最近动作组执行结果" }),
+    ).not.toBeInTheDocument();
+  });
+  it("retains canceled and rejected results with frame metadata while remaining retryable", () => {
+    const value = props();
+    const state = {
+      commandId: "cancelled",
+      label: "取放",
+      phase: "canceled" as const,
+      message: "用户取消",
+      group: {
+        id: "g",
+        index: 1,
+        count: 2,
+        phase: "moving" as const,
+        elapsed: 4,
+        stepLabel: "B",
+      },
+    };
+    const view = render(
+      <MotionGroupsPage {...value} motion={{ ...value.motion, state }} />,
+    );
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("已取消");
+    expect(screen.getByRole("button", { name: "执行动作组" })).toBeEnabled();
+    view.rerender(
+      <MotionGroupsPage
+        {...value}
+        motion={{
+          ...value.motion,
+          state: {
+            ...state,
+            commandId: "rejected",
+            phase: "failed",
+            message: "Controller 未激活，拒绝启动",
+            group: {
+              ...state.group,
+              index: 0,
+              phase: "preparing",
+              stepLabel: "HOME",
+            },
+          },
+        }}
+      />,
+    );
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("Controller 未激活，拒绝启动");
+    expect(
+      screen.getByRole("status", { name: "最近动作组执行结果" }),
+    ).toHaveTextContent("第 1/2 帧 · HOME");
+    expect(
+      screen.queryByRole("button", { name: "停止动作组" }),
+    ).not.toBeInTheDocument();
+  });
+  it("shows the result beside execution controls and scrolls to diagnostics only on an explicit request", async () => {
+    const scroll = vi.fn();
+    const descriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scroll,
+    });
+    try {
+      const value = props(),
+        user = userEvent.setup();
+      const state = {
+        commandId: "result",
+        label: "取放",
+        phase: "failed" as const,
+        message: "Action 失败",
+        group: {
+          id: "g",
+          index: 0,
+          count: 2,
+          phase: "preparing" as const,
+          elapsed: 2,
+          stepLabel: "HOME",
+        },
+      };
+      const view = render(
+        <MotionGroupsPage {...value} motion={{ ...value.motion, state }} />,
+      );
+      expect(scroll).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("button", { name: "查看详细结果" }).closest("footer"),
+      ).toHaveTextContent("最近执行的「取放」动作组 · 执行失败");
+      view.rerender(
+        <MotionGroupsPage
+          {...value}
+          motion={{
+            ...value.motion,
+            state: { ...state, message: "Action 失败，机器人已停稳" },
+          }}
+        />,
+      );
+      expect(scroll).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "查看详细结果" }));
+      expect(scroll).toHaveBeenCalledExactlyOnceWith({
+        block: "start",
+        behavior: "smooth",
+      });
+    } finally {
+      if (descriptor)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollIntoView",
+          descriptor,
+        );
+      else
+        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
 });

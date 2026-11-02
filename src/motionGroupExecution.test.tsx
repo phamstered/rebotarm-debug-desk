@@ -17,6 +17,25 @@ function setup(supported = true) {
   return { ...hook, request, emit: (m: BridgeEnvelope) => act(() => listener(m)) };
 }
 describe("Bridge-owned motion groups", () => {
+  it("keeps a rejected group attempt identifiable after its execution lock is released", async () => {
+    const h = setup(); await waitFor(() => expect(h.result.current.groupReason).toBe("")); act(() => h.result.current.setArmed(true));
+    const original = h.request.getMockImplementation()!;
+    h.request.mockImplementation(async message => message.op === "position_group_start"
+      ? { op: "position_group_start_ack", accepted: false, message: "控制器反馈已过期" } : original(message));
+    await act(async () => h.result.current.executeGroup!(group()));
+    expect(h.result.current.state).toMatchObject({ phase: "failed", label: "取放", message: "控制器反馈已过期", group: { id: "g1", index: 0, stepLabel: "姿态0", phase: "preparing" } });
+    expect(h.result.current.state.commandId).not.toBe(""); expect(h.result.current.busy).toBe(false);
+  });
+  it("retains terminal diagnostic errors without using them to override the server outcome", async () => {
+    const h = setup(); await waitFor(() => expect(h.result.current.groupReason).toBe("")); act(() => h.result.current.setArmed(true));
+    await act(async () => h.result.current.executeGroup!(group())); const command_id = h.result.current.state.commandId;
+    const errors = [{ joint_name: "joint4", target: 0, actual: -.043679, position_error: -.043679, position_tolerance: .02, velocity: -.007326, velocity_tolerance: .03, unit: "rad" as const }];
+    h.emit({ op: "position_motion", command_id, motion_phase: "succeeded", group_id: "g1", group_count: 3, group_index: 2, group_phase: "holding", group_elapsed_s: 10,
+      group_step_label: "C（执行时快照）", arrival_errors: errors, position_error_check_enforced: false });
+    expect(h.result.current.state.phase).toBe("succeeded"); expect(h.result.current.busy).toBe(false);
+    expect(h.result.current.state.group?.stepLabel).toBe("C（执行时快照）");
+    expect(h.result.current.state.arrivalErrors).toEqual(errors); expect(h.result.current.state.positionErrorCheckEnforced).toBe(false);
+  });
   it("ignores malformed group terminal events and late events after actual completion", async () => {
     const h = setup(); await waitFor(() => expect(h.result.current.groupReason).toBe(""));
     act(() => h.result.current.setArmed(true)); await act(async () => h.result.current.executeGroup!(group()));
