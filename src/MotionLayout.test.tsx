@@ -51,11 +51,13 @@ describe("Motion dividers", () => {
     fireEvent.pointerMove(window, { clientY: 50 }); expect(saved().logHeight).toBe(200);
     unmount(); expect(document.body.style.cursor).toBe(""); vi.unstubAllGlobals();
   });
-  it("docks the status, operation and RGBD panels only inside Motion", () => {
+  it("keeps Robot View floating tools inside Motion", () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     render(<MotionLayoutProvider active><ViewerHeadsUp error="resource error" leading={<span>motion state</span>} rgbd={<span>RGBD options</span>}><span>TCP options</span></ViewerHeadsUp></MotionLayoutProvider>);
     expect(screen.getByLabelText("运动状态面板")).toHaveTextContent("resource error");
     expect(screen.getByLabelText("Robot View 操作面板")).toHaveTextContent("TCP options");
     expect(screen.getByLabelText("RGBD 面板")).toHaveTextContent("RGBD options");
-    expect(screen.getByRole("separator", { name: "调整 RGBD 面板高度" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "调整时钟同步 / RGBD浮窗大小" })).toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 });

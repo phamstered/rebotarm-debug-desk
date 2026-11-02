@@ -74,8 +74,9 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Motion 可在 ROS 未就绪时进入，查看已保存位置及就绪原因；执行继续要求连接、MoveIt、active 控制器、新鲜反馈、时钟和既有安全确认。
 - Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际 Activate / Deactivate 只在 Motion 侧栏，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。Status 保留整栈启动、模式切换、安全退出与解除输出。
 - Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、位置与动作组共用底部规划执行日志。左侧 Controllers 默认展开，可收起以扩展画布。
-- Controllers 宽度、日志高度、Robot View 的运动状态/RGBD、画布、TCP 或关节操作区，以及点位列表/编辑区均可拖动分隔条调整；状态与 RGBD 之间也可上下分割。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄画布将状态/操作区移到画布下方，并支持调整下方面板高度；窄位置页改为列表/编辑上下分区。面板独立滚动，拖拽不会下发运动。
-- 尺寸独立保存于 `robot-console-motion-layout`，重启恢复。缩小窗口按可用空间限制显示，不覆盖宽屏偏好；在 Motion 点击全局“重置布局”恢复所有尺寸并展开 Controllers，保留当前 Tab。
+- Controllers 宽度、日志高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄位置页改为列表/编辑上下分区。
+- Robot View 画布铺满内容区；「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」作为画布内三个独立浮窗。拖动标题移动，右下角手柄调整大小；标题和缩放手柄也支持方向键每次 10px、Shift 每次 40px。每个浮窗可折叠，画布顶部按钮可重新展开并置于最前；「重置浮窗」恢复默认位置、大小和展开状态。折叠保留当前编辑内容，不改变点云订阅或执行状态。面板内滚动/点击不操作相机，拖动浮窗不下发运动。
+- 分隔尺寸独立保存于 `robot-console-motion-layout`；浮窗位置、大小和折叠状态保存于 `robot-console-viewer-floating-panels-v1`，重启恢复。缩小窗口限制浮窗及其标题在画布内，面板内容独立滚动；仅显示尺寸约束不覆盖宽屏偏好。在 Motion 点击全局“重置布局”恢复分隔尺寸和所有浮窗并展开 Controllers，保留当前 Tab。
 - 导航页、Motion Tab 与 Controllers 展开状态独立记忆。Motion 默认 Robot View；旧 `dashboard` 导航标识继续表示 Topics。连接后默认跳 Status 的既有独立设置继续适用。
 - RGBD 仅在 Motion → Robot View、窗口可见、实时显示和 RGBD 配置开启时订阅；位置 Tab、Topics 和其他页释放当前客户端兴趣并清空点云。已加载的 Robot View 场景仍保留，隐藏时停止绘制并取消未结束的拖拽。
 
