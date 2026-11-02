@@ -62,7 +62,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Topics 页的 Topics、ROS Control、Inspector 三个区域可独立展开/收起；左右侧栏也可整列最小化并恢复，状态保存在本机。Topics 与 ROS Control 会自动使用另一面板释放出的高度。
 - Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。Topic 名称与类型悬停显示全称。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态。桌面每秒经现有 WebSocket 读取 Bridge 共享缓存，不再为列表刷新启动 SSH/ROS CLI；Topics 自动刷新间隔单独设置。
-- ROS Control 标题栏提供手动刷新按钮，与展开/收起按钮并列；手动与自动刷新具有并发保护。手动刷新及控制器操作前后等待请求进入后新发起的 ROS 查询，切换期间发起的查询不能充当切换后核验。
+- ROS Control 标题栏提供手动刷新按钮，与展开/收起按钮并列；手动与自动刷新具有并发保护。自动轮询静默更新，不触发“全部刷新”或“刷新 Controllers”的忙碌显示；手动刷新和操作核验仍显示进行中状态。健康结果默认仅显示稳定的“最新”摘要，快照年龄与后台查询进度可展开“查询详情”查看，故障、过期及真实 Controller 状态变化立即展示。手动刷新及控制器操作前后等待请求进入后新发起的 ROS 查询，切换期间发起的查询不能充当切换后核验。
 - Topics 的 Controller 卡片提供「查看 Graph」聚焦关联节点、Topic 和连线，以及「管理」跳转 Motion；本页只读。Motion 中确认 Activate / Deactivate 后，通过 SSH 调用 Humble `ros2 control switch_controllers --strict`，完成后共享刷新列表并展示成功或错误信息。
 - Controller 名称和操作类型在 Tauri/Rust 后端校验，拒绝包含 shell 特殊字符的输入。列表与运动健康检查共用单个常驻 ROS 客户端，沿用 2 秒请求上限、3.1 秒状态有效期和失败退避，保留既有 active、接口认领和故障门禁。新鲜成功结果不显示“重试等待”，仅失效状态显示退避等待时间。缺少 MoveIt 支持时仍可查询列表；缺少 Controller Manager 消息支持或旧 Bridge 时明确提示升级，不回退到冷启动 CLI 查询。
 - 兼容 Jetson 当前 Humble `ros2controlcli` 的超时参数类型缺陷：不显式传入 `--switch-timeout`，使用其内部浮点默认值，并由外层进程提供 10 秒超时保护。
@@ -82,8 +82,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 4. Topic Graph、Inspector 与 Monitor
 
-- Motion 集中 Robot View、「姿态库」和「动作组」Tab；Topics 中心固定展示 Topic Graph，数值图表使用 Monitor 导航页。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「姿态库」保存当前连接（SSH 主机、用户、端口）下的六轴及可选夹爪点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链和保存关节值显示简化 3D 姿态：立体连杆、关节、基座地面网格及末端红 X / 绿 Y / 蓝 Z 方向轴，保存夹爪目标时展示手指开度。HOME、编辑和动作组预览共用这一展示；使用固定斜视角并自动取景，不加载 mesh 或为每张卡片占用 WebGL 上下文。缺失或无效姿态显示「无姿态」，预览不下发运动；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理姿态库」打开同一份数据。自定义点可以新增、编辑和删除。
-- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。若轨迹控制器已运行但规划器未启动，可在姿态库页点击“启动 MoveIt”；随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
+- Motion 集中 Robot View、「姿态库」和「动作组」Tab；Topics 中心固定展示 Topic Graph，数值图表使用 Monitor 导航页。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「姿态库」保存当前连接（SSH 主机、用户、端口）下的六轴及可选夹爪点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链和保存关节值显示简化 3D 姿态：立体连杆、关节、基座地面网格及末端红 X / 绿 Y / 蓝 Z 方向轴，保存夹爪目标时展示手指开度。HOME、编辑和动作组预览共用这一展示；使用固定斜视角并自动取景，不加载 mesh 或为每张卡片占用 WebGL 上下文。缺失或无效姿态显示「无姿态」，预览不下发运动；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」位于 Robot View → TCP 操作区最下方，点击打开命名、可选夹爪及备注窗口；窗口固定点击时的实测快照，后续反馈和未执行的 TCP 预览不会改写它。读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理姿态库」打开同一份数据。新姿态从 Robot View 保存；姿态库只保留执行、编辑和删除，不再提供“手动新增”或“启动 MoveIt”。
+- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
 - MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。支持 `arm` 六关节及可选 `gripper` / `arm_with_gripper`，通过独立夹爪 JTC 协调执行；执行请求不自动切换控制器。速度与加速度缩放为 1.0（不缩放）；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤2 rad/s 与加速度 ≤2 rad/s²（真实入口采用 2/2、缩放 1/1、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
 - Bridge 在规划前及执行期间校验控制器 active、三类反馈 <1 秒、TRACK/故障/使能掩码、反馈一致性、完整有限关节值和模型限位。跨连接只允许一个点位运动，`command_id` 去重；规划/执行超过 180 秒、故障、反馈丢失、配置变化、连接断开或会话心跳超过 5 秒会请求取消。手动 MIT（DISABLE 除外）、旧拖拽轨迹及重力辨识不能覆盖正在运行的点位运动。
 - 启动点位前核对 active JTC 实际认领六关节 `position+velocity` 接口，并要求实测关节速度 ≤0.05 rad/s。已移除独立的启动连续性检查：不再校验 JTC desired/reference 的位置偏差、参考速度或字段完整性，也不等待参考连续稳定 200 ms。MoveIt 仍以新鲜实测关节状态作为规划起点，保留自身起点容差与碰撞检查；JTC actual 与 STM32 实测位置仍须相差 ≤0.02 rad。此变更不改变低速跟踪或重力补偿。旧 position-only JTC 仍不可执行点位。
@@ -238,7 +238,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | Monitor / DataGraph | Dashboard/Panel CRUD、Inspector 两级加入、Panel 多序列与四类图表、布局预设（localStorage + JSON 导入导出）、网格拖拽、共享准星、bag `/clock`/stamp 时间轴、播放条（暂停/1x/进度估算）、暂停跟随/冻结窗口、最大化、重置/锁定/紧凑、v1→v2 迁移、转矩 7 Panel、30s 窗口、Jetson bag play | `src/TopicInspector.test.tsx`、`src/monitorLogic.test.ts`、`src/monitorChartLogic.test.ts`、`src/MonitorChart.test.tsx`、`src/monitorTimeline.test.ts`、`src/MonitorPage.test.tsx`、`src/dataGraphLogic.test.ts`、`src/DataGraph.test.tsx`、`src/App.test.tsx`、`src-tauri` rosbag play 测试 |
 | 图像 Topic | Image WebSocket 二进制全速传输、动画帧合并绘制、RGB/BGR/RGBA/BGRA/Mono8/Mono16 转换、step/大小端、Canvas 预览及紧凑元数据 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`bridge/easy_debug_bridge/test/test_image_topic.py`、`src/bridge.test.ts`、`src/imageTopicLogic.test.ts`、`src/RosImagePreview.test.tsx`、`src/TopicInspector.test.tsx` |
 | 通用 Topic 解码 | 已安装消息类型的嵌套字段、数组、时间与大整数，ControllerState Inspector 路由、错误类型拒绝 | `bridge/easy_debug_bridge/test/test_topic_json.cpp`、`bridge/easy_debug_bridge/test/test_generic_topic.py`（ROS 集成）、`src/App.test.tsx` |
-| ROS Control | CLI 输出解析、ANSI 清理、超时说明、Topics Controller 只读浏览、Motion 确认后 Activate/Deactivate、共享状态和操作后刷新、手动/30 秒自动刷新 | `src-tauri/src/lib.rs`、`src/ControllerList.test.tsx`、`src/MotionControllersPanel.test.tsx`、`src/useRosControllers.test.tsx`、`src/App.test.tsx` |
+| ROS Control | CLI 输出解析、ANSI 清理、超时说明、Topics Controller 只读浏览、Motion 确认后 Activate/Deactivate、共享状态和操作后刷新、手动强制核验/每秒静默缓存读取 | `src-tauri/src/lib.rs`、`src/ControllerList.test.tsx`、`src/MotionControllersPanel.test.tsx`、`src/useRosControllers.test.tsx`、`src/App.test.tsx` |
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
 | URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx`、`src/resourceCacheLogic.test.ts`、`src/urdfAssetLogic.test.ts`、`src/UrdfViewer.test.tsx`、`bridge/easy_debug_bridge/test/test_viewer_transport.py` |
 | 电机输入 | 默认 TRACK/Kp/Kd、多电机使能掩码、行程默认 ±0.35、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
@@ -303,7 +303,7 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 ## MoveIt 一键启动
 
 - Trajectory 自检通过后启动真实 MoveIt，流程图增加“启动 MoveIt”阶段；Teleop/VLA 不启动规划器。仅启动规划器不会执行点位，不会自动勾选安全解锁，也不会创建或切换硬件控制器。
-- 姿态库页的“启动 MoveIt”复用同一个原生入口。需要连接 Jetson、已有 active `arm_trajectory_controller`、无其他操作或点位运动；原生再次读取新鲜无故障 TRACK 并查询真实控制器状态。未启动轨迹控制时提示先在 Status 启动 Trajectory。
+- MoveIt 启动统一由 Status 的 Trajectory 模式流程完成；姿态库不提供重复启动入口。未就绪时继续显示原因，保存姿态不要求启动规划器或解锁运动。
 - 在配置的 ROS 域内等待 `/move_action`、`/move_group/get_parameters`、`/get_planning_scene` 就绪。已有就绪规划器直接复用；已有但未就绪的节点只等待，不重复启动。重复的 Action 服务端、启动器提前退出或超时均报错；MoveIt 自身的同名内部节点不会被误判为多套规划器。点位是否可执行继续由 Bridge 的模型、碰撞、起点和硬件安全门判断。
 - 本应用启动的规划器保存 Linux PID、启动标识、用户与 ROS 域；切换或退出在 DISABLE 和旧 arm 清理通过后向已核验的启动器发送一次退出信号并等待其进程组退出，避免向启动器与子节点重复广播信号。归属不可读、PID 复用、未知残留或退出超时会阻止后续步骤，不强杀、不接管外部启动的规划器。失败时保留必要进程与日志；重试不会中断机械臂命令流。
 - MoveIt 输出记录在 Jetson `~/.cache/robot-console/arm-moveit.log`，Status 日志来源可选“MoveIt 规划器”，支持既有搜索、下载与跟随。旧日志保留在 `history/`。手动兼容启动仍可执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`。

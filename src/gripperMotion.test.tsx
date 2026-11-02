@@ -1,3 +1,4 @@
+import { SavePoseDialog } from "./SavePoseDialog";
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { addPosition, emptyPositionStore, GRIPPER_JOINT_NAME, type PositionDraft, parsePositionStore, serializePositionStore } from "./positionLogic";
@@ -56,9 +57,9 @@ describe("calibrated joint7", () => {
   });
   it("saves optional mm entry in metres and explains HOME hold", () => {
     const onCreate = vi.fn((_draft: PositionDraft) => "");
-    render(<PositionPage profileKey="p" store={emptyPositionStore()} captureError="" urdfXml="" onCreate={onCreate} onUpdate={() => ""} onDelete={() => {}} onCapture={() => ({ positions: [0,0,0,0,0,0] })} />);
+    render(<><PositionPage profileKey="p" store={emptyPositionStore()} urdfXml="" onUpdate={() => ""} onDelete={() => {}} />
+      <SavePoseDialog initial={{name:"",positions:[0,0,0,0,0,0],source:"feedback",note:""}} urdfXml="" onSave={onCreate} onClose={vi.fn()} /></>);
     expect(screen.getByText("夹爪：保持当前")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "手动新增" }));
     fireEvent.change(screen.getByLabelText("点位名称"), { target: { value: "Grip" } });
     fireEvent.click(screen.getByLabelText("保存夹爪目标"));
     fireEvent.change(screen.getByLabelText("夹爪行程 mm"), { target: { value: "25" } });

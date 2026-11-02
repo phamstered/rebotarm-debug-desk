@@ -59,7 +59,7 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 
 Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、姿态库、动作组和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
 
-Controller 列表通过 Bridge 的常驻 ROS 客户端查询，与运动健康检查共用缓存；桌面每秒读取，手动刷新和切换前后等待新查询。失败保留标注年龄的最近成功列表供查看，过期数据不授权控制操作；该查询独立于 MoveIt 支持。
+Controller 列表通过 Bridge 的常驻 ROS 客户端查询，与运动健康检查共用缓存；桌面每秒静默读取，手动刷新和切换前后等待新查询。正常轮询不触发刷新按钮忙碌动画，健康查询的快照年龄和后台进度折叠在“查询详情”中。失败保留标注年龄的最近成功列表供查看，过期数据不授权控制操作；该查询独立于 MoveIt 支持。
 
 动作组用时间轴编排已保存位置的姿态快照、过渡时长和停留，支持独立保存、修改和删除。Jetson Bridge 先准备到首姿态，再逐段 MoveIt 规划执行与实际停稳确认，支持段间暂停和整组取消；桌面端不使用定时器派发下一段。名义时间轴不包含准备、规划及停稳的额外耗时。详见 [基本功能](docs/basic-features.md#motion-动作组)。
 
@@ -67,7 +67,7 @@ Motion 的 Robot View 在同一连接内保留已加载场景和 128 MiB 资源�
 
 行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 
-姿态库页支持保存点位及点击执行：Status 的 Trajectory 一键启动会在真实轨迹控制器与重力补偿自检通过后启动 MoveIt；已有轨迹控制器时，也可在姿态库页点击“启动 MoveIt”。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置和可选夹爪（joint7）目标；HOME 从当前 SRDF 同步并保持夹爪当前开度，支持取消、停稳确认和实际位置误差诊断。Robot View 的关节调整与 TCP 预览也通过同一运动入口执行；TCP 保留青色球自由拖拽快速定位，使用 XYZ 平移箭头与 RPY 旋转圆环（支持基座/工具坐标）或输入 mm/度微调；松手保留位姿预览，点击确认后以完整 Pose 目标交给 MoveIt 执行。夹爪需要配套控制栈的独立轨迹控制器和标定配置。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
+Robot View 的 TCP 操作区底部可保存当前实测姿态，姿态库页支持编辑、删除及点击执行：Status 的 Trajectory 一键启动会在真实轨迹控制器与重力补偿自检通过后启动 MoveIt。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置和可选夹爪（joint7）目标；HOME 从当前 SRDF 同步并保持夹爪当前开度，支持取消、停稳确认和实际位置误差诊断。Robot View 的关节调整与 TCP 预览也通过同一运动入口执行；TCP 保留青色球自由拖拽快速定位，使用 XYZ 平移箭头与 RPY 旋转圆环（支持基座/工具坐标）或输入 mm/度微调；松手保留位姿预览，点击确认后以完整 Pose 目标交给 MoveIt 执行。夹爪需要配套控制栈的独立轨迹控制器和标定配置。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
 
 Status 与 Robot View 显示 STM32 相对 Jetson 的时间同步状态；Bridge 校验源时间戳和新版固件同步诊断，失步期间阻止 MoveIt 执行，时间基准改变后重建 RGBD 的 TF 历史。时钟偏差由 Jetson 测量，不依赖 Mac 校时；固件周期同步和控制栈时间过滤需要配套部署。
 

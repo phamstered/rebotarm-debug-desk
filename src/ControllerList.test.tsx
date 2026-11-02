@@ -24,6 +24,20 @@ it("keeps last-good rows visibly read-only with neutral badges, age and query fa
 });
 it("does not describe a healthy polling cooldown as a retry", () => {
   render(<ControllerList status={{...status,hasSnapshot:true,snapshotAgeMs:100,queryState:"ready",retryAfterMs:1000}} onInspect={vi.fn()}/>);
-  expect(screen.getByRole("status")).toHaveTextContent("快照年龄 0.1 s");
+  expect(screen.getByText("快照年龄 0.1 s")).not.toBeVisible();
   expect(screen.queryByText(/重试等待/)).not.toBeInTheDocument();
+});
+it("keeps healthy query diagnostics collapsed through pending changes and reveals genuine failures immediately", async () => {
+  const user = userEvent.setup();
+  const view = render(<ControllerList status={{...status,hasSnapshot:true,snapshotAgeMs:100,queryState:"ready"}} onInspect={vi.fn()} />);
+  view.rerender(<ControllerList status={{...status,hasSnapshot:true,snapshotAgeMs:1100,queryState:"pending",queryPending:true}} onInspect={vi.fn()} />);
+  expect(screen.getByText("后台查询中")).not.toBeVisible();
+  expect(screen.getByText("快照年龄 1.1 s")).not.toBeVisible();
+  expect(screen.getByText("1 个 · 最新")).toBeVisible();
+  await user.click(screen.getByText("查询详情"));
+  expect(screen.getByText("后台查询中")).toBeVisible();
+  view.rerender(<ControllerList status={{...status,fresh:false,available:false,hasSnapshot:true,snapshotAgeMs:3200,queryState:"timeout",message:"ListControllers >2s"}} onInspect={vi.fn()} />);
+  expect(screen.getByText("查询超时")).toBeVisible();
+  expect(screen.getByText("ListControllers >2s")).toBeVisible();
+  expect(screen.getByText("active（上次）")).toBeVisible();
 });

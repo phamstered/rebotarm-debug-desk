@@ -66,6 +66,33 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+it("keeps background reads silent while an explicit refresh remains visibly busy through pending cache reads", async () => {
+  const cache = deferred<BridgeEnvelope>(), forced = deferred<BridgeEnvelope>();
+  request.mockReturnValueOnce(cache.promise).mockReturnValueOnce(forced.promise);
+  const hook = renderHook(() => useRosControllers(options));
+  await flush();
+  expect(hook.result.current.refreshing).toBe(false);
+  let refresh!: Promise<unknown>;
+  act(() => { refresh = hook.result.current.refresh(); });
+  expect(hook.result.current.refreshing).toBe(true);
+  await act(async () => { cache.resolve(wire()); });
+  expect(hook.result.current.refreshing).toBe(true);
+  await act(async () => { forced.resolve(wire("active")); await refresh; });
+  expect(hook.result.current.refreshing).toBe(false);
+  expect(hook.result.current.status?.controllers[0].state).toBe("active");
+});
+it("does not flash refreshing during repeated background polls but reports their failures immediately", async () => {
+  vi.useFakeTimers();
+  const hook = renderHook(() => useRosControllers(options));
+  await flush();
+  const next = deferred<BridgeEnvelope>(); request.mockReturnValueOnce(next.promise);
+  await act(async () => { mono = 1000; await vi.advanceTimersByTimeAsync(1000); });
+  expect(hook.result.current.refreshing).toBe(false);
+  expect(hook.result.current.status?.fresh).toBe(true);
+  await act(async () => next.reject(new Error("read failed")));
+  expect(hook.result.current.refreshing).toBe(false);
+  expect(hook.result.current.status).toMatchObject({fresh:false,available:false,message:"read failed"});
+});
 it("reads cached state immediately and every second without native controller queries", async () => {
   vi.useFakeTimers();
   const hook = renderHook(() => useRosControllers(options));

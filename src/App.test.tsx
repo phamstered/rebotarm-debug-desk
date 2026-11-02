@@ -66,12 +66,15 @@ vi.mock("./bridge", () => ({
   },
 }));
 vi.mock("./UrdfViewer", () => ({
-  UrdfViewer: ({ xml, trajectoryController, onSendTrajectory }: {
+  UrdfViewer: ({ xml, trajectoryController, onSendTrajectory, onSavePose, savePoseDisabledReason }: {
+    onSavePose?(): void;
+    savePoseDisabledReason?: string;
     xml: string;
     trajectoryController: { name: string; topic: string } | null;
     onSendTrajectory(request: { jointNames: string[]; points: { positions: number[]; time_from_start: number }[] }): Promise<void>;
   }) => (
     <div data-testid="urdf">
+      <button type="button" onClick={onSavePose} disabled={Boolean(savePoseDisabledReason)}>保存当前姿态</button>
       <span>{xml || "empty"}</span>
       <span data-testid="trajectory-controller">{trajectoryController ? `${trajectoryController.name}@${trajectoryController.topic}` : "none"}</span>
       <button
@@ -528,6 +531,21 @@ describe("App workflow", () => {
       await waitFor(() => expect(
         doubles.controllers.mock.calls,
       ).toHaveLength(controllersBeforeAutoRefresh + 1));
+
+      const lastTopics = await doubles.listTopics.mock.results.at(-1)!.value;
+      const lastControllers = await doubles.controllers.mock.results.at(-1)!.value;
+      let finishTopics!: (value: unknown) => void, finishControllers!: (value: unknown) => void;
+      doubles.listTopics.mockReturnValueOnce(new Promise(resolve => { finishTopics = resolve; }));
+      doubles.controllers.mockReturnValueOnce(new Promise(resolve => { finishControllers = resolve; }));
+      await act(async () => {
+        automaticRefreshes.forEach(refresh => refresh());
+        intervalSpy.mock.calls.filter(([, delay]) => delay === 1000).forEach(([callback]) => (callback as () => void)());
+      });
+      expect(screen.getByRole("button", {name:"刷新全部状态"})).toBeEnabled();
+      expect(screen.getByRole("button", {name:"刷新全部状态"}).querySelector(".spin")).toBeNull();
+      expect(refreshControllers).toBeEnabled();
+      expect(refreshTopics).toBeEnabled();
+      await act(async () => { finishTopics(lastTopics); finishControllers(lastControllers); });
     } finally {
       intervalSpy.mockRestore();
     }
@@ -1418,10 +1436,16 @@ describe("App workflow", () => {
     await user.click(await screen.findByRole("button", { name: "Motion" }));
       await screen.findByRole("tab", { name: "姿态库" });
       act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"], position: [0, -.2, -.3, 0, 0, 0] } }));
-      await user.click(screen.getByRole("tab", { name: "姿态库" }));
+      await user.click(screen.getByRole("tab", { name: "Robot View" }));
       expect(screen.getByRole("button", { name: "保存当前姿态" })).toBeEnabled();
       await user.click(screen.getByRole("button", { name: "保存当前姿态" }));
+      act(() => doubles.listener?.({ op: "topic_message", topic: "/stm32/joint_states", data: { name: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"], position: [1,1,1,1,1,1] } }));
       await user.click(screen.getByRole("button", { name: "保存点位" }));
+      expect(screen.queryByRole("dialog", {name:"保存当前姿态"})).not.toBeInTheDocument();
+      expect(doubles.request.mock.calls.some(([m]) => m.op === "position_move")).toBe(false);
+      await user.click(screen.getByRole("tab", { name: "姿态库" }));
+      expect(screen.queryByRole("button", {name:"手动新增"})).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", {name:"启动 MoveIt"})).not.toBeInTheDocument();
       await user.click(screen.getByRole("checkbox", { name: /允许点位运动/ }));
       const move = screen.getByRole("button", { name: "移动到 姿态 1" });
       await waitFor(() => expect(move).toBeEnabled());
