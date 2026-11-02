@@ -56,7 +56,7 @@ const baseProps = {
 };
 
 describe("StatusPage", () => {
-  it("renders four status tabs with sticky HOLD alert and exclusive mode strip", async () => {
+  it("renders three status tabs with sticky HOLD alert and exclusive mode strip", async () => {
     const user = userEvent.setup();
     const onCardAction = vi.fn();
     const onQuickAction = vi.fn();
@@ -70,9 +70,9 @@ describe("StatusPage", () => {
 
     expect(screen.getByRole("heading", { name: "Status" })).toBeVisible();
     expect(screen.getByRole("tablist", { name: "状态分区" })).toBeVisible();
-    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getAllByRole("tab")).toHaveLength(3);
     expect(screen.getByRole("tab", { name: /连接/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: /传感器/ })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: /传感器/ })).not.toBeInTheDocument();
 
     expect(screen.getByLabelText("SSH / 隧道")).toBeVisible();
     expect(screen.getByLabelText("Bridge")).toBeVisible();
@@ -80,8 +80,8 @@ describe("StatusPage", () => {
     expect(screen.getByLabelText("Hardware")).not.toBeVisible();
     await user.click(screen.getByRole("tab", { name: /硬件健康/ }));
     expect(screen.getByLabelText("Hardware")).toBeVisible();
-    expect(screen.getByLabelText("ROS 就绪")).toBeVisible();
-    expect(screen.getByLabelText("ros2_control")).toBeVisible();
+    expect(screen.getByLabelText("ROS 就绪")).not.toBeVisible();
+    expect(screen.getByLabelText("ros2_control")).not.toBeVisible();
     expect(screen.getByLabelText("USB CDC / ACM")).toBeVisible();
     expect(screen.queryByLabelText("DDS Domain")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("systemd")).not.toBeInTheDocument();
@@ -93,6 +93,8 @@ describe("StatusPage", () => {
     expect(screen.getByTestId("status-detail-hardware")).toHaveTextContent(/无重力补偿/);
     await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByTestId("status-mode-idle")).toBeVisible();
+    expect(screen.getByLabelText("ROS 就绪")).toBeVisible();
+    expect(screen.getByLabelText("ros2_control")).toBeVisible();
     expect(screen.queryByLabelText("Teleop")).not.toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled();
@@ -234,7 +236,7 @@ describe("Status tab navigation", () => {
     expect(screen.getByRole("tab", { name: /硬件健康/ })).toHaveFocus();
     expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
     await user.keyboard("{End}");
-    expect(screen.getByRole("tab", { name: /传感器/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /控制模式/ })).toHaveAttribute("aria-selected", "true");
     await user.keyboard("{Home}");
     expect(screen.getByRole("tab", { name: /连接/ })).toHaveFocus();
   });
@@ -320,6 +322,27 @@ it("keeps the last target/log after verified stop and treats manager shutdown as
   expect(screen.getByRole("button", {name: "Trajectory"})).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
   expect(screen.getByRole("tab", {name: /控制模式/})).not.toHaveTextContent("异常");
-  await user.click(screen.getByRole("tab", {name: /硬件健康/}));
+  await user.click(screen.getByRole("tab", {name: /控制模式/}));
   expect(screen.getByText("控制环境已退出（预期）")).toBeVisible();
+});
+
+it("renders clock diagnostics as a standard health card and updates the hidden tab summary", async () => {
+  const user = userEvent.setup();
+  const clockSync = { supported: true, state: "synchronized" as const, source_topic: "/stm32/joint_states", message: "时间恢复", generation: 2, source_offset_ms: -3, feedback_age_ms: 5 };
+  const { rerender } = render(<StatusPage {...baseProps} clockSync={clockSync} />);
+  rerender(<StatusPage {...baseProps} clockSync={{ ...clockSync, state: "unsynchronized", message: "等待重新同步" }} />);
+  expect(screen.getByRole("tab", { name: /硬件健康/ })).toHaveClass("tone-fail");
+  await user.click(screen.getByRole("tab", { name: /硬件健康/ }));
+  const card = screen.getByRole("article", { name: "时钟同步" });
+  expect(card).toHaveClass("status-card", "tone-fail");
+  expect(card).toHaveTextContent("落后 3.0 ms");
+  expect(card).toHaveTextContent("反馈接收帧龄5 ms");
+  expect(card).toHaveTextContent("等待重新同步");
+  expect(screen.getByLabelText("RealSense")).toBeVisible();
+});
+
+it.each(["ros-ready", "ros2-control"])("opens control health card %s on highlight without an active mode", (id) => {
+  render(<StatusPage {...baseProps} highlightCardId={id} />);
+  expect(screen.getByRole("tab", { name: /控制模式/ })).toHaveAttribute("aria-selected", "true");
+  expect(document.getElementById(`status-card-${id}`)).toHaveAttribute("data-highlighted", "true");
 });
