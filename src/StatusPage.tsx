@@ -1,3 +1,4 @@
+import { controllerStatusFresh } from "./controllersInfoLogic";
 import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -211,7 +212,7 @@ export function StatusPage({
     [armMode, rosControl],
   );
   const activeMode = controlStopped ? null : observedMode;
-  const modeConfirmed = Boolean(rosControl?.available) || controlStopped;
+  const modeConfirmed = controllerStatusFresh(rosControl) || controlStopped;
   const [targetMode, setTargetMode] = useState<"teleop" | "trajectory" | "vla">("teleop");
   useEffect(() => { if (modeConfirmed && activeMode) setTargetMode(activeMode); }, [activeMode, modeConfirmed]);
   const modeNames = { teleop: "Teleop", trajectory: "Trajectory", vla: "VLA" };
@@ -319,7 +320,7 @@ export function StatusPage({
                 </section>
               )}
               {isControl && !activeMode && (
-                <p className="status-mode-idle" data-testid="status-mode-idle">当前无运行中模式 · 选择目标模式后点击启动</p>
+                <p className="status-mode-idle" data-testid="status-mode-idle">{modeConfirmed ? "当前无运行中模式 · 选择目标模式后点击启动" : "当前模式待确认 · 可刷新状态或尝试恢复启动"}</p>
               )}
               <div
                 className={`status-card-grid zone-${zone.id}${zone.primary ? " primary" : ""}`}

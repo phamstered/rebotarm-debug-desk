@@ -1618,3 +1618,9 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .viewer-floating-rgbd .viewer-overlay-row > input { flex: 1 1 0; width: 0; min-width: 0; margin: 0; }
 .viewer-floating-rgbd .viewer-overlay-row > input[type="number"] { padding: 4px; }
 .viewer-floating-rgbd .viewer-overlay-row > strong { min-width: 0; font-size: 10px; }
+.controller-query-status { display:flex; flex-wrap:wrap; gap:4px 9px; margin:6px 0 10px; padding:7px 8px; border:1px solid var(--line); border-radius:5px; font-size:11px; overflow-wrap:anywhere; }
+.controller-query-status p { flex-basis:100%; min-width:0; margin:0; white-space:pre-wrap; }
+.controller-query-status.stale { color:#d8ae68; background:#342c1c44; }
+.controller-query-status.fresh { color:var(--muted); }
+.controller-status-badge.unknown { color:#a9b8c0; }
+.controller-actions button:disabled, .motion-controllers-panel > header button:disabled { opacity:.45; cursor:not-allowed; }

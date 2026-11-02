@@ -145,6 +145,19 @@ def main(binary):
             robot.delay = 0.
             ready()
 
+            # Read-only controllers_info never renews a motion-owner lease.
+            robot.hold_plan = True
+            before = len(robot.executions)
+            assert move().get('accepted') is not False
+            lease_deadline = time.monotonic() + 6
+            while time.monotonic() < lease_deadline:
+                registry = ws.request('controllers_info')
+                assert registry['supported'] and registry['fresh'], registry
+                time.sleep(.1)
+            wait_for(canceled)
+            assert len(robot.executions) == before
+            robot.hold_plan = False
+
             # Let every obsolete delayed callback finish sending its response.
             # Destroy in the quiet interval after a new fast response, before the
             # next query, so rclpy never sends through a destroyed service handle.

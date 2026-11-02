@@ -1,6 +1,7 @@
 import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo } from "./types";
 
 export type BridgeHello = {
+  controllers_info_supported?: boolean;
   rgbd_subscription_id_supported?: boolean;
   bridge_version?: string;
   bridge_build_id?: string;
@@ -97,6 +98,7 @@ export class BridgeClient {
         if (message.op !== "resource") this.listeners.forEach((listener) => listener(message));
         if (!helloResolved && message.op === "hello") {
           finishHello({
+            controllers_info_supported: message.controllers_info_supported,
             bridge_version: message.bridge_version,
             bridge_build_id: message.bridge_build_id,
             ros_distro: message.ros_distro,

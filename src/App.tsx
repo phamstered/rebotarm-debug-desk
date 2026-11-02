@@ -3,6 +3,7 @@ import { TopicsPage } from "./TopicsPage";
 import { ControllerList } from "./ControllerList";
 import { MotionControllersPanel } from "./MotionControllersPanel";
 import { useRosControllers } from "./useRosControllers";
+import { controllerStatusFresh, controllerStatusLabel } from "./controllersInfoLogic";
 import { MotionTerminal } from "./MotionTerminal";
 import { MotionGroupsPage } from "./MotionGroupsPage";
 import { useMotionGroups } from "./useMotionGroups";
@@ -103,6 +104,8 @@ import {
   VLA_CHUNK_TOPIC,
   VLA_POSITION_CONTROLLER,
   isVlaControllerActive,
+  isArmTeleopControllerActive,
+  isArmTrajectoryControllerActive,
   vlaStartVerificationFailure,
 } from "./vlaLogic";
 
@@ -405,9 +408,10 @@ export default function App() {
   const [armMode, setArmMode] = useState<ArmModeStatus | null>(null);
   const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
   const [statusActionNotice, setStatusActionNotice] = useState("");
+  const bridge = useMemo(() => new BridgeClient(), []);
   const controllerBlockRef = useRef("");
   const getControllerBlockReason = useCallback(() => controllerBlockRef.current, []);
-  const controllers = useRosControllers({ profile, connected: stage === "connected",
+  const controllers = useRosControllers({ profile, bridge, supported: bridgeHello?.controllersInfoSupported, connected: stage === "connected",
     connectionKey: JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]),
     getBlockReason: getControllerBlockReason });
   const { status: rosControl, refreshing: rosControlRefreshing, action: controllerAction,
@@ -459,7 +463,6 @@ export default function App() {
   const connectionGenerationRef = useRef(0);
   const topicRefreshInFlightRef = useRef(false);
   const liveUpdatesRef = useRef(true);
-  const bridge = useMemo(() => new BridgeClient(), []);
   const filteredTopics = useMemo(() => {
     const query = topicFilter.trim().toLocaleLowerCase();
     if (!query) return topics;
@@ -511,7 +514,7 @@ export default function App() {
 
   // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
   const activeTrajectoryController = useMemo(
-    () => findActiveTrajectoryController(rosControl?.controllers ?? []),
+    () => controllerStatusFresh(rosControl) ? findActiveTrajectoryController(rosControl!.controllers) : null,
     [rosControl],
   );
   const controllerStateTopic = activeTrajectoryController ? trajectoryStateTopic(activeTrajectoryController, topics) : "";
@@ -797,6 +800,7 @@ export default function App() {
           bridgeBuildId: message.bridge_build_id,
           rosDistro: message.ros_distro,
           rgbdSubscriptionIdSupported: message.rgbd_subscription_id_supported,
+          controllersInfoSupported: message.controllers_info_supported,
         });
       }
       if (message.op === "disconnected") {
@@ -880,11 +884,22 @@ export default function App() {
       activate,
       deactivate,
     });
+    const verified = await fetchRosControllers(true, true);
+    if (!controllerStatusFresh(verified) || activate.some(name => verified.controllers.find(c => c.name === name)?.state !== "active") || deactivate.some(name => verified.controllers.find(c => c.name === name)?.state === "active")) throw new Error(`VLA Controller 切换后状态未确认：${verified.message}`);
     return message;
   }
 
   const statusActionInFlightRef = useRef(false);
   const armWorkflow = useArmModeWorkflow(profile, stage === "connected");
+
+  async function checkControllerQueryForRestore(generation: number) {
+    const status = await fetchRosControllers(true, true);
+    if (generation !== connectionGenerationRef.current) throw new Error("连接已改变，模式操作已失效");
+    if (status.supported !== true) throw new Error(status.message || "请升级 Bridge 后再启动控制模式");
+    // A stopped stack has no manager yet. Its existing confirmed safe startup remains available.
+    if (!controllerStatusFresh(status) && !["waiting", "unavailable"].includes(status.queryState ?? "")) throw new Error(status.message || "Controller 查询状态未确认，请重试");
+    return status;
+  }
 
   async function runVlaStart() {
     if (controllerAction) { setStatusActionNotice("Controller 切换进行中，请等待完成"); return; }
@@ -898,13 +913,13 @@ export default function App() {
     setStatusActionBusy("vla-start");
     setStatusActionNotice("");
     try {
+      await checkControllerQueryForRestore(actionGeneration);
       setStatusActionNotice("正在安全回零并清理旧模式，再初始化 VLA 控制环境…");
       const reset = await armWorkflow.run("vla");
       if (actionGeneration !== connectionGenerationRef.current) return;
       if (!reset.ok) throw new Error(`${reset.message}：${reset.detail || reset.exitCode}`);
-      await refreshRosControllers();
       await refreshUsbAndArm();
-      const verified = await fetchRosControllers();
+      const verified = await fetchRosControllers(true, true);
       if (actionGeneration !== connectionGenerationRef.current) return;
       let latestHardware = hardwareStatusRef.current;
       if (latestHardware != null) {
@@ -941,6 +956,9 @@ export default function App() {
     setStatusActionBusy(alsoStopArm ? "arm-stop" : "vla-stop");
     setStatusActionNotice("");
     try {
+      const latestControllers = alsoStopArm ? null : await fetchRosControllers(true, true);
+      if (actionGeneration !== connectionGenerationRef.current) return;
+      if (!alsoStopArm && !controllerStatusFresh(latestControllers)) throw new Error(latestControllers?.message || "Controller 状态未确认，无法判断 VLA 是否运行");
       if (alsoStopArm) {
         const stopResult = await armWorkflow.run(disable ? "disable-stop" : "stop");
         if (actionGeneration !== connectionGenerationRef.current) return;
@@ -948,7 +966,7 @@ export default function App() {
       }
       if (alsoStopArm) {
         setStatusActionNotice(disable ? "输出已关闭，控制环境已退出" : "已回零并关闭输出，控制环境已退出");
-      } else if (isVlaControllerActive(rosControl)) {
+      } else if (isVlaControllerActive(latestControllers)) {
         try {
           const message = await switchVlaControllers([], [VLA_POSITION_CONTROLLER]);
           if (actionGeneration !== connectionGenerationRef.current) return;
@@ -1004,6 +1022,7 @@ export default function App() {
         }
         return;
       }
+      if (["teleop", "trajectory", "moveit"].includes(mode)) await checkControllerQueryForRestore(actionGeneration);
       if (mode === "teleop" || mode === "trajectory") {
         if (isFault11Latched(hardwareStatus)) {
           throw new Error("需先安全回零/托住，再重启 STM32（无软恢复）");
@@ -1016,7 +1035,12 @@ export default function App() {
       if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
       await refreshUsbAndArm();
-      await refreshRosControllers();
+      if (result.ok && ["teleop", "trajectory", "moveit"].includes(mode)) {
+        const verified = await fetchRosControllers(true, true);
+        if (actionGeneration !== connectionGenerationRef.current) return;
+        if (!controllerStatusFresh(verified)) throw new Error(`模式启动后 Controller 状态未确认：${verified.message}`);
+        if (mode === "teleop" ? !isArmTeleopControllerActive(verified) : !isArmTrajectoryControllerActive(verified)) throw new Error("模式启动后目标 Controller 未确认 active");
+      } else await refreshRosControllers();
     } catch (reason) {
       if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
@@ -1072,12 +1096,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refreshTopics, settings.refreshIntervalSeconds, stage]);
 
-  useEffect(() => {
-    if (stage !== "connected") return;
-    void refreshRosControllers();
-    const timer = window.setInterval(() => void refreshRosControllers(), settings.refreshIntervalSeconds * 1000);
-    return () => window.clearInterval(timer);
-  }, [refreshRosControllers, settings.refreshIntervalSeconds, stage]);
+
 
   function clearConnectionData() {
     connectionGenerationRef.current += 1;
@@ -1157,6 +1176,7 @@ export default function App() {
       activeStep = "bridge";
       const hello = await bridge.connect({ ...profile, localPort });
       setBridgeUp(true);
+      setBridgeHello(current => ({...current, bridgeVersion:hello.bridge_version,bridgeBuildId:hello.bridge_build_id,rosDistro:hello.ros_distro,controllersInfoSupported:hello.controllers_info_supported}));
       const versionCheck = checkBridgeVersion(hello);
       setBridgeVersionCheck(versionCheck);
       if (versionCheck.status === "mismatch") {
@@ -1661,8 +1681,8 @@ export default function App() {
     );
   }
 
-  const calibrationControllerState = rosControl?.controllers
-    .find((controller) => controller.name === "joint4_calibration_controller")?.state;
+  const calibrationControllerState = controllerStatusFresh(rosControl) ? rosControl!.controllers
+    .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
 
   return (
     <div className={`app-shell ${navExpanded ? "" : "nav-collapsed"}`}>
@@ -1902,7 +1922,7 @@ export default function App() {
         <section className={`sidebar-section ros-control-panel ${panels.rosControl ? "expanded" : "collapsed"}`} aria-label="ROS Control Controllers">
           <PanelTitle
             title="ROS Control"
-            meta={rosControl ? (rosControl.available ? String(rosControl.controllers.length) : "离线") : "检查中"}
+            meta={controllerStatusLabel(rosControl)}
             expanded={panels.rosControl}
             onRefresh={() => void refreshRosControllers()}
             refreshing={rosControlRefreshing}
@@ -1970,8 +1990,8 @@ export default function App() {
           message={controllerActionMessage} error={controllerActionError} disabledReason={controllerDisabledReason}
           focusController={focusController} onInspect={inspectController} />}
         readiness={<>
-          <span>机械臂：{rosControl?.controllers.find((controller) => controller.name === "arm_trajectory_controller")?.state ?? "未知"}</span>
-          <span>夹爪：{rosControl?.controllers.find((controller) => controller.name === "gripper_trajectory_controller")?.state ?? "未知"}</span>
+          <span>机械臂：{(controllerStatusFresh(rosControl) ? rosControl!.controllers.find((controller) => controller.name === "arm_trajectory_controller")?.state : undefined) ?? "未知"}</span>
+          <span>夹爪：{(controllerStatusFresh(rosControl) ? rosControl!.controllers.find((controller) => controller.name === "gripper_trajectory_controller")?.state : undefined) ?? "未知"}</span>
           <span>MoveIt：{positionMotion.reason || "已就绪"}</span>
           <span>关节反馈：{captureError || "新鲜"}</span>
           <span>时钟：{{ waiting: "等待同步", synchronized: "已对齐", unsynchronized: "失步", stale: "已过期", unsupported: "诊断不支持", disconnected: "未连接" }[clockSync.state]}</span>
@@ -2068,7 +2088,8 @@ export default function App() {
           actions={<><button type="button" className="ghost" onClick={() => setSettingsDialogOpen(false)}>取消</button><button type="button" className="primary" onClick={saveToolbarSettings}>保存设置</button></>}
         >
           <div className="settings-form">
-            <label>Topics / Controller 自动刷新间隔（秒）<input type="number" min="5" max="300" value={settingsDraft.refreshIntervalSeconds} onChange={(event) => setSettingsDraft((current) => ({ ...current, refreshIntervalSeconds: Number(event.target.value) }))} /></label>
+            <p>Controller 固定每 1 秒读取 Bridge 缓存；手动刷新会查询最新状态。</p>
+            <label>Topics 自动刷新间隔（秒）<input type="number" min="5" max="300" value={settingsDraft.refreshIntervalSeconds} onChange={(event) => setSettingsDraft((current) => ({ ...current, refreshIntervalSeconds: Number(event.target.value) }))} /></label>
             <label className="settings-check"><input type="checkbox" checked={settingsDraft.includeMessagePreviews} onChange={(event) => setSettingsDraft((current) => ({ ...current, includeMessagePreviews: event.target.checked }))} />诊断快照包含最新消息摘要（单条最多 4 KiB）</label>
             <label className="settings-check"><input type="checkbox" checked={navigateStatusOnConnect} onChange={(event) => setNavigateStatusOnConnect(event.target.checked)} />连接成功后打开 Status（默认开启）</label>
           </div>

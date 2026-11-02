@@ -27,7 +27,7 @@ const baseProps = {
   jointStateSample: { data: {}, count: 3, firstAt: 0, lastAt: 500, hz: 4 },
   rosControl: {
     manager: "/controller_manager",
-    available: true,
+    fresh: true, available: true,
     controllers: [{ name: "forward_position_controller", typeName: "t", state: "active" }],
     message: "",
   },
@@ -139,7 +139,7 @@ describe("StatusPage", () => {
         }}
         rosControl={{
           manager: "/controller_manager",
-          available: true,
+          fresh: true, available: true,
           controllers: [
             { name: "arm_teleop_controller", typeName: "t", state: "active" },
             { name: "gravity_compensation_controller", typeName: "t", state: "active" },
@@ -172,7 +172,7 @@ describe("StatusPage", () => {
         }}
         rosControl={{
           manager: "/controller_manager",
-          available: true,
+          fresh: true, available: true,
           controllers: [
             { name: "arm_teleop_controller", typeName: "t", state: "inactive" },
             { name: "arm_trajectory_controller", typeName: "t", state: "active" },

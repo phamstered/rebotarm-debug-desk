@@ -59,6 +59,8 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 
 Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、姿态库、动作组和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
 
+Controller 列表通过 Bridge 的常驻 ROS 客户端查询，与运动健康检查共用缓存；桌面每秒读取，手动刷新和切换前后等待新查询。失败保留标注年龄的最近成功列表供查看，过期数据不授权控制操作；该查询独立于 MoveIt 支持。
+
 动作组用时间轴编排已保存位置的姿态快照、过渡时长和停留，支持独立保存、修改和删除。Jetson Bridge 先准备到首姿态，再逐段 MoveIt 规划执行与实际停稳确认，支持段间暂停和整组取消；桌面端不使用定时器派发下一段。名义时间轴不包含准备、规划及停稳的额外耗时。详见 [基本功能](docs/basic-features.md#motion-动作组)。
 
 Motion 的 Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐藏时暂停渲染并取消未完成加载；资源使用二进制传输（兼容旧 Base64）。图像仅发送给订阅它的连接，Inspector 隐藏时释放图像订阅。RGBD 仅在 Motion → Robot View、窗口可见且实时显示开启时订阅；切到姿态库或其他页即释放当前客户端兴趣。断开重连后重新获取资源，详见 [架构](docs/architecture.md#urdf-assets)。

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { MotionControllersPanel } from "./MotionControllersPanel";
 const controller = { name: "arm", state: "inactive", typeName: "test/Controller" };
-const props = { status: { manager: "/controller_manager", available: true, message: "", controllers: [controller] }, refreshing: false, onRefresh: vi.fn(), onSwitch: vi.fn(), action: null, message: "", error: "", disabledReason: "", onInspect: vi.fn() };
+const props = { status: { manager: "/controller_manager", fresh: true, available: true, message: "", controllers: [controller] }, refreshing: false, onRefresh: vi.fn(), onSwitch: vi.fn(), action: null, message: "", error: "", disabledReason: "", onInspect: vi.fn() };
 it("requires explicit confirmation and rechecks changed controller state before confirming", async () => {
   const user = userEvent.setup(), change = vi.fn();
   const view = render(<MotionControllersPanel {...props} onSwitch={change} />);
@@ -47,4 +47,11 @@ it("discards pending confirmation when its page or panel becomes inactive", asyn
   view.rerender(<MotionControllersPanel {...props} onSwitch={change} active />);
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(change).not.toHaveBeenCalled();
+});
+it("disables an open confirmation immediately when its snapshot expires",async()=>{
+  const user=userEvent.setup(),change=vi.fn();const view=render(<MotionControllersPanel {...props} onSwitch={change}/>);
+  await user.click(screen.getByRole("button",{name:"激活 arm"}));
+  view.rerender(<MotionControllersPanel {...props} onSwitch={change} status={{...props.status,available:false,fresh:false,hasSnapshot:true,snapshotAgeMs:3100,queryState:"stale",message:"Controller 快照已过期"}}/>);
+  expect(screen.getByRole("button",{name:"确认激活"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"激活 arm"})).toBeDisabled();expect(change).not.toHaveBeenCalled();
 });
