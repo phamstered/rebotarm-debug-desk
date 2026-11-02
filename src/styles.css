@@ -1564,8 +1564,8 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .motion-log-divider { grid-area: log-divider; }
 .motion-layout-root .motion-workspace-log { max-height: none; overflow: hidden; display: flex; flex-direction: column; }
 .motion-workspace-log > .motion-terminal { flex: 1 1 0; min-height: 0; height: 100%; }
-.motion-workspace:has(.motion-workspace-log .collapsed) { grid-template-rows: auto minmax(0, 1fr) 0 34px; }
-.motion-workspace:has(.motion-workspace-log .collapsed) .motion-log-divider { visibility: hidden; }
+.motion-workspace:has(.motion-workspace-log > .motion-output-panel.collapsed) { grid-template-rows: auto minmax(0, 1fr) 0 34px; }
+.motion-workspace:has(.motion-workspace-log > .motion-output-panel.collapsed) .motion-log-divider { visibility: hidden; }
 .motion-workspace-log .control-log-output { height: 100%; max-height: none; min-height: 0; resize: none; }
 .motion-workspace-log .control-log-viewer { display: flex; flex-direction: column; overflow: hidden; }
 
@@ -1635,3 +1635,16 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .save-pose-form .position-joint-chips { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .controller-status-badge.unknown { color:#a9b8c0; }
 .controller-actions button:disabled, .motion-controllers-panel > header button:disabled { opacity:.45; cursor:not-allowed; }
+
+/* Reports share the bounded output row with logs; neither can grow the editor. */
+.motion-output-panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; background: #09151f; }
+.motion-output-header { display: flex; align-items: center; justify-content: space-between; flex: 0 0 34px; min-height: 34px; border-bottom: 1px solid var(--line); padding: 0 8px; }
+.motion-output-header .center-tab-list { height: 100%; }
+.motion-output-header .center-tab-list button { padding: 4px 12px; font-size: 11px; }
+.motion-output-toggle { border: 0; background: transparent; color: var(--muted); padding: 3px 10px; }
+.motion-output-log, .motion-output-report { min-height: 0; min-width: 0; flex: 1 1 0; }
+.motion-output-log { display: flex; flex-direction: column; overflow: hidden; }
+.motion-output-log > .motion-terminal { flex: 1 1 0; min-height: 0; border-top: 0; }
+.motion-output-report { overflow: auto; padding: 8px 12px; }
+.motion-output-report > .motion-group-result { margin: 0; }
+.motion-output-log[hidden], .motion-output-report[hidden] { display: none; }

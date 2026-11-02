@@ -2044,7 +2044,7 @@ export default function App() {
 </> : null}
         groups={renderGroupEditor()}
         log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
-          plannerLog={<ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible} connected={stage === "connected"} preferredSource="moveit" />} />}
+          plannerLog={(outputActive) => <ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible && outputActive} connected={stage === "connected"} preferredSource="moveit" />} />}
       />
 
       </div>

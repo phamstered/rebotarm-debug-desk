@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { useMotionReport } from "./MotionOutput";
+import type { PositionMotionState } from "./positionMotionLogic";
 import { MotionPage } from "./MotionPage";
 import { MotionTerminal } from "./MotionTerminal";
 import { defaultMotionLayout, MOTION_LAYOUT_KEY } from "./motionLayoutLogic";
@@ -14,7 +16,7 @@ describe("Motion workspace", () => {
     const user = userEvent.setup(); const { rerender } = render(<MotionPage {...props} />);
     const scene = screen.getByTestId("retained-model");
     expect(screen.getByRole("separator", { name: "调整 Controllers 宽度" })).toHaveAttribute("aria-valuenow", "400");
-    await user.click(screen.getByRole("button", { name: /规划执行日志/ }));
+    await user.click(screen.getByRole("button", { name: "收起执行面板" }));
     expect(screen.queryByRole("searchbox", { name: "搜索规划日志" })).not.toBeInTheDocument();
     rerender(<MotionPage {...props} resetVersion={1} />);
     expect(screen.getByRole("searchbox", { name: "搜索规划日志" })).toBeVisible();
@@ -47,4 +49,64 @@ describe("Motion workspace", () => {
     expect(screen.getByText("Controller operations")).not.toBeVisible();
     expect(screen.getByText("Shared motion log")).toBeVisible();
   });
+});
+
+function ReportPublisher({ state }: { state?: PositionMotionState }) {
+  const open = useMotionReport(state, null);
+  return <button onClick={open}>查看执行报告</button>;
+}
+const reportState: PositionMotionState = { commandId: "group-1", label: "取放", phase: "succeeded", message: "Action 成功，已停稳", group: { id: "group", count: 2, index: 1, phase: "holding", elapsed: 15 } };
+it("keeps output selection and editor mounted on completion, opens reports explicitly and clears prior profile results", async () => {
+  const user = userEvent.setup();
+  const props = { active: true, tab: "groups" as const, onTabChange: vi.fn(), controllersOpen: false,
+    onToggleControllers: vi.fn(), controllers: null, readiness: null,
+    robot: null, positions: null, log: <MotionTerminal active logs={[]} /> };
+  const view = render(<MotionPage {...props} groups={<ReportPublisher />} />);
+  const editor = screen.getByRole("button", { name: "查看执行报告" });
+  await user.click(screen.getByRole("button", { name: "收起执行面板" }));
+  view.rerender(<MotionPage {...props} groups={<ReportPublisher state={reportState} />} />);
+  expect(screen.getByRole("tab", { name: "执行日志" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "展开执行面板" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("status", { name: "最近动作组执行结果" })).not.toBeInTheDocument();
+  await user.click(editor);
+  expect(screen.getByRole("tab", { name: "执行报告" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("status", { name: "最近动作组执行结果" })).toHaveTextContent("Action 成功，已停稳");
+  view.rerender(<MotionPage {...props} active={false} groups={<ReportPublisher state={reportState} />} />);
+  view.rerender(<MotionPage {...props} groups={<ReportPublisher state={reportState} />} />);
+  expect(screen.getByRole("button", { name: "查看执行报告" })).toBe(editor);
+  expect(screen.getByRole("status", { name: "最近动作组执行结果" })).toHaveTextContent("取放");
+  view.rerender(<MotionPage {...props} groups={<ReportPublisher key="new-profile" />} />);
+  expect(screen.queryByRole("status", { name: "最近动作组执行结果" })).not.toBeInTheDocument();
+  expect(screen.getByText(/暂无动作组执行报告/)).toBeVisible();
+});
+it("preserves log filters and scroll while reports are open, and pauses the retained raw reader when hidden or folded", async () => {
+  const user = userEvent.setup();
+  const props = { active: true, tab: "groups" as const, onTabChange: vi.fn(), controllersOpen: false,
+    onToggleControllers: vi.fn(), controllers: null, readiness: null, robot: null, positions: null,
+    log: <MotionTerminal active logs={[]} plannerLog={active => <div data-testid="raw-reader" data-active={active}>raw planner</div>} /> };
+  render(<MotionPage {...props} />);
+  const search = screen.getByRole("searchbox");
+  await user.type(search, "timeout");
+  const pre = screen.getByLabelText("规划日志输出");
+  Object.defineProperties(pre, { scrollHeight: { value: 1000 }, clientHeight: { value: 100 } });
+  fireEvent.wheel(pre); fireEvent.scroll(pre);
+  pre.scrollTop = 123;
+  await user.click(screen.getByRole("tab", { name: "执行报告" }));
+  await user.click(screen.getByRole("tab", { name: "执行日志" }));
+  expect(screen.getByRole("searchbox")).toBe(search);
+  expect(search).toHaveValue("timeout");
+  expect(pre.scrollTop).toBe(123);
+  await user.selectOptions(screen.getByLabelText("规划日志来源"), "moveit");
+  const raw = screen.getByTestId("raw-reader");
+  expect(raw).toHaveAttribute("data-active", "true");
+  await user.click(screen.getByRole("tab", { name: "执行报告" }));
+  expect(raw).toHaveAttribute("data-active", "false");
+  await user.keyboard("{ArrowLeft}");
+  expect(screen.getByRole("tab", { name: "执行日志" })).toHaveFocus();
+  expect(screen.getByTestId("raw-reader")).toBe(raw);
+  expect(raw).toHaveAttribute("data-active", "true");
+  await user.click(screen.getByRole("button", { name: "收起执行面板" }));
+  expect(raw).toHaveAttribute("data-active", "false");
+  await user.click(screen.getByRole("button", { name: "展开执行面板" }));
+  expect(raw).toHaveAttribute("data-active", "true");
 });

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { MotionDivider, MotionLayoutProvider } from "./MotionLayout";
+import { MotionOutputPanel, MotionOutputProvider } from "./MotionOutput";
 import type { MotionTab } from "./appNavigationLogic";
 
 export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggleControllers,
@@ -17,7 +18,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
   groups?: ReactNode;
   log: ReactNode;
 }) {
-  return <MotionLayoutProvider active={active} resetVersion={resetVersion}><main className={`motion-workspace${controllersOpen ? "" : " controllers-collapsed"}`} hidden={!active} aria-label="Motion">
+  return <MotionLayoutProvider active={active} resetVersion={resetVersion}><MotionOutputProvider><main className={`motion-workspace${controllersOpen ? "" : " controllers-collapsed"}`} hidden={!active} aria-label="Motion">
     <header className="motion-workspace-header">
       <div className="motion-workspace-navigation">
         <strong>Motion</strong>
@@ -44,6 +45,6 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
       <div id="motion-groups" className="motion-groups" hidden={tab !== "groups"}>{groups}</div>
     </section>
     <MotionDivider size="logHeight" label="调整 Motion 日志高度" axis="y" edge="end" panel=".motion-workspace-log" container=".motion-workspace" maxFraction={.5} className="motion-log-divider" />
-    <section className="motion-workspace-log" aria-label="Motion 日志">{log}</section>
-  </main></MotionLayoutProvider>;
+    <section className="motion-workspace-log" aria-label="Motion 输出"><MotionOutputPanel log={log} /></section>
+  </main></MotionOutputProvider></MotionLayoutProvider>;
 }
