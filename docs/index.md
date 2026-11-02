@@ -30,6 +30,12 @@ features:
     details: MIT JointCommand、Joint4 标定，以及重力辨识页（Desk/Bridge 已接，实机 E2E 仍待现场）。运动抖动用只读采集脚本离线分析。
 ---
 
+## 未连接时的首页
+
+![连接页：SSH 主机、端口、私钥，以及连接 Jetson、管理姿态库、管理动作组](/screenshots/connect.png)
+
+窗口标题是 **Robot Console**。未连接时只有这一张卡片：SSH 主机默认 `jetson`，端口 `22`，用户名和私钥可留空以使用 `~/.ssh/config`。按钮是「连接 Jetson」「管理姿态库」「管理动作组」。此图在没有 Jetson 的环境截取。
+
 ## 这是什么
 
 **Rebotarm Debug Desk**（仓库 [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)）是运行在 macOS 上的 ROS 2 Humble 调试与受控操作控制台，技术栈为 Tauri + Rust + React + Three.js。ROS Bridge 运行在 Jetson / Ubuntu 22.04；两端仅通过 SSH 隧道通信。

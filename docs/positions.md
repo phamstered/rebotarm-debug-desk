@@ -2,6 +2,12 @@
 
 Motion → **姿态库** 保存当前连接下的关节姿态，并在会话解锁后交给 Jetson 上的 MoveIt2 规划执行。保存、编辑和删除不会发运动指令。连接、切模式和打开页面都不会自动回 HOME。
 
+![已进入 Motion 但控制器尚未激活时的姿态库](/screenshots/positions.png)
+
+![从连接页「管理姿态库」打开的离线姿态库](/screenshots/positions-offline.png)
+
+两张图都没有 Jetson，所以 HOME 是「待同步」「无姿态」，自定义列表是「还没有自定义点位」。连上控制栈之后，卡片左侧才会按保存的关节角画出简化姿态；执行按钮在门禁通过前保持禁用，并把原因写在安全确认旁边。离线时原因是「请先连接 Jetson」。已经连接但轨迹控制器未激活时，原因是「请先激活 arm_trajectory_controller 轨迹控制」。勾选安全确认之前，已连接且控制器就绪时的原因是「请先确认工作区安全并解锁点位执行」。
+
 协议字段见 [Bridge 协议 · MoveIt2](./protocol#moveit2-保存点位执行)；更细的门禁与测试见 [基本功能](./basic-features#motion-工作区)。2026-10-25 的方案记录（独立窗口、`motion_move` 等未采用的接口名）在 [历史方案](./positions-moveit-design)，不以该文的勾选状态判断当前能力。
 
 ## 前置条件
@@ -10,7 +16,7 @@ Motion → **姿态库** 保存当前连接下的关节姿态，并在会话解�
 
 1. Jetson 已安装 `rebotarm_moveit_config`，并且能启动 `real_move_group.launch.py`。该 launch 只拉起规划器，不另起硬件、`robot_state_publisher` 或第二个 `controller_manager`。
 2. Bridge 编译进 MoveIt 消息支持。未编译时 `position_motion_info` 返回不可用，姿态仍可管理，执行按钮给出原因。
-3. 在 **Status** 用 Trajectory 一键启动。原生流程在轨迹控制器与重力补偿自检通过后，再执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`，并等待 `/move_action`、`/move_group/get_parameters`、`/get_planning_scene`。已有就绪规划器会复用；姿态库页没有单独的「启动 MoveIt」按钮。
+3. 在 **Status → 控制模式** 选择 Trajectory，再点「启动所选模式」。原生流程在轨迹控制器与重力补偿自检通过后，再执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`，并等待 `/move_action`、`/move_group/get_parameters`、`/get_planning_scene`。已有就绪规划器会复用；姿态库页没有单独的「启动 MoveIt」按钮。MoveIt 未起来时，界面原因是「MoveIt /move_action 未启动，请启动 real_move_group.launch.py」。
 4. 现场控制器配置需关闭 MoveIt 自动切换控制器。执行前 Bridge 再核对 `arm_trajectory_controller` 为 active，并认领 joint1–joint6 的 `position+velocity`。可选夹爪还要独立的 `gripper_trajectory_controller` 与标定参数。
 
 规划失败或规划器未就绪时，轨迹控制器命令流可以仍然保留；界面显示缺少的服务或配置，不会改走本地 IK 或 `/joint_trajectory` 直发。

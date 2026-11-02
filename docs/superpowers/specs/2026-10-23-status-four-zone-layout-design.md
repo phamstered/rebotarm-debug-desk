@@ -1,4 +1,6 @@
-# Status 四区布局（desk UI）
+# Status 四区布局（历史方案）
+
+> 历史方案，不是当前界面。已落地的 Status 只有三个分区：连接、硬件健康、控制模式。RealSense 在硬件健康里，没有单独的「传感器」页。用法和截图见 [功能概览 · Status](/features#status-状态总览)。
 
 日期：2026-10-23  
 仓库：`phamstered/rebotarm-debug-desk`  

@@ -1,6 +1,14 @@
 # 连接与 Bridge
 
-桌面端不直接加入 DDS。连接链路是：
+桌面端不直接加入 DDS。未连接时先看到连接卡片，链路是：
+
+![未连接的 Robot Console 首页](/screenshots/connect.png)
+
+![展开「高级」后的 ROS 环境脚本与左腕 RGBD 字段](/screenshots/connect-advanced.png)
+
+上图没有连接 Jetson。主表单是 SSH 主机、用户名、端口、私钥路径。「高级」里才有 `ROS_DOMAIN_ID`、ROS 环境脚本，以及 **RGBD 启用**、RGB / Depth / CameraInfo Topic、**RGBD 目标 TF**、最大宽、最大高、最大 FPS。默认脚本是 `Project/rebotarm-ros2-stack/install/setup.bash`，默认彩色图是 `/cameras/left_arm/wrist/color/image_raw`，对齐深度是 `/cameras/left_arm/wrist/aligned_depth_to_color/image_raw`，CameraInfo 是 `/cameras/left_arm/wrist/color/camera_info`，目标 TF 是 `base_link`，预览 320×240、12 FPS。输入框较窄时路径会在框内截断，保存的仍是完整字符串。
+
+连接链路是：
 
 ```text
 SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh -N -L 本地转发 → WebSocket

@@ -67,11 +67,25 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ### 做什么
 
-左侧导航第一项 **Status** 分为「连接 / 硬件健康 / 控制模式 / 传感器」四个 Tab；每个 Tab 按分区内卡片的最高严重程度显示色标和数量，未打开的分区也会更新。卡片汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；禁用的一键/卡片操作旁显示短中文原因。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。VLA 卡片提示 Desk 一键 Teleop 拉起的 ros2_control 风险（见 PR #102）。可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
+左侧导航第一项 **Status** 只有三个分区：**连接**、**硬件健康**、**控制模式**。每个分区按钮带色标和数量，未打开的分区也会更新。没有单独的「传感器」页；RealSense 在硬件健康里。
+
+![Status 的连接分区。此图没有真实 Jetson：Agent 显示未运行，并等待 JointState](/screenshots/status-connection.png)
+
+连接分区是 SSH、Bridge、micro-ROS Agent。硬件健康是 USB CDC / ACM、Hardware、时钟同步、RealSense。控制模式是模式条，加上 ros2_control 与 ROS 就绪；Teleop、Trajectory、VLA 的详情卡片只在该模式已成为当前控制器后出现。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。禁用按钮旁边是短中文原因，例如还没有 JointState 时模式按钮标题为「等待 JointState」。
+
+![控制模式分区：Teleop、Trajectory、VLA，以及「启动所选模式」「回零并退出控制」](/screenshots/status-vla.png)
+
+模式条文案是 **Teleop**、**Trajectory**、**VLA**。没有单独的「一键 VLA」或卡片上的「启动 VLA」。当前没有运行中的模式时，主按钮是「启动所选模式」；已有别的模式时是「切换模式（先回零）」；已经是所选模式时是「当前模式已启用」。停止是「回零并退出控制」，说明写着「回到零位，确认输出关闭后退出。不是暂停或保持。」「直接关闭输出…」收在折叠里，确认现场支撑后才是解除电机输出。JointState 未到时，导航里的 Monitor、Motor、Calibration、重力辨识保持禁用，提示「需先收到 JointState（ROS 就绪）后才能打开…」。
+
+![硬件健康：USB、Hardware、时钟同步、RealSense。没有相机时 RealSense 为「无 USB」](/screenshots/status-hardware.png)
+
+RealSense 卡片在没有 `8086:*` 设备时写「未检测到 Intel RealSense（lsusb 8086:*）」。重新拉起按钮的备注仍写 `ros2 launch realsense2_camera rs_launch.py`；实际一键命令是 `ros2 launch rebotarm_gazebo left_wrist_camera.launch.py`。以启动命令为准，不要按卡片备注去找 `rs_launch.py`。USB 未看到 MCU 时失败文案会提到期望的 VID:PID `0483:5740`，这不是已经识别到的设备。Agent 卡片的操作是「重新拉起」。本页不刷写 STM32。
 
 ### 怎么用
 
-连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片会打开硬件健康 Tab、滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory/VLA（沿用现有安全停止流程，互斥停旧进程）。一键 Teleop 使用 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。一键 VLA 经 `switch_controllers` 激活 `vla_position_controller`、停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`；chunk 来自 `/vla/joint_chunk`（`VlaJointChunk.positions[]`），Desk 不直写 `/stm32/joint_commands`。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
+连接成功后默认打开 Status（可在设置关闭）。工具条左侧是「断开并重连…」「连接配置」「设置」；右侧是连接名、`localhost:` 实际转发端口、micro-ROS Agent 徽章和「断开」。Fault 芯片会打开硬件健康并高亮 Hardware。Topics 与 Motion 另有一条工具栏：「全部刷新」「暂停显示」或「继续显示」「开始录制」或「停止录制」「诊断快照」「重置布局」。
+
+选择 Teleop 后，「启动所选模式」执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。选择 Trajectory 时同一脚本使用 `--position-controller=trajectory --gravity=true`，夹爪参数由当时硬件状态决定，`--clean=false`，并在控制器自检后启动 `rebotarm_moveit_config` 的 `real_move_group.launch.py`。选择 VLA 时不跑这支 teleop 脚本，而是在已有控制栈上 `switch_controllers`：激活 `vla_position_controller`，停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`。chunk 来自 `/vla/joint_chunk`。Desk 不直写 `/stm32/joint_commands`。用法见 [VLA](./vla#_4-在-desk-中使用)。需要升级 Bridge 时仍走版本不匹配提示。
 
 ### 边界
 
@@ -155,9 +169,15 @@ Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View /
 
 ### 怎么用
 
-1. 在 Status 一键启动 Trajectory。自检通过后桌面会启动 `rebotarm_moveit_config` 的 `real_move_group.launch.py`。姿态库没有第二个「启动 MoveIt」按钮。
+1. 在 Status → 控制模式选择 **Trajectory**，再点「启动所选模式」。自检通过后桌面会启动 `rebotarm_moveit_config` 的 `real_move_group.launch.py`。姿态库没有第二个「启动 MoveIt」按钮。
 2. 在 Robot View 的 TCP 操作区点「保存当前姿态」。对话框锁住点击时的实测关节，可选夹爪和备注，不执行运动。未连接时用连接页「管理姿态库」编辑已有点。
 3. 打开 Motion → 姿态库，勾选「我已确认工作区安全，允许点位运动」，再点击卡片。取消只作用于本会话已受理的运动；ACK 不等于到位。
+
+![Motion → 姿态库。没有控制器时提示先激活 arm_trajectory_controller；HOME 显示待同步](/screenshots/positions.png)
+
+未连接时也可以从首页「管理姿态库」打开同一份数据，此时执行被禁用，原因是「请先连接 Jetson」。
+
+![未连接时的姿态库：锁定的 HOME 为待同步，还没有自定义点位](/screenshots/positions-offline.png)
 
 操作步骤、安全门，以及尚未提供的独立窗口 / 仅规划按钮，见 [姿态库与 MoveIt2](./positions)。
 
@@ -218,7 +238,11 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 1. 确认内置 URDF Topic（默认 `/robot_description`）与 JointState Topic 与当前固件 / ros2-stack 一致（界面不再编辑这些字段）。
 2. 连接后打开 Navigation → Motion →「Robot View」；Bridge 拉取 URDF 与 `package://` 网格 / 纹理。
 3. 模型随 JointState 的 name/position 更新；缺少的位置按 0 处理。
-4. 画布上有三个浮窗：「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」。可拖动、缩放、折叠；「重置浮窗」恢复默认位置。折叠不改变点云订阅或执行状态。
+4. 画布上有三个浮窗：「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」。可拖动、缩放、折叠；「重置浮窗」恢复默认位置。折叠不改变点云订阅或执行状态。没有 URDF 时画面中央是「等待 URDF Topic 数据…」。
+
+![Motion → Robot View。没有 URDF、没有关节反馈、没有点云；RGBD 浮窗停在 0.0 Hz · 0 pts](/screenshots/robot-view.png)
+
+上图是空闲界面：Controller 管理写着「服务不可用 / Controller Manager 未响应」，就绪行是「机械臂：未知」「夹爪：未知」「MoveIt：请先激活 arm_trajectory_controller 轨迹控制」「关节反馈：没有新鲜的关节反馈」「时钟：等待同步」。点云控件已经在，但没有相机帧。现场连上左腕相机后，这里才会出现彩色点，而不是另一套页面。
 
 <RobotViewDataFlow />
 
