@@ -23,12 +23,12 @@ describe("navigation preferences", () => {
   });
   it.each([null, "", "graph", "unknown"])("defaults invalid Motion preference %s safely", (value) => {
     expect(loadMotionTab(stored("robot-console-motion-tab", value))).toBe("robot");
-    expect(loadMotionSidebar(stored("robot-console-motion-controllers", value))).toBe(true);
+    expect(loadMotionSidebar(stored("robot-console-motion-controllers", value))).toBe(false);
   });
   it("falls back when reading preferences is unavailable", () => {
     const unavailable = { getItem: () => { throw new Error("Storage blocked"); } };
     expect(loadAppPage(unavailable)).toBe("dashboard");
     expect(loadMotionTab(unavailable)).toBe("robot");
-    expect(loadMotionSidebar(unavailable)).toBe(true);
+    expect(loadMotionSidebar(unavailable)).toBe(false);
   });
 });

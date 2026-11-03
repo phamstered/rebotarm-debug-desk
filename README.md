@@ -57,7 +57,7 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 | 重力辨识（Bridge/UI；stack #24 FULL_ARM；Jetson E2E pending） | [§8](docs/features.md#8-重力辨识) · [设计/实现说明](docs/gravity-identification.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/gravity-identification) |
 | 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
 
-Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、姿态库、动作组和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
+Navigation 的 **Motion** 位于 Topics 后，集中提供 Robot View、姿态库、动作组和 Controller 操作；Topics 保留 Graph / Inspector 与 Controller 只读状态，整栈 Teleop / Trajectory / VLA 模式管理仍在 Status。Motion 使用紧凑工作栏、按需连接详情/工具、图标导航、可恢复的专注模式和默认收起的 Controllers/输出区；动作组提供资源 Tab、右键/`⋯` 编辑、可固定属性及预览/时间轴布局切换。未就绪时也可进入 Motion 查看原因，执行仍受反馈、控制器和安全确认门禁约束。运动进行中，各页显示任务阶段及本会话取消入口。
 
 Controller 列表通过 Bridge 的常驻 ROS 客户端查询，与运动健康检查共用缓存；桌面每秒静默读取，手动刷新和切换前后等待新查询。正常轮询不触发刷新按钮忙碌动画，健康查询的快照年龄和后台进度折叠在“查询详情”中。失败保留标注年龄的最近成功列表供查看，过期数据不授权控制操作；该查询独立于 MoveIt 支持。
 

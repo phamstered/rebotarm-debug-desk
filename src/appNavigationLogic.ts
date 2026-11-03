@@ -19,5 +19,5 @@ export function loadMotionTab(storage: NavigationStorage = localStorage): Motion
 }
 
 export function loadMotionSidebar(storage: NavigationStorage = localStorage): boolean {
-  return readPreference(storage, "robot-console-motion-controllers") !== "false";
+  return readPreference(storage, "robot-console-motion-controllers") === "true";
 }

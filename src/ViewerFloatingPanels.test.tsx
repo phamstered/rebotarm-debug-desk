@@ -74,3 +74,17 @@ describe("Robot View floating windows",()=>{
     expect(screen.getByLabelText("TCP X")).not.toBeVisible();spy.mockRestore();
   });
 });
+
+
+it("defaults compact telemetry to folded panels and switches between docking and floating without losing edits",async()=>{
+  const user=(await import('@testing-library/user-event')).default.setup();
+  const body=<div className="viewer-layout"><ViewerHeadsUp error="" rgbd={<input aria-label="camera detail"/>}><input aria-label="held TCP" defaultValue="12"/></ViewerHeadsUp></div>;
+  const view=render(<MotionLayoutProvider active compact>{body}</MotionLayoutProvider>);
+  expect(screen.getByLabelText('camera detail')).not.toBeVisible();expect(screen.getByLabelText('held TCP')).toBeVisible();
+  expect(screen.getByLabelText('Robot View 操作面板')).toHaveClass('viewer-controls-docked');
+  fireEvent.change(screen.getByLabelText('held TCP'),{target:{value:'24'}});
+  await user.click(screen.getByRole('button',{name:'切换为浮窗'}));expect(screen.getByLabelText('Robot View 操作面板')).not.toHaveClass('viewer-controls-docked');expect(screen.getByLabelText('held TCP')).toHaveValue('24');
+  view.rerender(<MotionLayoutProvider active compact focusMode>{body}</MotionLayoutProvider>);
+  expect(view.container.querySelector('.viewer-floating-layer')).toHaveClass('viewer-focus');
+  view.rerender(<MotionLayoutProvider active compact>{body}</MotionLayoutProvider>);expect(screen.getByLabelText('held TCP')).toHaveValue('24');
+});

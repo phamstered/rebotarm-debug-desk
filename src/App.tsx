@@ -28,6 +28,7 @@ import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { PositionPage } from "./PositionPage";
+import { useWorkspacePreference } from "./workspacePreferences";
 import { SavePoseDialog } from "./SavePoseDialog";
 import { useClockSync } from "./clockSyncLogic";
 import { positionMotionBusy, usePositionMotion } from "./positionMotionLogic";
@@ -393,6 +394,7 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState("");
   const [topicSubscribeError, setTopicSubscribeError] = useState("");
   const [messages, setMessages] = useState<Record<string, TopicSample>>({});
+  const [positionEditRequest,setPositionEditRequest] = useState<{id:string;intent?:"edit"|"delete"}|undefined>();
   const [poseToSave, setPoseToSave] = useState<PositionDraft | null>(null);
   const [poseSaveError, setPoseSaveError] = useState("");
   const [positionStore, setPositionStore] = useState<PositionStore>(() => emptyPositionStore());
@@ -426,6 +428,8 @@ export default function App() {
   const [gravitySessionActive, setGravitySessionActive] = useState(false);
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
+  const [motionFocus, setMotionFocus] = useState(false);
+  const [motionNav, setMotionNav] = useWorkspacePreference<boolean>("motion-nav", false);
   const [motionTab, setMotionTab] = useState<MotionTab>(loadMotionTab);
   const [motionControllersOpen, setMotionControllersOpen] = useState(loadMotionSidebar);
   const [motionLayoutReset, setMotionLayoutReset] = useState(0);
@@ -1109,6 +1113,7 @@ export default function App() {
 
   function clearConnectionData() {
     setPoseToSave(null);
+    setPositionEditRequest(undefined);
     setPoseSaveError("");
     connectionGenerationRef.current += 1;
     setTopicsVisited(false);
@@ -1376,7 +1381,7 @@ export default function App() {
   }
 
   function resetWorkspaceLayout() {
-    if (appPage === "motion") { setMotionLayoutReset((value) => value + 1); setMotionControllersOpen(true); setToolbarNotice("Motion 布局已恢复默认值"); return; }
+    if (appPage === "motion") { setMotionFocus(false);setMotionNav(false);setMotionLayoutReset((value) => value + 1); setMotionControllersOpen(false); setToolbarNotice("Motion 布局已恢复默认值"); return; }
     setLayout({ ...defaultLayoutSizes });
     setPanels({ ...defaultPanelState });
     setSidebars({ ...defaultSidebarState });
@@ -1591,7 +1596,7 @@ export default function App() {
     urdfXml={urdf || previewUrdf} homePositions={positionMotion.homePositions}
     onSave={motionGroups.saveGroup} onDelete={motionGroups.deleteGroup} motion={positionMotion}
     onBack={offline ? () => setManageMotionGroups(false) : undefined}
-    onOpenPoseLibrary={() => { if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
+    onOpenPoseLibrary={(id,intent) => { if(id)setPositionEditRequest({id,intent}); if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
   if (stage !== "connected" && manageMotionGroups) {
     return <main className="connect-shell"><section className="offline-motion-groups">
@@ -1604,6 +1609,7 @@ export default function App() {
       <main className="connect-shell">
         <PositionPage
           profileKey={positionProfileKey}
+          editRequest={positionEditRequest}
           store={positionStore}
           urdfXml={urdf || previewUrdf}
           onUpdate={editPosition}
@@ -1678,24 +1684,7 @@ export default function App() {
     );
   }
 
-  const calibrationControllerState = controllerStatusFresh(rosControl) ? rosControl!.controllers
-    .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
-
-  return (
-    <div className={`app-shell ${navExpanded ? "" : "nav-collapsed"}`}>
-      <AppNav
-        page={appPage}
-        expanded={navExpanded}
-        rosReady={rosReady}
-        onSelect={(next) => {
-          setAppPage(next);
-          if (next !== "status") setStatusHighlightCardId(null);
-        }}
-        onToggle={() => setNavExpanded((current) => !current)}
-      />
-      {!navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
-      <div className="app-main-column">
-      <header className="connected-topbar" role="banner" aria-label="已连接工具条">
+  const connectionPanel = <div className="connection-panel">
         <button
           type="button"
           className="toolbar-action switch-host"
@@ -1734,7 +1723,65 @@ export default function App() {
           <span /> micro-ROS Agent：{isAgentOnline(agentStatus) ? "运行中" : agentError ? "检查失败" : agentStatus ? "未运行" : "检查中"}
         </span>
         <button className="ghost disconnect-btn" onClick={() => void disconnect()} title="断开 SSH 隧道与 Bridge">断开</button>
-      </header>
+</div>;
+  const workspaceTools = <>        <div className="toolbar-actions" role="group" aria-label="全局操作">
+        <button
+          type="button"
+          className="toolbar-action"
+          aria-label="刷新全部状态"
+          title="刷新 Topics 与 Controller 列表"
+          disabled={topicRefreshing || rosControlRefreshing}
+          onClick={() => {
+            void refreshTopics();
+            void refreshRosControllers();
+          }}
+        >
+          <span className={topicRefreshing || rosControlRefreshing ? "spin" : ""}>↻</span>全部刷新
+        </button>
+          <button
+            type="button"
+            className={`toolbar-action ${liveUpdates ? "" : "active"}`}
+            aria-pressed={!liveUpdates}
+            onClick={() => {
+              setLiveUpdates((current) => !current);
+              setToolbarNotice(liveUpdates ? "实时数据显示已暂停；连接和 rosbag 录制不受影响" : "实时数据显示已恢复");
+            }}
+            title="暂停或恢复 Topic、JointState 与状态消息的界面更新"
+          ><span>{liveUpdates ? "Ⅱ" : "▶"}</span>{liveUpdates ? "暂停显示" : "继续显示"}</button>
+          <button
+            type="button"
+            className={`toolbar-action record ${rosbagStatus?.recording ? "active" : ""}`}
+            aria-pressed={Boolean(rosbagStatus?.recording)}
+            disabled={Boolean(toolbarBusy)}
+            onClick={() => void toggleRosbagRecording()}
+            title={rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
+          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
+          <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
+          <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title="恢复面板尺寸并展开全部面板"><span>⊞</span>重置布局</button>
+        </div>
+</>;
+  const motionWarning = typeof faultCode === "number" && faultCode !== 0 ? `硬件故障 ${faultCode}` : agentError || (!rosReady ? "ROS 反馈未就绪" : "") ||
+    (!controllerStatusFresh(rosControl) ? "Controller 状态待确认" : "") || positionMotion.reason || captureError ||
+    (clockSync.state !== "synchronized" ? `时钟：${clockSync.message || clockSync.state}` : "");
+  const calibrationControllerState = controllerStatusFresh(rosControl) ? rosControl!.controllers
+    .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
+
+  return (
+    <div className={`app-shell ${appPage === "motion" ? `motion-shell${motionFocus ? " motion-focus" : motionNav ? "" : " nav-icons"}` : navExpanded ? "" : "nav-collapsed"}`}>
+      <AppNav
+        page={appPage}
+        expanded={appPage === "motion" ? motionNav && !motionFocus : navExpanded}
+        iconRail={appPage === "motion" && !motionFocus}
+        rosReady={rosReady}
+        onSelect={(next) => {
+          setAppPage(next);
+          if (next !== "status") setStatusHighlightCardId(null);
+        }}
+        onToggle={() => appPage === "motion" ? setMotionNav(v => !v) : setNavExpanded((current) => !current)}
+      />
+      {appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
+      <div className="app-main-column">
+      {appPage !== "motion" && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>
@@ -1828,45 +1875,7 @@ export default function App() {
           controlLockedReason={controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
         />
       ) : null}
-      {(appPage === "dashboard" || appPage === "motion") && (
-      <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">
-        <div className="toolbar-actions" role="group" aria-label="全局操作">
-        <button
-          type="button"
-          className="toolbar-action"
-          aria-label="刷新全部状态"
-          title="刷新 Topics 与 Controller 列表"
-          disabled={topicRefreshing || rosControlRefreshing}
-          onClick={() => {
-            void refreshTopics();
-            void refreshRosControllers();
-          }}
-        >
-          <span className={topicRefreshing || rosControlRefreshing ? "spin" : ""}>↻</span>全部刷新
-        </button>
-          <button
-            type="button"
-            className={`toolbar-action ${liveUpdates ? "" : "active"}`}
-            aria-pressed={!liveUpdates}
-            onClick={() => {
-              setLiveUpdates((current) => !current);
-              setToolbarNotice(liveUpdates ? "实时数据显示已暂停；连接和 rosbag 录制不受影响" : "实时数据显示已恢复");
-            }}
-            title="暂停或恢复 Topic、JointState 与状态消息的界面更新"
-          ><span>{liveUpdates ? "Ⅱ" : "▶"}</span>{liveUpdates ? "暂停显示" : "继续显示"}</button>
-          <button
-            type="button"
-            className={`toolbar-action record ${rosbagStatus?.recording ? "active" : ""}`}
-            aria-pressed={Boolean(rosbagStatus?.recording)}
-            disabled={Boolean(toolbarBusy)}
-            onClick={() => void toggleRosbagRecording()}
-            title={rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
-          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
-          <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
-          <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title="恢复面板尺寸并展开全部面板"><span>⊞</span>重置布局</button>
-        </div>
-      </header>
-      )}
+      {appPage === "dashboard" && <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">{workspaceTools}</header>}
       {(appPage === "dashboard" || topicsVisited) && (
       <TopicsPage active={appPage === "dashboard"} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
       <aside
@@ -1980,7 +1989,10 @@ export default function App() {
       />}
       </TopicsPage>
       )}
-      <MotionPage resetVersion={motionLayoutReset} active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
+      <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
+        connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
+        tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <button className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</button>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
+        resetVersion={motionLayoutReset} active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
           onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}
@@ -2035,6 +2047,7 @@ export default function App() {
 </>}
         positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
             profileKey={positionProfileKey}
+            editRequest={positionEditRequest}
             store={positionStore}
             urdfXml={urdf || previewUrdf}
             onUpdate={editPosition}
