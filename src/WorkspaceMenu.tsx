@@ -208,23 +208,26 @@ export function WorkspacePopover({
     };
     document.addEventListener("pointerdown", outside, true);
     const resize = () => setOpen(false);
+    // WebKit mouse activation does not necessarily focus the trigger button.
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (!active || event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      root.current?.querySelector("button")?.focus();
+    };
+    document.addEventListener("keydown", key);
     window.addEventListener("resize", resize);
     return () => {
       document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", key);
       window.removeEventListener("resize", resize);
     };
-  }, [open]);
+  }, [open, active]);
   return (
     <div
       ref={root}
       className="workspace-popover"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.stopPropagation();
-          setOpen(false);
-          root.current?.querySelector("button")?.focus();
-        }
-      }}
     >
       <button
         type="button"

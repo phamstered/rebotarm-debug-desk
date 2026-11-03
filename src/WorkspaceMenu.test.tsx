@@ -141,3 +141,19 @@ it("portals tool popovers outside clipped editors and dismisses them when their 
     screen.queryByRole("region", { name: "添加与轨道" }),
   ).not.toBeInTheDocument();
 });
+
+it("closes a mouse-opened popover when focus stays on the body, while respecting handled Escape", async () => {
+  const user=userEvent.setup();
+  render(<WorkspacePopover label="工具"><button>刷新</button></WorkspacePopover>);
+  const trigger=screen.getByRole("button",{name:"工具"});
+  await user.click(trigger);trigger.blur();
+  expect(document.activeElement).toBe(document.body);
+  const handled=new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true});
+  handled.preventDefault();document.dispatchEvent(handled);
+  expect(screen.getByRole("region",{name:"工具"})).toBeVisible();
+  fireEvent.keyDown(document.body,{key:"Escape",isComposing:true});
+  expect(screen.getByRole("region",{name:"工具"})).toBeVisible();
+  fireEvent.keyDown(document.body,{key:"Escape"});
+  expect(screen.queryByRole("region",{name:"工具"})).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+});
