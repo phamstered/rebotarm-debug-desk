@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
@@ -144,14 +144,55 @@ it("clicks a position to move while edit and delete remain separate", async () =
 });
 
 
-it("selects a compact pose without moving and exposes contextual editing and confirmed deletion",async()=>{
+it("double-clicks compact thumbnails to move without a preview pane, with contextual editing and confirmed deletion",async()=>{
   const user=userEvent.setup(),onDelete=vi.fn(),execute=vi.fn();const store=emptyPositionStore();store.profiles[key]={positions:[point('pick',[0,0,0,0,0,0])]};
-  const motion={logs:[],recordLog:vi.fn(),state:{phase:'idle' as const,commandId:'',label:'',message:''},homePositions:[],armed:true,busy:false,reason:'',jointRotationReason:'',jointTargetsReason:'',executeJoints:vi.fn(),executeJoint:vi.fn(),setArmed:vi.fn(),execute,cancel:vi.fn()};
+  const motion={logs:[],recordLog:vi.fn(),state:{phase:'idle' as const,commandId:'',label:'',message:''},homePositions:[0,0,0,0,0,0],armed:true,busy:false,reason:'',jointRotationReason:'',jointTargetsReason:'',executeJoints:vi.fn(),executeJoint:vi.fn(),setArmed:vi.fn(),execute,cancel:vi.fn()};
   render(<MotionLayoutProvider active compact><PositionPage profileKey={key} store={store} urdfXml="" onUpdate={()=>''} onDelete={onDelete} motion={motion}/></MotionLayoutProvider>);
-  await user.click(screen.getByRole('button',{name:'预览 pick'}));expect(execute).not.toHaveBeenCalled();
-  await user.click(screen.getByRole('button',{name:'执行到此姿态'}));expect(execute).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole('button',{name:'移动到 pick'}));expect(execute).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button',{name:'执行到此姿态'})).not.toBeInTheDocument();
+  expect(screen.getByLabelText('点位编辑')).not.toBeVisible();
+  await user.dblClick(screen.getByRole('article',{name:'pick'}));expect(execute).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('点位名称')).not.toBeInTheDocument();
+  await user.dblClick(screen.getByRole('button',{name:'移动到 pick'}));expect(execute).toHaveBeenCalledExactlyOnceWith(store.profiles[key].positions[0]);
+  await user.click(screen.getByRole('button',{name:'移动到 HOME'}));expect(execute).toHaveBeenCalledOnce();
+  await user.dblClick(screen.getByRole('button',{name:'移动到 HOME'}));expect(execute).toHaveBeenLastCalledWith('home');
+  execute.mockClear();
+  screen.getByRole('button',{name:'移动到 pick'}).focus();await user.keyboard('{Enter}');expect(execute).toHaveBeenCalledOnce();
+  execute.mockClear();
+  screen.getByRole('button',{name:'移动到 HOME'}).focus();await user.keyboard(' ');expect(execute).toHaveBeenCalledExactlyOnceWith('home');
   await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'编辑姿态'}));expect(screen.getByLabelText('点位名称')).toHaveValue('pick');expect(execute).toHaveBeenCalledOnce();
   await user.click(screen.getByRole('button',{name:'取消'}));
   await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'删除姿态'}));expect(onDelete).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button',{name:'确认删除 pick'}));expect(onDelete).toHaveBeenCalledExactlyOnceWith('pick');
+});
+
+
+it.each([
+  { name: "unarmed", patch: { armed: false } },
+  { name: "busy", patch: { busy: true } },
+  { name: "unready", patch: { reason: "反馈过期" } },
+  { name: "gripper unavailable", patch: {}, gripperPosition: .01 },
+])("blocks compact double-click motion when $name", async ({ patch, gripperPosition }) => {
+  const user = userEvent.setup(), execute = vi.fn();
+  const store = emptyPositionStore();
+  store.profiles[key] = { positions: [{ ...point("pick", [0,0,0,0,0,0]), gripperPosition }] };
+  const motion = { logs: [], recordLog: vi.fn(), state: { phase: "idle" as const, commandId: "", label: "", message: "" }, homePositions: [], armed: true, busy: false, reason: "", jointRotationReason: "", jointTargetsReason: "", executeJoints: vi.fn(), executeJoint: vi.fn(), setArmed: vi.fn(), execute, cancel: vi.fn(), ...patch };
+  render(<MotionLayoutProvider active compact><PositionPage profileKey={key} store={store} urdfXml="" onUpdate={()=>''} onDelete={vi.fn()} motion={motion}/></MotionLayoutProvider>);
+  expect(screen.getByRole("button", { name: "移动到 pick" })).toBeDisabled();
+  await user.dblClick(screen.getByRole("button", { name: "移动到 pick" }));
+  fireEvent.doubleClick(screen.getByRole("button", { name: "移动到 HOME" }));
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it("blocks compact thumbnail execution during editing and allows it after cancellation", async () => {
+  const user = userEvent.setup(), execute = vi.fn();
+  const store = emptyPositionStore();store.profiles[key] = { positions: [point("pick", [0,0,0,0,0,0])] };
+  const motion = { logs: [], recordLog: vi.fn(), state: { phase: "idle" as const, commandId: "", label: "", message: "" }, homePositions: [], armed: true, busy: false, reason: "", jointRotationReason: "", jointTargetsReason: "", executeJoints: vi.fn(), executeJoint: vi.fn(), setArmed: vi.fn(), execute, cancel: vi.fn() };
+  render(<MotionLayoutProvider active compact><PositionPage profileKey={key} store={store} urdfXml="" onUpdate={()=>''} onDelete={vi.fn()} motion={motion}/></MotionLayoutProvider>);
+  await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'编辑姿态'}));
+  expect(screen.getByRole('button',{name:'移动到 pick'})).toBeDisabled();
+  await user.dblClick(screen.getByRole('button',{name:'移动到 pick'}));expect(execute).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'取消'}));
+  expect(screen.getByLabelText('点位编辑')).not.toBeVisible();
+  await user.dblClick(screen.getByRole('button',{name:'移动到 pick'}));expect(execute).toHaveBeenCalledOnce();
 });

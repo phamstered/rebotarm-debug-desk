@@ -88,3 +88,25 @@ it("defaults compact telemetry to folded panels and switches between docking and
   expect(view.container.querySelector('.viewer-floating-layer')).toHaveClass('viewer-focus');
   view.rerender(<MotionLayoutProvider active compact>{body}</MotionLayoutProvider>);expect(screen.getByLabelText('held TCP')).toHaveValue('24');
 });
+
+
+it("detaches the docked controls by dragging its title, preserves inputs and cancels on hide", () => {
+  const body = <div className="viewer-layout"><ViewerHeadsUp error=""><input aria-label="held TCP" defaultValue="24"/></ViewerHeadsUp></div>;
+  const view = render(<MotionLayoutProvider active compact>{body}</MotionLayoutProvider>);
+  const panel = screen.getByLabelText("Robot View 操作面板");
+  const drag = screen.getByRole("button", { name: "移动TCP / 关节操作浮窗" });
+  expect(panel).toHaveClass("viewer-controls-docked");
+  fireEvent.pointerDown(drag, { button: 0, clientX: 700, clientY: 10 });
+  fireEvent.pointerMove(window, { clientX: 701, clientY: 11 });
+  expect(panel).toHaveClass("viewer-controls-docked");
+  fireEvent.pointerMove(window, { clientX: 600, clientY: 40 });
+  expect(panel).not.toHaveClass("viewer-controls-docked");
+  expect(saved().controls).toMatchObject({ x: 560, y: 30, width: 340, height: 560 });
+  expect(screen.getByLabelText("held TCP")).toHaveValue("24");
+  fireEvent.pointerCancel(window);
+  const stopped = saved();
+  fireEvent.pointerMove(window, { clientX: 500, clientY: 20 });expect(saved()).toEqual(stopped);
+  fireEvent.pointerDown(drag, { button: 0, clientX: 600, clientY: 40 });
+  view.rerender(<MotionLayoutProvider active={false} compact>{body}</MotionLayoutProvider>);
+  fireEvent.pointerMove(window, { clientX: 500, clientY: 20 });expect(saved()).toEqual(stopped);
+});

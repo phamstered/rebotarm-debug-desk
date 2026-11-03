@@ -1454,10 +1454,11 @@ describe("App workflow", () => {
       expect(screen.queryByRole("button", {name:"手动新增"})).not.toBeInTheDocument();
       expect(screen.queryByRole("button", {name:"启动 MoveIt"})).not.toBeInTheDocument();
       await user.click(screen.getByRole("checkbox", { name: /允许点位运动/ }));
-      await user.click(screen.getByRole("button",{name:"预览 姿态 1"}));
-      const move = screen.getByRole("button", { name: "执行到此姿态" });
+      const move = screen.getByRole("button", { name: "移动到 姿态 1" });
       await waitFor(() => expect(move).toBeEnabled());
       await user.click(move);
+      expect(doubles.request.mock.calls.some(([m]) => m.op === "position_move")).toBe(false);
+      await user.dblClick(move);
       expect(doubles.request).toHaveBeenCalledWith(expect.objectContaining({ op: "position_move", positions: [0, -.2, -.3, 0, 0, 0], confirmation: "ARMED" }), 5000);
       expect(doubles.request.mock.calls.some(([m]) => m.op === "trajectory_command")).toBe(false);
       const moveRequest = doubles.request.mock.calls.find(([m]) => m.op === "position_move")![0];

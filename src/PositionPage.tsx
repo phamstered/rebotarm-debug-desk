@@ -45,7 +45,6 @@ export function PositionPage({
   const compact=useMotionLayout()?.compact ?? false;
   const [selectedId,setSelectedId]=useState("");
   const [menuId,setMenuId]=useState("");
-  const chosen=positions.find(p=>p.id===selectedId);
   const target=positions.find(p=>p.id===(menuId||selectedId));
   function beginEdit(position: CustomPosition) {
     setSelectedId(position.id);setEditingId(position.id);setName(position.name);setJoints(position.positions.map(String));
@@ -54,11 +53,10 @@ export function PositionPage({
   }
   useEffect(()=>{const p=positions.find(p=>p.id===editRequest?.id);if(p){setSelectedId(p.id);if(editRequest?.intent==='delete')setPendingDelete(p.id);else beginEdit(p);}},[editRequest]);
   const contextMenu=useWorkspaceMenu(target?[
-    {label:"预览姿态",run:()=>{setSelectedId(target.id);setEditorOpen(false);}},
     {label:"编辑姿态",disabled:motion?.busy,run:()=>beginEdit(target)},
     {label:"删除姿态",danger:true,disabled:motion?.busy,run:()=>{setSelectedId(target.id);setPendingDelete(target.id);}}
   ]:[],"姿态操作");
-  const showEditor=!compact||editorOpen||!!chosen;
+  const showEditor=!compact||editorOpen;
   function save() {
     if (includeGripper && (!gripper.trim() || !Number.isFinite(Number(gripper)))) { setFormError("请输入有效的夹爪行程"); return; }
     const draft = { gripperPosition: includeGripper ? Number(gripper) / 1000 : undefined, name, positions: joints.map(Number), note, source };
@@ -79,10 +77,9 @@ export function PositionPage({
       <div className="position-toolbar">
         <div>
           <h2>姿态库</h2>
-          <p>{compact ? "单击预览，双击编辑；实际运动使用明确的执行按钮。" : "保存六个关节角和可选夹爪行程；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。"}</p>
+          <p>{compact ? "双击 3D 缩略图移动；右键或 ⋯ 编辑、删除姿态。" : "保存六个关节角和可选夹爪行程；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。"}</p>
         </div>
         <div className="position-toolbar-actions">
-          {compact && target && contextMenu.trigger}
           {onBack && <button type="button" className="position-quiet" onClick={onBack}>返回连接</button>}
 
         </div>
@@ -103,10 +100,11 @@ export function PositionPage({
             if (!compact && !disabled && homeReady && !(event.target as HTMLElement).closest("button")) void motion?.execute("home");
           }}>
             <button type="button" className="position-target" aria-label="移动到 HOME"
-              disabled={disabled || !homeReady} title={homeReady ? moveReason : "HOME 尚未从 MoveIt SRDF 同步"}
-              onClick={() => void motion?.execute("home")}>
+              disabled={disabled || !homeReady} title={homeReady ? moveReason || (compact ? "双击移动到 HOME；键盘 Enter / 空格执行" : "移动到 HOME") : "HOME 尚未从 MoveIt SRDF 同步"}
+              onClick={event => { if (!compact || event.detail === 0) void motion?.execute("home"); }}
+              onDoubleClick={compact ? () => { if (!disabled && homeReady) void motion?.execute("home"); } : undefined}>
               <UrdfPoseThumbnail xml={urdfXml} label="HOME" jointNames={[...ARM_JOINT_NAMES]} positions={homeReady ? motion?.homePositions : undefined} />
-              <span>HOME</span>
+              <span>{compact ? "双击移动" : "HOME"}</span>
             </button>
             <div className="position-card-body">
               <div className="position-card-head">
@@ -176,9 +174,7 @@ export function PositionPage({
                 <button type="submit" className="position-primary">保存点位</button>
               </div>
             </form>
-          ) : compact && chosen ? <section className="position-selection-preview"><h3>{chosen.name}</h3><UrdfPoseThumbnail xml={urdfXml} label={chosen.name} jointNames={chosen.jointNames} positions={chosen.positions}/>
-            <button type="button" disabled={disabled || chosen.gripperPosition!==undefined&&!motion?.gripper?.available} onClick={()=>void motion?.execute(chosen)}>执行到此姿态</button>
-            <button type="button" onClick={()=>{setSelectedId("");setEditorOpen(false);}}>收起预览</button></section> : (
+          ) : (
             <p className="position-editor-hint">选一个点位进行编辑；新姿态请在 Robot View 的 TCP 操作区保存。</p>
           )}
         </aside>
@@ -217,13 +213,15 @@ function PositionCard({
   const positions = previewPositions ?? position.positions;
   return (
     <article className={`position-card${selected ? " selected" : ""}`} aria-label={position.name} tabIndex={compact ? 0 : undefined}
-      onContextMenu={onContextMenu} onKeyDown={onContextKey} onDoubleClick={compact ? onEdit : undefined} onClick={(event) => {
+      onContextMenu={onContextMenu} onKeyDown={onContextKey} onClick={(event) => {
       if (!(event.target as HTMLElement).closest("button")) { if(compact)onSelect();else if(!moveDisabled)onMove(); }
     }}>
-      <button type="button" className="position-target" aria-label={`${compact ? "预览" : "移动到"} ${position.name}`} disabled={!compact && moveDisabled}
-        title={compact ? "本地预览，不下发运动" : moveReason || `由 MoveIt2 规划并移动到 ${position.name}`} onClick={compact ? onSelect : onMove}>
+      <button type="button" className="position-target" aria-label={`移动到 ${position.name}`} disabled={moveDisabled}
+        title={moveReason || (compact ? `双击移动到 ${position.name}；键盘 Enter / 空格执行` : `由 MoveIt2 规划并移动到 ${position.name}`)}
+        onClick={event => { if (!compact || event.detail === 0) onMove(); else onSelect(); }}
+        onDoubleClick={compact ? () => { if (!moveDisabled) onMove(); } : undefined}>
         <UrdfPoseThumbnail xml={urdfXml} label={position.name} jointNames={position.gripperPosition === undefined ? position.jointNames : [...position.jointNames, GRIPPER_JOINT_NAME]} positions={position.gripperPosition === undefined ? positions : [...positions, position.gripperPosition]} />
-        <span>{compact ? "预览" : "移动"}</span>
+        <span>{compact ? "双击移动" : "移动"}</span>
       </button>
       <div className="position-card-body">
         <div className="position-card-head">
