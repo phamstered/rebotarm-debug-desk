@@ -389,28 +389,45 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
-.compact-position-page
-  .position-workspace.position-editor-closed
-  .position-list {
-  grid-template-columns: minmax(0, 1fr);
-}
 .compact-position-page .position-card.selected {
   outline: 1px solid var(--cyan);
 }
-/* Keep each saved pose in a readable row instead of squeezing its joint grid into cards. */
+/* Finder-style tiles reflow with the list, including while its editor is open. */
 .compact-position-page { gap: 10px; padding: 12px; }
-.compact-position-page .position-list { grid-template-columns: minmax(0, 1fr); gap: 6px; padding-right: 0; }
-.compact-position-page .position-card { grid-template-columns: 76px minmax(0, 1fr); gap: 12px; padding: 8px 10px; border-radius: 8px; }
-.compact-position-page .position-target { gap: 2px; padding: 3px; }
-.compact-position-page .position-thumb { height: 54px; }
+.compact-position-page .position-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
+  gap: 10px;
+  padding-right: 0;
+}
+.compact-position-page .position-card {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  min-width: 0;
+  container-type: inline-size;
+}
+.compact-position-page .position-target { width: 96px; justify-self: center; gap: 2px; padding: 3px; }
+.compact-position-page .position-target .position-thumb { height: 64px; }
 .compact-position-page .position-target > span { font-size: 10px; }
 .compact-position-page .position-card-body { gap: 5px; }
 .compact-position-page .position-card-body > p { margin: 0; font-size: 11px; }
 .compact-position-page .position-card-head { flex-wrap: nowrap; gap: 8px; }
 .compact-position-page .position-card-head strong { min-width: 0; }
 .compact-position-page .position-card-actions { flex-shrink: 0; }
-.compact-position-page .position-joint-chips { grid-template-columns: repeat(auto-fit, minmax(min(100%, 100px), 1fr)); gap: 4px; }
+.compact-position-page .position-joint-chips {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
 .compact-position-page .position-joint-chips li { min-width: 0; gap: 6px; padding: 3px 6px; white-space: nowrap; }
+@container (max-width: 285px) {
+  .compact-position-page .position-joint-chips li {
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+  }
+}
 .compact-position-page .position-motion { margin-bottom: 0; padding: 8px 10px; font-size: 12px; }
 .compact-position-page .position-motion [role="status"] { font-size: 11px; }
 .position-editor-pane[hidden] { display: none; }
