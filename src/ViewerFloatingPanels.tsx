@@ -57,13 +57,22 @@ export function ViewerFloatingPanels({ error, leading, children, rgbd, revealCon
     setSaved(old => ({ ...old, [id]: boundViewerPanel({ ...boundViewerPanel(old[id] ?? defaultViewerPanel(id, bounds), bounds), ...patch }, bounds) }));
   }
   function start(event: ReactPointerEvent<HTMLButtonElement>, id: ViewerPanelId, resize: boolean) {
-    if (!active || event.button !== 0 || docked && id==='controls' && !resize) return;
+    if (!active || event.button !== 0) return;
     event.preventDefault(); event.stopPropagation(); event.currentTarget.focus(); cleanup.current?.(); raise(id);
     const initial = panel(id), x = event.clientX, y = event.clientY, pointerId = event.pointerId;
+    if (docked && id === "controls" && !resize) {
+      initial.height = boundViewerPanel(saved.controls ?? defaultViewerPanel(id, bounds), bounds).height;
+    }
+    let detach = docked && id === "controls" && !resize;
     const move = (pointer: PointerEvent) => {
       if (pointer.pointerId !== pointerId) return;
       const dx = pointer.clientX - x, dy = pointer.clientY - y;
-      change(id, resize ? { width: initial.width + dx, height: initial.height + dy } : { x: initial.x + dx, y: initial.y + dy });
+      if (detach) {
+        if (Math.hypot(dx, dy) < 3) return;
+        detach = false;
+        setDocked(false);
+      }
+      change(id, resize ? { width: initial.width + dx, height: initial.height + dy } : { ...initial, x: initial.x + dx, y: initial.y + dy });
     };
     const stop = (pointer?: PointerEvent | Event) => {
       if (pointer && "pointerId" in pointer && pointer.pointerId !== pointerId) return;
@@ -93,10 +102,12 @@ export function ViewerFloatingPanels({ error, leading, children, rgbd, revealCon
           onWheel={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
           <header className="viewer-floating-header">
             <button type="button" className="viewer-floating-drag" aria-label={`移动${titles[id]}浮窗`}
-              title="拖动标题移动；方向键微调，Shift 加速" onPointerDown={event => start(event, id, false)}
+              title={docked && id === "controls" ? "拖动标题脱离停靠；方向键移动，Shift 加速" : "拖动标题移动；方向键微调，Shift 加速"} onPointerDown={event => start(event, id, false)}
               onKeyDown={event => {
                 if (!active || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-                event.preventDefault(); const step = event.shiftKey ? 40 : 10;
+                event.preventDefault(); cleanup.current?.();
+                if (docked && id === "controls") setDocked(false);
+                const step = event.shiftKey ? 40 : 10;
                 change(id, { x: state.x + (event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0),
                   y: state.y + (event.key === "ArrowDown" ? step : event.key === "ArrowUp" ? -step : 0) });
               }}>{titles[id]}{id === "status" && error ? " · 异常" : ""}</button>
