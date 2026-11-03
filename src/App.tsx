@@ -1757,7 +1757,7 @@ export default function App() {
             title={rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
           ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
           <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
-          <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title="恢复面板尺寸并展开全部面板"><span>⊞</span>重置布局</button>
+          <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title={appPage === "motion" ? "恢复 Motion 默认布局，保留当前 Tab 与编辑内容" : "恢复面板尺寸并展开全部面板"}><span>⊞</span>重置布局</button>
         </div>
 </>;
   const motionWarning = typeof faultCode === "number" && faultCode !== 0 ? `硬件故障 ${faultCode}` : agentError || (!rosReady ? "ROS 反馈未就绪" : "") ||
