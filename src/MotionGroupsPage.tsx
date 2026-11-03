@@ -4,6 +4,13 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { useWorkspacePreference } from "./workspacePreferences";
+import {
+  isEditingTarget,
+  useWorkspaceMenu,
+  WorkspacePopover,
+  type WorkspaceAction,
+} from "./WorkspaceMenu";
 import { MotionDivider, useMotionLayout } from "./MotionLayout";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
 import {
@@ -56,7 +63,7 @@ export type MotionGroupsPageProps = {
   onSave(group: MotionGroup): Promise<void>;
   onDelete(id: string): Promise<void>;
   onBack?(): void;
-  onOpenPoseLibrary?(): void;
+  onOpenPoseLibrary?(id?: string, intent?: "edit" | "delete"): void;
   motion: PositionMotionControls;
 };
 export type GroupEditorHistory = {
@@ -65,7 +72,9 @@ export type GroupEditorHistory = {
   future: MotionGroup[];
   base: string;
 };
-type PendingNavigation = { kind: "group"; id: string } | { kind: "back" };
+type PendingNavigation =
+  | { kind: "group"; id: string; intent?: "copy" | "delete" | "properties" }
+  | { kind: "back" };
 const empty = (): GroupEditorHistory => ({
   past: [],
   present: null,
@@ -111,7 +120,9 @@ function Editor({
           }
         : empty()),
   );
-  const [picker, setPicker] = useState<"create" | "insert" | null>(null);
+  const [picker, setPicker] = useState<"create" | "insert" | "replace" | null>(
+    null,
+  );
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [review, setReview] = useState(false);
   const reviewAttempt = useRef(0);
@@ -182,6 +193,50 @@ function Editor({
   const openReport = useMotionReport(resultState, running);
   const scroll = useRef<HTMLDivElement>(null),
     layout = useMotionLayout();
+  const compact = layout?.compact ?? false;
+  const [resourcesOpen, setResourcesOpen] = useWorkspacePreference<boolean>(
+    "group-resources",
+    true,
+  );
+  const [inspectorPinned, setInspectorPinned] = useWorkspacePreference<boolean>(
+    "group-inspector-pinned",
+    false,
+  );
+  const [inspectorOpen, setInspectorOpen] = useState(
+    !compact || inspectorPinned,
+  );
+  const [settingsOpen, setSettingsOpen] = useState(!compact);
+  const [groupView, setGroupView] = useWorkspacePreference<
+    "split" | "preview" | "timeline"
+  >("group-view", "split", ["split", "preview", "timeline"]);
+  const [resourceTab, setResourceTab] = useWorkspacePreference<
+    "groups" | "poses"
+  >("group-resources-tab", "groups", ["groups", "poses"]);
+  const [search, setSearch] = useState("");
+  const [libraryPreview, setLibraryPreview] = useState<CustomPosition | null>(
+    null,
+  );
+  const [menuTarget, setMenuTarget] = useState<{
+    kind: "pose" | "action" | "track" | "source" | "group" | "canvas";
+    id: string;
+  } | null>(null);
+  const replacement = useRef<string | null>(null);
+  const insertionSide = useRef<"before" | "after">("after");
+  const resourcesVisible = !compact || (resourcesOpen && !layout?.focusMode);
+  const inspectorVisible = !compact || (inspectorOpen && !layout?.focusMode);
+  const previousReset = useRef(layout?.resetVersion);
+  useEffect(() => {
+    if (previousReset.current !== layout?.resetVersion) {
+      previousReset.current = layout?.resetVersion;
+      setResourcesOpen(true);
+      setInspectorPinned(false);
+      setInspectorOpen(!compact);
+      setResourceTab("groups");
+      setSearch("");
+      setGroupView("split");
+    }
+  }, [layout?.resetVersion]);
+
   useEffect(() => {
     live.current = true;
     return () => {
@@ -288,7 +343,7 @@ function Editor({
       };
     });
   }
-  function choose(nextId: string) {
+  function choose(nextId: string, intent?: "copy" | "delete" | "properties") {
     if (nextId === "new") {
       setPicker("create");
       setPending(null);
@@ -297,7 +352,17 @@ function Editor({
     const next = groups.find((group) => group.id === nextId);
     const now = Date.now();
     const value = next
-      ? cloneMotionGroup(next)
+      ? cloneMotionGroup(
+          intent === "copy"
+            ? {
+                ...next,
+                id: id(),
+                name: `${next.name} 副本`,
+                createdAt: now,
+                updatedAt: now,
+              }
+            : next,
+        )
       : {
           id: id(),
           name: "新动作组",
@@ -311,19 +376,25 @@ function Editor({
       past: [],
       present: value,
       future: [],
-      base: next ? JSON.stringify(next) : "",
+      base: next && intent !== "copy" ? JSON.stringify(next) : "",
     });
+    setLibraryPreview(null);
+    setMenuTarget(null);
     setSelectedStep(0);
     setSelectedActionId(null);
     setPlaying(false);
     setPlayhead(0);
     setPending(null);
     setNotice("");
-    setDeleting(false);
+    setDeleting(intent === "delete");
+    if (intent === "properties") {
+      openInspector();
+      setSettingsOpen(true);
+    }
   }
   function navigate(next: PendingNavigation, discard = false) {
     if (next.kind === "group") {
-      choose(next.id);
+      choose(next.id, next.intent);
       return;
     }
     setPending(null);
@@ -541,6 +612,8 @@ function Editor({
   );
   const armTrack = tracks.find((t) => t.kind === "arm")!;
   function chooseStep(index: number) {
+    setLibraryPreview(null);
+    setMenuTarget(null);
     setSelectedStep(index);
     setSelectedActionId(null);
     setPlayhead(rows[index].arrival);
@@ -566,22 +639,43 @@ function Editor({
       setSelectedStep(0);
       setSelectedActionId(null);
       setPlayhead(0);
+    } else if (picker === "replace" && draft) {
+      const index = draft.steps.findIndex((s) => s.id === replacement.current);
+      if (index >= 0 && poses[0])
+        edit((g) => {
+          const old = g.steps[index];
+          g.steps[index] = {
+            ...snapshotStep(poses[0], old.id, old.duration),
+            hold: old.hold,
+            trackId: old.trackId,
+          };
+          return g;
+        });
+      replacement.current = null;
     } else if (draft) {
-      const offset = selected ? selectedStep + 1 : draft.steps.length;
+      const offset = selected
+        ? selectedStep + (insertionSide.current === "before" ? 0 : 1)
+        : draft.steps.length;
       const additions = poses.map((p, i) => ({
         ...snapshotStep(p, id(), offset + i ? 5 : 0),
         trackId: selected?.trackId ?? armTrack.id,
       }));
       edit((g) => {
         g.steps.splice(offset, 0, ...additions);
+        g.steps = g.steps.map((step, i) => ({
+          ...step,
+          duration: i ? step.duration || 5 : 0,
+        }));
         return g;
       });
       setSelectedStep(offset);
       setSelectedActionId(null);
     }
     setPicker(null);
+    insertionSide.current = "after";
   }
-  function addCapture() {
+  function addCaptureAt(index: number) {
+    const selected = draft?.steps[index];
     if (
       !draft ||
       !selected ||
@@ -613,6 +707,7 @@ function Editor({
       actions: [...(g.actions ?? []), capture],
     }));
     setSelectedActionId(capture.id);
+    openInspector();
   }
   function editCapture(values: Partial<MotionCaptureAction>) {
     if (selectedAction)
@@ -663,13 +758,374 @@ function Editor({
     setPlaying(false);
     void action(() => motion.executeGroup!(copy));
   }
+  function openInspector() {
+    layout?.exitFocus?.();
+    setInspectorOpen(true);
+  }
+  function undo() {
+    if (!editingLocked && !working)
+      setGroupEditorHistory((c) =>
+        !c.past.length
+          ? c
+          : {
+              ...c,
+              past: c.past.slice(0, -1),
+              present: c.past.at(-1)!,
+              future: c.present ? [c.present, ...c.future] : c.future,
+            },
+      );
+  }
+  function redo() {
+    if (!editingLocked && !working)
+      setGroupEditorHistory((c) =>
+        !c.future.length
+          ? c
+          : {
+              ...c,
+              past: c.present ? [...c.past, c.present] : c.past,
+              present: c.future[0],
+              future: c.future.slice(1),
+            },
+      );
+  }
+  function fitTimeline() {
+    setZoom(
+      Math.max(
+        0.01,
+        Math.min(
+          240,
+          ((scroll.current?.clientWidth || 600) - 280) /
+            Math.max(1, displayTotal),
+        ),
+      ),
+    );
+  }
+  const target =
+    menuTarget ??
+    (selectedAction
+      ? { kind: "action", id: selectedAction.id }
+      : selected
+        ? { kind: "pose", id: selected.id }
+        : { kind: "canvas", id: "" });
+  function selectionActions(): WorkspaceAction[] {
+    const blocked = editingLocked || working || saving;
+    const props = () => {
+      openInspector();
+    };
+    if (target.kind === "pose") {
+      const index = draft?.steps.findIndex((s) => s.id === target.id) ?? -1;
+      if (index < 0) return [];
+      return [
+        {
+          label: "属性",
+          run: () => {
+            chooseStep(index);
+            props();
+          },
+        },
+        {
+          label: "替换姿态",
+          disabled: blocked,
+          run: () => {
+            chooseStep(index);
+            replacement.current = target.id;
+            setPicker("replace");
+          },
+        },
+        {
+          label: "在前面插入 Pose",
+          disabled: blocked || draft!.steps.length >= 100,
+          run: () => {
+            chooseStep(index);
+            insertionSide.current = "before";
+            setPicker("insert");
+          },
+        },
+        {
+          label: "在后面插入 Pose",
+          disabled: blocked || draft!.steps.length >= 100,
+          run: () => {
+            chooseStep(index);
+            insertionSide.current = "after";
+            setPicker("insert");
+          },
+        },
+        {
+          label: "添加拍照 Action",
+          disabled: blocked || (draft?.actions?.length ?? 0) >= 100,
+          run: () => {
+            chooseStep(index);
+            addCaptureAt(index);
+          },
+        },
+        {
+          label: "复制 Pose",
+          disabled: blocked || draft!.steps.length >= 100,
+          run: () => {
+            edit((g) => {
+              const copy = {
+                ...g.steps[index],
+                id: id(),
+                duration: g.steps[index].duration || 5,
+              };
+              g.steps.splice(index + 1, 0, copy);
+              return g;
+            });
+            setSelectedStep(index + 1);
+            setSelectedActionId(null);
+          },
+        },
+        {
+          label: "删除 Pose",
+          danger: true,
+          disabled: blocked,
+          run: () => removeStep(index),
+        },
+      ];
+    }
+    if (target.kind === "action") {
+      const a = draft?.actions?.find((x) => x.id === target.id);
+      if (!a) return [];
+      return [
+        {
+          label: "属性",
+          run: () => {
+            setSelectedActionId(a.id);
+            setSelectedStep(
+              draft!.steps.findIndex((s) => s.id === a.afterStepId),
+            );
+            props();
+          },
+        },
+        {
+          label: "修改依赖 Pose",
+          disabled: blocked,
+          run: () => {
+            setSelectedActionId(a.id);
+            props();
+          },
+        },
+        {
+          label: "复制 Action",
+          disabled: blocked || (draft?.actions?.length ?? 0) >= 100,
+          run: () => {
+            const copy = { ...a, id: id(), name: `${a.name} 副本` };
+            edit((g) => ({ ...g, actions: [...(g.actions ?? []), copy] }));
+            setSelectedActionId(copy.id);
+          },
+        },
+        {
+          label: "删除 Action",
+          danger: true,
+          disabled: blocked,
+          run: () => {
+            edit((g) => ({
+              ...g,
+              actions: g.actions?.filter((x) => x.id !== a.id),
+            }));
+            setSelectedActionId(null);
+          },
+        },
+      ];
+    }
+    if (target.kind === "group") {
+      const g =
+        draft?.id === target.id
+          ? draft
+          : groups.find((x) => x.id === target.id);
+      if (!g) return [];
+      return [
+        { label: "打开", disabled: working, run: () => requestChoose(g.id) },
+        {
+          label: "重命名 / 设置",
+          disabled: blocked,
+          run: () => {
+            if (g.id === draft?.id) {
+              openInspector();
+              setSettingsOpen(true);
+            } else
+              requestNavigate({
+                kind: "group",
+                id: g.id,
+                intent: "properties",
+              });
+          },
+        },
+        {
+          label: "复制动作组",
+          disabled: blocked || groups.length >= MOTION_GROUP_LIMITS.groups,
+          run: () => {
+            if (g.id === draft?.id) {
+              const now = Date.now();
+              setGroupEditorHistory({
+                past: [],
+                present: cloneMotionGroup({
+                  ...g,
+                  id: id(),
+                  name: `${g.name} 副本`,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+                future: [],
+                base: "",
+              });
+            } else requestNavigate({ kind: "group", id: g.id, intent: "copy" });
+          },
+        },
+        {
+          label: "删除动作组",
+          danger: true,
+          disabled:
+            blocked || !ready || !!error || !groups.some((x) => x.id === g.id),
+          run: () => {
+            if (g.id === draft?.id) setDeleting(true);
+            else requestNavigate({ kind: "group", id: g.id, intent: "delete" });
+          },
+        },
+      ];
+    }
+    if (target.kind === "source") {
+      const p = sources.find((x) => x.id === target.id);
+      if (!p) return [];
+      return [
+        {
+          label: "预览姿态",
+          run: () => {
+            setMenuTarget({ kind: "source", id: p.id });
+            setLibraryPreview(p);
+            setPlaying(false);
+            setGroupView("split");
+          },
+        },
+        {
+          label: "添加到当前动作组",
+          disabled: blocked || !draft || draft.steps.length >= 100,
+          run: () => insertPoses("", [p]),
+        },
+        {
+          label: "打开姿态库编辑",
+          disabled: !onOpenPoseLibrary || p.id === HOME_POSITION_ID,
+          run: () => onOpenPoseLibrary?.(p.id, "edit"),
+        },
+        {
+          label: "删除姿态",
+          danger: true,
+          disabled:
+            !onOpenPoseLibrary || p.id === HOME_POSITION_ID || motion.busy,
+          run: () => onOpenPoseLibrary?.(p.id, "delete"),
+        },
+      ];
+    }
+    if (target.kind === "track") {
+      const used =
+        draft?.steps.some((s) => (s.trackId ?? "arm") === target.id) ||
+        draft?.actions?.some((a) => a.trackId === target.id);
+      const t = tracks.find((t) => t.id === target.id);
+      return [
+        {
+          label: "轨道设置 / 重命名",
+          disabled: blocked,
+          run: () => setTrackEditor(true),
+        },
+        {
+          label: "删除空轨道",
+          danger: true,
+          disabled:
+            blocked ||
+            used ||
+            (t?.kind === "arm" &&
+              tracks.filter((x) => x.kind === "arm").length <= 1),
+          run: () =>
+            edit((g) => ({
+              ...g,
+              tracks: tracks.filter((t) => t.id !== target.id),
+            })),
+        },
+      ];
+    }
+    return [
+      {
+        label: "添加 Pose",
+        disabled: blocked || !draft || draft.steps.length >= 100,
+        run: () => setPicker("insert"),
+      },
+      {
+        label: "设备轨道",
+        disabled: blocked || !draft,
+        run: () => setTrackEditor(true),
+      },
+      { label: "适应完整时间轴", run: fitTimeline },
+      {
+        label: snap ? "关闭吸附" : "启用 0.1 s 吸附",
+        run: () => setSnap((v) => !v),
+      },
+    ];
+  }
+  const menuActions = selectionActions();
+  const selectionMenu = useWorkspaceMenu(
+    menuActions.map((action) => ({
+      ...action,
+      run: () => {
+        setMenuTarget(null);
+        action.run();
+      },
+    })),
+    "选中对象操作",
+    active && layout?.active !== false && menuActions.length > 0,
+  );
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (
+        !active ||
+        layout?.active === false ||
+        e.defaultPrevented ||
+        e.repeat ||
+        dragCleanup.current ||
+        isEditingTarget(e.target) ||
+        document.querySelector('[role="dialog"], [role="menu"]')
+      )
+        return;
+      const command = e.metaKey || e.ctrlKey;
+      if (command && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (!editingLocked) void save();
+      } else if (command && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        e.shiftKey ? redo() : undo();
+      } else if (!command && !e.altKey && e.code === "Space") {
+        e.preventDefault();
+        if (draft?.steps.length && !motion.busy) {
+          if (playhead >= displayTotal) setPlayhead(0);
+          setPlaying((v) => !v);
+        }
+      } else if (
+        !command &&
+        ["Delete", "Backspace"].includes(e.key) &&
+        e.target instanceof Element &&
+        e.target.closest(".motion-pose-block,.motion-action-block") &&
+        !editingLocked &&
+        !working
+      ) {
+        e.preventDefault();
+        if (selectedAction)
+          edit((g) => ({
+            ...g,
+            actions: g.actions?.filter((a) => a.id !== selectedAction.id),
+          }));
+        else if (selected) removeStep(selectedStep);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  });
   const captureResult = resultState?.capture;
   return (
     <section
-      className="motion-groups-editor"
+      className={`motion-groups-editor${compact ? " compact-group-editor" : ""}`}
       aria-label="动作组编辑器"
       data-profile={profileKey}
     >
+      {selectionMenu.menu}
       {onBack && (
         <div className="motion-offline-back">
           <button
@@ -680,7 +1136,7 @@ function Editor({
           </button>
         </div>
       )}
-      {(error || notice) && (
+      {(error || notice.includes("失败")) && (
         <p className="motion-editor-notice" role="alert">
           {error || notice}
         </p>
@@ -706,9 +1162,13 @@ function Editor({
         <MotionPosePicker
           key={picker}
           create={picker === "create"}
+          single={picker === "replace"}
           sources={sources}
           xml={urdfXml}
-          onClose={() => setPicker(null)}
+          onClose={() => {
+            setPicker(null);
+            insertionSide.current = "after";
+          }}
           onChoose={insertPoses}
           onOpenLibrary={
             onOpenPoseLibrary
@@ -720,83 +1180,230 @@ function Editor({
           }
         />
       )}
-      <div className="motion-groups-layout">
-        <aside className="motion-groups-list" aria-label="动作组和姿态库">
-          <h3>动作组</h3>
+      {compact && (
+        <div className="motion-editor-viewbar">
           <button
-            aria-label="新建动作组"
-            className="motion-primary"
-            disabled={
-              !ready ||
-              !!error ||
-              working ||
-              groups.length >= MOTION_GROUP_LIMITS.groups
-            }
-            onClick={() => requestChoose("new")}
+            type="button"
+            aria-pressed={resourcesVisible}
+            onClick={() => {
+              if (layout?.focusMode) {
+                layout.exitFocus?.();
+                setResourcesOpen(true);
+              } else setResourcesOpen((v) => !v);
+            }}
           >
-            ＋ 新建动作组
+            资源库
           </button>
-          <div className="motion-group-library">
-            {groups.map((g) => (
+          <div role="group" aria-label="预览与时间轴布局">
+            {(
+              [
+                ["preview", "仅预览"],
+                ["split", "分屏"],
+                ["timeline", "仅时间轴"],
+              ] as const
+            ).map(([value, label]) => (
               <button
-                key={g.id}
-                aria-label={`${g.name} · ${g.steps.length} 帧`}
-                aria-pressed={draft?.id === g.id}
-                disabled={working}
-                onClick={() => requestChoose(g.id)}
+                key={value}
+                type="button"
+                aria-pressed={groupView === value}
+                onClick={() => setGroupView(value)}
               >
-                {g.name} · {g.steps.length} 帧
-                <small>
-                  {groupTracks(g).filter((t) => t.kind === "arm").length}{" "}
-                  台机械臂 · {g.actions?.length ?? 0} 个 Action
-                </small>
+                {label}
               </button>
             ))}
           </div>
-          <h3>
-            姿态库 <span>Pose</span>
-          </h3>
-          <p>添加到选中姿态之后；拖入轨道可插入。</p>
-          <div className="motion-pose-library">
-            {sources.map((p) => (
-              <button
-                key={p.id}
-                draggable
-                disabled={!draft || editingLocked || draft.steps.length >= 100}
-                onDragStart={(e) =>
-                  e.dataTransfer.setData("application/x-robot-position", p.id)
-                }
-                onClick={() => {
-                  setPicker("insert");
-                }}
-                aria-label={`选择姿态 ${p.name}`}
-              >
-                <UrdfPoseThumbnail
-                  xml={urdfXml}
-                  label={p.name}
-                  {...motionPoseThumbnailProps(p.positions, p.gripperPosition)}
-                />
-                <span>{p.name}</span>
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            aria-pressed={inspectorVisible}
+            onClick={() => {
+              if (layout?.focusMode) openInspector();
+              else setInspectorOpen((v) => !v);
+            }}
+          >
+            属性
+          </button>
+          {selectionMenu.trigger}
+        </div>
+      )}
+      <div
+        className={`motion-groups-layout${resourcesVisible ? "" : " resources-collapsed"}${inspectorVisible ? "" : " inspector-collapsed"}${compact ? ` group-view-${groupView}` : ""}`}
+      >
+        <aside
+          className="motion-groups-list"
+          aria-label="动作组和姿态库"
+          hidden={!resourcesVisible}
+        >
+          {compact && (
+            <>
+              <div role="tablist" aria-label="资源库">
+                {(
+                  [
+                    ["groups", "动作组"],
+                    ["poses", "姿态库"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    role="tab"
+                    aria-label={`${label}资源`}
+                    aria-selected={resourceTab === value}
+                    onClick={() => setResourceTab(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <input
+                aria-label="搜索资源"
+                placeholder="搜索名称…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </>
+          )}
+          <section hidden={compact && resourceTab !== "groups"}>
+            <h3>动作组</h3>
+            <button
+              aria-label="新建动作组"
+              className="motion-primary"
+              disabled={
+                !ready ||
+                !!error ||
+                working ||
+                groups.length >= MOTION_GROUP_LIMITS.groups
+              }
+              onClick={() => requestChoose("new")}
+            >
+              ＋ 新建动作组
+            </button>
+            <div className="motion-group-library">
+              {groups
+                .filter(
+                  (g) =>
+                    !compact ||
+                    g.name.toLowerCase().includes(search.toLowerCase()),
+                )
+                .map((g) => (
+                  <button
+                    key={g.id}
+                    onContextMenu={(e) => {
+                      setMenuTarget({ kind: "group", id: g.id });
+                      selectionMenu.onContextMenu(e);
+                    }}
+                    onKeyDown={(e) => {
+                      setMenuTarget({ kind: "group", id: g.id });
+                      selectionMenu.onKeyDown(e);
+                    }}
+                    aria-label={`${g.name} · ${g.steps.length} 帧`}
+                    aria-pressed={draft?.id === g.id}
+                    disabled={working}
+                    onClick={() => requestChoose(g.id)}
+                  >
+                    {g.name} · {g.steps.length} 帧
+                    <small>
+                      {groupTracks(g).filter((t) => t.kind === "arm").length}{" "}
+                      台机械臂 · {g.actions?.length ?? 0} 个 Action
+                    </small>
+                  </button>
+                ))}
+            </div>
+          </section>
+          <section hidden={compact && resourceTab !== "poses"}>
+            <h3>
+              姿态库 <span>Pose</span>
+            </h3>
+            <p>添加到选中姿态之后；拖入轨道可插入。</p>
+            <div className="motion-pose-library">
+              {sources
+                .filter(
+                  (p) =>
+                    !compact ||
+                    p.name.toLowerCase().includes(search.toLowerCase()),
+                )
+                .map((p) => (
+                  <button
+                    key={p.id}
+                    onContextMenu={(e) => {
+                      setMenuTarget({ kind: "source", id: p.id });
+                      selectionMenu.onContextMenu(e);
+                    }}
+                    onKeyDown={(e) => {
+                      setMenuTarget({ kind: "source", id: p.id });
+                      selectionMenu.onKeyDown(e);
+                    }}
+                    onDoubleClick={() => onOpenPoseLibrary?.(p.id, "edit")}
+                    draggable
+                    disabled={
+                      !compact &&
+                      (!draft || editingLocked || draft.steps.length >= 100)
+                    }
+                    onDragStart={(e) =>
+                      e.dataTransfer.setData(
+                        "application/x-robot-position",
+                        p.id,
+                      )
+                    }
+                    onClick={() => {
+                      if (compact) {
+                        setMenuTarget({ kind: "source", id: p.id });
+                        setLibraryPreview(p);
+                        setPlaying(false);
+                      } else setPicker("insert");
+                    }}
+                    aria-label={`选择姿态 ${p.name}`}
+                  >
+                    <UrdfPoseThumbnail
+                      xml={urdfXml}
+                      label={p.name}
+                      {...motionPoseThumbnailProps(
+                        p.positions,
+                        p.gripperPosition,
+                      )}
+                    />
+                    <span>{p.name}</span>
+                  </button>
+                ))}
+            </div>
+          </section>
         </aside>
-        <MotionDivider
-          size="groupListWidth"
-          label="调整动作组列表宽度"
-          axis="x"
-          panel=".motion-groups-list"
-          container=".motion-groups-layout"
-        />
+        {resourcesVisible && (
+          <MotionDivider
+            size="groupListWidth"
+            className="group-resources-divider"
+            label="调整动作组列表宽度"
+            axis="x"
+            panel=".motion-groups-list"
+            container=".motion-groups-layout"
+          />
+        )}
         <main className="motion-group-editor">
           <header className="motion-groups-header">
             <div>
               <strong>{draft?.name || "创建你的第一个动作组"}</strong>
-              <span className="motion-save-state">
-                {dirty ? "有未保存修改" : "已保存"}
+              <span className="motion-save-state" role="status" title={notice}>
+                {saving || working
+                  ? "处理中…"
+                  : dirty
+                    ? "有未保存修改"
+                    : "已保存"}
               </span>
             </div>
             <div className="motion-groups-actions">
+              {compact && (
+                <button
+                  type="button"
+                  className="workspace-more"
+                  aria-label="动作组操作菜单"
+                  disabled={!draft}
+                  onClick={(e) => {
+                    setMenuTarget({ kind: "group", id: draft!.id });
+                    selectionMenu.onContextMenu(e);
+                  }}
+                >
+                  ⋯
+                </button>
+              )}
               <button
                 disabled={
                   !draft ||
@@ -807,8 +1414,10 @@ function Editor({
                   editingLocked
                 }
                 onClick={() => void save()}
+                title="保存动作组 · ⌘/Ctrl+S"
+                aria-label="保存动作组"
               >
-                保存动作组
+                {compact ? "保存" : "保存动作组"}
               </button>
               <button
                 disabled={!history.past.length || working || editingLocked}
@@ -848,7 +1457,14 @@ function Editor({
                   .filter((t) => t.kind === "arm")
                   .map((track, i) => {
                     const pose = draft
-                      ? previewGroupPose(draft, playhead, track.id)
+                      ? libraryPreview &&
+                        track.id === (selected?.trackId ?? armTrack.id)
+                        ? {
+                            positions: libraryPreview.positions,
+                            gripperPosition: libraryPreview.gripperPosition,
+                            index: -1,
+                          }
+                        : previewGroupPose(draft, playhead, track.id)
                       : null;
                     return (
                       <div className="motion-preview-model" key={track.id}>
@@ -867,7 +1483,9 @@ function Editor({
                         <span className="motion-preview-caption">
                           {track.name} ·{" "}
                           {pose
-                            ? draft?.steps[pose.index]?.positionName
+                            ? pose.index === -1
+                              ? libraryPreview?.name
+                              : draft?.steps[pose.index]?.positionName
                             : "未添加 Pose"}
                           {tracks.filter((t) => t.kind === "arm").length > 1
                             ? " · 当前模型示意"
@@ -931,41 +1549,100 @@ function Editor({
           <section className="motion-timeline-panel" aria-label="动作块时间轴">
             <div className="motion-group-zoom">
               <strong>时间轴</strong>
-              <button
-                disabled={!draft || editingLocked || draft.steps.length >= 100}
-                onClick={() => setPicker("insert")}
-              >
-                ＋ Pose
-              </button>
-              <button
-                disabled={
-                  !selected ||
-                  editingLocked ||
-                  (draft?.actions?.length ?? 0) >= 100 ||
-                  (tracks.length >= 16 &&
-                    !tracks.some((t) => t.kind === "camera"))
-                }
-                onClick={addCapture}
-              >
-                ＋ Action
-              </button>
-              <button
-                disabled={
-                  !draft ||
-                  editingLocked ||
-                  tracks.filter((t) => t.kind === "arm").length < 2
-                }
-                title="为不同机械臂的 Pose 添加同步等待点"
-                onClick={() => setSyncEditor("new")}
-              >
-                同步点
-              </button>
-              <button
-                disabled={!draft || editingLocked}
-                onClick={() => setTrackEditor(true)}
-              >
-                设备轨道
-              </button>
+              {compact ? (
+                <WorkspacePopover
+                  active={active && layout?.active !== false}
+                  label="添加与轨道"
+                >
+                  {" "}
+                  <button
+                    disabled={
+                      !draft || editingLocked || draft.steps.length >= 100
+                    }
+                    onClick={() => setPicker("insert")}
+                  >
+                    ＋ Pose
+                  </button>
+                  <button
+                    disabled={
+                      !selected ||
+                      editingLocked ||
+                      (draft?.actions?.length ?? 0) >= 100 ||
+                      (tracks.length >= 16 &&
+                        !tracks.some((t) => t.kind === "camera"))
+                    }
+                    onClick={() => addCaptureAt(selectedStep)}
+                  >
+                    ＋ Action
+                  </button>
+                  <button
+                    disabled={
+                      !draft ||
+                      editingLocked ||
+                      tracks.filter((t) => t.kind === "arm").length < 2
+                    }
+                    title="为不同机械臂的 Pose 添加同步等待点"
+                    onClick={() => setSyncEditor("new")}
+                  >
+                    同步点
+                  </button>
+                  <button
+                    disabled={!draft || editingLocked}
+                    onClick={() => setTrackEditor(true)}
+                  >
+                    设备轨道
+                  </button>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={snap}
+                      onChange={(e) => setSnap(e.target.checked)}
+                    />
+                    0.1 s 吸附
+                  </label>
+                </WorkspacePopover>
+              ) : (
+                <>
+                  {" "}
+                  <button
+                    disabled={
+                      !draft || editingLocked || draft.steps.length >= 100
+                    }
+                    onClick={() => setPicker("insert")}
+                  >
+                    ＋ Pose
+                  </button>
+                  <button
+                    disabled={
+                      !selected ||
+                      editingLocked ||
+                      (draft?.actions?.length ?? 0) >= 100 ||
+                      (tracks.length >= 16 &&
+                        !tracks.some((t) => t.kind === "camera"))
+                    }
+                    onClick={() => addCaptureAt(selectedStep)}
+                  >
+                    ＋ Action
+                  </button>
+                  <button
+                    disabled={
+                      !draft ||
+                      editingLocked ||
+                      tracks.filter((t) => t.kind === "arm").length < 2
+                    }
+                    title="为不同机械臂的 Pose 添加同步等待点"
+                    onClick={() => setSyncEditor("new")}
+                  >
+                    同步点
+                  </button>
+                  <button
+                    disabled={!draft || editingLocked}
+                    onClick={() => setTrackEditor(true)}
+                  >
+                    设备轨道
+                  </button>
+                </>
+              )}
               <button onClick={() => setZoom((v) => Math.max(0.01, v / 1.5))}>
                 缩小
               </button>
@@ -988,14 +1665,19 @@ function Editor({
               >
                 适应时间轴
               </button>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={snap}
-                  onChange={(e) => setSnap(e.target.checked)}
-                />
-                0.1 s 吸附
-              </label>
+              {!compact && (
+                <>
+                  {" "}
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={snap}
+                      onChange={(e) => setSnap(e.target.checked)}
+                    />
+                    0.1 s 吸附
+                  </label>
+                </>
+              )}
             </div>
             <div
               className="motion-group-timeline-scroll"
@@ -1019,6 +1701,10 @@ function Editor({
                   height: 38 + tracks.length * 88,
                 }}
                 aria-label="关键帧时间轴"
+                onContextMenu={(e) => {
+                  setMenuTarget({ kind: "canvas", id: "" });
+                  selectionMenu.onContextMenu(e);
+                }}
                 onPointerDown={scrub}
               >
                 <div className="motion-timeline-ruler">
@@ -1041,6 +1727,14 @@ function Editor({
                   >
                     <button
                       className="motion-track-label"
+                      onContextMenu={(e) => {
+                        setMenuTarget({ kind: "track", id: track.id });
+                        selectionMenu.onContextMenu(e);
+                      }}
+                      onKeyDown={(e) => {
+                        setMenuTarget({ kind: "track", id: track.id });
+                        selectionMenu.onKeyDown(e);
+                      }}
                       onClick={() => setTrackEditor(true)}
                     >
                       {track.kind === "camera" ? "▣" : "⌁"} {track.name}
@@ -1096,8 +1790,31 @@ function Editor({
                                     moveStep(Number(from), index);
                                   }
                                 }}
+                                onContextMenu={(e) => {
+                                  chooseStep(index);
+                                  setMenuTarget({
+                                    kind: "pose",
+                                    id: row.step.id,
+                                  });
+                                  selectionMenu.onContextMenu(e);
+                                }}
+                                onDoubleClick={() => {
+                                  chooseStep(index);
+                                  openInspector();
+                                }}
                                 onClick={() => chooseStep(index)}
                                 onKeyDown={(e) => {
+                                  if (
+                                    e.key === "ContextMenu" ||
+                                    (e.key === "F10" && e.shiftKey)
+                                  ) {
+                                    setMenuTarget({
+                                      kind: "pose",
+                                      id: row.step.id,
+                                    });
+                                    selectionMenu.onKeyDown(e);
+                                    return;
+                                  }
                                   if (
                                     index &&
                                     ["ArrowLeft", "ArrowRight"].includes(e.key)
@@ -1162,7 +1879,18 @@ function Editor({
                               aria-label={`Action · ${a.name} · 停稳后采集 · ≤ ${a.timeout} s`}
                               title={`Action · ${a.name} · 采集超时 ${a.timeout} s`}
                               aria-pressed={selectedActionId === a.id}
+                              onContextMenu={(e) => {
+                                setMenuTarget({ kind: "action", id: a.id });
+                                selectionMenu.onContextMenu(e);
+                              }}
+                              onKeyDown={(e) => {
+                                setMenuTarget({ kind: "action", id: a.id });
+                                selectionMenu.onKeyDown(e);
+                              }}
+                              onDoubleClick={() => openInspector()}
                               onClick={() => {
+                                setLibraryPreview(null);
+                                setMenuTarget(null);
                                 setSelectedActionId(a.id);
                                 setSelectedStep(
                                   draft!.steps.findIndex(
@@ -1237,25 +1965,53 @@ function Editor({
             </div>
           </section>
         </main>
-        <MotionDivider
-          size="groupPropertiesWidth"
-          label="调整关键帧属性宽度"
-          axis="x"
-          edge="end"
-          panel=".motion-group-properties"
-          container=".motion-groups-layout"
-          className="motion-group-properties-divider"
-        />
-        <MotionDivider
-          size="groupPropertiesHeight"
-          label="调整关键帧属性高度"
-          axis="y"
-          edge="end"
-          panel=".motion-group-properties"
-          container=".motion-groups-layout"
-          className="motion-group-properties-height-divider"
-        />
-        <aside className="motion-group-properties" aria-label="动作组属性">
+        {inspectorVisible && (
+          <MotionDivider
+            size="groupPropertiesWidth"
+            label="调整关键帧属性宽度"
+            axis="x"
+            edge="end"
+            panel=".motion-group-properties"
+            container=".motion-groups-layout"
+            className="motion-group-properties-divider"
+          />
+        )}
+        {inspectorVisible && (
+          <MotionDivider
+            size="groupPropertiesHeight"
+            label="调整关键帧属性高度"
+            axis="y"
+            edge="end"
+            panel=".motion-group-properties"
+            container=".motion-groups-layout"
+            className="motion-group-properties-height-divider"
+          />
+        )}
+        <aside
+          className="motion-group-properties"
+          aria-label="动作组属性"
+          hidden={!inspectorVisible}
+        >
+          {compact && (
+            <div className="motion-inspector-tools">
+              <button
+                type="button"
+                aria-pressed={inspectorPinned}
+                onClick={() => setInspectorPinned((v) => !v)}
+              >
+                {inspectorPinned ? "取消固定" : "固定属性"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInspectorOpen(false);
+                  setInspectorPinned(false);
+                }}
+              >
+                收起属性
+              </button>
+            </div>
+          )}
           {draft && (
             <>
               <fieldset disabled={editingLocked}>
@@ -1417,7 +2173,7 @@ function Editor({
                         删除 Pose
                       </button>
                     </div>
-                    <details open>
+                    <details open={!compact}>
                       <summary>姿态快照</summary>
                       <p>{stepStatus}</p>
                       <button
@@ -1459,7 +2215,13 @@ function Editor({
                 ) : (
                   <p>选择 Pose 或 Action 查看属性。</p>
                 )}
-                <details className="motion-group-settings" open>
+                <details
+                  className="motion-group-settings"
+                  open={settingsOpen}
+                  onToggle={(event) =>
+                    setSettingsOpen(event.currentTarget.open)
+                  }
+                >
                   <summary>动作组设置</summary>
                   <label>
                     动作组名称
@@ -1744,11 +2506,25 @@ function Editor({
       )}
       <footer className="motion-group-execution">
         {resultState && (
-          <div className={`motion-group-result-summary result-${resultState.phase}`}>
-            <strong title={running?.name || resultState.label || resultState.group?.id}>
-              最近执行：{running?.name || resultState.label || resultState.group?.id} · {motionGroupPhaseLabels[resultState.phase]}
+          <div
+            className={`motion-group-result-summary result-${resultState.phase}`}
+          >
+            <strong
+              title={
+                running?.name || resultState.label || resultState.group?.id
+              }
+            >
+              最近执行：
+              {running?.name ||
+                resultState.label ||
+                resultState.group?.id} ·{" "}
+              {motionGroupPhaseLabels[resultState.phase]}
             </strong>
-            {openReport && <button type="button" onClick={openReport}>查看执行报告</button>}
+            {openReport && (
+              <button type="button" onClick={openReport}>
+                查看执行报告
+              </button>
+            )}
           </div>
         )}
         <label className="motion-safety-check">

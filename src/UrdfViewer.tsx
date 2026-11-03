@@ -27,6 +27,8 @@ import {
 } from "./kinematicsLogic";
 import type { KinematicJoint, KinematicModel, Vec3 } from "./kinematicsLogic";
 import { TcpPoseHandle } from "./TcpPoseHandle";
+import { useWorkspaceMenu } from "./WorkspaceMenu";
+import { useMotionLayout } from "./MotionLayout";
 import { TcpPosePanel } from "./TcpPosePanel";
 import type { TcpHandleFrame, TcpTargetPose } from "./tcpPoseInteractionLogic";
 import { JointRotationPanel } from "./JointRotationPanel";
@@ -48,7 +50,8 @@ type JointState = { name?: string[]; position?: number[] };
 export type TrajectorySendRequest = { jointNames: string[]; points: TrajectoryPoint[] };
 export type ViewerStatus = { kind: "info" | "success" | "error"; text: string };
 
-function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolean }) {
+type CameraView = {name:"fit"|"front"|"side"|"top";revision:number};
+function Controls({ robot, enabled, view }: { robot: URDFRobot | null; enabled: boolean; view:CameraView }) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
   useEffect(() => {
@@ -74,7 +77,8 @@ function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolea
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3()).length();
-    camera.position.set(center.x + size, center.y + size, center.z + size * 0.7);
+    const direction = view.name==='front' ? new Vector3(0,0,1) : view.name==='side' ? new Vector3(1,0,0) : view.name==='top' ? new Vector3(0,1,.001) : new Vector3(1,1,.7);
+    camera.position.copy(center).addScaledVector(direction.normalize(),Math.max(.1,size)*1.5);
     controlsRef.current?.target.copy(center);
     camera.lookAt(center);
     if (camera instanceof PerspectiveCamera) {
@@ -82,18 +86,20 @@ function Controls({ robot, enabled }: { robot: URDFRobot | null; enabled: boolea
       camera.far = Math.max(size * 100, 100);
       camera.updateProjectionMatrix();
     }
-  }, [camera, robot]);
+  }, [camera, robot, view]);
   return null;
 }
 
 function Scene({
   robot,
   controlsEnabled,
+  view, showGrid, showAxes,
   children,
   onPick,
 }: {
   robot: URDFRobot | null;
   controlsEnabled: boolean;
+  view: CameraView; showGrid:boolean; showAxes:boolean;
   children?: ReactNode;
   onPick?(event: ThreeEvent<MouseEvent>): void;
 }) {
@@ -112,10 +118,11 @@ function Scene({
     <>
       <ambientLight intensity={0.55} />
       <primitive object={keyLight} />
-      <primitive object={grid} />
+      {showGrid && <primitive object={grid} />}
+      {showAxes && <axesHelper args={[.25]} />}
       {robot && <primitive object={robot} rotation={[-Math.PI / 2, 0, 0]} onClick={onPick} />}
       {children}
-      <Controls robot={robot} enabled={controlsEnabled} />
+      <Controls robot={robot} enabled={controlsEnabled} view={view} />
     </>
   );
 }
@@ -203,6 +210,15 @@ export function UrdfViewer({
     }
     return { name: names, position: positions };
   }, [rawJointState, jointMotion?.gripper?.position, jointMotion?.gripper?.fresh]);
+  const layout=useMotionLayout();
+  const [cameraView,setCameraView]=useState<CameraView>({name:'fit',revision:0});
+  const [showGrid,setShowGrid]=useState(true), [showAxes,setShowAxes]=useState(false), [revealControls,setRevealControls]=useState(0);
+  const canvasMenu=useWorkspaceMenu([
+    ...([['fit','适应模型'],['front','正视图'],['side','侧视图'],['top','俯视图']] as const).map(([name,label])=>({label,run:()=>setCameraView(v=>({name,revision:v.revision+1}))})),
+    {label:showGrid?'隐藏网格':'显示网格',run:()=>setShowGrid(v=>!v)},
+    {label:showAxes?'隐藏坐标轴':'显示坐标轴',run:()=>setShowAxes(v=>!v)},
+    {label:'打开 TCP / 关节操作',run:()=>{layout?.exitFocus?.();setRevealControls(v=>v+1);}}
+  ],'画布视图',active);
   const [targetPose, setTargetPose] = useState<TcpTargetPose | null>(null);
   const [handleFrame, setHandleFrame] = useState<TcpHandleFrame>("base");
   const [poseInputError, setPoseInputError] = useState("");
@@ -423,9 +439,10 @@ export function UrdfViewer({
 
   return (
     <div className={`viewer${interaction === "joint" ? " joint-mode" : ""}`}>
-      <div className="viewer-layout">
+      <div className="viewer-layout" onContextMenu={event=>{if(!(event.target as Element).closest('.viewer-heads-up'))canvasMenu.onContextMenu(event);}}>
+      {canvasMenu.menu}<div className="viewer-canvas-menu">{canvasMenu.trigger}</div>
       {!xml && <div className="viewer-placeholder">等待 URDF Topic 数据…</div>}
-      <ViewerHeadsUp error={overlayError} leading={<MotionControlPanel info={motionInfo} />} rgbd={rgbdStatus?.enabled !== false && (
+      <ViewerHeadsUp revealControls={revealControls} error={overlayError} leading={<MotionControlPanel info={motionInfo} />} rgbd={rgbdStatus?.enabled !== false && (
           <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
             {clockSync && <ClockSyncStatus value={clockSync} />}
             <div className="viewer-overlay-row">
@@ -536,7 +553,7 @@ export function UrdfViewer({
       </ViewerHeadsUp>
       <Canvas className="viewer-canvas" frameloop={active ? "always" : "never"} camera={{ position: [2, 2, 2], fov: 45 }} shadows>
         <color attach="background" args={["#08121d"]} />
-        <Scene robot={robot} controlsEnabled={active && !dragging} onPick={pickJoint}>
+        <Scene view={cameraView} showGrid={showGrid} showAxes={showAxes} robot={robot} controlsEnabled={active && !dragging} onPick={pickJoint}>
           {/* Cloud and robot share the scene root; cloud positions use the same ROS Z-up to scene Y-up rotation. */}
           <RgbdPointCloudLayer
             cloud={rgbdCloud}

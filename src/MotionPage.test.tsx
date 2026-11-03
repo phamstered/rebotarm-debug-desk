@@ -110,3 +110,15 @@ it("preserves log filters and scroll while reports are open, and pauses the reta
   await user.click(screen.getByRole("button", { name: "展开执行面板" }));
   expect(raw).toHaveAttribute("data-active", "true");
 });
+
+
+it("starts compact output folded, preserves the scene in focus and allows report access to exit focus",async()=>{
+  localStorage.clear();const user=userEvent.setup(),exit=vi.fn();
+  const props={active:true,compact:true,tab:'robot' as const,onTabChange:vi.fn(),controllersOpen:true,onToggleControllers:vi.fn(),controllers:<div>control body</div>,readiness:<span>health details</span>,robot:<div data-testid="focus-scene"/>,positions:null,log:<div>live log body</div>,onToggleFocus:exit};
+  const view=render(<MotionPage {...props}/>);const scene=screen.getByTestId('focus-scene');
+  expect(screen.getByRole('button',{name:'展开执行面板'})).toBeVisible();expect(screen.getByText('live log body')).not.toBeVisible();
+  await user.click(screen.getByRole('tab',{name:'执行日志'}));expect(screen.getByText('live log body')).toBeVisible();
+  view.rerender(<MotionPage {...props} focusMode/>);expect(screen.getByText('live log body')).not.toBeVisible();expect(screen.getByText('control body')).not.toBeVisible();expect(screen.getByTestId('focus-scene')).toBe(scene);
+  await user.click(screen.getByRole('tab',{name:'执行报告'}));expect(exit).toHaveBeenCalledOnce();
+  view.rerender(<MotionPage {...props}/>);expect(screen.getByText('control body')).toBeVisible();
+});

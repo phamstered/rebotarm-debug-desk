@@ -7,7 +7,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MotionGroupsPage as Editor,
   type MotionGroupsPageProps,
@@ -851,5 +851,90 @@ describe("MotionGroupsPage", () => {
     expect(
       screen.queryByRole("button", { name: "同步点 同步点" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+
+describe("compact Motion editing",()=>{
+  beforeEach(()=>localStorage.clear());
+  function Compact({options,focus=false,active=true}:{options:MotionGroupsPageProps;focus?:boolean;active?:boolean}){
+    return <MotionLayoutProvider active={active} compact focusMode={focus}><MotionGroupsPage {...options}/></MotionLayoutProvider>;
+  }
+  it("defaults to one resource tab and a closed Inspector, selects locally and opens properties on double click",async()=>{
+    const user=userEvent.setup(),options=props();render(<Compact options={options}/>);
+    expect(screen.queryByLabelText("运动时长 (s)")).not.toBeVisible();
+    expect(screen.queryByRole("button",{name:"选择姿态 A"})).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab",{name:"姿态库资源"}));
+    await user.click(screen.getByRole("button",{name:"选择姿态 A"}));
+    expect(options.motion.executeGroup).not.toHaveBeenCalled();expect(options.motion.execute).not.toHaveBeenCalled();
+    await user.dblClick(screen.getByRole("button",{name:"关键帧 2 B"}));
+    expect(screen.getByLabelText("运动时长 (s)")).toHaveValue(4);
+    expect(screen.getByLabelText("运动时长 (s)")).toBeVisible();
+    await user.click(screen.getByRole("button",{name:"收起属性"}));expect(screen.getByLabelText("运动时长 (s)")).not.toBeVisible();
+    expect(screen.getByText("已保存")).toBeVisible();
+  });
+  it("targets the right-clicked Pose when adding a capture and preserves dependency cleanup through undo",async()=>{
+    const user=userEvent.setup(),options=props({motion:{...props().motion,captureSupported:true}});render(<Compact options={options}/>);
+    const second=screen.getByRole("button",{name:"关键帧 2 B"});
+    fireEvent.contextMenu(second);await user.click(screen.getByRole("menuitem",{name:"添加拍照 Action"}));
+    expect(screen.getByLabelText("依赖 Pose")).toHaveValue('b');
+    const action=screen.getByRole("button",{name:/Action · 拍照 1 ·/});
+    fireEvent.contextMenu(action);await user.click(screen.getByRole("menuitem",{name:"复制 Action"}));
+    fireEvent.keyDown(window,{key:'s',metaKey:true});await waitFor(()=>expect(options.onSave).toHaveBeenCalledOnce());
+    const saved=vi.mocked(options.onSave).mock.calls[0][0];expect(saved.actions).toHaveLength(2);expect(new Set(saved.actions!.map(a=>a.id)).size).toBe(2);expect(saved.actions!.every(a=>a.afterStepId==='b')).toBe(true);
+    fireEvent.contextMenu(second);await user.click(screen.getByRole("menuitem",{name:"删除 Pose"}));
+    expect(screen.queryByRole("button",{name:/Action · 拍照/})).not.toBeInTheDocument();
+    fireEvent.keyDown(window,{key:'z',metaKey:true});expect(screen.getAllByRole("button",{name:/Action · 拍照/})).toHaveLength(2);
+    expect(options.motion.executeGroup).not.toHaveBeenCalled();
+  });
+  it("replaces a pose snapshot without changing timing or its Action dependency",async()=>{
+    const user=userEvent.setup(),options=props();render(<Compact options={options}/>);
+    fireEvent.contextMenu(screen.getByRole("button",{name:"关键帧 2 B"}));await user.click(screen.getByRole("menuitem",{name:"替换姿态"}));
+    await user.click(within(screen.getByRole('dialog',{name:'替换姿态'})).getByRole('button',{name:/A/}));
+    await user.click(screen.getByRole('button',{name:'替换所选 Pose'}));
+    fireEvent.keyDown(window,{key:'s',metaKey:true});await waitFor(()=>expect(options.onSave).toHaveBeenCalledOnce());
+    expect(vi.mocked(options.onSave).mock.calls[0][0].steps[1]).toMatchObject({id:'b',positionId:'p',duration:4,hold:2,positions:position.positions});
+  });
+  it("uses the new selection after copying and deleting a Pose through menus",async()=>{
+    const user=userEvent.setup(),options=props();render(<Compact options={options}/>);
+    fireEvent.contextMenu(screen.getByRole('button',{name:'关键帧 2 B'}));await user.click(screen.getByRole('menuitem',{name:'复制 Pose'}));
+    expect(screen.getByRole('button',{name:'关键帧 3 B'})).toHaveAttribute('aria-pressed','true');
+    await user.click(screen.getByRole('button',{name:'选中对象操作菜单'}));await user.click(screen.getByRole('menuitem',{name:'删除 Pose'}));
+    expect(screen.getByRole('button',{name:'关键帧 2 B'})).toBeVisible();expect(screen.queryByRole('button',{name:'关键帧 3 B'})).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button',{name:'选中对象操作菜单'}));expect(screen.getByRole('menuitem',{name:'属性'})).toBeVisible();
+    expect(options.motion.executeGroup).not.toHaveBeenCalled();
+  });
+  it("inserts before the first Pose with a valid first-segment duration and can undo it",async()=>{
+    const user=userEvent.setup(),options=props();render(<Compact options={options}/>);
+    fireEvent.contextMenu(screen.getByRole('button',{name:'关键帧 1 A'}));await user.click(screen.getByRole('menuitem',{name:'在前面插入 Pose'}));
+    await user.click(within(screen.getByRole('dialog',{name:'从姿态库添加 Pose'})).getByRole('button',{name:/A/}));await user.click(screen.getByRole('button',{name:'添加所选 Pose'}));
+    fireEvent.keyDown(window,{key:'s',metaKey:true});await waitFor(()=>expect(options.onSave).toHaveBeenCalledOnce());
+    const saved=vi.mocked(options.onSave).mock.calls[0][0];expect(saved.steps).toHaveLength(3);expect(saved.steps[0].duration).toBe(0);expect(saved.steps[1]).toMatchObject({id:'a',duration:5});
+    await waitFor(()=>expect(screen.getByText('已保存')).toBeVisible());
+    fireEvent.keyDown(window,{key:'z',metaKey:true});expect(screen.queryByRole('button',{name:'关键帧 3 B'})).not.toBeInTheDocument();
+  });
+  it("keeps dirty navigation and persistent deletion confirmation when deleting another group from its menu",async()=>{
+    const user=userEvent.setup(),options=props();render(<Compact options={options}/>);
+    await user.click(screen.getByRole('button',{name:'动作组操作菜单'}));await user.click(screen.getByRole('menuitem',{name:'重命名 / 设置'}));
+    fireEvent.change(screen.getByLabelText('动作组名称'),{target:{value:'未保存'}});
+    fireEvent.contextMenu(screen.getByRole('button',{name:'另一组 · 2 帧'}));await user.click(screen.getByRole('menuitem',{name:'删除动作组'}));
+    expect(screen.getByRole('dialog',{name:'未保存修改'})).toBeVisible();expect(options.onDelete).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button',{name:'放弃并切换'}));expect(screen.getByRole('dialog',{name:'删除动作组'})).toHaveTextContent('另一组');
+    await user.click(screen.getByRole('button',{name:'确认删除动作组'}));await waitFor(()=>expect(options.onDelete).toHaveBeenCalledExactlyOnceWith('h'));
+  });
+  it("keeps panels and unsaved values through focus mode and does not steal text input shortcuts",async()=>{
+    const user=userEvent.setup(),options=props();const view=render(<Compact options={options}/>);
+    await user.dblClick(screen.getByRole('button',{name:'关键帧 2 B'}));
+    const duration=screen.getByLabelText('运动时长 (s)');fireEvent.change(duration,{target:{value:'4.2'}});
+    fireEvent.keyDown(duration,{key:'s',metaKey:true});fireEvent.keyDown(duration,{key:'z',metaKey:true});expect(duration).toHaveValue(4.2);expect(options.onSave).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button',{name:'资源库'}));
+    view.rerender(<Compact options={options} focus/>);expect(duration).not.toBeVisible();
+    view.rerender(<Compact options={options}/>);expect(duration).toBeVisible();expect(duration).toHaveValue(4.2);expect(screen.getByLabelText('动作组和姿态库')).not.toBeVisible();
+    view.rerender(<Compact options={options} active={false}/>);fireEvent.keyDown(window,{key:'s',metaKey:true});expect(options.onSave).not.toHaveBeenCalled();
+  });
+  it("does not edit or save the running group's fixed snapshot from menus or shortcuts",async()=>{
+    const options=props();options.motion={...options.motion,busy:true,state:{phase:'executing',commandId:'run',label:'取放',message:'',group:{id:'g',index:0,count:2,elapsed:0,phase:'moving'}}};
+    render(<Compact options={options}/>);fireEvent.contextMenu(screen.getByRole('button',{name:'关键帧 2 B'}));expect(screen.getByRole('menuitem',{name:'删除 Pose'})).toBeDisabled();expect(screen.getByRole('menuitem',{name:'复制 Pose'})).toBeDisabled();
+    fireEvent.keyDown(window,{key:'s',metaKey:true});expect(options.onSave).not.toHaveBeenCalled();expect(screen.getByRole('button',{name:'停止动作组'})).toBeVisible();
   });
 });

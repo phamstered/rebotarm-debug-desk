@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
+import { MotionLayoutProvider } from "./MotionLayout";
 import { PositionPage } from "./PositionPage";
 import { emptyPositionStore, profileKeyFor } from "./positionLogic";
 
@@ -140,4 +141,17 @@ it("clicks a position to move while edit and delete remain separate", async () =
   expect(execute).toHaveBeenCalledWith(store.profiles[key].positions[0]);
   await user.click(screen.getByRole("button", { name: "移动到 HOME" }));
   expect(execute).toHaveBeenCalledWith("home");
+});
+
+
+it("selects a compact pose without moving and exposes contextual editing and confirmed deletion",async()=>{
+  const user=userEvent.setup(),onDelete=vi.fn(),execute=vi.fn();const store=emptyPositionStore();store.profiles[key]={positions:[point('pick',[0,0,0,0,0,0])]};
+  const motion={logs:[],recordLog:vi.fn(),state:{phase:'idle' as const,commandId:'',label:'',message:''},homePositions:[],armed:true,busy:false,reason:'',jointRotationReason:'',jointTargetsReason:'',executeJoints:vi.fn(),executeJoint:vi.fn(),setArmed:vi.fn(),execute,cancel:vi.fn()};
+  render(<MotionLayoutProvider active compact><PositionPage profileKey={key} store={store} urdfXml="" onUpdate={()=>''} onDelete={onDelete} motion={motion}/></MotionLayoutProvider>);
+  await user.click(screen.getByRole('button',{name:'预览 pick'}));expect(execute).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'执行到此姿态'}));expect(execute).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'编辑姿态'}));expect(screen.getByLabelText('点位名称')).toHaveValue('pick');expect(execute).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole('button',{name:'取消'}));
+  await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'删除姿态'}));expect(onDelete).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'确认删除 pick'}));expect(onDelete).toHaveBeenCalledExactlyOnceWith('pick');
 });

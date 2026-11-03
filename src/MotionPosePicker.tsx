@@ -7,6 +7,7 @@ export function MotionPosePicker({
   sources,
   xml,
   create,
+  single = false,
   onChoose,
   onClose,
   onOpenLibrary,
@@ -14,6 +15,7 @@ export function MotionPosePicker({
   sources: CustomPosition[];
   xml: string;
   create: boolean;
+  single?: boolean;
   onChoose(name: string, poses: CustomPosition[]): void;
   onClose(): void;
   onOpenLibrary?(): void;
@@ -26,7 +28,7 @@ export function MotionPosePicker({
     .filter(Boolean);
   return (
     <MotionGroupDialog
-      title={create ? "从姿态库新建动作组" : "从姿态库添加 Pose"}
+      title={create ? "从姿态库新建动作组" : single ? "替换姿态" : "从姿态库添加 Pose"}
       onClose={onClose}
     >
       {create && (
@@ -63,7 +65,7 @@ export function MotionPosePicker({
               aria-pressed={selected.includes(p.id)}
               onClick={() =>
                 setSelected((ids) =>
-                  ids.includes(p.id)
+                  single ? [p.id] : ids.includes(p.id)
                     ? ids.filter((id) => id !== p.id)
                     : [...ids, p.id],
                 )
@@ -91,7 +93,7 @@ export function MotionPosePicker({
           disabled={!poses.length || !name.trim()}
           onClick={() => onChoose(name.trim(), poses)}
         >
-          {create ? "创建动作组" : "添加所选 Pose"}
+          {create ? "创建动作组" : single ? "替换所选 Pose" : "添加所选 Pose"}
         </button>
       </footer>
     </MotionGroupDialog>

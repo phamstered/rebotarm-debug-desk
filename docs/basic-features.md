@@ -73,17 +73,28 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 - Motion 可在 ROS 未就绪时进入，查看已保存位置及就绪原因；执行继续要求连接、MoveIt、active 控制器、新鲜反馈、时钟和既有安全确认。
 - Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际 Activate / Deactivate 只在 Motion 侧栏，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。Status 保留整栈启动、模式切换、安全退出与解除输出。
-- Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、姿态库与动作组共用底部规划执行日志。左侧 Controllers 默认展开，可收起以扩展画布。
+- Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、姿态库与动作组共用底部规划执行日志。左侧 Controllers 默认收起，可通过工作栏“面板”展开；已有展开偏好继续恢复。
 - Controllers 宽度、日志高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄姿态库页改为列表/编辑上下分区。
-- Robot View 画布铺满内容区；「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」作为画布内三个独立浮窗。拖动标题移动，右下角手柄调整大小；标题和缩放手柄也支持方向键每次 10px、Shift 每次 40px。每个浮窗可折叠，画布顶部按钮可重新展开并置于最前；「重置浮窗」恢复默认位置、大小和展开状态。折叠保留当前编辑内容，不改变点云订阅或执行状态。面板内滚动/点击不操作相机，拖动浮窗不下发运动。
-- 分隔尺寸独立保存于 `robot-console-motion-layout`；浮窗位置、大小和折叠状态保存于 `robot-console-viewer-floating-panels-v1`，重启恢复。缩小窗口限制浮窗及其标题在画布内，面板内容独立滚动；仅显示尺寸约束不覆盖宽屏偏好。在 Motion 点击全局“重置布局”恢复分隔尺寸和所有浮窗并展开 Controllers，保留当前 Tab。
+- Robot View 画布铺满内容区；「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」支持画布内浮窗。紧凑工作台的 TCP / 关节操作默认停靠右侧，可切换浮窗；未保存偏好时运动状态和 RGBD 默认折叠，异常仍在状态摘要或面板标题提示。拖动标题移动，右下角手柄调整大小；标题和缩放手柄也支持方向键每次 10px、Shift 每次 40px。每个浮窗可折叠，画布顶部按钮可重新展开并置于最前；「重置浮窗」恢复默认位置、大小和展开状态。折叠保留当前编辑内容，不改变点云订阅或执行状态。面板内滚动/点击不操作相机，拖动浮窗不下发运动。
+- 分隔尺寸独立保存于 `robot-console-motion-layout`；浮窗位置、大小和折叠状态保存于 `robot-console-viewer-floating-panels-v1`，重启恢复。缩小窗口限制浮窗及其标题在画布内，面板内容独立滚动；仅显示尺寸约束不覆盖宽屏偏好。在 Motion 点击全局“重置布局”恢复分隔尺寸和所有浮窗并恢复图标导航、收起 Controllers 和输出区，保留当前 Tab 与编辑内容。
 - 导航页、Motion Tab 与 Controllers 展开状态独立记忆。Motion 默认 Robot View；旧 `dashboard` 导航标识继续表示 Topics。连接后默认跳 Status 的既有独立设置继续适用。
 - RGBD 仅在 Motion → Robot View、窗口可见、实时显示和 RGBD 配置开启时订阅；姿态库 Tab、Topics 和其他页释放当前客户端兴趣并清空点云。已加载的 Robot View 场景仍保留，隐藏时停止绘制并取消未结束的拖拽。
+
+### Motion 紧凑工作台
+
+- Motion 将连接状态、全局工具和三个视图 Tab 合并为单条工作栏。主机按钮展示就绪或当前异常，展开可查看 SSH/Bridge/Agent/硬件/时钟及连接操作；Controllers 位于“面板”，刷新、实时显示、录制、诊断和布局重置位于“更多工具”。显示暂停和录制中保留常驻标记。后台轮询与原有安全核验保持运行，切换/断线清除会话数据的行为不变。
+- Motion 默认图标导航，其他页面保留自己的展开偏好。“专注模式”临时隐藏导航、资源、属性、Controllers、Robot View 操作窗和展开日志；退出恢复原布局，不清除未保存编辑或预览。主动打开属性/输出/Controllers 时退出专注。正在运行的任务、取消/停止、执行前检查和故障摘要持续可见。
+- 动作组左侧使用“动作组 / 姿态库”资源 Tab 和名称搜索；属性默认收起，单击块选择并本地预览，双击或菜单“属性”展开。属性可固定，下次恢复；未固定时仍保留当前会话展开状态。预览与时间轴支持分屏、仅预览、仅时间轴，资源区也可单独收起。窄宽度的属性区使用可关闭抽屉，不额外增加一行编辑区。
+- 动作组、源姿态、Pose/Action 块、轨道和时间轴空白支持右键菜单；工作区与卡片提供 `⋯` 替代入口。菜单支持 Shift+F10、方向键、Enter、Escape 和点击外部关闭。文本输入保留系统右键操作。Pose 可替换快照、前后插入、复制、添加拍照和删除；Action 可修改属性/依赖、复制和删除。删除 Pose 同步移除依赖 Action/同步点，撤销可恢复。轨道仅允许删除未使用轨道，且至少保留一个机械臂轨道。
+- 持久化动作组/姿态删除继续确认，切换未保存动作组继续提供保存/放弃/返回。编排块修改使用既有撤销记录；运行组锁定编辑，菜单和快捷键不能绕过。实际运动与 Controller 切换不由右键快捷触发，继续使用明确入口及原安全确认。
+- 工作台快捷键：⌘/Ctrl+S 保存动作组，⌘/Ctrl+Z 与 Shift+⌘/Ctrl+Z 撤销/重做，Space 播放/暂停本地预览；选中且聚焦的编排块可用 Delete/Backspace 删除并撤销。输入框、对话框、菜单、隐藏页面或拖动中不截获这些快捷键；不映射真实运动或停止指令。保存反馈位于组名旁，失败仍明确显示原因。
+- Robot View 画布右键或 `⋯` 提供适应模型、正/侧/俯视图、网格/坐标轴开关和打开 TCP 操作区。这些操作不修改目标关节或下发运动，青色球与 XYZ/RPY 微调、确认执行、保存实测姿态保持可用。
+- 紧凑面板偏好使用 `robot-console-workspace-*` 本地键，分隔尺寸和浮窗位置沿用原键。专注模式不覆写这些偏好。输出区默认折叠，展开偏好继续记忆；报告可随时通过标签或“查看执行报告”打开。正常保存不再显示占据整行的提示。
 
 ## 4. Topic Graph、Inspector 与 Monitor
 
 - Motion 集中 Robot View、「姿态库」和「动作组」Tab；Topics 中心固定展示 Topic Graph，数值图表使用 Monitor 导航页。Topic Graph 展示 ROS Node、Topic，以及 Publisher/Subscriber 的有向连接关系，视觉语义与 `rqt_graph` 一致。「姿态库」保存当前连接（SSH 主机、用户、端口）下的六轴及可选夹爪点位，HOME 固定为 `builtin:home`，界面和保存文件都不能删除、改名或覆盖它；数值尚未从 Jetson SRDF 同步时显示「待同步」。每个点位左侧按 URDF 关节链和保存关节值显示简化 3D 姿态：立体连杆、关节、基座地面网格及末端红 X / 绿 Y / 蓝 Z 方向轴，保存夹爪目标时展示手指开度。HOME、编辑和动作组预览共用这一展示；使用固定斜视角并自动取景，不加载 mesh 或为每张卡片占用 WebGL 上下文。缺失或无效姿态显示「无姿态」，预览不下发运动；没有实机 `robot_description` 时用内置运动学模型。「保存当前姿态」位于 Robot View → TCP 操作区最下方，点击打开命名、可选夹爪及备注窗口；窗口固定点击时的实测快照，后续反馈和未执行的 TCP 预览不会改写它。读取 1 秒内完整的 joint1–joint6，优先配置的 JointState，否则用 `/joint_states`。重力补偿下手把手臂拖到目标位置后可以保存，只记录关节角，不下发运动。未连接时连接页的「管理姿态库」打开同一份数据。新姿态从 Robot View 保存；姿态库只保留执行、编辑和删除，不再提供“手动新增”或“启动 MoveIt”。
-- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。随后勾选会话内安全确认并点击点位卡片。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
+- 点位执行使用 Jetson MoveIt2：连接后在 Status 启动 Trajectory，原生流程会在轨迹控制器和 gravity 自检通过后启动 `real_move_group.launch.py`。随后勾选会话内安全确认，选中姿态后点击“执行到此姿态”；HOME 使用明确的“移动到 HOME”按钮。Motion 姿态卡单击仅预览，双击或右键编辑，卡片本身不触发运动。保存、编辑和删除不会触发运动。HOME 来自当前 `/move_group` 的 SRDF `arm/home`，未同步时不可执行，不以全零替代。
 - MoveIt `/move_action` 负责碰撞规划、时间参数化及通过配置好的 `arm_trajectory_controller/follow_joint_trajectory` 执行完整轨迹。支持 `arm` 六关节及可选 `gripper` / `arm_with_gripper`，通过独立夹爪 JTC 协调执行；执行请求不自动切换控制器。速度与加速度缩放为 1.0（不缩放）；服务端需禁用自动控制器管理、配置起点容差 ≤0.02 rad、速度 ≤2 rad/s 与加速度 ≤2 rad/s²（真实入口采用 2/2、缩放 1/1、起点 0.01）。未知/缺少 MoveIt 编译支持时禁用执行并提示原因。
 - Bridge 在规划前及执行期间校验控制器 active、三类反馈 <1 秒、TRACK/故障/使能掩码、反馈一致性、完整有限关节值和模型限位。跨连接只允许一个点位运动，`command_id` 去重；规划/执行超过 180 秒、故障、反馈丢失、配置变化、连接断开或会话心跳超过 5 秒会请求取消。手动 MIT（DISABLE 除外）、旧拖拽轨迹及重力辨识不能覆盖正在运行的点位运动。
 - 启动点位前核对 active JTC 实际认领六关节 `position+velocity` 接口，并要求实测关节速度 ≤0.05 rad/s。已移除独立的启动连续性检查：不再校验 JTC desired/reference 的位置偏差、参考速度或字段完整性，也不等待参考连续稳定 200 ms。MoveIt 仍以新鲜实测关节状态作为规划起点，保留自身起点容差与碰撞检查；JTC actual 与 STM32 实测位置仍须相差 ≤0.02 rad。此变更不改变低速跟踪或重力补偿。旧 position-only JTC 仍不可执行点位。
@@ -214,7 +225,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
 - rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Rebotarm Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
 - “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
-- 在 Motion 点击“重置布局”恢复所有面板尺寸、展开 Controllers 侧栏和规划日志并保留当前 Tab；其他页沿用 Topics 默认左右宽度、Topics/ROS Control 分割比例及侧栏/面板展开状态的重置；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
+- 在 Motion 点击“重置布局”恢复所有面板尺寸、收起 Controllers 侧栏和输出区并保留当前 Tab；其他页沿用 Topics 默认左右宽度、Topics/ROS Control 分割比例及侧栏/面板展开状态的重置；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
 
 ## 13. 单元测试覆盖矩阵
 

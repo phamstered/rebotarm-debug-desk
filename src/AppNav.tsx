@@ -49,7 +49,8 @@ const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () =
   { page: "gravity", label: "重力辨识", title: "重力辨识 /StartGravityID", icon: GravityIcon },
 ];
 
-export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: {
+export function AppNav({ page, expanded, iconRail = false, rosReady = true, onSelect, onToggle }: {
+  iconRail?: boolean;
   page: AppPage;
   expanded: boolean;
   /** When false, Monitor / Motor stay disabled until JointState smoke is green. */
@@ -58,7 +59,7 @@ export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: 
   onToggle(): void;
 }) {
   return (
-    <nav className={`app-nav ${expanded ? "expanded" : "collapsed"}`} aria-label="主工具栏">
+    <nav className={`app-nav ${expanded ? "expanded" : iconRail ? "icon-rail" : "collapsed"}`} aria-label="主工具栏">
       <div className="app-nav-brand"><img src={robotConsoleIcon} alt="" /><span>Navigation</span></div>
       <div className="app-nav-body">
         <div className="app-nav-items">
@@ -93,8 +94,8 @@ export function AppNav({ page, expanded, rosReady = true, onSelect, onToggle }: 
             );
           })}
         </div>
-        {expanded && (
-          <button className="app-nav-toggle" onClick={onToggle} aria-label="完全收起主工具栏" title="收起">
+        {(expanded || iconRail) && (
+          <button className="app-nav-toggle" onClick={onToggle} aria-label={expanded ? "完全收起主工具栏" : "展开主工具栏"} title={expanded ? "收起" : "展开"}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg><span>收起</span>
           </button>
         )}

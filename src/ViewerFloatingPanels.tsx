@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useWorkspacePreference } from "./workspacePreferences";
 import { useMotionLayout } from "./MotionLayout";
 import { boundViewerPanel, defaultViewerPanel, FLOATING_HEADER_HEIGHT, loadViewerFloating, panelIds, VIEWER_FLOATING_KEY,
   type FloatingPanelState, type ViewerBounds, type ViewerPanelId } from "./viewerFloatingLogic";
@@ -6,10 +7,14 @@ import { boundViewerPanel, defaultViewerPanel, FLOATING_HEADER_HEIGHT, loadViewe
 const titles = { status: "运动控制", rgbd: "时钟同步 / RGBD", controls: "TCP / 关节操作" };
 const labels = { status: "运动状态面板", rgbd: "RGBD 面板", controls: "Robot View 操作面板" };
 
-export function ViewerFloatingPanels({ error, leading, children, rgbd }: {
+export function ViewerFloatingPanels({ error, leading, children, rgbd, revealControls = 0 }: {
+  revealControls?: number;
   error: string; leading?: ReactNode; children: ReactNode; rgbd?: ReactNode;
 }) {
   const layout = useMotionLayout();
+  const [docked,setDocked]=useWorkspacePreference<boolean>("viewer-docked",layout?.compact??false);
+  const previousReveal=useRef(revealControls);
+  useEffect(()=>{if(previousReveal.current!==revealControls){previousReveal.current=revealControls;setSaved(old=>({...old,controls:{...boundViewerPanel(old.controls??defaultViewerPanel('controls',bounds),bounds),collapsed:false}}));}},[revealControls]);
   const [saved, setSaved] = useState(loadViewerFloating);
   const [bounds, setBounds] = useState<ViewerBounds>({ width: 1000, height: 600 });
   const [order, setOrder] = useState<ViewerPanelId[]>([...panelIds]);
@@ -32,18 +37,27 @@ export function ViewerFloatingPanels({ error, leading, children, rgbd }: {
   }, []);
   useEffect(() => {
     if (previousReset.current !== layout?.resetVersion) {
-      previousReset.current = layout?.resetVersion; setSaved({}); cleanup.current?.();
+      previousReset.current = layout?.resetVersion; setSaved({}); setDocked(layout?.compact??false); cleanup.current?.();
     }
   }, [layout?.resetVersion]);
   useEffect(() => { try { localStorage.setItem(VIEWER_FLOATING_KEY, JSON.stringify(saved)); } catch { /* Use in-memory layout. */ } }, [saved]);
   useEffect(() => { if (!active) cleanup.current?.(); return () => cleanup.current?.(); }, [active, bounds.width, bounds.height]);
-  const panel = (id: ViewerPanelId) => boundViewerPanel(saved[id] ?? defaultViewerPanel(id, bounds), bounds);
+  const panel = (id: ViewerPanelId) => {
+    const value=boundViewerPanel(saved[id] ?? {...defaultViewerPanel(id,bounds),collapsed:!!layout?.compact&&id!=='controls'},bounds);
+    return docked && id==='controls' ? {...value,x:Math.max(0,bounds.width-value.width),y:0,height:bounds.height} : value;
+  };
+  useEffect(()=>{
+    const viewer=host.current?.closest<HTMLElement>('.viewer-layout');
+    const state=panel('controls');
+    viewer?.style.setProperty('--viewer-controls-width',`${docked&&!state.collapsed&&!layout?.focusMode?state.width:0}px`);
+    return ()=>{viewer?.style.removeProperty('--viewer-controls-width');};
+  },[docked,saved.controls?.collapsed,saved.controls?.width,bounds.width,layout?.focusMode]);
   const raise = (id: ViewerPanelId) => setOrder(old => [...old.filter(item => item !== id), id]);
   function change(id: ViewerPanelId, patch: Partial<FloatingPanelState>) {
     setSaved(old => ({ ...old, [id]: boundViewerPanel({ ...boundViewerPanel(old[id] ?? defaultViewerPanel(id, bounds), bounds), ...patch }, bounds) }));
   }
   function start(event: ReactPointerEvent<HTMLButtonElement>, id: ViewerPanelId, resize: boolean) {
-    if (!active || event.button !== 0) return;
+    if (!active || event.button !== 0 || docked && id==='controls' && !resize) return;
     event.preventDefault(); event.stopPropagation(); event.currentTarget.focus(); cleanup.current?.(); raise(id);
     const initial = panel(id), x = event.clientX, y = event.clientY, pointerId = event.pointerId;
     const move = (pointer: PointerEvent) => {
@@ -61,17 +75,18 @@ export function ViewerFloatingPanels({ error, leading, children, rgbd }: {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop); window.addEventListener("blur", stop);
   }
-  return <div className="viewer-heads-up viewer-floating-layer">
+  return <div className={`viewer-heads-up viewer-floating-layer${layout?.focusMode ? " viewer-focus" : ""}`}>
     <div className="viewer-floating-toolbar" role="toolbar" aria-label="Robot View 浮窗">
       {visibleIds.map(id => <button key={id} type="button" aria-pressed={!panel(id).collapsed} onClick={() => {
         cleanup.current?.(); change(id, { collapsed: !panel(id).collapsed }); raise(id);
       }}>{titles[id]}</button>)}
       <button type="button" onClick={() => { cleanup.current?.(); setSaved({}); }}>重置浮窗</button>
+      <button type="button" aria-pressed={docked} onClick={()=>setDocked(v=>!v)}>{docked ? "切换为浮窗" : "固定到右侧"}</button>
     </div>
     <div ref={host} className="viewer-floating-area">
       {visibleIds.map(id => {
         const state = panel(id);
-        return <section key={id} className={`viewer-floating-window viewer-floating-${id}${state.collapsed ? " collapsed" : ""}`}
+        return <section key={id} className={`viewer-floating-window viewer-floating-${id}${docked && id==='controls' ? " viewer-controls-docked" : ""}${state.collapsed ? " collapsed" : ""}`}
           aria-label={labels[id]} style={{ left: state.x, top: state.y, width: state.width,
             height: state.collapsed ? Math.min(FLOATING_HEADER_HEIGHT, bounds.height) : state.height, zIndex: order.indexOf(id) + 1 }}
           onPointerDown={event => { event.stopPropagation(); raise(id); }} onFocusCapture={() => raise(id)}

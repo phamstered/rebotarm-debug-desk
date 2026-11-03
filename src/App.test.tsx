@@ -481,6 +481,8 @@ describe("App workflow", () => {
     expect(screen.queryByRole("button", {name:"激活 arm_controller"})).not.toBeInTheDocument();
     expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
     await user.click(screen.getByRole("button", {name:"Motion"}));
+    await user.click(screen.getByRole("button", {name:"面板"}));
+    await user.click(screen.getByRole("button", {name:"展开 Controllers"}));
     const before = doubles.controllers.mock.calls.length;
     await user.click(screen.getByRole("button",{name:"停用 joint_state_broadcaster"}));
     expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
@@ -688,6 +690,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await user.click(await screen.findByRole("button", { name: "Motion" }));
+    await user.click(screen.getByRole("button", {name:"连接与运动状态"}));
     await screen.findByText("micro-ROS Agent：运行中");
     doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "<robot/>" });
     await waitFor(() => expect(screen.getByTestId("urdf")).toHaveTextContent("<robot/>"));
@@ -908,7 +911,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await user.click(await screen.findByRole("button", { name: "Motion" }));
-    await screen.findByRole("toolbar", { name: "应用工具栏" });
+    await user.click(screen.getByRole("button", {name:"更多工具"}));
     act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "first" }));
     expect(screen.getByTestId("urdf")).toHaveTextContent("first");
 
@@ -1412,6 +1415,10 @@ describe("App workflow", () => {
       const task = screen.getByRole("status", { name: "当前运动任务" }); expect(task).toHaveTextContent(group.name);
       await user.click(within(task).getByRole("button", { name: "返回 Motion" }));
       expect(screen.getByRole("tab", { name: "动作组" })).toHaveAttribute("aria-selected", "true");
+      await user.click(screen.getByRole("button",{name:"专注模式"}));
+      expect(screen.getByRole("status",{name:"当前运动任务"})).toBeVisible();
+      expect(within(screen.getByRole("status",{name:"当前运动任务"})).getByRole("button",{name:"取消运动"})).toBeVisible();
+      expect(screen.getByRole("button",{name:"退出专注"})).toBeVisible();
       await user.click(screen.getByRole("button", { name: "停止动作组" }));
       expect(doubles.request).toHaveBeenCalledWith({ op: "position_cancel", command_id: request.command_id }, 5000);
     } finally { doubles.request.mockResolvedValue({ op: "joint_command_ack", sequence: 1 }); }
@@ -1447,7 +1454,8 @@ describe("App workflow", () => {
       expect(screen.queryByRole("button", {name:"手动新增"})).not.toBeInTheDocument();
       expect(screen.queryByRole("button", {name:"启动 MoveIt"})).not.toBeInTheDocument();
       await user.click(screen.getByRole("checkbox", { name: /允许点位运动/ }));
-      const move = screen.getByRole("button", { name: "移动到 姿态 1" });
+      await user.click(screen.getByRole("button",{name:"预览 姿态 1"}));
+      const move = screen.getByRole("button", { name: "执行到此姿态" });
       await waitFor(() => expect(move).toBeEnabled());
       await user.click(move);
       expect(doubles.request).toHaveBeenCalledWith(expect.objectContaining({ op: "position_move", positions: [0, -.2, -.3, 0, 0, 0], confirmation: "ARMED" }), 5000);
@@ -1468,6 +1476,7 @@ describe("App workflow", () => {
     const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
     const list=await screen.findByRole("region",{name:"ROS Control Controllers"});expect(list).toHaveTextContent("查询超时");expect(list).not.toHaveTextContent("离线");expect(list).toHaveTextContent("active（上次）");
     await user.click(screen.getByRole("button",{name:"Motion"}));expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("none");
+    await user.click(screen.getByRole("button",{name:"面板"}));await user.click(screen.getByRole("button",{name:"展开 Controllers"}));
     expect(screen.getByRole("button",{name:"停用 arm_trajectory_controller"})).toBeDisabled();
     expect(doubles.invoke.mock.calls.some(([command])=>command==="check_ros_controllers")).toBe(false);
   });
@@ -1505,5 +1514,22 @@ describe("App workflow", () => {
     expect(await screen.findByText(/模式启动后 Controller 状态未确认/)).toBeVisible();
     expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");
   });
+
+
+it("uses a compact Motion header with icon navigation, recoverable panels and tools",async()=>{
+  const user=userEvent.setup(),view=render(<App/>);await user.click(screen.getByRole('button',{name:'连接 Jetson'}));await user.click(await screen.findByRole('button',{name:'Motion'}));
+  expect(view.container.querySelector('.app-shell')).toHaveClass('nav-icons');
+  expect(screen.queryByRole('toolbar',{name:'应用工具栏'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('banner',{name:'已连接工具条'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'刷新全部状态'})).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button',{name:'更多工具'}));expect(screen.getByRole('button',{name:'刷新全部状态'})).toBeVisible();
+  await user.keyboard('{Escape}');await user.click(screen.getByRole('button',{name:'连接与运动状态'}));expect(screen.getByRole('button',{name:'连接配置'})).toBeVisible();
+  await user.keyboard('{Escape}');await user.click(screen.getByRole('button',{name:'面板'}));await user.click(screen.getByRole('button',{name:'展开 Controllers'}));
+  expect(screen.getByRole('region',{name:'Controller 管理'})).toBeVisible();
+  await user.click(screen.getByRole('button',{name:'专注模式'}));expect(view.container.querySelector('.app-shell')).toHaveClass('motion-focus');
+  expect(screen.getByLabelText('Motion Controllers')).not.toBeVisible();
+  await user.click(screen.getByRole('button',{name:'退出专注'}));expect(screen.getByRole('region',{name:'Controller 管理'})).toBeVisible();
+  expect(view.container.querySelector('.app-shell')).toHaveClass('nav-icons');
+});
 
 });

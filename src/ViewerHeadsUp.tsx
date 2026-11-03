@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 import { useMotionLayout } from "./MotionLayout";
 import { ViewerFloatingPanels } from "./ViewerFloatingPanels";
 
-export function ViewerHeadsUp({ error, leading, children, rgbd }: { error: string; leading?: ReactNode; children: ReactNode; rgbd?: ReactNode }) {
+export function ViewerHeadsUp({ error, leading, children, rgbd, revealControls = 0 }: { revealControls?: number; error: string; leading?: ReactNode; children: ReactNode; rgbd?: ReactNode }) {
   const layout = useMotionLayout();
-  if (layout) return <ViewerFloatingPanels error={error} leading={leading} rgbd={rgbd}>{children}</ViewerFloatingPanels>;
+  if (layout) return <ViewerFloatingPanels revealControls={revealControls} error={error} leading={leading} rgbd={rgbd}>{children}</ViewerFloatingPanels>;
   return <div className="viewer-heads-up">
     {leading}
     {error && <div className="viewer-error" role="alert">{error}</div>}
