@@ -27,11 +27,11 @@ export function useArmModeWorkflow(profile: ConnectionProfile, connected: boolea
   const context = JSON.stringify([profile.host, profile.sshPort, profile.username, profile.identityFile, profile.rosDomainId, profile.rosSetupScript, connected]);
   const latest = useRef(context); latest.current = context;
   useEffect(() => { generation.current++; setWorkflow(null); return () => { generation.current++; }; }, [context]);
-  async function run(mode: string) {
+  async function run(mode: string, supportConfirmed = false) {
     if (mode === "realsense") {
       const onProgress = new Channel<ArmProgress>();
       onProgress.onmessage = () => {};
-      return invoke<RemoteActionResult>("start_arm_mode", { profile, mode, onProgress });
+      return invoke<RemoteActionResult>("start_arm_mode", { profile, mode, supportConfirmed, onProgress });
     }
     const ticket = ++generation.current; const startedContext = context;
     const current = () => ticket === generation.current && latest.current === startedContext;
@@ -43,7 +43,7 @@ export function useArmModeWorkflow(profile: ConnectionProfile, connected: boolea
       setWorkflow({ ...event, mode, running: event.stage !== "ready" && !event.failed });
     };
     try {
-      const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode, onProgress: channel });
+      const result = await invoke<RemoteActionResult>("start_arm_mode", { profile, mode, supportConfirmed, onProgress: channel });
       if (current()) setWorkflow((state) => ({ mode, stage: result.ok ? "ready" : state?.stage ?? "prepare", message: result.ok ? result.message : result.detail || result.message, failed: !result.ok, running: false }));
       return result;
     } catch (reason) {

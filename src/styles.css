@@ -1648,3 +1648,13 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .motion-output-report { overflow: auto; padding: 8px 12px; }
 .motion-output-report > .motion-group-result { margin: 0; }
 .motion-output-log[hidden], .motion-output-report[hidden] { display: none; }
+
+.teaching-gripper { padding: 12px; border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 10px; }
+.teaching-gripper-actions { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
+.teaching-gripper-actions label { display: grid; gap: 4px; }
+.teaching-gripper-actions input { width: 120px; max-width: 100%; }
+
+.teaching-gripper p { margin: 0; color: #92aebc; font-size: 12px; line-height: 1.6; }
+.teaching-gripper output { color: #bdd0da; font-size: 12px; overflow-wrap: anywhere; }
+.teaching-gripper-actions button { border: 1px solid #2b4c58; border-radius: 7px; padding: 8px 12px; color: #dcebf7; background: #102a35; font-size: 12px; }
+.teaching-gripper-actions button:disabled { opacity: .45; cursor: not-allowed; }

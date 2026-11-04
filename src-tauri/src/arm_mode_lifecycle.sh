@@ -382,6 +382,7 @@ arm_clean_environment() {
     echo "[mode] cleaning previous arm supervisors"
     stop_pg "$teleop_pid_file" "start_arm_teleop" || return 1
     stop_pg "$traj_pid_file" "start_arm_teleop" || return 1
+    if [[ -n "${teaching_pid_file:-}" ]]; then stop_pg "$teaching_pid_file" "--mode=teaching" || return 1; fi
     arm_stop_orphans || return 1
     arm_verify_clean || return 1
     echo "[mode] previous control environment verified clean"
@@ -408,4 +409,16 @@ arm_start_vla() {
         echo "VLA startup requires fault-free TRACK feedback." >&2
         return 1
     }
+}
+
+# A hand-guided arm must be physically supported before removing compensation.
+# Ordinary mode switching cannot silently turn this into a return-to-zero move.
+arm_refuse_teaching_transition() {
+    local pid="" value
+    [[ -z "${teaching_pid_file:-}" ]] || pid=$(cat "$teaching_pid_file" 2>/dev/null || true)
+    value=$(timeout 3 ros2 param get /microros_stm32h723_hardware drag_teaching 2>/dev/null || true)
+    if [[ "$(alive_pid "$pid" "--mode=teaching")" == 1 || "$value" == *'Boolean value is: True'* ]]; then
+        echo "拖动示教不会主动回零：请先支撑机械臂，使用确认后的解除输出退出，再启动其他模式。" >&2
+        return 1
+    fi
 }

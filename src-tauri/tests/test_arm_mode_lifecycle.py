@@ -64,6 +64,17 @@ class LifecycleTests(unittest.TestCase):
                                     text=True, capture_output=True, timeout=20)
             return result, (root / "events").read_text() if (root / "events").exists() else "", (root / "pid").exists()
 
+    def test_teaching_requires_explicit_supported_exit(self):
+        for value in ('Boolean value is: True', 'Boolean value is: False'):
+            result, _, _ = self.run_shell('''
+                alive_pid() { echo 0; }
+                ros2() { echo "REPLACE_VALUE"; }
+                arm_refuse_teaching_transition
+            '''.replace("REPLACE_VALUE", value))
+            self.assertEqual(result.returncode == 0, value.endswith('False'))
+        result, _, _ = self.run_shell('alive_pid() { echo 1; }; arm_refuse_teaching_transition')
+        self.assertNotEqual(result.returncode, 0)
+
     def test_trajectory_gripper_requires_valid_fresh_presence_mask(self):
         for mask, expected in [('63', 'false'), ('127', 'true'), ('064', 'true')]:
             result, events, _ = self.run_shell('arm_trajectory_gripper trajectory && echo "$arm_gripper"', mask=mask)

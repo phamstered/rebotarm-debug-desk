@@ -1,6 +1,7 @@
 import type { ControlLogSource } from "./types";
 
 export const CONTROL_LOG_SOURCES: Array<{ id: ControlLogSource; label: string }> = [
+  { id: "teaching", label: "拖动示教" },
   { id: "teleop", label: "Teleop" },
   { id: "trajectory", label: "Trajectory" },
   { id: "vla", label: "VLA" },
