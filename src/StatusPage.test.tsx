@@ -357,27 +357,26 @@ describe("drag teaching UI", () => {
     await user.click(screen.getByRole("button", { name: "启动所选模式" }));
     expect(action).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "确认进入拖动示教" })).toBeDisabled();
-    await user.click(screen.getByLabelText("已支撑机械臂，运动区域安全，允许切换为柔顺模式"));
+    await user.click(screen.getByLabelText("已支撑机械臂与物体，运动区域安全，允许切换为柔顺模式"));
     await user.click(screen.getByRole("button", { name: "确认进入拖动示教" }));
     expect(action).toHaveBeenCalledWith("teaching");
   });
-  it("allows separate gripper moves and requires supported exit, never ordinary homing", async () => {
+  it("provides manual pose capture without electric gripper controls and requires supported exit", async () => {
     const user = userEvent.setup(); const action = vi.fn();
-    const gripper = { busy: false, message: "", move: vi.fn().mockResolvedValue(undefined), cancel: vi.fn().mockResolvedValue(undefined) };
+    const savePose = vi.fn();
     render(<StatusPage {...baseProps} hardwareStatus={{ mode: 1, fault_code: 0 }}
       armMode={{ ...baseProps.armMode, mode: "teaching", teachingRunning: true }}
-      rosControl={{ ...baseProps.rosControl, controllers: ["gravity_compensation_controller", "gripper_trajectory_controller"].map(name => ({ name, state: "active", typeName: "t" })) }}
-      teachingGripper={gripper} onQuickAction={action} />);
+      rosControl={{ ...baseProps.rosControl, controllers: ["gravity_compensation_controller"].map(name => ({ name, state: "active", typeName: "t" })) }}
+      onSaveTeachingPose={savePose} onQuickAction={action} />);
     await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByTestId("current-control-mode")).toHaveTextContent("拖动示教");
-    expect(screen.getByRole("button", { name: "张开" })).toBeDisabled();
-    await user.click(screen.getByLabelText("夹爪区域无手指或障碍物，可以执行"));
-    await user.click(screen.getByRole("button", { name: "张开" }));
-    expect(gripper.move).toHaveBeenCalledWith(.05);
-    await user.clear(screen.getByLabelText("闭合目标（mm）"));
-    await user.type(screen.getByLabelText("闭合目标（mm）"), "12");
-    await user.click(screen.getByRole("button", { name: "夹取到目标" }));
-    expect(gripper.move).toHaveBeenLastCalledWith(.012);
+    for (const name of ["张开", "夹取到目标", "停止夹爪"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByLabelText("闭合目标（mm）")).not.toBeInTheDocument();
+    expect(screen.getByText(/夹爪不主动保持位置/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存当前姿态" }));
+    expect(savePose).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "支撑并退出示教" }));
     expect(action).not.toHaveBeenCalled();
     await user.click(screen.getByLabelText("机械臂已支撑，可以解除输出"));

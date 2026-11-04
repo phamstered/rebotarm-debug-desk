@@ -1,4 +1,4 @@
-import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady, useTeachingGripper } from "./teachingLogic";
+import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady } from "./teachingLogic";
 import { MotionPage } from "./MotionPage";
 import { TopicsPage } from "./TopicsPage";
 import { ControllerList } from "./ControllerList";
@@ -921,7 +921,6 @@ export default function App() {
 
   const statusActionInFlightRef = useRef(false);
   const armWorkflow = useArmModeWorkflow(profile, stage === "connected");
-  const teachingGripper = useTeachingGripper(profile, stage === "connected");
 
   async function checkControllerQueryForRestore(generation: number) {
     const status = await fetchRosControllers(true, true);
@@ -991,7 +990,6 @@ export default function App() {
       if (actionGeneration !== connectionGenerationRef.current) return;
       if (!alsoStopArm && !controllerStatusFresh(latestControllers)) throw new Error(latestControllers?.message || "Controller 状态未确认，无法判断 VLA 是否运行");
       if (alsoStopArm) {
-        await teachingGripper.finishBeforeStop();
         const stopResult = await armWorkflow.run(disable ? "disable-stop" : "stop", disable);
         if (actionGeneration !== connectionGenerationRef.current) return;
         if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
@@ -1833,7 +1831,6 @@ export default function App() {
           armMode={armMode}
           realsenseTopicSample={messages[profile.rgbdRgbTopic]}
           vlaChunkSample={messages[VLA_CHUNK_TOPIC]}
-          teachingGripper={teachingGripper}
           onSaveTeachingPose={openSavePose}
           actionBusy={statusActionBusy}
           actionNotice={statusActionNotice}
