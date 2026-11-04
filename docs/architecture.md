@@ -184,4 +184,4 @@ A shared pointer/keyboard menu uses current render callbacks, clamps to the view
 
 ## 拖动示教控制路径
 
-拖动示教通过 Tauri 固定 SSH 操作启动 ROS 栈的 `--mode=teaching`；专用六轴柔顺增益与独立夹爪 JTC 由控制栈提供。夹爪按钮调用安装在 Jetson 的 `teaching_gripper.py`，经 UUID 标识的 FollowJointTrajectory Action 执行、取消和核验，不经过任意 Topic 发布或直接 MIT 指令。Mac 不加入 DDS。远端模式与夹爪动作共用 `arm-mode.lock`，停止依然由硬件持续发送 DISABLE 并确认反馈后才清理进程。示教退出不回零，需用户现场支撑确认。
+拖动示教通过 Tauri 固定 SSH 操作启动 ROS 栈的 `--mode=teaching`。控制栈提供六轴重力补偿/阻尼与零输出手动夹爪，不启动夹爪 JTC，也不接受示教夹爪运动请求。桌面启动前检查 `check-manual` 能力，启动后通过只读硬件标记、控制器接口和反馈核验手动配置。Mac 不加入 DDS；Status 只显示说明及实测姿态保存。远端模式操作仍使用 `arm-mode.lock`，停止由硬件持续发送 DISABLE 并确认反馈后才清理进程。示教退出不回零，需现场支撑确认。

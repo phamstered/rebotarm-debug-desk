@@ -9,7 +9,6 @@ use tokio::time::{sleep, Duration};
 
 mod data_collection;
 mod control_logs;
-mod teaching;
 mod positions;
 mod motion_groups;
 mod arm_workflow;
@@ -786,17 +785,18 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
             "{setup}{paths}{alive_fn}{stop_fn}\
              [ -f \"$ws/scripts/start_arm_teleop.sh\" ] || exit 1; \
              grep -q -- '--mode=.*teaching' \"$ws/scripts/start_arm_teleop.sh\" || {{ echo \"请升级 ROS 控制栈：缺少拖动示教支持\" >&2; exit 1; }}; \
+             ros2 run microros_stm32h723_bridge teaching_gripper.py --help | grep -q check-manual || {{ echo \"请升级 ROS 控制栈：缺少手动夹爪示教支持\" >&2; exit 1; }}; \
              arm_refuse_teaching_transition || exit 1; \
              arm_clean_environment || exit 1; \
              moveit_manage stop || exit 1; \
-             arm_progress startup \"启动六轴重力拖动与独立夹爪\"; \
+             arm_progress startup \"启动六轴重力拖动与手动夹爪\"; \
              arm_rotate_log \"$HOME/.cache/robot-console/arm-teaching.log\" || exit 1; \
              setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --mode=teaching --clean=false \
                >\"$HOME/.cache/robot-console/arm-teaching.log\" 2>&1 </dev/null 9>&- & pid=$!; \
              printf \"%s\\n\" \"$pid\" >\"$teaching_pid_file\"; \
              wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-teaching.log\" \"Controller self-check passed:\" || exit 1; \
              arm_progress verify \"核验示教增益、重力与夹爪反馈\"; \
-             timeout 15 ros2 run microros_stm32h723_bridge teaching_gripper.py check || exit 1; \
+             timeout 15 ros2 run microros_stm32h723_bridge teaching_gripper.py check-manual || exit 1; \
              printf \"OK|%s|teaching\\n\" \"$pid\""
         ),
         "moveit" => format!(
@@ -1693,7 +1693,6 @@ pub fn run() {
             restart_micro_ros_agent,
             probe_arm_mode,
             start_arm_mode,
-            teaching::teaching_gripper_action,
             check_ros_controllers,
             switch_ros_controller,
             switch_ros_controllers,
@@ -1743,7 +1742,9 @@ mod tests {
     fn teaching_mode_uses_dedicated_preset_and_tracks_owned_process() {
         let command = arm_mode_remote_command(&profile(""), "teaching").unwrap();
         assert!(command.contains("--mode=teaching --clean=false"));
-        assert!(command.contains("teaching_gripper.py check"));
+        assert!(command.contains("teaching_gripper.py check-manual"));
+        let capability = command.find("teaching_gripper.py --help").unwrap();
+        assert!(capability < command.find("arm_clean_environment || exit 1").unwrap());
         assert!(command.contains("arm-teaching.pid"));
         assert!(!command.contains("moveit_manage start"));
         let status = parse_arm_mode_status("ARM|teaching|0|0|0|0|0|0|0|0|1|456").unwrap();

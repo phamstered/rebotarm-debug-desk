@@ -140,7 +140,6 @@ export function StatusPage({
   workflow = null,
   onCardAction,
   onQuickAction,
-  teachingGripper,
   onSaveTeachingPose,
   onClearHighlight,
 }: {
@@ -171,7 +170,6 @@ export function StatusPage({
   onClearHighlight?: () => void;
   onCardAction?: (action: StatusCardAction, card: StatusCardModel) => void;
   onSaveTeachingPose?: () => void;
-  teachingGripper?: { busy: boolean; message: string; move: (position: number) => Promise<void>; cancel: () => Promise<void> };
   onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "teaching" | "stop" | "disable-stop") => void;
 }) {
   const [selectedTab, setSelectedTab] = useState<StatusZoneId>(() => statusZoneForCard(highlightCardId) ?? "connection");
@@ -181,11 +179,9 @@ export function StatusPage({
   }, [highlightCardId]);
   const selectTab = (id: StatusZoneId) => { setSelectedTab(id); onClearHighlight?.(); };
   const [confirmTeaching, setConfirmTeaching] = useState(false);
-  const [gripperConfirmed, setGripperConfirmed] = useState(false);
-  const [gripperMm, setGripperMm] = useState("0");
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [supported, setSupported] = useState(false);
-  useEffect(() => { setGripperConfirmed(false); setConfirmTeaching(false); setConfirmDisable(false); setSupported(false); }, [stage, profile.host, profile.rosDomainId, profile.rosSetupScript]);
+  useEffect(() => { setConfirmTeaching(false); setConfirmDisable(false); setSupported(false); }, [stage, profile.host, profile.rosDomainId, profile.rosSetupScript]);
   const controlStopped = Boolean(workflow && ["stop", "disable-stop"].includes(workflow.mode) && workflow.stage === "ready" && !workflow.failed && hardwareStatus?.mode === 3 && hardwareStatus?.fault_code === 0);
   const cards = buildStatusCards({
     clockSync,
@@ -220,7 +216,7 @@ export function StatusPage({
     [armMode, rosControl],
   );
   const activeMode = controlStopped ? null : observedMode;
-  useEffect(() => { setGripperConfirmed(false); }, [activeMode, hardwareStatus?.mode, hardwareStatus?.fault_code]);
+  useEffect(() => { }, [activeMode, hardwareStatus?.mode, hardwareStatus?.fault_code]);
   const modeConfirmed = controllerStatusFresh(rosControl) || controlStopped;
   const [targetMode, setTargetMode] = useState<"teleop" | "trajectory" | "vla" | "teaching">("teleop");
   useEffect(() => { if (modeConfirmed && activeMode) setTargetMode(activeMode); }, [activeMode, modeConfirmed]);
@@ -309,7 +305,7 @@ export function StatusPage({
                           onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}</button>
                       ))}
                     </div>
-                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || Boolean(teachingGripper?.busy) || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
+                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
                       onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
@@ -325,18 +321,12 @@ export function StatusPage({
                     </details>
                   </div>
                   {actionNotice && <output className="status-action-notice" role="status">{actionNotice}</output>}
-                  {activeMode === "teaching" && teachingGripper && <section className="teaching-gripper" aria-label="示教夹爪">
-                    <strong>夹爪抓放</strong>
-                    <p>六轴可手动拖动。夹爪按 5 秒轨迹执行；完成不代表夹持成功。目标为单指行程。</p>
-                    <label className="safety-check"><input type="checkbox" checked={gripperConfirmed} onChange={(e) => setGripperConfirmed(e.target.checked)} />夹爪区域无手指或障碍物，可以执行</label>
+                  {activeMode === "teaching" && <section className="teaching-gripper" aria-label="手动示教">
+                    <strong>六轴与夹爪手动示教</strong>
+                    <p>六轴保留重力补偿与阻尼；夹爪不主动保持位置，可用手拨动。请托住夹爪中的物体。</p>
                     <div className="teaching-gripper-actions">
-                      <label>闭合目标（mm）<input type="number" min="0" max="50" step="0.5" value={gripperMm} onChange={(e) => setGripperMm(e.target.value)} /></label>
-                      <button disabled={!gripperConfirmed || teachingGripper.busy || Boolean(actionBusy) || hardwareStatus?.mode !== 1 || hardwareStatus?.fault_code !== 0} onClick={() => void teachingGripper.move(0.05)}>张开</button>
-                      <button disabled={!gripperConfirmed || teachingGripper.busy || Boolean(actionBusy) || hardwareStatus?.mode !== 1 || hardwareStatus?.fault_code !== 0 || !gripperMm.trim() || !Number.isFinite(Number(gripperMm)) || Number(gripperMm) < 0 || Number(gripperMm) > 50} onClick={() => void teachingGripper.move(Number(gripperMm) / 1000)}>夹取到目标</button>
-                      <button disabled={teachingGripper.busy || Boolean(actionBusy) || !onSaveTeachingPose} onClick={onSaveTeachingPose}>保存当前姿态</button>
-                      <button disabled={!teachingGripper.busy} onClick={() => void teachingGripper.cancel()}>停止夹爪</button>
+                      <button disabled={Boolean(actionBusy) || !modeConfirmed || !onSaveTeachingPose} onClick={onSaveTeachingPose}>保存当前姿态</button>
                     </div>
-                    <output role="status">{teachingGripper.message}</output>
                     <p>保存同一帧的六轴与夹爪实测姿态，可在 Motion 姿态库查看；松手不保证机械臂保持原位。</p>
                   </section>}
                   <ArmModeWorkflow workflow={workflow} />
@@ -383,9 +373,9 @@ export function StatusPage({
       </div>
       {confirmTeaching && <div className="modal-backdrop"><section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="拖动示教确认">
         <header className="toolbar-modal-title"><strong>进入拖动示教</strong></header>
-        <div className="toolbar-modal-content"><p>先按原模式安全停止，再启用六轴零位置刚度、阻尼与重力补偿。机械臂可能因模型误差或负载变化漂移；夹爪保持当前开度，抓放需单独操作。</p>
-          <label className="safety-check"><input type="checkbox" checked={supported} onChange={(e) => setSupported(e.target.checked)} />已支撑机械臂，运动区域安全，允许切换为柔顺模式</label></div>
-        <footer className="toolbar-modal-actions"><button onClick={() => setConfirmTeaching(false)}>取消</button><button disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmTeaching(false); setGripperConfirmed(false); onQuickAction?.("teaching"); }}>确认进入拖动示教</button></footer>
+        <div className="toolbar-modal-content"><p>先按原模式安全停止，再启用六轴零位置刚度、阻尼与重力补偿。机械臂可能因模型误差或负载变化漂移；夹爪释放主动保持，可用手拨动；请托住夹爪中的物体。</p>
+          <label className="safety-check"><input type="checkbox" checked={supported} onChange={(e) => setSupported(e.target.checked)} />已支撑机械臂与物体，运动区域安全，允许切换为柔顺模式</label></div>
+        <footer className="toolbar-modal-actions"><button onClick={() => setConfirmTeaching(false)}>取消</button><button disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmTeaching(false); onQuickAction?.("teaching"); }}>确认进入拖动示教</button></footer>
       </section></div>}
       {confirmDisable && <div className="modal-backdrop">
         <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="解除电机输出确认">

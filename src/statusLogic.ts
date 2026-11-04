@@ -710,10 +710,10 @@ export function buildStatusCards(input: {
   const teachingActive = !controlStopped && Boolean(armMode?.teachingRunning) && teachingControllersReady(rosControl);
   const teachingCard: StatusCardModel = {
     id: "teaching", title: "拖动示教", tone: teachingActive ? "ok" : "idle",
-    summary: teachingActive ? "六轴柔顺 · 夹爪独立控制" : "未运行",
+    summary: teachingActive ? "六轴柔顺 · 夹爪手动拨动" : "未运行",
     rows: [gravityCompensationRow({ rosControl, modeActive: teachingActive }),
       { label: "六轴", value: "零位置刚度 + 阻尼；不跟踪位置目标" },
-      { label: "夹爪", value: "独立轨迹控制 · 米制标定" }],
+      { label: "夹爪", value: "零主动输出 · 米制标定" }],
     note: "可到 Motion 保存当前姿态；不自动录制连续轨迹。退出前必须支撑机械臂，不会主动回零。",
   };
   const rsUsb = Boolean(usbProbe?.realsensePresent);
