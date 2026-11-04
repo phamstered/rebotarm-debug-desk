@@ -173,3 +173,6 @@ node scripts/smoke-bridge.mjs 18765
 Topic Graph 的「显示调试 Bridge」只控制本控制台节点，不会隐藏 STM32 或相机节点。Bridge 与一键 arm 启动使用进程级 Fast DDS UDP profile，避免损坏的 SHM 锁影响 ROS 发现；显式 DDS XML 环境变量可覆盖，详见 [架构](docs/architecture.md#console-managed-ros-transport)。升级此修复需要更新桌面、部署 Bridge，并更新/构建控制栈的 `joint_state_relay`；不需要改写外部 Star Arm 驱动。
 
 Bridge 部署构建对所选包使用 `--cmake-clean-first`，避免 rsync 保留的源文件时间早于旧远端对象时漏编；不清理其他包。重启 Topic 可用 `--joint-state-topic` / `--command-topic` / `--status-topic` 配置，应用内升级自动使用连接 Profile 的值。
+
+
+Status 控制模式支持「拖动示教」：六轴重力补偿/阻尼下手动拖动，夹爪独立抓放，可保存姿态后切回 Trajectory 回放。需要配套 ROS 栈 `--mode=teaching` 支持；进入与退出需现场支撑确认，退出不会主动回零。见 [拖动示教说明](docs/basic-features.md#拖动示教六轴柔顺-独立夹爪)。

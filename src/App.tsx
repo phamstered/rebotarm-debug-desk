@@ -1,3 +1,4 @@
+import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady, useTeachingGripper } from "./teachingLogic";
 import { MotionPage } from "./MotionPage";
 import { TopicsPage } from "./TopicsPage";
 import { ControllerList } from "./ControllerList";
@@ -638,7 +639,23 @@ export default function App() {
     return "error" in captured ? captured.error : "";
   })();
 
+  useEffect(() => {
+    if (stage !== "connected" || !bridge || !armMode?.teachingRunning) return;
+    const abort = new AbortController();
+    void bridge.request({ op: "subscribe", topic: TEACHING_FEEDBACK_TOPIC, type: "sensor_msgs/msg/JointState" }, 3000, abort.signal).catch(() => {});
+    // The connection owns this low-rate feedback subscription, shared with Motion.
+    return () => abort.abort();
+  }, [bridge, stage, armMode?.teachingRunning]);
+
   function openSavePose() {
+    if (armMode?.teachingRunning) {
+      const captured = captureTeachingPose(messages[TEACHING_FEEDBACK_TOPIC], performance.now());
+      if ("error" in captured) { setPoseSaveError(captured.error); setStatusActionNotice(captured.error); return; }
+      setPoseSaveError("");
+      setPoseToSave({ name: nextCapturedPoseName(positionStore.profiles[positionProfileKey]?.positions ?? []),
+        ...captured, source: "feedback", note: "拖动示教：同一帧六轴与标定夹爪" });
+      return;
+    }
     const captured = captureCurrentArmPose(captureSamples, performance.now(), profile.jointStateTopic);
     if ("error" in captured) { setPoseSaveError(captured.error); return; }
     const gripper = positionMotion.gripper;
@@ -904,6 +921,7 @@ export default function App() {
 
   const statusActionInFlightRef = useRef(false);
   const armWorkflow = useArmModeWorkflow(profile, stage === "connected");
+  const teachingGripper = useTeachingGripper(profile, stage === "connected");
 
   async function checkControllerQueryForRestore(generation: number) {
     const status = await fetchRosControllers(true, true);
@@ -973,7 +991,8 @@ export default function App() {
       if (actionGeneration !== connectionGenerationRef.current) return;
       if (!alsoStopArm && !controllerStatusFresh(latestControllers)) throw new Error(latestControllers?.message || "Controller 状态未确认，无法判断 VLA 是否运行");
       if (alsoStopArm) {
-        const stopResult = await armWorkflow.run(disable ? "disable-stop" : "stop");
+        await teachingGripper.finishBeforeStop();
+        const stopResult = await armWorkflow.run(disable ? "disable-stop" : "stop", disable);
         if (actionGeneration !== connectionGenerationRef.current) return;
         if (!stopResult.ok) throw new Error(`${stopResult.message}：${stopResult.detail || stopResult.exitCode}`);
       }
@@ -1011,7 +1030,7 @@ export default function App() {
     }
   }
 
-  async function runStatusRestart(actionId: string, mode: "teleop" | "trajectory" | "realsense" | "stop" | "agent" | "moveit") {
+  async function runStatusRestart(actionId: string, mode: "teaching" | "teleop" | "trajectory" | "realsense" | "stop" | "agent" | "moveit") {
     if (controllerAction && mode !== "stop") { setStatusActionNotice("Controller 切换进行中，请等待完成"); return; }
     if (statusActionBusy || statusActionInFlightRef.current) return;
     const actionGeneration = connectionGenerationRef.current;
@@ -1035,8 +1054,8 @@ export default function App() {
         }
         return;
       }
-      if (["teleop", "trajectory", "moveit"].includes(mode)) await checkControllerQueryForRestore(actionGeneration);
-      if (mode === "teleop" || mode === "trajectory") {
+      if (["teleop", "trajectory", "teaching", "moveit"].includes(mode)) await checkControllerQueryForRestore(actionGeneration);
+      if (mode === "teleop" || mode === "trajectory" || mode === "teaching") {
         if (isFault11Latched(hardwareStatus)) {
           throw new Error("需先安全回零/托住，再重启 STM32（无软恢复）");
         }
@@ -1044,15 +1063,15 @@ export default function App() {
         // Native lifecycle safely stops the owning hardware before removing any controller.
         setStatusActionNotice("安全回零 → 清理旧进程 → 启动并核验目标模式…");
       }
-      const result = await armWorkflow.run(mode);
+      const result = await armWorkflow.run(mode, mode === "teaching");
       if (actionGeneration !== connectionGenerationRef.current) return;
       setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
       await refreshUsbAndArm();
-      if (result.ok && ["teleop", "trajectory", "moveit"].includes(mode)) {
+      if (result.ok && ["teleop", "trajectory", "teaching", "moveit"].includes(mode)) {
         const verified = await fetchRosControllers(true, true);
         if (actionGeneration !== connectionGenerationRef.current) return;
         if (!controllerStatusFresh(verified)) throw new Error(`模式启动后 Controller 状态未确认：${verified.message}`);
-        if (mode === "teleop" ? !isArmTeleopControllerActive(verified) : !isArmTrajectoryControllerActive(verified)) throw new Error("模式启动后目标 Controller 未确认 active");
+        if (mode === "teaching" ? !teachingControllersReady(verified) : mode === "teleop" ? !isArmTeleopControllerActive(verified) : !isArmTrajectoryControllerActive(verified)) throw new Error("模式启动后目标 Controller 未确认 active");
       } else await refreshRosControllers();
     } catch (reason) {
       if (actionGeneration !== connectionGenerationRef.current) return;
@@ -1096,8 +1115,9 @@ export default function App() {
     }
   }
 
-  function handleStatusQuickAction(id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop") {
-    if (id === "teleop") void runStatusRestart("teleop-restart", "teleop");
+  function handleStatusQuickAction(id: "teleop" | "trajectory" | "vla" | "teaching" | "stop" | "disable-stop") {
+    if (id === "teaching") void runStatusRestart("teaching-restart", "teaching");
+    else if (id === "teleop") void runStatusRestart("teleop-restart", "teleop");
     else if (id === "trajectory") void runStatusRestart("trajectory-restart", "trajectory");
     else if (id === "vla") void runVlaStart();
     else void runVlaStop(true, id === "disable-stop");
@@ -1813,6 +1833,8 @@ export default function App() {
           armMode={armMode}
           realsenseTopicSample={messages[profile.rgbdRgbTopic]}
           vlaChunkSample={messages[VLA_CHUNK_TOPIC]}
+          teachingGripper={teachingGripper}
+          onSaveTeachingPose={openSavePose}
           actionBusy={statusActionBusy}
           actionNotice={statusActionNotice}
           onCardAction={handleStatusCardAction}
@@ -1871,8 +1893,8 @@ export default function App() {
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
           onStreamingChange={setControlStreaming}
-          controlLocked={gravitySessionActive || Boolean(controllerAction)}
-          controlLockedReason={controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
+          controlLocked={Boolean(armMode?.teachingRunning) || gravitySessionActive || Boolean(controllerAction)}
+          controlLockedReason={armMode?.teachingRunning ? "拖动示教运行中：禁止直接电机命令，请使用示教夹爪入口" : controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
         />
       ) : null}
       {appPage === "dashboard" && <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">{workspaceTools}</header>}

@@ -388,12 +388,14 @@ export type UsbProbeStatus = {
   error?: string;
 };
 
-export type ArmModeKind = "teleop" | "trajectory" | "realsense" | "idle" | "unknown";
+export type ArmModeKind = "teleop" | "trajectory" | "teaching" | "realsense" | "idle" | "unknown";
 
 export type ArmModeStatus = {
   mode: ArmModeKind;
   teleopRunning: boolean;
   trajectoryRunning: boolean;
+  teachingRunning?: boolean;
+  teachingPid?: number;
   realsenseRunning: boolean;
   teleopPid: number;
   trajectoryPid: number;
@@ -412,7 +414,7 @@ export type RemoteActionResult = {
   detail: string;
 };
 
-export type ControlLogSource = "teleop" | "trajectory" | "vla" | "moveit" | "controller" | "realsense";
+export type ControlLogSource = "teaching" | "teleop" | "trajectory" | "vla" | "moveit" | "controller" | "realsense";
 export type ControlLogSnapshot = {
   source: ControlLogSource;
   path: string;

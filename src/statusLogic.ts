@@ -1,3 +1,4 @@
+import { teachingControllersReady } from "./teachingLogic";
 import { controllerStatusFresh, controllerStatusLabel } from "./controllersInfoLogic";
 import type { ClockSyncStatus } from "./clockSyncLogic";
 import type {
@@ -80,7 +81,7 @@ export type StatusStickyAlert = {
   kind: "fault" | "hold" | "fault11";
 };
 
-export type ActiveControlMode = "teleop" | "trajectory" | "vla" | null;
+export type ActiveControlMode = "teleop" | "trajectory" | "vla" | "teaching" | null;
 
 export const STATUS_ZONE_META: Array<{
   id: StatusZoneId;
@@ -91,7 +92,7 @@ export const STATUS_ZONE_META: Array<{
 }> = [
   { id: "connection", title: "连接", cardIds: ["ssh", "bridge", "agent"] },
   { id: "hardware", title: "硬件健康", primary: true, cardIds: ["usb", "hardware", "clock-sync", "realsense"] },
-  { id: "control", title: "控制模式", cardIds: ["ros2-control", "ros-ready", "teleop", "trajectory", "vla"] },
+  { id: "control", title: "控制模式", cardIds: ["ros2-control", "ros-ready", "teleop", "trajectory", "vla", "teaching"] },
 ];
 
 export function toneLabel(tone: StatusTone): string {
@@ -208,6 +209,7 @@ export function resolveActiveControlMode(input: {
     if (isVlaControllerActive(rosControl)) return "vla";
     if (isArmTeleopControllerActive(rosControl)) return "teleop";
     if (isArmTrajectoryControllerActive(rosControl)) return "trajectory";
+    if (input.armMode?.teachingRunning && teachingControllersReady(rosControl)) return "teaching";
     return null;
   }
   // Running scripts alone cannot confirm controller state or outputs.
@@ -705,6 +707,15 @@ export function buildStatusCards(input: {
     warning: trajGravityWarn,
   };
 
+  const teachingActive = !controlStopped && Boolean(armMode?.teachingRunning) && teachingControllersReady(rosControl);
+  const teachingCard: StatusCardModel = {
+    id: "teaching", title: "拖动示教", tone: teachingActive ? "ok" : "idle",
+    summary: teachingActive ? "六轴柔顺 · 夹爪独立控制" : "未运行",
+    rows: [gravityCompensationRow({ rosControl, modeActive: teachingActive }),
+      { label: "六轴", value: "零位置刚度 + 阻尼；不跟踪位置目标" },
+      { label: "夹爪", value: "独立轨迹控制 · 米制标定" }],
+    note: "可到 Motion 保存当前姿态；不自动录制连续轨迹。退出前必须支撑机械臂，不会主动回零。",
+  };
   const rsUsb = Boolean(usbProbe?.realsensePresent);
   const rsNode = Boolean(armMode?.realsenseRunning);
   const rsHz = realsenseTopicSample?.hz;
@@ -863,6 +874,7 @@ export function buildStatusCards(input: {
     usbCard,
     teleopCard,
     trajectoryCard,
+    teachingCard,
     vlaCard,
     realsenseCard,
     ...(input.clockSync ? [buildClockSyncCard(input.clockSync)] : []),
@@ -870,7 +882,7 @@ export function buildStatusCards(input: {
 }
 
 export type StatusQuickAction = {
-  id: "teleop" | "trajectory" | "vla" | "stop" | "disable-stop";
+  id: "teleop" | "trajectory" | "vla" | "teaching" | "stop" | "disable-stop";
   label: string;
   disabled?: boolean;
   disabledReason?: string;
@@ -891,7 +903,7 @@ export function buildStatusQuickActions(input: {
       ? "等待 JointState"
       : fault11Reason;
   const busy = input.actionBusy;
-  const modeBusy = busy === "teleop-restart" || busy === "trajectory-restart" || busy === "vla-start" || busy === "vla-stop" || busy === "arm-stop";
+  const modeBusy = busy === "teaching-restart" || busy === "teleop-restart" || busy === "trajectory-restart" || busy === "vla-start" || busy === "vla-stop" || busy === "arm-stop";
   return [
     {
       id: "teleop",
@@ -902,6 +914,12 @@ export function buildStatusQuickActions(input: {
     {
       id: "trajectory",
       label: "Trajectory",
+      disabled: !gateOk || modeBusy,
+      disabledReason: reason || (modeBusy ? "操作进行中" : undefined),
+    },
+    {
+      id: "teaching",
+      label: "拖动示教",
       disabled: !gateOk || modeBusy,
       disabledReason: reason || (modeBusy ? "操作进行中" : undefined),
     },

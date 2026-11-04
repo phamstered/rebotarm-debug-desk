@@ -180,3 +180,8 @@ Jetson `PositionMotion` 仍拥有整组调度与全局运动锁。Pose 停稳/�
 Motion composes connection/health and global tool popovers into its local header, independently of other navigation pages. Local workspace preferences retain icon navigation, resource/view choices, Inspector pinning, output visibility and docked/floating Robot View tools. Focus mode masks those panels temporarily without unmounting editors or overwriting preferences. Active task cancellation, explicit motion execution and current fault/freshness evidence remain outside context menus.
 
 A shared pointer/keyboard menu uses current render callbacks, clamps to the viewport, restores focus on dismissal and ignores text-editing targets. Pose/Action edits reuse existing history and immutable execution snapshots; source replacement preserves step identity/timing/dependencies. Removing a Pose removes its dependent Actions/sync points in one undo operation. Persistent deletion and unsaved navigation retain their existing confirmations. Local previews, camera presets and shortcuts never dispatch motion requests. No Bridge schema, DDS path or native controller-switch authorization changes.
+
+
+## 拖动示教控制路径
+
+拖动示教通过 Tauri 固定 SSH 操作启动 ROS 栈的 `--mode=teaching`；专用六轴柔顺增益与独立夹爪 JTC 由控制栈提供。夹爪按钮调用安装在 Jetson 的 `teaching_gripper.py`，经 UUID 标识的 FollowJointTrajectory Action 执行、取消和核验，不经过任意 Topic 发布或直接 MIT 指令。Mac 不加入 DDS。远端模式与夹爪动作共用 `arm-mode.lock`，停止依然由硬件持续发送 DISABLE 并确认反馈后才清理进程。示教退出不回零，需用户现场支撑确认。

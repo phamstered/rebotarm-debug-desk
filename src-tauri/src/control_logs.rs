@@ -35,7 +35,7 @@ pub struct ControlLogSnapshot {
 }
 
 fn remote_command(source: &str, download: bool) -> Result<String, String> {
-    if !matches!(source, "teleop" | "trajectory" | "vla" | "moveit" | "controller" | "realsense") {
+    if !matches!(source, "teleop" | "trajectory" | "teaching" | "vla" | "moveit" | "controller" | "realsense") {
         return Err("不支持的日志来源".into());
     }
     let script = READER.replace('\'', "'\"'\"'");

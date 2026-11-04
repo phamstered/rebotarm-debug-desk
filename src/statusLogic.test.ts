@@ -152,6 +152,7 @@ describe("statusLogic", () => {
       "usb",
       "teleop",
       "trajectory",
+      "teaching",
       "vla",
       "realsense",
     ]);
@@ -171,7 +172,7 @@ describe("statusLogic", () => {
       "bridge",
       "agent",
     ]);
-    expect(zones.find((zone) => zone.id === "control")?.cards.map((card) => card.id)).toEqual(["ros2-control", "ros-ready", "teleop", "trajectory", "vla"]);
+    expect(zones.find((zone) => zone.id === "control")?.cards.map((card) => card.id)).toEqual(["ros2-control", "ros-ready", "teleop", "trajectory", "vla", "teaching"]);
 
     const hardware = cards.find((card) => card.id === "hardware")!;
     expect(hardware.detail).toContain("无故障");

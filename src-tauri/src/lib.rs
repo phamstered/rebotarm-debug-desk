@@ -9,6 +9,7 @@ use tokio::time::{sleep, Duration};
 
 mod data_collection;
 mod control_logs;
+mod teaching;
 mod positions;
 mod motion_groups;
 mod arm_workflow;
@@ -101,9 +102,11 @@ struct ArmModeStatus {
     mode: String,
     teleop_running: bool,
     trajectory_running: bool,
+    teaching_running: bool,
     realsense_running: bool,
     teleop_pid: u32,
     trajectory_pid: u32,
+    teaching_pid: u32,
     realsense_pid: u32,
     /// Whether the Desk teleop script owns ros2_control (child launch or log).
     /// `None` means unknown while the process is alive (Start VLA must refuse).
@@ -688,10 +691,11 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
     let paths = "mkdir -p \"$HOME/.cache/robot-console\"; \
                  teleop_pid_file=\"$HOME/.cache/robot-console/arm-teleop.pid\"; \
                  traj_pid_file=\"$HOME/.cache/robot-console/arm-trajectory.pid\"; \
+                 teaching_pid_file=\"$HOME/.cache/robot-console/arm-teaching.pid\"; \
                  rs_pid_file=\"$HOME/.cache/robot-console/arm-realsense.pid\"; ";
     let alive_fn = "alive_pid() { p=\"$1\"; marker=\"$2\"; case \"$p\" in *[!0-9]*|\"\") echo 0; return; esac; \
                     if kill -0 \"$p\" 2>/dev/null; then \
-                      if [ -z \"$marker\" ] || ps -p \"$p\" -o args= | grep -Fq \"$marker\"; then echo 1; return; fi; \
+                      if [ -z \"$marker\" ] || ps -p \"$p\" -o args= | grep -Fq -- \"$marker\"; then echo 1; return; fi; \
                     fi; echo 0; }; ";
     let camera_alive_fn = "camera_alive() { p=\"$1\"; \
                            if [ \"$(alive_pid \"$p\" \"left_wrist_camera.launch.py\")\" = 1 ] || \
@@ -729,16 +733,19 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              jowns=$(owns_ros2 \"$jpid\" \"$HOME/.cache/robot-console/arm-trajectory.log\" \"\"); \
            else jowns=2; fi; \
          fi; \
+         hpid=$(cat \"$teaching_pid_file\" 2>/dev/null || true); \
+         halive=$(alive_pid \"$hpid\" \"--mode=teaching\"); \
          mode=idle; \
-         if [ \"$talive\" = 1 ]; then mode=teleop; elif [ \"$jalive\" = 1 ]; then mode=trajectory; elif [ \"$ralive\" = 1 ]; then mode=realsense; fi; \
-         printf \"ARM|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n\" \"$mode\" \"$talive\" \"$jalive\" \"$ralive\" \
-           \"${{tpid:-0}}\" \"${{jpid:-0}}\" \"${{rpid:-0}}\" \"$towns\" \"$jowns\""
+         if [ \"$talive\" = 1 ]; then mode=teleop; elif [ \"$jalive\" = 1 ]; then mode=trajectory; elif [ \"$halive\" = 1 ]; then mode=teaching; elif [ \"$ralive\" = 1 ]; then mode=realsense; fi; \
+         printf \"ARM|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n\" \"$mode\" \"$talive\" \"$jalive\" \"$ralive\" \
+           \"${{tpid:-0}}\" \"${{jpid:-0}}\" \"${{rpid:-0}}\" \"$towns\" \"$jowns\" \"$halive\" \"${{hpid:-0}}\""
     );
 
     let body = match mode {
         "status" => format!("{setup}{status_body}"),
         "stop" | "disable-stop" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
+             if [ \"{mode}\" = stop ]; then arm_refuse_teaching_transition || exit 1; fi; \
              arm_clean_environment {stop_service} || exit 1; \
              moveit_manage stop || exit 1; \
              printf \"OK|0|stopped\\n\"",
@@ -747,6 +754,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
         "teleop" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
+             arm_refuse_teaching_transition || exit 1; \
              arm_clean_environment || exit 1; \
              moveit_manage stop || exit 1; \
              arm_progress startup \"启动 Teleop 与重力补偿控制器\"; \
@@ -760,6 +768,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
         "trajectory" | "vla" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
              if [ ! -f \"$ws/scripts/start_arm_teleop.sh\" ]; then echo \"missing $ws/scripts/start_arm_teleop.sh\" >&2; exit 1; fi; \
+             arm_refuse_teaching_transition || exit 1; \
              arm_clean_environment || exit 1; \
              moveit_manage stop || exit 1; \
              arm_trajectory_gripper \"{mode}\" || exit 1; \
@@ -772,6 +781,23 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
              if [ \"{mode}\" = \"vla\" ]; then arm_start_vla || exit 1; \
              else arm_progress planner \"启动 MoveIt 并核验规划服务\"; moveit_manage start || {{ echo \"MoveIt 未就绪；轨迹控制器命令流保留，可在位置页重试规划器\" >&2; exit 1; }}; fi; \
              printf \"OK|%s|{mode}\\n\" \"$pid\""
+        ),
+        "teaching" => format!(
+            "{setup}{paths}{alive_fn}{stop_fn}\
+             [ -f \"$ws/scripts/start_arm_teleop.sh\" ] || exit 1; \
+             grep -q -- '--mode=.*teaching' \"$ws/scripts/start_arm_teleop.sh\" || {{ echo \"请升级 ROS 控制栈：缺少拖动示教支持\" >&2; exit 1; }}; \
+             arm_refuse_teaching_transition || exit 1; \
+             arm_clean_environment || exit 1; \
+             moveit_manage stop || exit 1; \
+             arm_progress startup \"启动六轴重力拖动与独立夹爪\"; \
+             arm_rotate_log \"$HOME/.cache/robot-console/arm-teaching.log\" || exit 1; \
+             setsid nohup bash \"$ws/scripts/start_arm_teleop.sh\" --mode=teaching --clean=false \
+               >\"$HOME/.cache/robot-console/arm-teaching.log\" 2>&1 </dev/null 9>&- & pid=$!; \
+             printf \"%s\\n\" \"$pid\" >\"$teaching_pid_file\"; \
+             wait_arm_ready \"$pid\" \"$HOME/.cache/robot-console/arm-teaching.log\" \"Controller self-check passed:\" || exit 1; \
+             arm_progress verify \"核验示教增益、重力与夹爪反馈\"; \
+             timeout 15 ros2 run microros_stm32h723_bridge teaching_gripper.py check || exit 1; \
+             printf \"OK|%s|teaching\\n\" \"$pid\""
         ),
         "moveit" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
@@ -837,6 +863,8 @@ fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
         teleop_running,
         trajectory_running,
         realsense_running,
+        teaching_running: fields.get(9) == Some(&"1"),
+        teaching_pid: if fields.get(9) == Some(&"1") { fields.get(10).and_then(|p| p.parse().ok()).unwrap_or(0) } else { 0 },
         teleop_pid: if teleop_running { teleop_pid } else { 0 },
         trajectory_pid: if trajectory_running {
             trajectory_pid
@@ -1598,13 +1626,16 @@ async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, Str
 }
 
 #[tauri::command]
-async fn start_arm_mode(profile: ConnectionProfile, mode: String,
+async fn start_arm_mode(profile: ConnectionProfile, mode: String, support_confirmed: Option<bool>,
     on_progress: tauri::ipc::Channel<arm_workflow::Progress>,
     logs: State<'_, control_logs::LogSessions>,
 ) -> Result<RemoteActionResult, String> {
+    if matches!(mode.as_str(), "teaching" | "disable-stop") && support_confirmed != Some(true) {
+        return Err("请先确认现场支撑机械臂，且夹爪释放无风险".into());
+    }
     let remote = arm_mode_remote_command(&profile, &mode)?;
     // Diagnostics must never delay or block a requested stop/DISABLE.
-    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "realsense" | "moveit") {
+    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "teaching" | "realsense" | "moveit") {
         let _ = control_logs::prepare(&profile, &logs).await;
     }
     let mut command = ssh_base(&profile);
@@ -1626,7 +1657,7 @@ async fn start_arm_mode(profile: ConnectionProfile, mode: String,
         ok: true,
         exit_code: 0,
         message: if mode == "stop" || mode == "disable-stop" {
-            "Teleop/Trajectory 已停止".into()
+            "控制环境已停止，输出已关闭".into()
         } else if mode == "moveit" {
             label
         } else if mode == "trajectory" {
@@ -1662,6 +1693,7 @@ pub fn run() {
             restart_micro_ros_agent,
             probe_arm_mode,
             start_arm_mode,
+            teaching::teaching_gripper_action,
             check_ros_controllers,
             switch_ros_controller,
             switch_ros_controllers,
@@ -1705,6 +1737,21 @@ mod tests {
             command_topic: "/stm32/joint_commands".into(),
             status_topic: "/stm32/status".into(),
         }
+    }
+
+    #[test]
+    fn teaching_mode_uses_dedicated_preset_and_tracks_owned_process() {
+        let command = arm_mode_remote_command(&profile(""), "teaching").unwrap();
+        assert!(command.contains("--mode=teaching --clean=false"));
+        assert!(command.contains("teaching_gripper.py check"));
+        assert!(command.contains("arm-teaching.pid"));
+        assert!(!command.contains("moveit_manage start"));
+        let status = parse_arm_mode_status("ARM|teaching|0|0|0|0|0|0|0|0|1|456").unwrap();
+        assert!(status.teaching_running);
+        assert_eq!(status.teaching_pid, 456);
+        assert!(!status.teleop_running && !status.trajectory_running);
+        let old = parse_arm_mode_status("ARM|idle|0|0|0|0|0|0").unwrap();
+        assert!(!old.teaching_running);
     }
 
     #[test]
@@ -2145,7 +2192,7 @@ __BYID_SEP__\n\
 
     #[test]
     fn arm_commands_are_valid_shell_and_can_be_exported_for_smoke_testing() {
-        for mode in ["teleop", "trajectory", "vla", "stop", "disable-stop", "status", "realsense", "moveit"] {
+        for mode in ["teleop", "trajectory", "vla", "teaching", "stop", "disable-stop", "status", "realsense", "moveit"] {
             let command = arm_mode_remote_command(&profile(""), mode).unwrap();
             assert!(std::process::Command::new("bash").args(["-n", "-c", &command])
                 .status().unwrap().success());
