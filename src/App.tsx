@@ -833,6 +833,7 @@ export default function App() {
           rosDistro: message.ros_distro,
           rgbdSubscriptionIdSupported: message.rgbd_subscription_id_supported,
           objectDetectionSupported: message.object_detection_supported,
+          visualPickSupported: message.visual_pick_supported,
           controllersInfoSupported: message.controllers_info_supported,
         });
       }
@@ -2045,6 +2046,7 @@ export default function App() {
               onSavePose={openSavePose}
               savePoseDisabledReason={captureError}
               savePoseError={poseSaveError}
+              visualPickSupported={bridgeHello?.visualPickSupported === true}
               objectsEnabled={objectsEnabled && objectsSupported}
               objectsSupported={objectsSupported}
               onObjectsEnabledChange={setObjectsEnabled}

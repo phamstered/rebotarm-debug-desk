@@ -1,10 +1,11 @@
+import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry, CanvasTexture, SRGBColorSpace } from "three";
 import type { ObjectBox, ObjectDetectionFrame } from "./types";
 import { objectBoxLines, objectLabel } from "./objectDetectionLogic";
 import { urdfToScenePoint } from "./kinematicsLogic";
 const ignoreRaycast = () => {};
-function ObjectWireBox({ box, labels, dimensions }: { box: ObjectBox; labels: boolean; dimensions: boolean }) {
+function ObjectWireBox({ box, labels, dimensions, selected, onSelect }: { box: ObjectBox; labels: boolean; dimensions: boolean; selected: boolean; onSelect?(id:number):void }) {
   const geometry = useMemo(() => new BufferGeometry().setAttribute("position", new BufferAttribute(objectBoxLines(box), 3)), [box]);
   const text = objectLabel(box, dimensions);
   const texture = useMemo(() => {
@@ -19,17 +20,21 @@ function ObjectWireBox({ box, labels, dimensions }: { box: ObjectBox; labels: bo
   }, [text, labels]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   useEffect(() => () => texture?.dispose(), [texture]);
+  const pick = (e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); if(e.delta <= 3) onSelect?.(box.id); };
   return <group>
-    <lineSegments geometry={geometry} raycast={ignoreRaycast}><lineBasicMaterial color="#70efbc" /></lineSegments>
+    {onSelect && <mesh position={[box.center[0],box.center[2],-box.center[1]]} onClick={pick}>
+      <boxGeometry args={[box.size[0],box.size[2],box.size[1]]}/><meshBasicMaterial transparent opacity={selected?.13:0} color="#ffc66d" depthWrite={false}/>
+    </mesh>}
+    <lineSegments geometry={geometry} raycast={ignoreRaycast}><lineBasicMaterial color={selected?"#ffc66d":"#70efbc"} /></lineSegments>
     {texture && <sprite position={urdfToScenePoint([box.center[0], box.center[1], box.center[2] + box.size[2] / 2 + .025])}
       scale={[.025 * texture.image.width / texture.image.height, .025, 1]} raycast={ignoreRaycast}>
       <spriteMaterial map={texture} transparent depthWrite={false} />
     </sprite>}
   </group>;
 }
-export function ObjectDetectionLayer({ frame, visible, labels, dimensions }: {
-  frame?: ObjectDetectionFrame; visible: boolean; labels: boolean; dimensions: boolean;
+export function ObjectDetectionLayer({ frame, visible, labels, dimensions, selectedId, onSelect }: {
+  frame?: ObjectDetectionFrame; visible: boolean; labels: boolean; dimensions: boolean; selectedId?:number; onSelect?(id:number):void;
 }) {
   if (!visible || frame?.status !== "ok") return null;
-  return <group>{frame.items.map(box => <ObjectWireBox key={box.id} box={box} labels={labels} dimensions={dimensions} />)}</group>;
+  return <group>{frame.items.map(box => <ObjectWireBox key={box.id} box={box} labels={labels} dimensions={dimensions} selected={box.id===selectedId} onSelect={onSelect} />)}</group>;
 }

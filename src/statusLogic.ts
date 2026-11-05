@@ -32,6 +32,7 @@ export type BridgeHelloInfo = {
   controllersInfoSupported?: boolean;
   rgbdSubscriptionIdSupported?: boolean;
   objectDetectionSupported?: boolean;
+  visualPickSupported?: boolean;
   bridgeVersion?: string;
   bridgeBuildId?: string;
   rosDistro?: string;

@@ -1,3 +1,6 @@
+export type VisualPickPose = { position: [number,number,number]; orientation: [number,number,number,number] };
+export type VisualPickPreview = { subscription_id: string; object_id: number; frame_seq: number; calibrated: boolean; execution_ready: boolean; grasp: VisualPickPose; pregrasp: VisualPickPose; opening_m: number; message: string };
+export type VisualPickState = { command_id: string; phase: string; message: string; busy: boolean };
 export type ObjectBox = { id: number; center: [number, number, number]; size: [number, number, number]; point_count: number };
 export type ObjectDetectionFrame = { status: "ok" | "empty" | "no_table" | "error"; message: string; frame_seq: number; items: ObjectBox[] };
 
@@ -202,6 +205,16 @@ export type BridgeEnvelope = {
   frame_age_ms?: number;
   rgbd_subscription_id_supported?: boolean;
   object_detection_supported?: boolean;
+  visual_pick_supported?: boolean;
+  grasp?: VisualPickPose;
+  pregrasp?: VisualPickPose;
+  object_id?: number;
+  frame_seq?: number;
+  calibrated?: boolean;
+  execution_ready?: boolean;
+  opening_m?: number;
+  pick_phase?: string;
+  preview_frame_seq?: number;
   objects?: ObjectDetectionFrame;
   supported?: boolean;
   state?: ClockSyncInfo["state"];

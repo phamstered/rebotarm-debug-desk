@@ -104,6 +104,13 @@ def main(binary):
                 current=sorted(b['id'] for b in boxes)
                 if ids is not None: assert ids==current,(ids,current)
                 ids=current
+            obj=frames[-1]['objects']['items'][0]['id']
+            preview=ws.request('visual_pick_preview',subscription_id='objects-a',object_id=obj)
+            assert preview['op']=='visual_pick_preview' and preview['calibrated'] is False and preview['execution_ready'] is False,preview
+            rejected=ws.request('visual_pick_start',subscription_id='objects-a',object_id=obj,command_id='no-real-motion',confirmation='ARMED')
+            assert rejected['op']=='error' and '标定' in rejected.get('message',''),rejected
+            assert ws.request('visual_pick_status')['busy'] is False
+            assert ws.request('visual_pick_preview',subscription_id='old-token',object_id=obj)['op']=='error'
             seq=[m['objects']['frame_seq'] for m in frames];assert seq==sorted(set(seq))
             print('Detection frames in 3s:',len(frames),'source age max ms:',max(m['frame_age_ms'] for m in frames))
             robot.with_objects=False
