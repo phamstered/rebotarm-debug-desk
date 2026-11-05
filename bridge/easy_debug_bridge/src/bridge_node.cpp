@@ -1694,7 +1694,6 @@ class BridgeNode : public rclcpp::Node {
     const auto steady = std::chrono::steady_clock::now();
     const auto last_good = session->last_success.time_since_epoch().count() ? session->last_success : session->started;
     if (!immediate && steady - last_good < std::chrono::milliseconds(500)) return;
-    session->object_tracker.clear();
     if (!session->last_error.empty() && immediate == session->last_error_immediate &&
         (error == session->last_error || steady - session->last_error_at < std::chrono::seconds(1))) return;
     std::ostringstream out;
@@ -1725,6 +1724,7 @@ class BridgeNode : public rclcpp::Node {
     if (!ws) return;
     const auto sync = clock_snapshot();
     if (!sync.healthy()) {
+      session->object_tracker.clear();
       session->pending.reset();
       send_rgbd_frame_failure(ws, session, "", sync.message, true, true);
       return;
@@ -1846,6 +1846,10 @@ class BridgeNode : public rclcpp::Node {
         const auto points = easy_debug_bridge::object_points(*depth_ds, k, {t.x,t.y,t.z}, {q.x,q.y,q.z,q.w}, session->object_config);
         result = easy_debug_bridge::detect_objects(points, session->object_config);
         session->object_tracker.assign(result.items, oldest_stamp);
+        if (result.status == "ok" && result.items.empty()) {
+          result.status = "empty";
+          result.message = "候选物体确认中（连续 3 帧）";
+        }
       } catch (const std::exception &error) {
         session->object_tracker.clear();
         result = {"error", error.what(), {}};

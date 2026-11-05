@@ -73,42 +73,126 @@ inline std::vector<ObjectPoint> object_points(const DownsampledImage &depth, con
   return points;
 }
 class ObjectTracker {
-  std::vector<ObjectBox> previous_;
+  struct Track {
+    ObjectBox reference;
+    int64_t seen;
+    unsigned hits = 1;
+  };
+  std::vector<Track> tracks_;
   uint64_t next_ = 1;
   int64_t stamp_ = 0;
+  static constexpr int64_t retention_ns = 1500000000LL;
+  static constexpr int64_t tentative_ns = 350000000LL;
+  static constexpr size_t max_tracks = 60;
+
+  static double cost(const ObjectBox &a, const ObjectBox &b) {
+    double distance = 0, intersection = 1, volume_a = 1, volume_b = 1, size_delta = 0;
+    for (int axis = 0; axis < 3; ++axis) {
+      distance += std::pow(a.center[axis] - b.center[axis], 2);
+      if (std::abs(a.size[axis] - b.size[axis]) > std::max(.08, b.size[axis])) return 1e6;
+      intersection *=
+          std::max(0., std::min(a.center[axis] + a.size[axis] / 2, b.center[axis] + b.size[axis] / 2) -
+                           std::max(a.center[axis] - a.size[axis] / 2, b.center[axis] - b.size[axis] / 2));
+      volume_a *= a.size[axis];
+      volume_b *= b.size[axis];
+      size_delta += std::abs(a.size[axis] - b.size[axis]) / std::max(.02, b.size[axis]);
+    }
+    if (distance > .1 * .1) return 1e6;
+    const double iou = intersection / std::max(1e-12, volume_a + volume_b - intersection);
+    return std::sqrt(distance) / .1 + .5 * (1 - iou) + .05 * size_delta;
+  }
+  // Rectangular Hungarian assignment. Dummy columns allow every observation to
+  // remain unmatched; association is global rather than detection-order greedy.
+  static std::vector<size_t> associate(const std::vector<std::vector<double>> &costs) {
+    const size_t n = costs.size(), m = n ? costs[0].size() : 0;
+    std::vector<double> u(n + 1), v(m + 1);
+    std::vector<size_t> p(m + 1), way(m + 1), result(n, m);
+    for (size_t i = 1; i <= n; ++i) {
+      p[0] = i;
+      size_t j0 = 0;
+      std::vector<double> best(m + 1, 1e9);
+      std::vector<bool> used(m + 1);
+      do {
+        used[j0] = true;
+        const size_t i0 = p[j0];
+        double delta = 1e9;
+        size_t j1 = 0;
+        for (size_t j = 1; j <= m; ++j)
+          if (!used[j]) {
+            const double current = costs[i0 - 1][j - 1] - u[i0] - v[j];
+            if (current < best[j]) {
+              best[j] = current;
+              way[j] = j0;
+            }
+            if (best[j] < delta) {
+              delta = best[j];
+              j1 = j;
+            }
+          }
+        for (size_t j = 0; j <= m; ++j) {
+          if (used[j]) {
+            u[p[j]] += delta;
+            v[j] -= delta;
+          } else
+            best[j] -= delta;
+        }
+        j0 = j1;
+      } while (p[j0]);
+      do {
+        const size_t j1 = way[j0];
+        p[j0] = p[j1];
+        j0 = j1;
+      } while (j0);
+    }
+    for (size_t j = 1; j <= m; ++j)
+      if (p[j]) result[p[j] - 1] = j - 1;
+    return result;
+  }
 
  public:
   void clear() {
-    previous_.clear();
+    tracks_.clear();
     stamp_ = 0;
   }
   void assign(std::vector<ObjectBox> &items, int64_t stamp) {
-    if (stamp <= stamp_ || stamp - stamp_ > 500000000LL) previous_.clear();
-    std::vector<bool> used(previous_.size());
-    for (auto &box : items) {
-      double best = .06 * .06;
-      size_t match = previous_.size();
-      for (size_t i = 0; i < previous_.size(); ++i) {
-        if (used[i]) continue;
-        double distance = 0;
-        bool size_ok = true;
-        for (int a = 0; a < 3; ++a) {
-          distance += std::pow(box.center[a] - previous_[i].center[a], 2);
-          size_ok &= std::abs(box.size[a] - previous_[i].size[a]) < .05;
-        }
-        if (size_ok && distance < best) {
-          best = distance;
-          match = i;
-        }
-      }
-      if (match < previous_.size()) {
-        box.id = previous_[match].id;
-        used[match] = true;
-      } else
-        box.id = next_++;
-    }
-    previous_ = items;
+    if (stamp <= stamp_) clear();
     stamp_ = stamp;
+    tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
+                                 [&](const Track &t) {
+                                   return stamp - t.seen > (t.reference.id ? retention_ns : tentative_ns);
+                                 }),
+                  tracks_.end());
+    // Detection and history bounds keep association and memory costs predictable.
+    if (items.size() > 20) items.resize(20);
+    const size_t existing = tracks_.size();
+    std::vector<std::vector<double>> costs(items.size(), std::vector<double>(existing + items.size(), 2.));
+    for (size_t i = 0; i < items.size(); ++i)
+      for (size_t j = 0; j < existing; ++j) costs[i][j] = cost(items[i], tracks_[j].reference);
+    const auto matches = associate(costs);
+    std::vector<ObjectBox> visible;
+    std::vector<bool> observed(existing);
+    for (size_t i = 0; i < items.size(); ++i) {
+      auto box = items[i];
+      box.id = 0;
+      if (matches[i] < existing && costs[i][matches[i]] < 2.) {
+        auto &track = tracks_[matches[i]];
+        observed[matches[i]] = true;
+        track.seen = stamp;
+        if (++track.hits >= 3 && !track.reference.id) track.reference.id = next_++;
+        box.id = track.reference.id;
+        // Smooth association reference only; send the current measured box.
+        for (int axis = 0; axis < 3; ++axis) {
+          track.reference.center[axis] = .6 * track.reference.center[axis] + .4 * box.center[axis];
+          track.reference.size[axis] = .6 * track.reference.size[axis] + .4 * box.size[axis];
+        }
+        if (box.id) visible.push_back(box);
+      } else if (tracks_.size() < max_tracks) {
+        tracks_.push_back({box, stamp, 1});
+      }
+    }
+    for (size_t j = 0; j < existing; ++j)
+      if (!observed[j] && !tracks_[j].reference.id) tracks_[j].hits = 0;
+    items = std::move(visible);
   }
 };
 ObjectResult detect_objects(const std::vector<ObjectPoint> &points, const ObjectConfig &config);

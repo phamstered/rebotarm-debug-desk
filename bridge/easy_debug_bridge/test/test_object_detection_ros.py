@@ -107,6 +107,11 @@ def main(binary):
             seq=[m['objects']['frame_seq'] for m in frames];assert seq==sorted(set(seq))
             print('Detection frames in 3s:',len(frames),'source age max ms:',max(m['frame_age_ms'] for m in frames))
             robot.with_objects=False
+            brief=capture('empty',.35);assert brief and all(not m['objects']['items'] for m in brief)
+            robot.with_objects=True
+            recovered=capture('ok',.5);assert recovered
+            assert all(sorted(b['id'] for b in m['objects']['items'])==ids for m in recovered)
+            robot.with_objects=False
             empty=capture('empty');assert empty and all(not m['objects']['items'] for m in empty)
             ws.tf_errors.clear();robot.images_enabled=False
             capture('ok',.8)

@@ -28,20 +28,85 @@ int main() {
     rejected = true;
   }
   assert(rejected);
+  const std::vector<ObjectBox> scene{{0, {0, 0, 0}, {.05, .05, .05}, 50},
+                                     {0, {.2, 0, 0}, {.05, .05, .05}, 50}};
   ObjectTracker tracker;
-  std::vector<ObjectBox> boxes{{0, {0, 0, 0}, {.05, .05, .05}, 50}, {0, {.2, 0, 0}, {.05, .05, .05}, 50}};
-  tracker.assign(boxes, 1000000000);
-  auto first = boxes[0].id, second = boxes[1].id;
-  assert(first != second);
-  std::reverse(boxes.begin(), boxes.end());
-  boxes[1].center[0] = .01;
-  tracker.assign(boxes, 1100000000);
+  int64_t stamp = 1000000000;
+  auto frame = [&](std::vector<ObjectBox> input, int64_t advance = 100000000) {
+    stamp += advance;
+    tracker.assign(input, stamp);
+    return input;
+  };
+  assert(frame(scene).empty());
+  assert(frame(scene).empty());
+  auto boxes = frame(scene);
+  assert(boxes.size() == 2);
+  const auto first = boxes[0].id, second = boxes[1].id;
+  auto reversed = scene;
+  std::reverse(reversed.begin(), reversed.end());
+  reversed[1].center[0] = .015;
+  boxes = frame(reversed);
   assert(boxes[0].id == second && boxes[1].id == first);
-  tracker.assign(boxes, 1800000000);
-  assert(boxes[1].id != first);
-  first = boxes[1].id;
+  assert(std::abs(boxes[1].center[0] - .015) < 1e-12);  // Output remains measured, not smoothed.
+  assert(frame({}).empty());
+  assert(frame({}).empty());
+  boxes = frame(scene, 600000000);
+  assert(boxes[0].id == first && boxes[1].id == second);
+  assert(frame(scene, 1600000000).empty());
+  assert(frame(scene).empty());
+  boxes = frame(scene);
+  assert(boxes[0].id != first);
   tracker.clear();
-  tracker.assign(boxes, 1900000000);
-  assert(boxes[1].id != first);
+  assert(frame(scene).empty());
+  // One-frame flicker never allocates a public ID; confirmation requires consecutive hits.
+  ObjectTracker noise;
+  std::vector<ObjectBox> one{scene[0]}, none;
+  for (int i = 0; i < 10; ++i) {
+    auto input = one;
+    noise.assign(input, stamp += 100000000);
+    assert(input.empty());
+    noise.assign(none, stamp += 100000000);
+  }
+  for (int i = 0; i < 3; ++i) {
+    boxes = one;
+    noise.assign(boxes, stamp += 100000000);
+  }
+  assert(boxes.size() == 1 && boxes[0].id == 1);
+  // A backwards timestamp starts a fresh track and cannot resurrect the old ID.
+  auto old = boxes[0].id;
+  boxes = one;
+  noise.assign(boxes, 1);
+  assert(boxes.empty());
+  boxes = one;
+  noise.assign(boxes, 2);
+  boxes = one;
+  noise.assign(boxes, 3);
+  assert(boxes[0].id != old);
+  // Global association preserves both IDs where greedy nearest-first would steal a match.
+  ObjectTracker global;
+  auto pair = scene;
+  pair[1].center[0] = .09;
+  for (int i = 0; i < 3; ++i) {
+    boxes = pair;
+    global.assign(boxes, 1000000000 + i * 100000000);
+  }
+  auto id0 = boxes[0].id, id1 = boxes[1].id;
+  auto ambiguous = pair;
+  ambiguous[0].center[0] = .04;
+  ambiguous[1].center[0] = -.07;
+  boxes = ambiguous;
+  global.assign(boxes, 1400000000);
+  assert(boxes.size() == 2 && boxes[0].id == id1 && boxes[1].id == id0);
+  // Churn is bounded and eventually expires; new stationary observations can recover.
+  for (int i = 0; i < 100; ++i) {
+    boxes = scene;
+    boxes[0].center[0] = i % 2 ? 1. : -1.;
+    global.assign(boxes, 2000000000LL + i * 100000000);
+  }
+  for (int i = 0; i < 3; ++i) {
+    boxes = scene;
+    global.assign(boxes, 20000000000LL + i * 100000000);
+  }
+  assert(boxes.size() == 2);
   std::cout << "Object projection/tracking tests passed\n";
 }
