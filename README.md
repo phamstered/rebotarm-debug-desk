@@ -12,6 +12,8 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 
 > 本文档以 **Rebotarm Debug Desk** 作为用户面向产品名；npm 包名为 `rebotarm-debug-desk`；`.app` 显示名仍以代码侧 **Robot Console** 为准（文档不静默改 Tauri `productName`）。
 
+Robot View 支持可选的桌面物体几何检测与同帧三维框显示。Jetson 安装 `libpcl-dev` 后重新构建 Bridge 即可启用；使用限制和 ROI 配置见 [基础功能](docs/basic-features.md#桌面物体三维框几何检测)。
+
 ## 相关仓库 / 职责
 
 | 仓库 | 职责 | 文档 |

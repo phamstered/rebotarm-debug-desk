@@ -21,11 +21,12 @@ export function useRgbdStream(
   profile: ConnectionProfile,
   strictToken: boolean,
   connectionKey: string,
+  detectObjects = false,
 ) {
   const [state, setState] = useState(() => createRgbdSessionState());
   const key = JSON.stringify([connectionKey, profile.rgbdRgbTopic, profile.rgbdDepthTopic,
     profile.rgbdCameraInfoTopic, profile.rgbdTargetFrame, profile.rgbdMaxWidth,
-    profile.rgbdMaxHeight, profile.rgbdMaxFps]);
+    profile.rgbdMaxHeight, profile.rgbdMaxFps, detectObjects]);
   useEffect(() => {
     setState(resetRgbdSession);
     if (!active || !connected) return;
@@ -42,7 +43,9 @@ export function useRgbdStream(
       setState((current) => valid ? { ...current, cloud: null, stale: true, tfOk: false, tfError: message } : current);
     };
     const stop = bridge.onMessage((message: BridgeEnvelope) => {
-      if (!valid || message.op !== "rgbd_frame") return;
+      if (!valid) return;
+      if (message.op === "error" && message.request_id === token) { fail(String(message.message || message.error || "RGBD 订阅失败")); return; }
+      if (message.op !== "rgbd_frame") return;
       if ((strictToken && message.subscription_id !== token) ||
           (message.subscription_id !== undefined && message.subscription_id !== token)) return;
       // Legacy Bridge frames have no token. Respect interest and reject different
@@ -53,6 +56,7 @@ export function useRgbdStream(
       }
       try {
         const meta = parseRgbdFrameMeta(message);
+        if (detectObjects && meta.objects === undefined) meta.objects = null;
         if (!meta.tf_ok) { fail(meta.error || meta.tf_error || "TF 查询失败"); return; }
         const at = performance.now();
         const remaining = RGBD_FRAME_TTL_MS - (meta.frame_age_ms ?? 0);
@@ -75,7 +79,8 @@ export function useRgbdStream(
         });
       } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
     });
-    bridge.send({ op: "subscribe_rgbd", subscription_id: token,
+    bridge.send({ op: "subscribe_rgbd", subscription_id: token, request_id: token,
+      ...(detectObjects ? { detect_objects: true } : {}),
       rgb_topic: profile.rgbdRgbTopic, depth_topic: profile.rgbdDepthTopic,
       camera_info_topic: profile.rgbdCameraInfoTopic, target_frame: profile.rgbdTargetFrame,
       max_width: profile.rgbdMaxWidth, max_height: profile.rgbdMaxHeight, max_fps: profile.rgbdMaxFps });

@@ -495,3 +495,15 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 缩略图最大边为 120 像素，仅用于结果预览；源图像保留在 Jetson，原有高频 Image 二进制路径不变。失败/取消不伪造成功结果，也不推进下一段。心跳、暂停、取消及所有既有门禁继续作用于采集阶段。
 
 桌面动作组文件仍为 `motion-groups.v1.json`，兼容扩展 `tracks?:[{id,name,kind:"arm"|"camera",deviceId}]`、`steps[].trackId?`、`actions?:[{id,type:"camera_capture",name,trackId,afterStepId,topic,timeout}]`。省略轨道时使用 `{id:"arm",name:"机械臂",kind:"arm",deviceId:"current"}`。轨道及依赖在 TypeScript/Rust 两侧验证，序列化请求按依赖 Pose 转换为 `captures`；桌面另可保存 `syncPoints?:[{id,name,afterStepIds}]`；每个同步点需引用至少两个不同机械臂轨道的 Pose，ID 与 Pose/Action/同步点互不重复。时间轴位置表示参与 Pose 的名义完成时刻，不承诺真实同步。轨道与同步点均不作为多臂执行指令发送。当前多臂/非当前设备执行在客户端拒绝，Bridge 仍只有单机械臂调度能力。
+
+### 同帧桌面物体检测
+
+`hello.object_detection_supported` 表示当前 Bridge 是否编译了 PCL 检测组件。`subscribe_rgbd` 新增可选布尔字段 `detect_objects`（默认 false）。true 要求 `target_frame: "base_link"` 且组件可用；类型错误、配置错误或不支持时返回关联 `request_id` 的 `error`，不替换已有订阅。检测开启时实际 `max_fps` 不超过 10。老客户端仍收到原有 RGBD；新客户端在老 Bridge 上禁用检测。
+
+开启检测后，每个有效 `RCD1` 帧元数据增加 `objects`，与该帧的深度、内参、采集时刻 TF 和订阅令牌一致，不另发异步检测包：
+
+```json
+{"objects":{"status":"ok","message":"可见点云包围盒","frame_seq":1,"items":[{"id":1,"center":[0.2,0.1,0.05],"size":[0.05,0.06,0.04],"point_count":120}]}}
+```
+
+`center/size` 为 `base_link` 轴对齐包围盒中心/完整边长，单位米；`point_count` 为该体素聚类点数。`frame_seq` 在订阅内递增；ID 仅在当前订阅和连续观测中短暂有效，不跨重连保证。`status` 为 `ok` / `empty` / `no_table` / `error`，后三种 `items` 必须为空。最多 20 个框。检测失败仍可携带有效点云，不能保留上一帧框。桌面不可信时不聚类整个场景。源帧龄在检测完成后计算，超过原有 500 ms 源期限不发送。客户端对有限坐标、尺寸范围、重复 ID、状态和数量进行校验，非法对象数据显示错误并清空框。RGBD 整体失败继续使用原有 `tf_ok:false` 清除整个帧。

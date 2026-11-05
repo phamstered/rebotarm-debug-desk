@@ -185,3 +185,9 @@ A shared pointer/keyboard menu uses current render callbacks, clamps to the view
 ## 拖动示教控制路径
 
 拖动示教通过 Tauri 固定 SSH 操作启动 ROS 栈的 `--mode=teaching`。控制栈提供六轴重力补偿/阻尼与零输出手动夹爪，不启动夹爪 JTC，也不接受示教夹爪运动请求。桌面启动前检查 `check-manual` 能力，启动后通过只读硬件标记、控制器接口和反馈核验手动配置。Mac 不加入 DDS；Status 只显示说明及实测姿态保存。远端模式操作仍使用 `arm-mode.lock`，停止由硬件持续发送 DISABLE 并确认反馈后才清理进程。示教退出不回零，需现场支撑确认。
+
+## Tabletop object observation
+
+Optional PCL detection runs in each existing RGBD processing worker, using that preview's depth pixels, scaled intrinsics and capture-time TF. It does not run in ROS receive callbacks and does not create a second cloud stream. Projection samples at most 30,000 points; ROI, voxel filtering, bounded RANSAC and Euclidean clusters produce at most 20 base-frame AABBs. Session-local short-term IDs reset on stream/time failures. Metadata travels inside the same RCD1 envelope and shares its source-age deadline, subscription token, desktop RAF coalescing and expiry. Rendering is noninteractive Three.js line segments and sprites, with explicit geometry/texture disposal; it cannot initiate motion.
+
+CMake discovers optional PCL components; `-DEASY_DEBUG_OBJECT_DETECTION=OFF` or missing PCL retains RGBD and advertises detection unavailable. Ubuntu detection builds use `libpcl-dev` (rosdep build key `libpcl-all-dev`). Configuration is loaded from a server-controlled ROS parameter path at detection subscription time; clients cannot request arbitrary file paths. Invalid configuration rejects the subscription before replacing the current session. PCL-specific algorithm tests and synthetic RGBD/TF transport tests run on ROS hosts; portable projection/tracking and desktop validation/lifecycle tests run in `npm test`.
