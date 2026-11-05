@@ -59,6 +59,7 @@ export type RgbdFrameMeta = {
 };
 
 export type ColoredPointCloud = {
+  subscriptionId?: string;
   objects?: ObjectDetectionFrame;
   /** Positions in URDF / base_link meters (Z-up). */
   positions: Float32Array;
@@ -329,6 +330,7 @@ export function buildColoredPointCloud(
     sourceFrame: meta.source_frame || meta.rgb.header?.frame_id || "",
     targetFrame: meta.target_frame || "base_link",
     stampDiffNs: meta.stamp_diff_ns ?? 0,
+    subscriptionId: meta.subscription_id,
     objects: meta.objects === undefined ? undefined : parseObjectDetection(meta.objects),
   };
 }

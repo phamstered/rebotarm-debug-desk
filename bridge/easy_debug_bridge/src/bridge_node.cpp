@@ -25,6 +25,7 @@
 #include <tf2/exceptions.h>
 #include "easy_debug_bridge/rgbd_core.hpp"
 #include "easy_debug_bridge/object_detection.hpp"
+#include "easy_debug_bridge/visual_pick.hpp"
 #include "easy_debug_bridge/rgbd_qos.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
@@ -367,6 +368,7 @@ class BridgeNode : public rclcpp::Node {
   BridgeNode() : Node("easy_debug_bridge") {
     port_ = declare_parameter<int>("port", 8765);
     declare_parameter<std::string>("object_detection_config", ament_index_cpp::get_package_share_directory("easy_debug_bridge") + "/config/object_detection.json");
+    declare_parameter<std::string>("visual_pick_config", ament_index_cpp::get_package_share_directory("easy_debug_bridge") + "/config/visual_pick.json");
     command_topic_ = declare_parameter<std::string>("command_topic", "/stm32/joint_commands");
     status_topic_ = declare_parameter<std::string>("status_topic", "/stm32/status");
     joint_state_topic_ = declare_parameter<std::string>("joint_state_topic", "/stm32/joint_states");
@@ -432,6 +434,18 @@ class BridgeNode : public rclcpp::Node {
         }, safety_options);
     controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_);
+    visual_pick_ = std::make_unique<easy_debug_bridge::VisualPick>(get_parameter("visual_pick_config").as_string(),
+      [this](uint64_t owner, const auto &r, auto send){position_motion_->request(owner,r,std::move(send));},
+      [this](uint64_t owner, const std::string &token, uint64_t id){return pick_observation(owner,token,id);},
+      [this](const std::string &link){
+        const auto sync=clock_snapshot(); if(!sync.healthy())throw std::runtime_error("时钟未同步");
+        std::shared_ptr<TfContext> context; {std::lock_guard<std::mutex> lock(tf_mutex_);context=tf_context_;}
+        const auto t=context->buffer->lookupTransform("base_link",link,tf2::TimePointZero);
+        const int64_t stamp=int64_t(t.header.stamp.sec)*1000000000LL+t.header.stamp.nanosec;
+        if(now().nanoseconds()-stamp< -50000000LL||now().nanoseconds()-stamp>=500000000LL)throw std::runtime_error("TCP TF 已过期");
+        easy_debug_bridge::TcpPose p;p.position={t.transform.translation.x,t.transform.translation.y,t.transform.translation.z};
+        p.orientation={t.transform.rotation.x,t.transform.rotation.y,t.transform.rotation.z,t.transform.rotation.w};return easy_debug_bridge::validate_tcp_pose(p);
+      });
     rgbd_receiver_ = std::thread([this] {
       while (rclcpp::ok() && !rgbd_receiver_stop_.load()) {
         rgbd_receiver_executor_->spin_some(std::chrono::milliseconds(5));
@@ -451,6 +465,7 @@ class BridgeNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Easy Debug Bridge configured on 127.0.0.1:%d", port_);
   }
   ~BridgeNode() override {
+    visual_pick_.reset();
     std::vector<uint64_t> clients;
     { std::lock_guard<std::mutex> lock(rgbd_mutex_); for (const auto &item : rgbd_sessions_) clients.push_back(item.first); }
     for (const auto client : clients) clear_rgbd_session(client);
@@ -494,6 +509,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void remove_session(uint64_t client) {
+    if(visual_pick_)visual_pick_->cancel(client);
     controller_registry_->disconnected(client);
     position_motion_->disconnected(client);
     {
@@ -544,7 +560,7 @@ class BridgeNode : public rclcpp::Node {
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
-                     ",\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
+                     ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
         const std::weak_ptr<WebSocketSession> weak = session;
         if (const auto field = request.get_child_optional("refresh")) {
@@ -556,8 +572,14 @@ class BridgeNode : public rclcpp::Node {
         });
       } else if (op == "clock_sync_info") {
         send_clock_sync_info(session, request_id);
+      } else if (op == "visual_pick_preview" || op == "visual_pick_start" || op == "visual_pick_status" || op == "visual_pick_cancel") {
+        const std::weak_ptr<WebSocketSession> weak=session;
+        visual_pick_->request(session->id(),request,[weak](const std::string &reply){if(auto target=weak.lock())target->send(reply);});
       } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel" ||
                  op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume") {
+        if(visual_pick_->busy() && (op=="position_move"||op=="position_group_start"||op=="position_group_resume")) {
+          session->send(error_message(request_id,"视觉抓取持有运动锁，请先取消"));return;
+        }
         if (op == "position_group_start" && payload.size() > 256 * 1024) {
           session->send("{\"op\":\"position_group_start_ack\",\"request_id\":" + json_quote(request_id) +
               ",\"command_id\":" + json_quote(request.get<std::string>("command_id", "")) + ",\"accepted\":false,\"message\":\"动作组请求超过 256 KiB\"}");
@@ -996,8 +1018,8 @@ class BridgeNode : public rclcpp::Node {
     const double kd = request.get<double>("kd", 0.0);
     const double effort = request.get<double>("effort", 0.0);
     const bool disable = mode_value == microros_stm32h723_bridge::msg::JointCommand::MODE_DISABLE;
-    if (position_motion_->busy() && !disable) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
-    if (disable) position_motion_->disconnected(0);
+    if ((position_motion_->busy() || visual_pick_->busy()) && !disable) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
+    if (disable) { visual_pick_->cancel(); position_motion_->disconnected(0); }
 
     easy_debug_bridge::CommandFields fields;
     fields.mode = mode_value;
@@ -1113,7 +1135,7 @@ class BridgeNode : public rclcpp::Node {
   void publish_trajectory_command(const std::shared_ptr<WebSocketSession> &session,
                                   const boost::property_tree::ptree &request,
                                   const std::string &request_id) {
-    if (position_motion_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
+    if (position_motion_->busy() || visual_pick_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
     easy_debug_bridge::TrajectoryCommand command;
     command.topic = request.get<std::string>("topic", "");
     if (const auto names = request.get_child_optional("joint_names")) {
@@ -1281,7 +1303,7 @@ class BridgeNode : public rclcpp::Node {
                             const boost::property_tree::ptree &request,
                             const std::string &request_id) {
     const auto fields = parse_gravity_id_goal(request);
-    if (position_motion_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
+    if (position_motion_->busy() || visual_pick_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
     const auto validation = easy_debug_bridge::validate_gravity_id_goal(fields);
     if (validation != easy_debug_bridge::GravityIdGoalValidation::Ok) {
       session->send(error_message(
@@ -1432,6 +1454,9 @@ class BridgeNode : public rclcpp::Node {
     easy_debug_bridge::ObjectConfig object_config;
     easy_debug_bridge::ObjectTracker object_tracker;
     uint64_t object_frame_seq = 0;
+    std::vector<easy_debug_bridge::ObjectBox> pick_boxes;
+    int64_t pick_stamp=0;
+    uint64_t pick_generation=0, pick_sequence=0;
     int64_t stamp_tolerance_ns = 50000000;
     // Only live/retired sessions own the source. Final ownership is released
     // by the RX thread outside spin_some after this session's worker is joined.
@@ -1838,6 +1863,7 @@ class BridgeNode : public rclcpp::Node {
     payload.insert(payload.end(), depth_ds->data.begin(), depth_ds->data.end());
 
     std::string object_metadata;
+    std::vector<easy_debug_bridge::ObjectBox> pick_boxes;
     if (session->detect_objects) {
       easy_debug_bridge::ObjectResult result;
       try {
@@ -1854,6 +1880,7 @@ class BridgeNode : public rclcpp::Node {
         session->object_tracker.clear();
         result = {"error", error.what(), {}};
       }
+      pick_boxes=result.items;
       object_metadata = ",\"objects\":" + easy_debug_bridge::object_result_json(result, ++session->object_frame_seq);
     }
     std::ostringstream meta;
@@ -1892,6 +1919,9 @@ class BridgeNode : public rclcpp::Node {
     if (!send_sync.healthy() || send_sync.generation != sync.generation) return;
     if (!ws->send_binary(easy_debug_bridge::binary_rgbd_frame(meta.str(), payload),
                         std::chrono::steady_clock::now() + std::chrono::nanoseconds(left_ns))) return;
+    {std::lock_guard<std::mutex> lock(session->mutex);
+      session->pick_boxes=std::move(pick_boxes);session->pick_stamp=oldest_stamp;session->pick_generation=sync.generation;session->pick_sequence=session->object_frame_seq;
+    }
     session->last_success = std::chrono::steady_clock::now();
     session->last_error.clear();
   }
@@ -1906,8 +1936,20 @@ class BridgeNode : public rclcpp::Node {
     return publisher;
   }
 
+  easy_debug_bridge::PickObservation pick_observation(uint64_t owner,const std::string &token,uint64_t id) {
+    const auto sync=clock_snapshot();if(!sync.healthy())throw std::runtime_error("视觉时钟未就绪");
+    std::shared_ptr<RgbdSession> s;
+    {std::lock_guard<std::mutex> lock(rgbd_mutex_);auto it=rgbd_sessions_.find(owner);if(it==rgbd_sessions_.end())throw std::runtime_error("没有当前 RGBD 订阅");s=it->second;}
+    std::lock_guard<std::mutex> lock(s->mutex);
+    if(!s->active||!s->detect_objects||s->subscription_id!=token||s->target_frame!="base_link")throw std::runtime_error("视觉选择已失效，请重新选择");
+    const auto age=now().nanoseconds()-s->pick_stamp;
+    if(age< -50000000LL||age>=500000000LL||s->pick_generation!=sync.generation)throw std::runtime_error("目标观测已过期");
+    for(const auto &b:s->pick_boxes)if(b.id==id)return {b,token,s->pick_sequence,s->pick_generation};
+    throw std::runtime_error("所选目标当前不可见");
+  }
   std::shared_ptr<easy_debug_bridge::ControllerRegistry> controller_registry_;
   std::unique_ptr<easy_debug_bridge::PositionMotion> position_motion_;
+  std::unique_ptr<easy_debug_bridge::VisualPick> visual_pick_;
   int port_;
   std::string command_topic_;
   std::string status_topic_;

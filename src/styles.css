@@ -1658,3 +1658,8 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .teaching-gripper output { color: #bdd0da; font-size: 12px; overflow-wrap: anywhere; }
 .teaching-gripper-actions button { border: 1px solid #2b4c58; border-radius: 7px; padding: 8px 12px; color: #dcebf7; background: #102a35; font-size: 12px; }
 .teaching-gripper-actions button:disabled { opacity: .45; cursor: not-allowed; }
+
+.visual-pick-panel { display:grid; gap:6px; padding:8px 0; border-bottom:1px solid #294254; font-size:11px; overflow-wrap:anywhere; }
+.visual-pick-panel .viewer-overlay-row { flex-wrap:wrap; }
+.visual-pick-panel label { display:flex; align-items:flex-start; gap:4px; }
+.visual-pick-panel button { white-space:normal; }

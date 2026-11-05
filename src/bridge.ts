@@ -3,6 +3,8 @@ import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDet
 export type BridgeHello = {
   controllers_info_supported?: boolean;
   rgbd_subscription_id_supported?: boolean;
+  object_detection_supported?: boolean;
+  visual_pick_supported?: boolean;
   bridge_version?: string;
   bridge_build_id?: string;
   ros_distro?: string;

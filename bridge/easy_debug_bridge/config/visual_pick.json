@@ -1,0 +1,13 @@
+{
+  "calibrated": false,
+  "scene_verified": false,
+  "tcp_link": "gripper_link",
+  "table_z_m": 0,
+  "grasp_depth_m": 0.015,
+  "pregrasp_clearance_m": 0.08,
+  "lift_m": 0.08,
+  "jaw_gap_at_zero_m": 0,
+  "opening_margin_m": 0.01,
+  "compression_m": 0.002,
+  "grasp_to_tcp": {"position": [0,0,0], "orientation": [0,0,0,1]}
+}
