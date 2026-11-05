@@ -1,3 +1,5 @@
+import { parseObjectDetection } from "./objectDetectionLogic";
+import type { ObjectDetectionFrame } from "./types";
 import { applyPoint, type Mat4, type Quat, type Vec3, urdfToScenePoint } from "./kinematicsLogic";
 
 /** RGBD binary frame magic: RCD1 */
@@ -36,6 +38,7 @@ export type RgbdPose = {
 
 export type RgbdFrameMeta = {
   op: "rgbd_frame";
+  objects?: unknown;
   subscription_id?: string;
   /** Source image age measured on Jetson immediately before sending. */
   frame_age_ms?: number;
@@ -56,6 +59,7 @@ export type RgbdFrameMeta = {
 };
 
 export type ColoredPointCloud = {
+  objects?: ObjectDetectionFrame;
   /** Positions in URDF / base_link meters (Z-up). */
   positions: Float32Array;
   /** RGB in 0–1. */
@@ -325,6 +329,7 @@ export function buildColoredPointCloud(
     sourceFrame: meta.source_frame || meta.rgb.header?.frame_id || "",
     targetFrame: meta.target_frame || "base_link",
     stampDiffNs: meta.stamp_diff_ns ?? 0,
+    objects: meta.objects === undefined ? undefined : parseObjectDetection(meta.objects),
   };
 }
 

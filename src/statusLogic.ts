@@ -31,6 +31,7 @@ export type StatusTone = "ok" | "warn" | "fail" | "idle" | "unknown";
 export type BridgeHelloInfo = {
   controllersInfoSupported?: boolean;
   rgbdSubscriptionIdSupported?: boolean;
+  objectDetectionSupported?: boolean;
   bridgeVersion?: string;
   bridgeBuildId?: string;
   rosDistro?: string;

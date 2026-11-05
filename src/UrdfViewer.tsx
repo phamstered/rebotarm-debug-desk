@@ -1,3 +1,5 @@
+import { ObjectDetectionLayer } from "./ObjectDetectionLayer";
+import { ObjectDetectionControls } from "./ObjectDetectionControls";
 import { ClockSyncStatus } from "./ClockSyncStatus";
 import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { GRIPPER_JOINT_NAME } from "./positionLogic";
@@ -168,6 +170,7 @@ export function UrdfViewer({
   rgbdNearM = 0.05,
   rgbdFarM = 3,
   rgbdStatus = null,
+  objectsEnabled = false, objectsSupported = false, onObjectsEnabledChange,
   clockSync,
   onRgbdVisibleChange,
   onRgbdPointSizeChange,
@@ -190,6 +193,7 @@ export function UrdfViewer({
   onSendTrajectory(request: TrajectorySendRequest): Promise<void>;
   clockSync?: ClockStatus;
   rgbdCloud?: ColoredPointCloud | null;
+  objectsEnabled?: boolean; objectsSupported?: boolean; onObjectsEnabledChange?(value: boolean): void;
   rgbdVisible?: boolean;
   rgbdPointSize?: number;
   rgbdColorMode?: RgbdColorMode;
@@ -210,6 +214,7 @@ export function UrdfViewer({
     }
     return { name: names, position: positions };
   }, [rawJointState, jointMotion?.gripper?.position, jointMotion?.gripper?.fresh]);
+  const [objectLabels, setObjectLabels] = useState(true), [objectDimensions, setObjectDimensions] = useState(false);
   const layout=useMotionLayout();
   const [cameraView,setCameraView]=useState<CameraView>({name:'fit',revision:0});
   const [showGrid,setShowGrid]=useState(true), [showAxes,setShowAxes]=useState(false), [revealControls,setRevealControls]=useState(0);
@@ -445,6 +450,9 @@ export function UrdfViewer({
       <ViewerHeadsUp revealControls={revealControls} error={overlayError} leading={<MotionControlPanel info={motionInfo} />} rgbd={rgbdStatus?.enabled !== false && (
           <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
             {clockSync && <ClockSyncStatus value={clockSync} />}
+            <ObjectDetectionControls supported={objectsSupported} enabled={objectsEnabled} onEnabledChange={onObjectsEnabledChange}
+              frame={rgbdCloud?.objects} labels={objectLabels} dimensions={objectDimensions}
+              onLabelsChange={setObjectLabels} onDimensionsChange={setObjectDimensions} />
             <div className="viewer-overlay-row">
               <label><input type="checkbox" checked={rgbdVisible} onChange={(e) => onRgbdVisibleChange?.(e.target.checked)} /> 点云</label>
               <select value={rgbdColorMode} onChange={(e) => onRgbdColorModeChange?.(e.target.value as RgbdColorMode)} aria-label="点云着色">
@@ -555,6 +563,7 @@ export function UrdfViewer({
         <color attach="background" args={["#08121d"]} />
         <Scene view={cameraView} showGrid={showGrid} showAxes={showAxes} robot={robot} controlsEnabled={active && !dragging} onPick={pickJoint}>
           {/* Cloud and robot share the scene root; cloud positions use the same ROS Z-up to scene Y-up rotation. */}
+          <ObjectDetectionLayer frame={rgbdCloud?.objects} visible={active && rgbdVisible && objectsEnabled} labels={objectLabels} dimensions={objectDimensions} />
           <RgbdPointCloudLayer
             cloud={rgbdCloud}
             visible={rgbdVisible}

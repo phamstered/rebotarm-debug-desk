@@ -26,7 +26,21 @@ find_package(moveit_msgs QUIET)
 find_package(control_msgs QUIET)
 find_package(controller_manager_msgs QUIET)
 
+option(EASY_DEBUG_OBJECT_DETECTION "Enable PCL tabletop object detection when available" ON)
+if(EASY_DEBUG_OBJECT_DETECTION)
+  find_package(PCL QUIET COMPONENTS common filters segmentation search sample_consensus)
+endif()
+add_library(object_detection STATIC src/object_detection.cpp)
+target_include_directories(object_detection PUBLIC include PRIVATE ${Boost_INCLUDE_DIRS})
+if(PCL_FOUND AND EASY_DEBUG_OBJECT_DETECTION)
+  target_compile_definitions(object_detection PRIVATE EASY_DEBUG_HAS_PCL=1)
+  target_include_directories(object_detection SYSTEM PRIVATE ${PCL_INCLUDE_DIRS})
+  target_link_libraries(object_detection PUBLIC ${PCL_LIBRARIES})
+else()
+  message(STATUS "PCL tabletop detection disabled; RGBD preview remains available")
+endif()
 add_executable(bridge_node src/bridge_node.cpp src/controller_registry.cpp)
+target_link_libraries(bridge_node object_detection)
 target_include_directories(bridge_node PRIVATE include)
 ament_target_dependencies(bridge_node
   ament_index_cpp rclcpp rclcpp_action std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
@@ -52,6 +66,12 @@ install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
 if(BUILD_TESTING)
   enable_testing()
+  add_executable(test_object_detection_core test/test_object_detection_core.cpp)
+  target_include_directories(test_object_detection_core PRIVATE include)
+  add_test(NAME object_detection_core COMMAND test_object_detection_core)
+  add_executable(test_object_detection test/test_object_detection.cpp)
+  target_link_libraries(test_object_detection object_detection)
+  add_test(NAME object_detection COMMAND test_object_detection ${CMAKE_CURRENT_SOURCE_DIR}/config/object_detection.json)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   set(CONTROLLERS_TEST_MODE "")
   if(NOT controller_manager_msgs_FOUND)
@@ -116,6 +136,10 @@ if(BUILD_TESTING)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_clock_sync_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(clock_sync_ros PROPERTIES
       ENVIRONMENT "ROS_DOMAIN_ID=215;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 120)
+    add_test(NAME object_detection_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_object_detection_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(object_detection_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=215;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
     add_test(NAME rgbd_stream_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_rgbd_stream_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(rgbd_stream_ros PROPERTIES

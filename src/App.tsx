@@ -515,10 +515,12 @@ export default function App() {
     };
   }, [bridge, stage, appPage, windowVisible, liveUpdates, panels.inspector, sidebars.right, inspectorDataVisible, selected, selectedNode, selectedTopicType, imageSubscriptionRevision]);
 
+  const [objectsEnabled, setObjectsEnabled] = useState(false);
+  const objectsSupported = bridgeHello?.objectDetectionSupported === true && profile.rgbdTargetFrame === "base_link";
   const [rgbdSession, setRgbdSession] = useRgbdStream(bridge,
     appPage === "motion" && motionTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
     stage === "connected", profile, bridgeHello?.rgbdSubscriptionIdSupported === true,
-    JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, effectiveLocalPort, profile.remotePort, profile.rosDomainId]));
+    JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, effectiveLocalPort, profile.remotePort, profile.rosDomainId]), objectsEnabled && objectsSupported);
 
   // 只有 active 的轨迹控制器才允许在 Robot View 拖拽 TCP 并下发轨迹。
   const activeTrajectoryController = useMemo(
@@ -830,6 +832,7 @@ export default function App() {
           bridgeBuildId: message.bridge_build_id,
           rosDistro: message.ros_distro,
           rgbdSubscriptionIdSupported: message.rgbd_subscription_id_supported,
+          objectDetectionSupported: message.object_detection_supported,
           controllersInfoSupported: message.controllers_info_supported,
         });
       }
@@ -2042,6 +2045,9 @@ export default function App() {
               onSavePose={openSavePose}
               savePoseDisabledReason={captureError}
               savePoseError={poseSaveError}
+              objectsEnabled={objectsEnabled && objectsSupported}
+              objectsSupported={objectsSupported}
+              onObjectsEnabledChange={setObjectsEnabled}
               rgbdCloud={rgbdSession.cloud}
               rgbdVisible={rgbdSession.visible}
               rgbdPointSize={rgbdSession.pointSize}

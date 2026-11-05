@@ -1,3 +1,6 @@
+export type ObjectBox = { id: number; center: [number, number, number]; size: [number, number, number]; point_count: number };
+export type ObjectDetectionFrame = { status: "ok" | "empty" | "no_table" | "error"; message: string; frame_seq: number; items: ObjectBox[] };
+
 export type ConnectionProfile = {
   id: string;
   name: string;
@@ -198,6 +201,8 @@ export type BridgeEnvelope = {
   subscription_id?: string;
   frame_age_ms?: number;
   rgbd_subscription_id_supported?: boolean;
+  object_detection_supported?: boolean;
+  objects?: ObjectDetectionFrame;
   supported?: boolean;
   state?: ClockSyncInfo["state"];
   source_topic?: string;

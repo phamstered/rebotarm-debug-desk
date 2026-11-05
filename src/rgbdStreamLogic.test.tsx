@@ -51,7 +51,7 @@ function payload2x2(): Uint8Array {
 }
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
-function setup(strict = true) {
+function setup(strict = true, detection = false) {
   vi.useFakeTimers();
   let next = 0;
   const frames = new Map<number, FrameRequestCallback>();
@@ -59,7 +59,7 @@ function setup(strict = true) {
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
   const listeners = new Set<(m: BridgeEnvelope) => void>();
   const bridge = { send: vi.fn(), onMessage: (cb: (m: BridgeEnvelope) => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; } };
-  const hook = renderHook(({ active, profile, connection }) => useRgbdStream(bridge, active, true, profile, strict, connection), {
+  const hook = renderHook(({ active, profile, connection }) => useRgbdStream(bridge, active, true, profile, strict, connection, detection), {
     initialProps: { active: true, profile: defaultProfile, connection: 'a' },
   });
   const token = () => bridge.send.mock.calls.filter(([m]) => m.op === 'subscribe_rgbd').at(-1)![0].subscription_id;
@@ -154,5 +154,17 @@ it('subtracts Jetson source age from the 500ms display lease and rejects invalid
   }
   emit({ frame_age_ms: 0 }); flush();
   expect(hook.result.current[0].cloud?.count).toBe(2);
+  hook.unmount();
+});
+
+it('transports object enablement and replaces boxes with each complete frame or failure', () => {
+  const { hook, emit, flush, bridge, token } = setup(true, true);
+  expect(bridge.send.mock.calls[0][0]).toMatchObject({detect_objects:true,request_id:token()});
+  const objects={status:"ok" as const,message:"可见点云包围盒",frame_seq:1,items:[{id:1,center:[0,0,0] as [number,number,number],size:[.1,.1,.1] as [number,number,number],point_count:30}]};
+  emit({objects});flush();expect(hook.result.current[0].cloud?.objects?.items).toHaveLength(1);
+  emit({objects:{...objects,status:"empty",items:[],frame_seq:2}});flush();expect(hook.result.current[0].cloud?.objects?.items).toEqual([]);
+  emit();flush();expect(hook.result.current[0].cloud?.objects).toMatchObject({status:"error",items:[]});
+  emit({objects});flush();emit({op:"error",request_id:token(),error:"Invalid object config"});
+  expect(hook.result.current[0].cloud).toBeNull();expect(hook.result.current[0].tfError).toContain("Invalid object config");
   hook.unmount();
 });

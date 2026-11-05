@@ -1,0 +1,14 @@
+{
+  "roi_min": [-0.8, -0.8, -0.5],
+  "roi_max": [0.8, 0.8, 1.0],
+  "voxel_m": 0.005,
+  "plane_distance_m": 0.005,
+  "plane_angle_deg": 15,
+  "table_min_z": -0.3,
+  "table_max_z": 0.1,
+  "min_height_m": 0.01,
+  "max_height_m": 0.3,
+  "cluster_tolerance_m": 0.015,
+  "min_cluster_points": 20,
+  "max_extent_m": 0.35
+}

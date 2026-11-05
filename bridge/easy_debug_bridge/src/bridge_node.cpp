@@ -24,6 +24,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2/exceptions.h>
 #include "easy_debug_bridge/rgbd_core.hpp"
+#include "easy_debug_bridge/object_detection.hpp"
 #include "easy_debug_bridge/rgbd_qos.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
@@ -365,6 +366,7 @@ class BridgeNode : public rclcpp::Node {
  public:
   BridgeNode() : Node("easy_debug_bridge") {
     port_ = declare_parameter<int>("port", 8765);
+    declare_parameter<std::string>("object_detection_config", ament_index_cpp::get_package_share_directory("easy_debug_bridge") + "/config/object_detection.json");
     command_topic_ = declare_parameter<std::string>("command_topic", "/stm32/joint_commands");
     status_topic_ = declare_parameter<std::string>("status_topic", "/stm32/status");
     joint_state_topic_ = declare_parameter<std::string>("joint_state_topic", "/stm32/joint_states");
@@ -541,7 +543,8 @@ class BridgeNode : public rclcpp::Node {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
-                     (controller_registry_->supported() ? "true}" : "false}"));
+                     (controller_registry_->supported() ? "true" : "false") +
+                     ",\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
         const std::weak_ptr<WebSocketSession> weak = session;
         if (const auto field = request.get_child_optional("refresh")) {
@@ -1425,6 +1428,10 @@ class BridgeNode : public rclcpp::Node {
     uint32_t max_width = 320;
     uint32_t max_height = 240;
     double max_fps = 12.0;
+    bool detect_objects = false;
+    easy_debug_bridge::ObjectConfig object_config;
+    easy_debug_bridge::ObjectTracker object_tracker;
+    uint64_t object_frame_seq = 0;
     int64_t stamp_tolerance_ns = 50000000;
     // Only live/retired sessions own the source. Final ownership is released
     // by the RX thread outside spin_some after this session's worker is joined.
@@ -1590,6 +1597,17 @@ class BridgeNode : public rclcpp::Node {
       return;
     }
 
+    if (const auto field = request.get_child_optional("detect_objects")) {
+      if (!field->empty() || (field->data() != "true" && field->data() != "false"))
+        throw std::runtime_error("detect_objects 必须为 boolean");
+    }
+    const bool detection = request.get<bool>("detect_objects", false);
+    easy_debug_bridge::ObjectConfig config;
+    if (detection) {
+      if (!easy_debug_bridge::object_detection_supported()) throw std::runtime_error("Bridge 未安装 PCL 物体检测组件");
+      if (target_frame != "base_link") throw std::runtime_error("物体检测要求 base_link 坐标系");
+      config = easy_debug_bridge::load_object_config(get_parameter("object_detection_config").as_string());
+    }
     clear_rgbd_session(session->id());
     auto rgbd = std::make_shared<RgbdSession>();
     rgbd->client_id = session->id();
@@ -1599,7 +1617,9 @@ class BridgeNode : public rclcpp::Node {
     rgbd->target_frame = target_frame;
     rgbd->max_width = max_width;
     rgbd->max_height = max_height;
-    rgbd->max_fps = max_fps;
+    rgbd->max_fps = detection ? std::min(max_fps, 10.) : max_fps;
+    rgbd->detect_objects = detection;
+    rgbd->object_config = config;
     rgbd->subscription_id = subscription_id;
 
     // Own ROS subscriptions — never touch ImageInterests / shared image map.
@@ -1674,6 +1694,7 @@ class BridgeNode : public rclcpp::Node {
     const auto steady = std::chrono::steady_clock::now();
     const auto last_good = session->last_success.time_since_epoch().count() ? session->last_success : session->started;
     if (!immediate && steady - last_good < std::chrono::milliseconds(500)) return;
+    session->object_tracker.clear();
     if (!session->last_error.empty() && immediate == session->last_error_immediate &&
         (error == session->last_error || steady - session->last_error_at < std::chrono::seconds(1))) return;
     std::ostringstream out;
@@ -1709,6 +1730,7 @@ class BridgeNode : public rclcpp::Node {
       return;
     }
     if (session->clock_generation != sync.generation) {
+      session->object_tracker.clear();
       session->pending.reset();
       std::lock_guard<std::mutex> lock(session->mutex);
       session->clock_generation = sync.generation;
@@ -1815,6 +1837,21 @@ class BridgeNode : public rclcpp::Node {
     const size_t depth_offset = payload.size();
     payload.insert(payload.end(), depth_ds->data.begin(), depth_ds->data.end());
 
+    std::string object_metadata;
+    if (session->detect_objects) {
+      easy_debug_bridge::ObjectResult result;
+      try {
+        const auto &t = transform.transform.translation;
+        const auto &q = transform.transform.rotation;
+        const auto points = easy_debug_bridge::object_points(*depth_ds, k, {t.x,t.y,t.z}, {q.x,q.y,q.z,q.w}, session->object_config);
+        result = easy_debug_bridge::detect_objects(points, session->object_config);
+        session->object_tracker.assign(result.items, oldest_stamp);
+      } catch (const std::exception &error) {
+        session->object_tracker.clear();
+        result = {"error", error.what(), {}};
+      }
+      object_metadata = ",\"objects\":" + easy_debug_bridge::object_result_json(result, ++session->object_frame_seq);
+    }
     std::ostringstream meta;
     meta << "{\"op\":\"rgbd_frame\",\"tf_ok\":true"
          << (session->subscription_id.empty() ? "" : ",\"subscription_id\":" + json_quote(session->subscription_id))
@@ -1841,7 +1878,7 @@ class BridgeNode : public rclcpp::Node {
          << ",\"y\":" << transform.transform.rotation.y
          << ",\"z\":" << transform.transform.rotation.z
          << ",\"w\":" << transform.transform.rotation.w << "}}"
-         << ",\"data_length\":" << payload.size() << "}";
+         << object_metadata << ",\"data_length\":" << payload.size() << "}";
 
     const auto left_ns = 500000000LL - (now().nanoseconds() - oldest_stamp);
     if (left_ns <= 0) return;
