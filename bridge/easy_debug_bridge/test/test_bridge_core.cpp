@@ -2,6 +2,7 @@
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/motion_plan_diagnostics.hpp"
 #include "easy_debug_bridge/motion_arrival.hpp"
 #include "easy_debug_bridge/group_hold_core.hpp"
 #include "easy_debug_bridge/position_group_core.hpp"
@@ -312,6 +313,27 @@ int main() {
     assert(!motion_target_reached(gripper.joint_names, {NAN}, {.025}, {0}));
     assert(!motion_stopped(gripper.joint_names, {NAN}));
     const std::vector<TimedMotionPoint> path{{{0}, {0}, {0}, {}, 0}, {{.05}, {0}, {0}, {}, 10000000000}};
+    const auto diagnostic_error = [&](std::vector<TimedMotionPoint> candidate, double seconds) {
+      try { stretch_motion(candidate, seconds, gripper, {.02}, {.04}); }
+      catch (const std::exception &e) { return std::string(e.what()); }
+      assert(false); return std::string{};
+    };
+    auto excessive = path; excessive.front().velocities = {.03};
+    const auto velocity_error = diagnostic_error(excessive, 10);
+    for (const auto *field : {"joint=gripper_finger_left_joint", "unit=m", "segment=0->1", "velocity_endpoints=", "velocity_limit=", "acceleration_limit=", "t_s=[", "time_scale=1", "p=[", "v=[", "a=["})
+      assert(velocity_error.find(field) != std::string::npos);
+    excessive = path; excessive.back().accelerations = {.05};
+    assert(diagnostic_error(excessive, 10).find("acceleration_endpoints=") != std::string::npos);
+    auto interior = path; interior.back().positions = {.04}; interior.back().time_ns = 3000000000;
+    assert(diagnostic_error(interior, 3).find("subdivision_depth=1") != std::string::npos);
+    const auto summaries = motion_plan_summaries(path, gripper, {.02}, {.04});
+    assert(summaries.size() == 1 && summaries.front().find("unit=m") != std::string::npos);
+    assert(summaries.front().find("p_knot_peak=") != std::string::npos);
+    assert(summaries.front().size() < 1024);
+    auto incomplete = path; incomplete.front().velocities.clear(); incomplete.back().accelerations = {NAN};
+    const auto incomplete_summary = motion_plan_summaries(incomplete, gripper, {.02}, {.04}).front();
+    assert(incomplete_summary.find("missing=1") != std::string::npos && incomplete_summary.find("nonfinite=1") != std::string::npos);
+    assert(motion_plan_summaries({}, gripper, {}, {}).size() == 1);
     assert(stretch_motion(path, 10, gripper, {.02}, {.04}).back().positions.front() == .05);
     assert(rejects([&] { stretch_motion(path, .1, gripper, {.02}, {.04}); }));
     auto malformed = path; malformed.back().velocities.push_back(0);

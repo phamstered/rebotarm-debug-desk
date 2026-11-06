@@ -12,6 +12,9 @@ struct TimedMotionPoint {
   std::vector<double> positions, velocities, accelerations, effort;
   int64_t time_ns{};
 };
+inline std::string motion_number(double value) {
+  std::ostringstream out; out << std::setprecision(17) << value; return out.str();
+}
 // A prismatic finger must remain within calibrated travel between knots too.
 inline void bounded_position_spline(const std::vector<double> &b, double lower, double upper, int depth = 0) {
   const auto within = [&](double x) { return std::isfinite(x) && x >= lower - 1e-9 && x <= upper + 1e-9; };
@@ -34,10 +37,16 @@ inline void bounded_spline(const std::vector<double> &b, double h, double vmax, 
   for (size_t i=1;i<v.size();++i) a.push_back((v.size()-1)*(v[i]-v[i-1])/h);
   auto within=[](double x,double limit){return std::isfinite(x) && std::abs(x)<=limit+1e-7;};
   if (!within(v.front(),vmax)||!within(v.back(),vmax)||!within(a.front(),amax)||!within(a.back(),amax))
-    throw std::runtime_error("指定时长导致轨迹速度或加速度超限");
+    throw std::runtime_error("轨迹样条速度或加速度超限: velocity_endpoints=[" + motion_number(v.front()) + "," + motion_number(v.back()) +
+        "] velocity_limit=" + motion_number(vmax) + " acceleration_endpoints=[" + motion_number(a.front()) + "," + motion_number(a.back()) +
+        "] acceleration_limit=" + motion_number(amax) + " subdivision_depth=" + std::to_string(depth) + " subsegment_dt_s=" + motion_number(h));
   if (std::all_of(v.begin(),v.end(),[&](double x){return within(x,vmax);}) &&
       std::all_of(a.begin(),a.end(),[&](double x){return within(x,amax);})) return;
-  if (depth>=12) throw std::runtime_error("无法确认样条速度/加速度满足上限，请增加时长");
+  if (depth>=12) throw std::runtime_error("无法确认样条速度/加速度满足上限: velocity_control_bound=" +
+      motion_number(std::abs(*std::max_element(v.begin(), v.end(), [](double x, double y) { return std::abs(x) < std::abs(y); }))) +
+      " velocity_limit=" + motion_number(vmax) + " acceleration_control_bound=" +
+      motion_number(std::abs(*std::max_element(a.begin(), a.end(), [](double x, double y) { return std::abs(x) < std::abs(y); }))) +
+      " acceleration_limit=" + motion_number(amax) + " subdivision_depth=" + std::to_string(depth));
   auto row=b;std::vector<double> left{b.front()},right{b.back()};
   while(row.size()>1){for(size_t i=0;i+1<row.size();++i) row[i]=(row[i]+row[i+1])/2;row.pop_back();left.push_back(row.front());right.push_back(row.back());}
   std::reverse(right.begin(),right.end());
@@ -78,6 +87,7 @@ inline std::vector<TimedMotionPoint> stretch_motion(std::vector<TimedMotionPoint
       throw std::runtime_error("运动限幅无效");
     for(size_t i=1;i<points.size();++i) {
       const auto &x=points[i-1],&y=points[i];double h=(y.time_ns-x.time_ns)/1e9;
+      try {
       if(x.velocities.empty()||y.velocities.empty()) {
         if (model.joint_names[k] == gripper_motion_joint())
           throw std::runtime_error("夹爪轨迹缺少速度，无法验证整段运动限幅");
@@ -93,6 +103,18 @@ inline std::vector<TimedMotionPoint> stretch_motion(std::vector<TimedMotionPoint
       bounded_spline(controls,h,velocity_limits[k],acceleration_limits[k]);
       if (model.joint_names[k] == gripper_motion_joint())
         bounded_position_spline(controls, model.lower[k], model.upper[k]);
+      } catch (const std::exception &e) {
+        const auto value = [&](const std::vector<double> &values) { return values.empty() ? std::string("missing") : motion_number(values[k]); };
+        const auto unit = model.joint_names[k] == gripper_motion_joint() ? "m" : "rad";
+        throw std::runtime_error(std::string(e.what()) + " joint=" + model.joint_names[k] + " unit=" + unit +
+            " segment=" + std::to_string(i-1) + "->" + std::to_string(i) +
+            " t_s=[" + motion_number(x.time_ns/1e9) + "," + motion_number(y.time_ns/1e9) + "] dt_s=" + motion_number(h) +
+            " duration_s=" + motion_number(seconds) + " time_scale=" + motion_number(scale) +
+            " p=[" + value(x.positions) + "," + value(y.positions) + "] v=[" + value(x.velocities) + "," + value(y.velocities) +
+            "] a=[" + value(x.accelerations) + "," + value(y.accelerations) + "]" +
+            " velocity_limit=" + motion_number(velocity_limits[k]) + " acceleration_limit=" + motion_number(acceleration_limits[k]) +
+            " position_limits=[" + motion_number(model.lower[k]) + "," + motion_number(model.upper[k]) + "]");
+      }
     }
   }
 

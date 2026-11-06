@@ -3,6 +3,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/controller_feedback_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
+#include "easy_debug_bridge/motion_plan_diagnostics.hpp"
 #include "easy_debug_bridge/motion_arrival.hpp"
 #include "easy_debug_bridge/group_hold_core.hpp"
 #include "easy_debug_bridge/position_group_parser.hpp"
@@ -112,6 +113,7 @@ struct PositionMotion::Impl {
     ExecuteHandle::SharedPtr execution_handle;
     std::vector<size_t> held_axes;
     double duration{0}, recommended_duration{0};
+    std::string validation_stage;
     Clock::time_point started{Clock::now()}, lease_at{Clock::now()}, result_at{}, settled_at{}, cancel_at{};
     bool cancel_requested{false}, terminal{false};
     int code{0}; bool failed_result{false}, planning_finished{false};
@@ -590,6 +592,11 @@ struct PositionMotion::Impl {
     if (!group || group->timeline.index == 0)
       r.send("{\"op\":" + quote(group ? "position_group_start_ack" : "position_move_ack") + ",\"accepted\":true,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"command_id\":" + quote(id) + "}");
+    log(m->owner, m->id, "plan_request", "group=" + goal.request.group_name + " pipeline=" + goal.request.pipeline_id +
+        " allowed_planning_time_s=" + motion_number(goal.request.allowed_planning_time) + " attempts=" + std::to_string(goal.request.num_planning_attempts) +
+        " plan_only=" + (m->plan_only ? "true" : "false") + " duration_source=" + (duration > 0 ? "explicit" : "automatic") +
+        " requested_duration_s=" + motion_number(duration) + " joints=" + capture_names(m->model.joint_names) +
+        " velocity_limits=" + numbers(m->velocity_limits) + " acceleration_limits=" + numbers(m->acceleration_limits));
     update(m, "planning", "MoveIt2 正在规划（自碰撞和已知环境碰撞检查）");
     rclcpp_action::Client<Group>::SendGoalOptions options;
     options.goal_response_callback = [this, m](Handle::SharedPtr handle) {
@@ -613,7 +620,9 @@ struct PositionMotion::Impl {
       m->handle.reset();
       log(m->owner, m->id, "result", "MoveGroup result=" + std::to_string(static_cast<int>(result.code)) +
           " error_code=" + std::to_string(result.result ? result.result->error_code.val : 0) +
-          " points=" + std::to_string(result.result ? result.result->planned_trajectory.joint_trajectory.points.size() : 0));
+          " points=" + std::to_string(result.result ? result.result->planned_trajectory.joint_trajectory.points.size() : 0) +
+          " request_elapsed_s=" + motion_number(std::chrono::duration<double>(Clock::now()-m->started).count()) +
+          " moveit_planning_time_s=" + (result.result ? motion_number(result.result->planning_time) : "unavailable"));
       if (m->plan_only && !m->cancel_requested && result.code == rclcpp_action::ResultCode::SUCCEEDED &&
           result.result && result.result->error_code.val == 1) {
         try { execute_plan(m, result.result->planned_trajectory); }
@@ -640,6 +649,19 @@ struct PositionMotion::Impl {
       update(m, "verifying", "执行 Action 成功，正在核对实际到位反馈");
   }
   void execute_plan(const std::shared_ptr<Motion> &m, const moveit_msgs::msg::RobotTrajectory &plan) {
+    const auto &trajectory = plan.joint_trajectory;
+    log(m->owner, m->id, "plan_result", "joints=" + capture_names(trajectory.joint_names) +
+        " points=" + std::to_string(trajectory.points.size()) +
+        " first_time_s=" + (trajectory.points.empty() ? "missing" : motion_number(trajectory.points.front().time_from_start.sec + trajectory.points.front().time_from_start.nanosec/1e9)) +
+        " last_time_s=" + (trajectory.points.empty() ? "missing" : motion_number(trajectory.points.back().time_from_start.sec + trajectory.points.back().time_from_start.nanosec/1e9)));
+    m->validation_stage = "preflight";
+    try { execute_plan_checked(m, plan); }
+    catch (const std::exception &e) {
+      log(m->owner, m->id, "plan_rejected", "stage=" + m->validation_stage + " reason=" + e.what(), "error");
+      throw;
+    }
+  }
+  void execute_plan_checked(const std::shared_ptr<Motion> &m, const moveit_msgs::msg::RobotTrajectory &plan) {
     if (m->terminal || m->cancel_requested || current != m) return;
     bool pending_cancel = false;
     {
@@ -663,6 +685,7 @@ struct PositionMotion::Impl {
     if (!execute_action->action_server_is_ready()) throw std::runtime_error("MoveIt /execute_trajectory 未启动");
     if (m->gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
     if (m->group && m->group->spec.uses_gripper) { const auto why = gripper_readiness(); if (!why.empty()) throw std::runtime_error(why); }
+    m->validation_stage = "trajectory_shape";
     if (!same_motion_joints(plan.joint_trajectory.joint_names, m->model.joint_names) || !plan.multi_dof_joint_trajectory.points.empty() ||
         !plan.multi_dof_joint_trajectory.joint_names.empty()) throw std::runtime_error("规划轨迹关节集合与请求不匹配");
     const auto &names = plan.joint_trajectory.joint_names;
@@ -670,6 +693,7 @@ struct PositionMotion::Impl {
       throw std::runtime_error("规划轨迹点数无效");
     std::vector<TimedMotionPoint> points;
     for (const auto &point : plan.joint_trajectory.points) {
+      m->validation_stage = "decode_point_" + std::to_string(points.size());
       if (point.time_from_start.nanosec >= 1000000000) throw std::runtime_error("规划轨迹时间无效");
       points.push_back({ordered_motion_values(m->model.joint_names, names, point.positions),
           point.velocities.empty() ? std::vector<double>{} : ordered_motion_values(m->model.joint_names, names, point.velocities),
@@ -678,25 +702,43 @@ struct PositionMotion::Impl {
           static_cast<int64_t>(point.time_from_start.sec) * 1000000000 + point.time_from_start.nanosec});
     }
     if (!points.empty()) { m->recommended_duration=points.back().time_ns/1e9; update(m,"planning","MoveIt 推荐运动时长："+std::to_string(m->recommended_duration)+" 秒（仅供参考）"); }
-    if (m->duration == 0) m->duration = m->recommended_duration;
+    const bool automatic_duration = m->duration == 0;
+    if (automatic_duration) m->duration = m->recommended_duration;
+    log(m->owner, m->id, "plan_timing", std::string("duration_source=") + (automatic_duration ? "automatic" : "explicit") +
+        " original_duration_s=" + motion_number(m->recommended_duration) + " execution_duration_s=" + motion_number(m->duration) +
+        " time_scale=" + (m->recommended_duration > 0 ? motion_number(m->duration/m->recommended_duration) : "invalid"));
+    for (const auto &summary : motion_plan_summaries(points, m->model, m->velocity_limits, m->acceleration_limits))
+      log(m->owner, m->id, "plan_joint", summary);
+    m->validation_stage = "timing_and_spline";
     points = stretch_motion(std::move(points), m->duration, m->model, m->velocity_limits, m->acceleration_limits);
+    m->validation_stage = "start_and_goal";
     const auto actual = measured(m->model, false, &m->calibration);
     for (size_t i = 0; i < m->model.joint_names.size(); ++i) {
       if (std::abs(points.front().positions[i] - actual[i]) > (m->model.joint_names[i] == gripper_motion_joint() ? .001 : start_tolerance))
-        throw std::runtime_error("规划后实测起点已变化，请重新规划");
+        throw std::runtime_error("规划后实测起点已变化，请重新规划 joint=" + m->model.joint_names[i] +
+            " planned=" + motion_number(points.front().positions[i]) + " actual=" + motion_number(actual[i]) +
+            " tolerance=" + motion_number(m->model.joint_names[i] == gripper_motion_joint() ? .001 : start_tolerance));
       if ((!m->tcp || m->model.joint_names[i] == gripper_motion_joint()) && std::abs(points.back().positions[i] - m->target[i]) > motion_goal_tolerance(m->model.joint_names[i]) + 1e-9)
-        throw std::runtime_error("规划轨迹终点与目标不匹配");
+        throw std::runtime_error("规划轨迹终点与目标不匹配 joint=" + m->model.joint_names[i] +
+            " planned=" + motion_number(points.back().positions[i]) + " target=" + motion_number(m->target[i]) +
+            " tolerance=" + motion_number(motion_goal_tolerance(m->model.joint_names[i])));
     }
+    m->validation_stage = "tcp_goal";
     if (m->tcp) {
       const std::vector<double> arm_goal(points.back().positions.begin(), points.back().positions.begin() + 6);
       const auto final_pose = tcp_forward_pose(m->tcp_model, arm_goal);
       if (tcp_pose_position_error(final_pose, m->tcp_target) > .005 || tcp_pose_orientation_error(final_pose, m->tcp_target) > .02)
-        throw std::runtime_error("MoveIt 轨迹终点未满足 TCP 位置/姿态目标，未执行");
+        throw std::runtime_error("MoveIt 轨迹终点未满足 TCP 位置/姿态目标，未执行 position_error_m=" +
+            motion_number(tcp_pose_position_error(final_pose, m->tcp_target)) + " position_tolerance_m=0.005 orientation_error_rad=" +
+            motion_number(tcp_pose_orientation_error(final_pose, m->tcp_target)) + " orientation_tolerance_rad=0.02");
       m->target = points.back().positions;
     }
+    m->validation_stage = "held_axes";
     for (const auto &point : points) for (const auto i : m->held_axes)
       if (std::abs(point.positions[i] - m->target[i]) > motion_hold_tolerance(m->model.joint_names[i]) + 1e-9)
-        throw std::runtime_error("规划轨迹不满足未编辑关节的保持约束");
+        throw std::runtime_error("规划轨迹不满足未编辑关节的保持约束 joint=" + m->model.joint_names[i] +
+            " t_s=" + motion_number(point.time_ns/1e9) + " planned=" + motion_number(point.positions[i]) +
+            " target=" + motion_number(m->target[i]) + " tolerance=" + motion_number(motion_hold_tolerance(m->model.joint_names[i])));
     Execute::Goal goal;
     goal.trajectory.joint_trajectory.joint_names = m->model.joint_names;
     goal.trajectory.joint_trajectory.header.frame_id = plan.joint_trajectory.header.frame_id;

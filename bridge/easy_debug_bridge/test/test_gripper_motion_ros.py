@@ -240,6 +240,8 @@ class MockRobot(Node):
             point.positions = [(1-alpha)*self.positions[j] + alpha*targets[j] for j in reversed(names)]
             point.velocities = [0.] * len(names)
             point.accelerations = [0.] * len(names)
+            if getattr(self, 'excessive_plan_velocity', False):
+                point.velocities = [.03 if j == GRIPPER else 0. for j in reversed(names)]
             point.time_from_start.sec = sec
             result.planned_trajectory.joint_trajectory.points.append(point)
         result.error_code.val = 1
@@ -353,7 +355,7 @@ def main(binary):
                 assert phase == expected, event
                 return True
             robot.hold_plan = True
-            reply = move(joint_targets={GRIPPER: .03}, motion_duration_s=6.)
+            reply = move(joint_targets={GRIPPER: .03})
             assert reply.get('accepted') is not False, reply
             wait_for(lambda: info()['busy'])
             robot.broadcaster_positions = [.025, 0., 0., 0., 0., 0., .03]
@@ -369,11 +371,25 @@ def main(binary):
             assert abs(robot.positions[GRIPPER] - .035) < 1e-9
             assert robot.executions[-1].points[-1].time_from_start.sec == 6
             assert len(robot.executions[-1].joint_names) == 7
-            reply = move(joint_targets={GRIPPER: .03}, motion_duration_s=6.)
+            reply = move(joint_targets={GRIPPER: .03})
             assert reply.get('accepted') is not False, reply
             wait_for(completed)
             assert robot.groups[-1] == 'gripper'
             assert robot.executions[-1].joint_names == [GRIPPER]
+            entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
+            assert any(e['phase']=='plan_request' and 'allowed_planning_time_s=5' in e['message'] for e in entries),entries
+            assert any(e['phase']=='plan_timing' and 'duration_source=automatic' in e['message'] for e in entries),entries
+            robot.excessive_plan_velocity = True
+            before = len(robot.executions)
+            reply = move(joint_targets={GRIPPER: .02})
+            assert reply.get('accepted') is not False, reply
+            wait_for(lambda: completed('failed'))
+            assert len(robot.executions) == before
+            entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
+            rejection = next(e for e in entries if e['phase']=='plan_rejected')
+            assert 'joint='+GRIPPER in rejection['message'] and 'unit=m' in rejection['message'] and 'velocity_endpoints=' in rejection['message'], rejection
+            assert any(e['phase']=='plan_timing' and 'duration_source=automatic' in e['message'] for e in entries),entries
+            robot.excessive_plan_velocity = False
             held = robot.positions[GRIPPER]
             reply = move(home=True)
             assert reply.get('accepted') is not False, reply
