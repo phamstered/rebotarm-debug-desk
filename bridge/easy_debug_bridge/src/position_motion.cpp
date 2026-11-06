@@ -710,7 +710,20 @@ struct PositionMotion::Impl {
     for (const auto &summary : motion_plan_summaries(points, m->model, m->velocity_limits, m->acceleration_limits))
       log(m->owner, m->id, "plan_joint", summary);
     m->validation_stage = "timing_and_spline";
-    points = stretch_motion(std::move(points), m->duration, m->model, m->velocity_limits, m->acceleration_limits);
+    if (automatic_duration) {
+      auto timed = automatic_motion_timing(points, m->model, m->velocity_limits, m->acceleration_limits,
+          [this, m](double previous, double next, const std::string &reason) {
+            log(m->owner, m->id, "plan_retime", "自动延长运动时长 previous_duration_s=" + motion_number(previous) +
+                " next_duration_s=" + motion_number(next) + " reason=" + reason, "warn");
+          });
+      points = std::move(timed.points); m->duration = timed.duration_s;
+      if (timed.adjustments)
+        log(m->owner, m->id, "plan_timing", "duration_source=automatic original_duration_s=" + motion_number(m->recommended_duration) +
+            " execution_duration_s=" + motion_number(m->duration) + " time_scale=" + motion_number(m->duration/m->recommended_duration) +
+            " adjustments=" + std::to_string(timed.adjustments) + " spline_validation=passed");
+    } else {
+      points = stretch_motion(std::move(points), m->duration, m->model, m->velocity_limits, m->acceleration_limits);
+    }
     m->validation_stage = "start_and_goal";
     const auto actual = measured(m->model, false, &m->calibration);
     for (size_t i = 0; i < m->model.joint_names.size(); ++i) {
@@ -751,7 +764,7 @@ struct PositionMotion::Impl {
       goal.trajectory.joint_trajectory.points.push_back(out);
     }
     rclcpp_action::Client<Execute>::SendGoalOptions options;
-    options.goal_response_callback = [this, m](ExecuteHandle::SharedPtr handle) {
+    options.goal_response_callback = [this, m, automatic_duration](ExecuteHandle::SharedPtr handle) {
       if (m->terminal || current != m || m->result_at != Clock::time_point{}) {
         if (handle) try { execute_action->async_cancel_goal(handle); } catch (...) {}
         return;
@@ -759,7 +772,7 @@ struct PositionMotion::Impl {
       m->execution_handle = handle;
       if (!handle) { finish_result(m, rclcpp_action::ResultCode::ABORTED, 0); return; }
       if (m->cancel_requested) request_cancel_handle(m);
-      else update(m, "executing", "按指定运动时长执行：" + std::to_string(m->duration) + " 秒");
+      else update(m, "executing", std::string(automatic_duration ? "按校验后的自动运动时长执行：" : "按指定运动时长执行：") + std::to_string(m->duration) + " 秒");
     };
     options.result_callback = [this, m](const ExecuteHandle::WrappedResult &result) {
       if (m->terminal || current != m) return;
