@@ -58,7 +58,6 @@ struct FeedbackSnapshot {
 struct PendingCapture {
     id: String,
     positions: Vec<f64>,
-    #[allow(dead_code)]
     gripper_position: Option<f64>,
     profile_key: String,
     created_ms: u64,
@@ -378,7 +377,8 @@ fn dispatch_api(config: &RuntimeConfig, request: &Request, asset_path: &str) -> 
                         name: body.name.clone(),
                         positions: capture.positions.clone(),
                         note: body.note.clone(),
-                        gripper_position: body.gripper_position,
+                        // A present field only means "include the frozen opening". The phone cannot supply the stroke.
+                        gripper_position: body.gripper_position.and(capture.gripper_position),
                     }, now, &random_token().unwrap_or_else(|_| format!("pose-{now}")))
                 };
                 match saved {
@@ -992,16 +992,39 @@ mod tests {
         assert_eq!(status, 200, "{body}");
         let capture_id = body.split("\"captureId\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
         publish_feedback(&config, true, "jetson|op|22".into(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]), None, String::new());
-        let payload = format!(r#"{{"name":"手机位","captureId":"{capture_id}","positions":[9,9,9,9,9,9],"note":"tap","gripperPosition":0.02}}"#);
+        let payload = format!(r#"{{"name":"手机位","captureId":"{capture_id}","positions":[9,9,9,9,9,9],"note":"tap","gripperPosition":0.09}}"#);
         let (status, body) = exchange(port, "POST", "/api/teach/poses", Some("abc"), Some(&payload));
         assert_eq!(status, 201, "{body}");
-        assert!(body.contains("手机位"));
-        assert!(body.contains("0.1"));
-        assert!(!body.contains("9.0") && !body.contains("[9,") && !body.contains("[9.0"));
-        assert_eq!(changes.load(Ordering::Relaxed), 1);
-        let saved = fs::read_to_string(positions::positions_file(&dir)).unwrap();
-        assert!(saved.contains("0.1"));
-        assert!(!saved.contains("builtin:home"));
+        let saved_pose: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(saved_pose["position"]["name"], "手机位");
+        assert_eq!(saved_pose["position"]["positions"], json!([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]));
+        assert_eq!(saved_pose["position"]["gripperPosition"], json!(0.02));
+        let (status, body) = exchange(port, "POST", "/api/teach/capture", Some("abc"), Some("{}"));
+        assert_eq!(status, 200, "{body}");
+        let omitted_id = body.split("\"captureId\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        let omitted = format!(r#"{{"name":"无夹爪","captureId":"{omitted_id}","gripperPosition":0.09}}"#);
+        let (status, body) = exchange(port, "POST", "/api/teach/poses", Some("abc"), Some(&omitted));
+        assert_eq!(status, 201, "{body}");
+        let omitted_pose: Value = serde_json::from_str(&body).unwrap();
+        assert!(omitted_pose["position"].get("gripperPosition").is_none());
+        publish_feedback(&config, true, "jetson|op|22".into(), Some(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]), Some(0.02), String::new());
+        let (status, body) = exchange(port, "POST", "/api/teach/capture", Some("abc"), Some("{}"));
+        assert_eq!(status, 200, "{body}");
+        let unchecked_id = body.split("\"captureId\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        let unchecked = format!(r#"{{"name":"不保存夹爪","captureId":"{unchecked_id}"}}"#);
+        let (status, body) = exchange(port, "POST", "/api/teach/poses", Some("abc"), Some(&unchecked));
+        assert_eq!(status, 201, "{body}");
+        let unchecked_pose: Value = serde_json::from_str(&body).unwrap();
+        assert!(unchecked_pose["position"].get("gripperPosition").is_none());
+        assert_eq!(changes.load(Ordering::Relaxed), 3);
+        let saved: Value = serde_json::from_str(&fs::read_to_string(positions::positions_file(&dir)).unwrap()).unwrap();
+        let stored = &saved["profiles"]["jetson|op|22"]["positions"];
+        assert_eq!(stored[0]["gripperPosition"], json!(0.02));
+        assert_eq!(stored[0]["positions"], json!([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]));
+        assert!(stored[1].get("gripperPosition").is_none());
+        assert!(stored[2].get("gripperPosition").is_none());
+        assert!(!saved.to_string().contains("builtin:home"));
+        assert!(!saved.to_string().contains("0.09"));
         let frame = live_frame(port);
         assert!(frame.contains("1.0") || frame.contains("0.1"));
         assert!(!frame.contains("8765"));
