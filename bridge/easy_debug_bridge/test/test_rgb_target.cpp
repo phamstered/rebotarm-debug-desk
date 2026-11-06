@@ -94,8 +94,24 @@ int main() {
   confirmed(t, verified);
   t.update(frame(3, false));
   assert(t.snapshot().metric_ready);
+  // Approaching along optical Z expands the image; projection preserves world
+  // identity.
+  confirmed(t, verified);
+  const auto approaching_id = t.snapshot().target_id;
+  t.update(frame(3, true, 0, .35));
+  assert(t.snapshot().mode == "rgbd");
+  t.update(frame(4, true, 0, .28));
+  auto close = t.snapshot();
+  assert(close.mode == "rgb" && close.identity_valid && close.metric_ready);
+  assert(close.target_id == approaching_id &&
+         std::abs(close.box.center[0]) < .001);
+  t.update(frame(5, false, 0, .24));
+  close = t.snapshot();
+  assert(close.mode == "rgb" && close.identity_valid &&
+         close.target_id == approaching_id);
+  assert(close.camera_z_m < .195 && close.metric_ready);
   const auto yaw = t.snapshot().locked_yaw;
-  t.update(frame(4, false));
+  t.update(frame(6, false, 0, .24));
   assert(t.snapshot().locked_yaw == yaw);
   RgbTargetFrame changed;
   // Nearby green objects remain separate; merged contours and occlusion latch
