@@ -21,12 +21,12 @@ static Tree parse(const std::string &s) {
 }
 static std::string vec(const std::array<double, 3> &v) {
   std::ostringstream o;
-  o << "[" << v[0] << "," << v[1] << "," << v[2] << "]";
+  o << std::setprecision(17) << "[" << v[0] << "," << v[1] << "," << v[2] << "]";
   return o.str();
 }
 static std::string pose_json(const TcpPose &p) {
   std::ostringstream o;
-  o << "{\"position\":" << vec(p.position) << ",\"orientation\":[" << p.orientation[0] << ","
+  o << std::setprecision(17) << "{\"position\":" << vec(p.position) << ",\"orientation\":[" << p.orientation[0] << ","
     << p.orientation[1] << "," << p.orientation[2] << "," << p.orientation[3] << "]}";
   return o.str();
 }
@@ -42,6 +42,7 @@ static std::string pose_detail(const TcpPose &p) {
 }
 static std::string frame_detail(const PickObservation &o) {
   return "object_id=" + std::to_string(o.box.id) + " subscription=" + position_json_quote(o.subscription) +
+      " target_id=" + position_json_quote(o.target_id) + " tracking_mode=" + o.tracking_mode + " tracking=" + o.tracking_json +
       " frame_seq=" + std::to_string(o.sequence) + " generation=" + std::to_string(o.generation) +
       " target_frame=" + position_json_quote(o.target_frame) + " source_frame=" + position_json_quote(o.source_frame) +
       " rgb_stamp_ns=" + std::to_string(o.rgb_stamp_ns) + " depth_stamp_ns=" + std::to_string(o.depth_stamp_ns) +
@@ -55,6 +56,7 @@ PickConfig load_pick_config(const std::string &path) {
   PickConfig c;
   c.calibrated = t.get<bool>("calibrated", false);
   c.scene_verified = t.get<bool>("scene_verified", false);
+  c.rgb_plane_verified = t.get<bool>("rgb_tracking.plane_verified", false);
   c.tcp_link = t.get<std::string>("tcp_link", "gripper_link");
   if (c.tcp_link.empty() || c.tcp_link.size() > 128) throw std::runtime_error("Invalid Pick TCP link");
   auto scalar = [&](const char *key, double &v, double lo, double hi) {
@@ -62,6 +64,7 @@ PickConfig load_pick_config(const std::string &path) {
     if (!std::isfinite(v) || v < lo || v > hi)
       throw std::runtime_error(std::string("Invalid Pick config: ") + key);
   };
+  scalar("rgb_tracking.max_travel_m", c.rgb_max_travel, .001, .15);
   scalar("table_z_m", c.table_z, -2, 2);
   scalar("grasp_depth_m", c.depth, 0, .04);
   scalar("pregrasp_clearance_m", c.clearance, .05, .2);
@@ -85,7 +88,7 @@ PickConfig load_pick_config(const std::string &path) {
     if (std::abs(x) > .5) throw std::runtime_error("Pick TCP offset exceeds .5 m");
   return c;
 }
-PickPlan make_pick_plan(const ObjectBox &b, const PickConfig &c) {
+PickPlan make_pick_plan(const ObjectBox &b, const PickConfig &c, double locked_yaw) {
   for (int a = 0; a < 3; ++a)
     if (!std::isfinite(b.center[a]) || std::abs(b.center[a]) > 3 || !std::isfinite(b.size[a]) ||
         b.size[a] <= 0 || b.size[a] > .5)
@@ -101,7 +104,7 @@ PickPlan make_pick_plan(const ObjectBox &b, const PickConfig &c) {
     p.grasp.position[2] = std::max(c.table_z + .01, p.grasp.position[2] - c.depth);
   }
   // Grasp-frame +X is jaw closing direction, +Z points up. AABB supplies two yaw candidates.
-  if (b.size[1] < b.size[0]) p.grasp.orientation = {0, 0, std::sqrt(.5), std::sqrt(.5)};
+  if ((std::isfinite(locked_yaw) && locked_yaw > .5) || (!std::isfinite(locked_yaw) && b.size[1] < b.size[0])) p.grasp.orientation = {0, 0, std::sqrt(.5), std::sqrt(.5)};
   p.pregrasp = p.grasp;
   p.pregrasp.position[2] += c.clearance;
   p.tcp = tcp_pose_compose(p.grasp, c.grasp_to_tcp);
@@ -322,7 +325,7 @@ struct VisualPick::Impl {
           !status.get<bool>("gripper_feedback_fresh", false))
         throw std::runtime_error(status.get<std::string>("gripper_message", "夹爪未就绪或已有运动"));
       const auto initial_actual = validate_tcp_pose(pose(config.tcp_link));  // Same fresh TCP check as execution preflight.
-      const auto plan = make_pick_plan(initial.box, config);
+      const auto plan = make_pick_plan(initial.box, config, initial.locked_yaw);
       record(who, task, "pick_geometry", "frame=base_link tcp_link=" + position_json_quote(config.tcp_link) +
           " grasp=" + pose_detail(plan.grasp) + " pregrasp=" + pose_detail(plan.pregrasp) +
           " tcp_target=" + pose_detail(plan.tcp) + " pre_tcp_target=" + pose_detail(plan.pre_tcp) +
@@ -336,6 +339,7 @@ struct VisualPick::Impl {
           plan.closing < lo || plan.closing > hi)
         throw std::runtime_error("抓取开度超出实测夹爪标定范围");
       unsigned segment = 0;
+      double rgb_travel=0;
       auto task_guard = [&]() {
         check_lease();
         if (Clock::now() - began > std::chrono::seconds(180)) throw std::runtime_error("抓取任务超过 180 秒");
@@ -343,6 +347,8 @@ struct VisualPick::Impl {
       auto current = [&]() {
         task_guard();
         auto o = observe(who, initial.subscription, initial.box.id);
+        if (!o.identity_valid || !o.metric_ready || (!o.target_id.empty()&&o.tracking_mode=="rgb"&&!config.rgb_plane_verified))throw std::runtime_error(o.tracking_message.empty()?"RGB 目标身份或几何未就绪":o.tracking_message);
+        if(o.target_id!=initial.target_id)throw std::runtime_error("视觉目标身份改变，需重新选择");
         if (o.generation != initial.generation || o.sequence < initial.sequence)
           throw std::runtime_error("视觉时间基准改变");
         double d = 0;
@@ -396,26 +402,30 @@ struct VisualPick::Impl {
         update(descending ? "descending" : "approaching",
                descending ? "分段下降，持续核对目标" : "分段接近预抓取位", send);
         bool reached = false;
-        for (unsigned step = 0; step < 30; ++step) {
+        for (unsigned step = 0; step < 80; ++step) {
           auto observed = next_observation();
-          auto desired = make_pick_plan(observed.box, config);
+          auto desired = make_pick_plan(observed.box, config, initial.locked_yaw);
           if (std::abs(desired.opening - plan.opening) > .003)
             throw std::runtime_error("目标宽度变化，需重新选择");
           const auto target = descending ? desired.tcp : desired.pre_tcp;
           const auto actual = pose(config.tcp_link);
           const double distance = tcp_pose_position_error(actual, target);
+          const bool rgb=observed.tracking_mode=="rgb";
+          const double max_step=rgb?.003:(descending?.01:.02);
+          if(rgb&&tcp_pose_orientation_error(actual,target)>.02)throw std::runtime_error("RGB 接近前姿态尚未对齐，请重新选择并从 RGBD 阶段接近");
           record(who, task, "pick_frame", frame_detail(observed));
           record(who, task, "pick_step", std::string("phase=") + (descending ? "descending" : "approaching") + " step=" + std::to_string(step) +
               " frame=base_link tcp_link=" + position_json_quote(config.tcp_link) + " actual_tcp=" + pose_detail(actual) +
               " target_tcp=" + pose_detail(target) + " distance_m=" + number(distance) + " orientation_error_rad=" + number(tcp_pose_orientation_error(actual, target)) +
-              " max_step_m=" + number(descending ? .01 : .02));
+              " max_step_m=" + number(max_step));
           if (distance <= .006 && tcp_pose_orientation_error(actual, target) <= .02) {
             grasp_target = desired.tcp;
             reached = true;
             break;
           }
-          const auto next = bounded_pick_step(actual, target, descending ? .01 : .02);
+          const auto next = bounded_pick_step(actual, target, max_step);
           const auto anchor = observed.box;
+          if(rgb){rgb_travel+=tcp_pose_position_error(actual,next);if(rgb_travel>config.rgb_max_travel)throw std::runtime_error("RGB 累计接近行程超限");}
           move(who, tcp(next, descending ? "下降" : "接近预抓取位"), send, [&]() {
             auto live = current();
             double shift = 0;
@@ -423,11 +433,11 @@ struct VisualPick::Impl {
             if (shift > .02 * .02) throw std::runtime_error("单段运动期间目标移动超过 2 cm");
           });
         }
-        if (!reached) throw std::runtime_error("视觉接近未在 30 段内收敛");
+        if (!reached) throw std::runtime_error("视觉接近未在 80 段内收敛");
       }
       const auto final_observation = next_observation();
       record(who, task, "pick_frame", frame_detail(final_observation));
-      const auto final_plan = make_pick_plan(final_observation.box, config);
+      const auto final_plan = make_pick_plan(final_observation.box, config, initial.locked_yaw);
       const auto final_actual = pose(config.tcp_link);
       if (std::abs(final_plan.opening - plan.opening) > .003 || final_plan.closing < lo ||
           final_plan.closing > hi || tcp_pose_position_error(final_actual, final_plan.tcp) > .006 ||
@@ -466,7 +476,7 @@ void VisualPick::cancel(uint64_t owner) {
 void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
   std::set<std::string> seen;
   const std::set<std::string> allowed{"op",           "request_id", "subscription_id",  "object_id",
-                                      "confirmation", "command_id", "preview_frame_seq"};
+                                      "confirmation", "command_id", "preview_frame_seq", "target_id"};
   for (const auto &field : r)
     if (!allowed.count(field.first) || !seen.insert(field.first).second || !field.second.empty())
       throw std::runtime_error("抓取请求字段未知、重复或不是标量");
@@ -493,7 +503,8 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
   const auto object = r.get<uint64_t>("object_id", 0);
   if (token.empty() || token.size() > 128 || !object) throw std::runtime_error("抓取目标令牌或编号无效");
   const auto observed = impl_->observe(owner, token, object);
-  const auto plan = make_pick_plan(observed.box, config);
+  const auto plan = make_pick_plan(observed.box, config, observed.locked_yaw);
+  const bool tracking_ready=observed.identity_valid&&observed.metric_ready&&(observed.target_id.empty()||observed.tracking_mode!="rgb"||config.rgb_plane_verified);
   if (op == "visual_pick_preview") {
     {
       std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -505,10 +516,10 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
          ",\"subscription_id\":" + position_json_quote(token) + ",\"object_id\":" + std::to_string(object) +
          ",\"frame_seq\":" + std::to_string(observed.sequence) +
          ",\"calibrated\":" + (config.calibrated ? "true" : "false") +
-         ",\"execution_ready\":" + (config.calibrated && config.scene_verified ? "true" : "false") +
-         ",\"grasp\":" + pose_json(plan.grasp) + ",\"pregrasp\":" + pose_json(plan.pregrasp) +
+         ",\"execution_ready\":" + (config.calibrated && config.scene_verified && tracking_ready ? "true" : "false") +
+         ",\"tracking\":" + observed.tracking_json + ",\"grasp\":" + pose_json(plan.grasp) + ",\"pregrasp\":" + pose_json(plan.pregrasp) +
          ",\"opening_m\":" + std::to_string(plan.opening) + ",\"message\":" +
-         position_json_quote(config.calibrated && config.scene_verified
+         position_json_quote(!tracking_ready ? (observed.tracking_message.empty()?"目标身份或 RGB 顶面几何未核验":observed.tracking_message) : config.calibrated && config.scene_verified
                                  ? "候选姿态；执行仍需 MoveIt、夹爪和现场确认"
                                  : "未完成相机/TCP/桌面标定或 MoveIt 障碍物核验，仅供预览") +
          "}");
@@ -517,6 +528,8 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
   if (op != "visual_pick_start") throw std::runtime_error("未知抓取操作");
   if (!config.calibrated || !config.scene_verified)
     throw std::runtime_error("未完成相机/TCP/桌面标定或 MoveIt 障碍物核验，禁止执行");
+  if(!observed.target_id.empty()&&r.get<std::string>("target_id", "")!=observed.target_id)throw std::runtime_error("抓取目标身份代次不一致");
+  if(!observed.identity_valid||!observed.metric_ready || (!observed.target_id.empty()&&observed.tracking_mode=="rgb"&&!config.rgb_plane_verified))throw std::runtime_error(observed.tracking_message.empty()?"目标身份或近距几何未就绪":observed.tracking_message);
   if (r.get<std::string>("confirmation", "") != "ARMED") throw std::runtime_error("请先确认现场安全");
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -524,9 +537,9 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
     if (it == impl_->previews.end() || Clock::now() - it->second.created > std::chrono::seconds(1))
       throw std::runtime_error("预览已过期，请重新生成候选");
     const auto &p = it->second;
-    if (!p.config.calibrated || !p.config.scene_verified || p.observed.subscription != token ||
+    if (!p.config.calibrated || !p.config.scene_verified || p.config.rgb_plane_verified!=config.rgb_plane_verified || p.config.rgb_max_travel!=config.rgb_max_travel || p.observed.subscription != token ||
         p.observed.box.id != object || p.observed.sequence != r.get<uint64_t>("preview_frame_seq", 0) ||
-        p.observed.generation != observed.generation)
+        p.observed.generation != observed.generation || p.observed.target_id != observed.target_id || !p.observed.identity_valid || !p.observed.metric_ready)
       throw std::runtime_error("预览与当前目标或标定代次不一致");
     double shift = 0;
     for (int a = 0; a < 3; ++a) {
@@ -535,7 +548,7 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
         throw std::runtime_error("目标尺寸已改变，请重新预览");
     }
     if (shift > .02 * .02) throw std::runtime_error("目标相对预览移动超过 2 cm");
-    const auto approved = make_pick_plan(observed.box, p.config);
+    const auto approved = make_pick_plan(observed.box, p.config, p.observed.locked_yaw);
     if (config.tcp_link != p.config.tcp_link || std::abs(config.lift - p.config.lift) > 1e-9 ||
         tcp_pose_position_error(plan.tcp, approved.tcp) > 1e-9 ||
         tcp_pose_orientation_error(plan.tcp, approved.tcp) > 1e-9 ||

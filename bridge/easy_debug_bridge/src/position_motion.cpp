@@ -554,7 +554,9 @@ struct PositionMotion::Impl {
       position.header.frame_id = m->tcp_model.root_link;
       position.link_name = m->tcp_model.arm_tip_link; position.weight = 1;
       shape_msgs::msg::SolidPrimitive sphere;
-      sphere.type = shape_msgs::msg::SolidPrimitive::SPHERE; sphere.dimensions = {.003};
+      const auto actual_tcp = tcp_forward_pose(m->tcp_model, ordered_arm_values(joints.name, joints.position));
+      sphere.type = shape_msgs::msg::SolidPrimitive::SPHERE;
+      sphere.dimensions = {tcp_planning_position_radius(tcp_pose_position_error(actual_tcp,m->tcp_target))};
       geometry_msgs::msg::Pose region;
       region.position.x = tip.position[0]; region.position.y = tip.position[1]; region.position.z = tip.position[2];
       region.orientation.w = 1;
@@ -588,6 +590,7 @@ struct PositionMotion::Impl {
     if (m->tcp) {
       const auto tip = tcp_target_to_arm_tip(m->tcp_model, m->tcp_target);
       log(m->owner, m->id, "plan_tcp_goal", "frame=" + m->tcp_model.root_link + " tcp_link=" + pose_field->get<std::string>("tcp_link") +
+          " planning_position_radius_m=" + motion_number(constraints.position_constraints.front().constraint_region.primitives.front().dimensions.front()) +
           " tcp_position_m=" + numbers(std::vector<double>(m->tcp_target.position.begin(), m->tcp_target.position.end())) +
           " tcp_quaternion_xyzw=" + numbers(std::vector<double>(m->tcp_target.orientation.begin(), m->tcp_target.orientation.end())) +
           " arm_tip_link=" + m->tcp_model.arm_tip_link + " arm_tip_position_m=" + numbers(std::vector<double>(tip.position.begin(), tip.position.end())) +

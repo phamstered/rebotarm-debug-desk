@@ -7,6 +7,12 @@ template<class F> bool rejects(F f) { try { f(); } catch (const std::exception &
 void near(double a, double b, double epsilon = 1e-12) { assert(std::abs(a-b) < epsilon); }
 }
 int main() {
+  near(tcp_planning_position_radius(.02),.003);
+  near(tcp_planning_position_radius(.003),.00075);
+  near(tcp_planning_position_radius(0),.003);
+  assert(tcp_planning_position_radius(.003)<.003);
+  assert(rejects([]{tcp_planning_position_radius(std::numeric_limits<double>::quiet_NaN());}));
+  assert(rejects([]{tcp_planning_position_radius(-.1);}));
   const double pi = std::acos(-1.), s = std::sqrt(.5);
   const TcpPose z90{{1., 2., 3.}, {0., 0., s, s}};
   const TcpPose x90{{1., 0., 0.}, {s, 0., 0., s}};

@@ -1,5 +1,13 @@
 export type VisualPickPose = { position: [number,number,number]; orientation: [number,number,number,number] };
-export type VisualPickPreview = { subscription_id: string; object_id: number; frame_seq: number; calibrated: boolean; execution_ready: boolean; grasp: VisualPickPose; pregrasp: VisualPickPose; opening_m: number; message: string };
+export type RgbTargetState = {
+  target_id: string; object_id: number; sequence: number; generation: number;
+  mode: "confirming" | "rgbd" | "rgb" | "uncertain";
+  identity_valid: boolean; metric_ready: boolean; plane_verified: boolean;
+  confidence: number; age_ms: number; camera_z_m: number; depth_valid_fraction: number;
+  geometry_source: string; message: string; source_frame: string; target_frame: string; stamp_ns: number;
+  roi: [number,number,number,number]; box: ObjectBox;
+};
+export type VisualPickPreview = { tracking?: RgbTargetState | null; subscription_id: string; object_id: number; frame_seq: number; calibrated: boolean; execution_ready: boolean; grasp: VisualPickPose; pregrasp: VisualPickPose; opening_m: number; message: string };
 export type VisualPickState = { command_id: string; phase: string; message: string; busy: boolean };
 export type ObjectBox = { id: number; center: [number, number, number]; size: [number, number, number]; point_count: number };
 export type ObjectDetectionFrame = { status: "ok" | "empty" | "no_table" | "error"; message: string; frame_seq: number; items: ObjectBox[] };
@@ -206,6 +214,10 @@ export type BridgeEnvelope = {
   rgbd_subscription_id_supported?: boolean;
   object_detection_supported?: boolean;
   visual_pick_supported?: boolean;
+  rgb_target_tracking_supported?: boolean;
+  tracking?: RgbTargetState | null;
+  target_id?: string;
+  target_rgb_payload?: Uint8Array;
   grasp?: VisualPickPose;
   pregrasp?: VisualPickPose;
   object_id?: number;

@@ -1670,3 +1670,4 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .motion-error-monitor-status strong { color: #d9e9f1; }
 .motion-error-monitor-sources { display: flex; flex-wrap: wrap; gap: 4px 18px; }
 .motion-error-monitor-sources code { overflow-wrap: anywhere; }
+.visual-pick-panel input[type="checkbox"] { flex:0 0 auto; width:14px; height:14px; margin:0; }
