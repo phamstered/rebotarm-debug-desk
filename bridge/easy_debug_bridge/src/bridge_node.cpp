@@ -26,6 +26,7 @@
 #include "easy_debug_bridge/rgbd_core.hpp"
 #include "easy_debug_bridge/object_detection.hpp"
 #include "easy_debug_bridge/visual_pick.hpp"
+#include "easy_debug_bridge/rgb_target.hpp"
 #include "easy_debug_bridge/rgbd_qos.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
@@ -562,7 +563,7 @@ class BridgeNode : public rclcpp::Node {
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
-                     ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
+                     ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
         const std::weak_ptr<WebSocketSession> weak = session;
         if (const auto field = request.get_child_optional("refresh")) {
@@ -574,6 +575,17 @@ class BridgeNode : public rclcpp::Node {
         });
       } else if (op == "clock_sync_info") {
         send_clock_sync_info(session, request_id);
+      } else if (op == "visual_target_release") {
+        if(visual_pick_->busy())throw std::runtime_error("抓取执行期间不能释放目标，请先取消");
+        std::set<std::string> fields;
+        for(const auto &field:request)if((field.first!="op"&&field.first!="request_id"&&field.first!="subscription_id"&&field.first!="target_id")||!field.second.empty()||!fields.insert(field.first).second)throw std::runtime_error("释放目标请求字段无效");
+        std::shared_ptr<RgbdSession> selected;
+        {std::lock_guard<std::mutex> lock(rgbd_mutex_);auto it=rgbd_sessions_.find(session->id());if(it!=rgbd_sessions_.end())selected=it->second;}
+        if(!selected||selected->subscription_id!=request.get<std::string>("subscription_id",""))throw std::runtime_error("目标订阅令牌无效");
+        const auto tracking=selected->target_tracker.snapshot();
+        if(tracking.target_id!=request.get<std::string>("target_id",""))throw std::runtime_error("目标身份代次不匹配");
+        selected->target_tracker.release();visual_pick_->cancel(session->id());
+        session->send("{\"op\":\"visual_target_released\",\"request_id\":"+json_quote(request_id)+"}");
       } else if (op == "visual_pick_preview" || op == "visual_pick_start" || op == "visual_pick_status" || op == "visual_pick_cancel") {
         const std::weak_ptr<WebSocketSession> weak=session;
         visual_pick_->request(session->id(),request,[weak](const std::string &reply){if(auto target=weak.lock())target->send(reply);});
@@ -1456,6 +1468,10 @@ class BridgeNode : public rclcpp::Node {
     easy_debug_bridge::ObjectConfig object_config;
     easy_debug_bridge::ObjectTracker object_tracker;
     uint64_t object_frame_seq = 0;
+    easy_debug_bridge::RgbTargetTracker target_tracker;
+    easy_debug_bridge::RgbTargetFrame pick_rgb_frame;
+    sensor_msgs::msg::Image::SharedPtr tracking_rgb, tracking_depth;
+    std::chrono::steady_clock::time_point tracking_sent{};
     std::vector<easy_debug_bridge::ObjectBox> pick_boxes;
     std::string pick_source_frame;
     easy_debug_bridge::TcpPose pick_transform;
@@ -1678,6 +1694,7 @@ class BridgeNode : public rclcpp::Node {
         const auto current = weak.lock();
         if (!current || !current->active.load()) break;
         try_emit_rgbd(current);
+        try_emit_rgb_target(current);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
     });
@@ -1697,6 +1714,8 @@ class BridgeNode : public rclcpp::Node {
     std::lock_guard<std::mutex> lock(session->mutex);
     if (!session->active.load()) return;
     const auto stamp = image_stamp(*message);
+    auto &tracking = rgb ? session->tracking_rgb : session->tracking_depth;
+    if (!tracking || stamp > image_stamp(*tracking)) tracking = message;
     if (stamp <= (rgb ? session->consumed_rgb : session->consumed_depth)) return;
     auto &queue = rgb ? session->rgb_queue : session->depth_queue;
     queue.push_back(message);
@@ -1755,6 +1774,7 @@ class BridgeNode : public rclcpp::Node {
     const auto sync = clock_snapshot();
     if (!sync.healthy()) {
       session->object_tracker.clear();
+      session->target_tracker.invalidate("视觉时钟未就绪");
       session->pending.reset();
       send_rgbd_frame_failure(ws, session, "", sync.message, true, true);
       return;
@@ -1764,6 +1784,9 @@ class BridgeNode : public rclcpp::Node {
       session->pending.reset();
       std::lock_guard<std::mutex> lock(session->mutex);
       session->clock_generation = sync.generation;
+      session->target_tracker.invalidate("视觉时钟代次改变，需重新选择");
+      session->pick_rgb_frame = {};
+      session->tracking_rgb.reset();session->tracking_depth.reset();
       session->rgb_queue.clear(); session->depth_queue.clear();
       session->consumed_rgb = session->consumed_depth = 0;
     }
@@ -1930,9 +1953,120 @@ class BridgeNode : public rclcpp::Node {
       session->pick_tf_stamp=int64_t(transform.header.stamp.sec)*1000000000LL+transform.header.stamp.nanosec;
       const auto &translation=transform.transform.translation;const auto &rotation=transform.transform.rotation;
       session->pick_transform.position={translation.x,translation.y,translation.z};session->pick_transform.orientation={rotation.x,rotation.y,rotation.z,rotation.w};
+      auto &seed=session->pick_rgb_frame;
+      seed.rgb=std::make_shared<easy_debug_bridge::DownsampledImage>(std::move(*rgb_ds));
+      seed.depth=depth->header.frame_id==source_frame?std::make_shared<easy_debug_bridge::DownsampledImage>(std::move(*depth_ds)):nullptr;
+      seed.k=k;seed.distortion=info->d;seed.distortion_model=info->distortion_model;
+      seed.source_frame=source_frame;seed.target_frame=session->target_frame;seed.subscription=session->subscription_id;
+      seed.camera_to_base=session->pick_transform;seed.stamp_ns=session->pick_rgb_stamp;seed.depth_stamp_ns=session->pick_depth_stamp;seed.generation=sync.generation;
     }
     session->last_success = std::chrono::steady_clock::now();
     session->last_error.clear();
+  }
+
+  void try_emit_rgb_target(const std::shared_ptr<RgbdSession> &s) {
+    if (!s->active || !s->detect_objects)
+      return;
+    auto state = s->target_tracker.snapshot();
+    if (state.target_id.empty())
+      return;
+    const auto steady = std::chrono::steady_clock::now();
+    if (steady - s->tracking_sent < std::chrono::milliseconds(100))
+      return;
+    const auto ws = find_session(s->client_id);
+    if (!ws)
+      return;
+    sensor_msgs::msg::Image::SharedPtr rgb, depth;
+    sensor_msgs::msg::CameraInfo::SharedPtr info;
+    {
+      std::lock_guard<std::mutex> lock(s->mutex);
+      rgb = s->tracking_rgb;
+      depth = s->tracking_depth;
+      info = s->latest_info;
+    }
+    const auto sync = clock_snapshot();
+    if (!sync.healthy() || sync.generation != state.generation)
+      s->target_tracker.invalidate("视觉时钟失效，需重新选择");
+    else if (rgb && info && image_stamp(*rgb) > state.stamp_ns) {
+      const auto age = now().nanoseconds() - image_stamp(*rgb);
+      if (age < -50000000LL || age >= 500000000LL)
+        s->target_tracker.invalidate("RGB 帧时间无效或过期");
+      else
+        try {
+          if (info->width != rgb->width || info->height != rgb->height ||
+              (!info->header.frame_id.empty() && info->header.frame_id != rgb->header.frame_id))
+            throw std::runtime_error("RGB CameraInfo 不匹配");
+          std::shared_ptr<TfContext> tf;
+          {
+            std::lock_guard<std::mutex> lock(tf_mutex_);
+            tf = tf_context_;
+          }
+          if (tf->generation != sync.generation)
+            throw std::runtime_error("RGB TF 代次不匹配");
+          const auto transform = tf->buffer->lookupTransform(s->target_frame, rgb->header.frame_id,
+                                                             rgb->header.stamp, tf2::durationFromSec(0));
+          const auto preview =
+              easy_debug_bridge::choose_preview_size(rgb->width, rgb->height, s->max_width, s->max_height);
+          auto down = easy_debug_bridge::downsample_image_nn(
+              rgb->data.data(), rgb->data.size(), rgb->width, rgb->height, rgb->step, rgb->encoding,
+              rgb->is_bigendian, preview.width, preview.height);
+          if (!down)
+            throw std::runtime_error("RGB 降采样失败");
+          easy_debug_bridge::RgbTargetFrame f;
+          f.rgb = std::make_shared<easy_debug_bridge::DownsampledImage>(std::move(*down));
+          double k[9];
+          for (int i = 0; i < 9; ++i)
+            k[i] = info->k[i];
+          f.k =
+              easy_debug_bridge::scale_intrinsics(k, rgb->width, rgb->height, preview.width, preview.height);
+          f.distortion = info->d;
+          f.distortion_model = info->distortion_model;
+          f.source_frame = rgb->header.frame_id;
+          f.target_frame = s->target_frame;
+          f.subscription = s->subscription_id;
+          f.generation = sync.generation;
+          f.stamp_ns = image_stamp(*rgb);
+          const auto &t = transform.transform.translation;
+          const auto &q = transform.transform.rotation;
+          f.camera_to_base.position = {t.x, t.y, t.z};
+          f.camera_to_base.orientation = {q.x, q.y, q.z, q.w};
+          if (depth && depth->header.frame_id == rgb->header.frame_id && depth->width == rgb->width &&
+              depth->height == rgb->height && std::llabs(image_stamp(*depth) - f.stamp_ns) <= 50000000LL) {
+            auto d = easy_debug_bridge::downsample_image_nn(
+                depth->data.data(), depth->data.size(), depth->width, depth->height, depth->step,
+                depth->encoding, depth->is_bigendian, preview.width, preview.height);
+            if (d) {
+              f.depth = std::make_shared<easy_debug_bridge::DownsampledImage>(std::move(*d));
+              f.depth_stamp_ns = image_stamp(*depth);
+            }
+          }
+          const auto after = clock_snapshot();
+          if (!after.healthy() || after.generation != sync.generation)
+            throw std::runtime_error("RGB 处理期间时钟改变");
+          f.source_age_ms = std::max(0., double(now().nanoseconds() - f.stamp_ns) / 1000000.);
+          s->target_tracker.update(f);
+        } catch (const tf2::TransformException &) {
+          // Exact capture-time TF may arrive after the image. Retry within the 500 ms freshness window.
+        } catch (const std::exception &e) {
+          s->target_tracker.invalidate(e.what());
+        }
+    }
+    state = s->target_tracker.snapshot();
+    s->tracking_sent = steady;
+    if (!state.frame.rgb)
+      return;
+    const auto &r = *state.frame.rgb;
+    const auto metadata =
+        "{\"op\":\"visual_target_frame\",\"subscription_id\":" + json_quote(s->subscription_id) +
+        ",\"tracking\":" + easy_debug_bridge::rgb_target_json(state) +
+        ",\"rgb\":{\"width\":" + std::to_string(r.width) + ",\"height\":" + std::to_string(r.height) +
+        ",\"step\":" + std::to_string(r.step) + ",\"encoding\":" + json_quote(r.encoding) +
+        ",\"data_length\":" + std::to_string(r.data.size()) +
+        "},\"data_length\":" + std::to_string(r.data.size()) + "}";
+    std::lock_guard<std::mutex> publish(s->publish_mutex);
+    if (s->active)
+      ws->send_binary(easy_debug_bridge::binary_payload_frame(metadata, r.data, 'T'),
+                      steady + std::chrono::milliseconds(100));
   }
 
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
@@ -1945,22 +2079,71 @@ class BridgeNode : public rclcpp::Node {
     return publisher;
   }
 
-  easy_debug_bridge::PickObservation pick_observation(uint64_t owner,const std::string &token,uint64_t id) {
-    const auto sync=clock_snapshot();if(!sync.healthy())throw std::runtime_error("视觉时钟未就绪");
+  easy_debug_bridge::PickObservation pick_observation(uint64_t owner, const std::string &token, uint64_t id) {
+    const auto sync = clock_snapshot();
+    if (!sync.healthy())
+      throw std::runtime_error("视觉时钟未就绪");
     std::shared_ptr<RgbdSession> s;
-    {std::lock_guard<std::mutex> lock(rgbd_mutex_);auto it=rgbd_sessions_.find(owner);if(it==rgbd_sessions_.end())throw std::runtime_error("没有当前 RGBD 订阅");s=it->second;}
-    std::lock_guard<std::mutex> lock(s->mutex);
-    if(!s->active||!s->detect_objects||s->subscription_id!=token||s->target_frame!="base_link")throw std::runtime_error("视觉选择已失效，请重新选择");
-    const auto age=now().nanoseconds()-s->pick_stamp;
-    if(age< -50000000LL||age>=500000000LL||s->pick_generation!=sync.generation)throw std::runtime_error("目标观测已过期");
-    for(const auto &b:s->pick_boxes)if(b.id==id) {
-      easy_debug_bridge::PickObservation result{b,token,s->pick_sequence,s->pick_generation};
-      result.source_frame=s->pick_source_frame;result.target_frame=s->target_frame;
-      result.rgb_stamp_ns=s->pick_rgb_stamp;result.depth_stamp_ns=s->pick_depth_stamp;result.tf_stamp_ns=s->pick_tf_stamp;
-      result.source_to_target=s->pick_transform;result.age_ms=double(age)/1000000.;return result;
+    {
+      std::lock_guard<std::mutex> lock(rgbd_mutex_);
+      auto it = rgbd_sessions_.find(owner);
+      if (it == rgbd_sessions_.end())
+        throw std::runtime_error("没有当前 RGBD 订阅");
+      s = it->second;
     }
-    throw std::runtime_error("所选目标当前不可见");
+    easy_debug_bridge::RgbTargetFrame seed;
+    easy_debug_bridge::ObjectBox selected;
+    const auto tracking_config =
+        easy_debug_bridge::load_rgb_target_config(get_parameter("visual_pick_config").as_string());
+    auto tracked = s->target_tracker.snapshot();
+    if (!tracked.target_id.empty() &&
+        !s->target_tracker.matches_config(tracking_config)) {
+      s->target_tracker.invalidate("RGB 跟踪配置改变，请清除并重新选择");
+      tracked = s->target_tracker.snapshot();
+    }
+    {
+      std::lock_guard<std::mutex> lock(s->mutex);
+      if (!s->active || !s->detect_objects || s->subscription_id != token || s->target_frame != "base_link")
+        throw std::runtime_error("视觉选择已失效，请重新选择");
+      if (tracked.target_id.empty() || tracked.object_id != id) {
+        if (visual_pick_->busy())
+          throw std::runtime_error("抓取中禁止切换目标");
+        const auto age = now().nanoseconds() - s->pick_stamp;
+        if (age < -50000000LL || age >= 500000000LL || s->pick_generation != sync.generation)
+          throw std::runtime_error("目标观测已过期");
+        auto found = std::find_if(s->pick_boxes.begin(), s->pick_boxes.end(),
+                                  [id](const auto &b) { return b.id == id; });
+        if (found == s->pick_boxes.end())
+          throw std::runtime_error("所选目标当前不可见");
+        selected = *found;
+        seed = s->pick_rgb_frame;
+      }
+    }
+    // CV work never runs under the image receiver's mutex.
+    if (seed.rgb) {
+      seed.source_age_ms = std::max(0., double(now().nanoseconds() - seed.stamp_ns) / 1000000.);
+      tracked = s->target_tracker.select(seed, selected, tracking_config);
+    }
+    if (tracked.target_id.empty() || tracked.object_id != id || tracked.generation != sync.generation)
+      throw std::runtime_error("目标身份已失效");
+    easy_debug_bridge::PickObservation result{tracked.box, token, tracked.sequence, tracked.generation};
+    result.source_frame = tracked.frame.source_frame;
+    result.target_frame = tracked.frame.target_frame;
+    result.rgb_stamp_ns = tracked.stamp_ns;
+    result.depth_stamp_ns = tracked.frame.depth ? tracked.frame.depth_stamp_ns : 0;
+    result.tf_stamp_ns = tracked.stamp_ns;
+    result.source_to_target = tracked.frame.camera_to_base;
+    result.age_ms = tracked.age_ms;
+    result.target_id = tracked.target_id;
+    result.tracking_mode = tracked.mode;
+    result.identity_valid = tracked.identity_valid;
+    result.metric_ready = tracked.metric_ready;
+    result.tracking_message = tracked.message;
+    result.tracking_json = easy_debug_bridge::rgb_target_json(tracked);
+    result.locked_yaw = tracked.locked_yaw;
+    return result;
   }
+
   std::shared_ptr<easy_debug_bridge::ControllerRegistry> controller_registry_;
   std::unique_ptr<easy_debug_bridge::PositionMotion> position_motion_;
   std::unique_ptr<easy_debug_bridge::VisualPick> visual_pick_;

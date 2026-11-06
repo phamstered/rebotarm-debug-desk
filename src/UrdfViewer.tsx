@@ -1,6 +1,6 @@
 import { VisualPickPanel } from "./VisualPickPanel";
 import { VisualPickPreviewLayer } from "./VisualPickPreviewLayer";
-import type { VisualPickPreview } from "./types";
+import type { VisualPickPreview, ObjectBox } from "./types";
 import { ObjectDetectionLayer } from "./ObjectDetectionLayer";
 import { ObjectDetectionControls } from "./ObjectDetectionControls";
 import { ClockSyncStatus } from "./ClockSyncStatus";
@@ -167,6 +167,7 @@ export function UrdfViewer({
   savePoseDisabledReason = "",
   savePoseError = "",
   rgbdCloud = null,
+  rgbdSubscriptionId,
   rgbdVisible = true,
   rgbdPointSize = 0.008,
   rgbdColorMode = "rgb",
@@ -197,6 +198,7 @@ export function UrdfViewer({
   onSendTrajectory(request: TrajectorySendRequest): Promise<void>;
   clockSync?: ClockStatus;
   rgbdCloud?: ColoredPointCloud | null;
+  rgbdSubscriptionId?: string;
   visualPickSupported?: boolean;
   objectsEnabled?: boolean; objectsSupported?: boolean; onObjectsEnabledChange?(value: boolean): void;
   rgbdVisible?: boolean;
@@ -211,9 +213,9 @@ export function UrdfViewer({
   onRgbdNearFarChange?(nearM: number, farM: number): void;
 }) {
   const [visualBusy,setVisualBusy]=useState(false),[visualPreview,setVisualPreview]=useState<VisualPickPreview|null>(null);
-  const [selection,setSelection]=useState<{token:string;id:number}|null>(null);
-  const token=rgbdCloud?.subscriptionId??"";
-  const selected=selection?.token===token?rgbdCloud?.objects?.items.find(b=>b.id===selection.id)??null:null;
+  const [selection,setSelection]=useState<{token:string;id:number;box:ObjectBox}|null>(null);
+  const token=rgbdSubscriptionId??rgbdCloud?.subscriptionId??"";
+  const selected=selection?.token===token?selection.box:null;
   const visualActive=active&&objectsEnabled&&rgbdVisible&&visualPickSupported&&Boolean(token);
   useEffect(()=>{if(!active||!objectsEnabled||!rgbdVisible||selection?.token!==token){setSelection(null);setVisualPreview(null);}},[active,objectsEnabled,rgbdVisible,token,selection?.token]);
   const jointMotion=providedJointMotion?{...providedJointMotion,busy:providedJointMotion.busy||visualBusy}:undefined;
@@ -578,7 +580,7 @@ export function UrdfViewer({
         <Scene view={cameraView} showGrid={showGrid} showAxes={showAxes} robot={robot} controlsEnabled={active && !dragging} onPick={pickJoint}>
           {/* Cloud and robot share the scene root; cloud positions use the same ROS Z-up to scene Y-up rotation. */}
           <ObjectDetectionLayer frame={rgbdCloud?.objects} visible={active && rgbdVisible && objectsEnabled} labels={objectLabels} dimensions={objectDimensions} selectedId={selected?.id}
-            onSelect={visualActive&&!visualBusy?(id)=>{setSelection({token,id});providedJointMotion?.setArmed(false);}:undefined}/>
+            onSelect={visualActive&&!visualBusy?(id)=>{const box=rgbdCloud?.objects?.items.find(b=>b.id===id);if(box)setSelection({token,id,box});providedJointMotion?.setArmed(false);}:undefined}/>
           <VisualPickPreviewLayer preview={visualActive&&selected?visualPreview:null}/>
           <RgbdPointCloudLayer
             cloud={rgbdCloud}

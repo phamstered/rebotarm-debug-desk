@@ -11,6 +11,13 @@ struct TcpPose {
   std::array<double, 4> orientation{0., 0., 0., 1.};
 };
 
+// Keep the measured start outside the planning goal region for millimetre servo steps.
+// Rotation-only requests retain the normal position region.
+inline double tcp_planning_position_radius(double distance_m) {
+  if(!std::isfinite(distance_m)||distance_m<0)throw std::runtime_error("TCP 目标距离无效");
+  if(distance_m<1e-6)return .003;
+  return std::min(.003,std::max(.0001,distance_m*.25));
+}
 inline TcpPose validate_tcp_pose(TcpPose pose) {
   for (const auto value : pose.position)
     if (!std::isfinite(value)) throw std::runtime_error("TCP 位置必须是三个有限数值");

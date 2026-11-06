@@ -168,3 +168,11 @@ it('transports object enablement and replaces boxes with each complete frame or 
   expect(hook.result.current[0].cloud).toBeNull();expect(hook.result.current[0].tfError).toContain("Invalid object config");
   hook.unmount();
 });
+it('retains the subscription lease when depth expires and clears it on leaving',async()=>{
+ const {hook,emit,flush,token}=setup();
+ expect(hook.result.current[0].subscriptionId).toBe(token());emit();flush();
+ await act(async()=>vi.advanceTimersByTimeAsync(500));
+ expect(hook.result.current[0].cloud).toBeNull();expect(hook.result.current[0].subscriptionId).toBe(token());
+ hook.rerender({active:false,profile:defaultProfile,connection:'a'});
+ expect(hook.result.current[0].subscriptionId).toBeUndefined();hook.unmount();
+});

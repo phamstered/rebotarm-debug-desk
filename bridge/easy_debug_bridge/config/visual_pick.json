@@ -1,4 +1,12 @@
 {
+  "rgb_tracking": {
+    "enabled": true,
+    "plane_verified": false,
+    "confirmation_frames": 3,
+    "handoff_distance_m": 0.25,
+    "max_seconds": 90,
+    "max_travel_m": 0.15
+  },
   "calibrated": false,
   "scene_verified": false,
   "tcp_link": "gripper_link",

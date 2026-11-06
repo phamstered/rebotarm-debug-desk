@@ -25,6 +25,7 @@ from test_gripper_motion_ros import MockRobot, WebSocket, wait_for, GRIPPER
 class BinaryWebSocket(WebSocket):
     def __init__(self, port):
         self.rgbd = []
+        self.targets = []
         self.tf_errors = []
         super().__init__(port)
 
@@ -48,11 +49,15 @@ class BinaryWebSocket(WebSocket):
             if first & 128:
                 break
         if opcode == 2:
-            assert payload[:4] == b'RCD1', payload[:8]
+            assert payload[:4] in (b'RCD1', b'RCT1'), payload[:8]
             size = struct.unpack('!I', payload[4:8])[0]
             message = json.loads(payload[8:8+size])
             assert message['data_length'] == len(payload)-8-size
-            self.rgbd.append(message)
+            if payload[:4] == b'RCT1':
+                assert message['op'] == 'visual_target_frame'
+                self.targets.append(message)
+            else:
+                self.rgbd.append(message)
         else:
             message = json.loads(payload)
         if message.get('op') == 'position_motion':

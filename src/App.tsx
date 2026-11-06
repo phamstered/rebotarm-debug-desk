@@ -2085,6 +2085,7 @@ export default function App() {
               objectsEnabled={objectsEnabled && objectsSupported}
               objectsSupported={objectsSupported}
               onObjectsEnabledChange={setObjectsEnabled}
+              rgbdSubscriptionId={rgbdSession.subscriptionId}
               rgbdCloud={rgbdSession.cloud}
               rgbdVisible={rgbdSession.visible}
               rgbdPointSize={rgbdSession.pointSize}

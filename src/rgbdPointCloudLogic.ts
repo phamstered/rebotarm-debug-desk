@@ -74,6 +74,7 @@ export type ColoredPointCloud = {
 };
 
 export type RgbdSessionState = {
+  subscriptionId?: string;
   sessionId: number;
   cloud: ColoredPointCloud | null;
   stale: boolean;

@@ -63,8 +63,8 @@ jobs:
 
       # Pure C++ unit binary against bridge_core.hpp — no rclcpp/ament/colcon.
       # Full Bridge ROS integration stays on Jetson (AGENTS.md §5 / §4).
-      - name: Install Boost headers for isolated visual Pick tests
-        run: apt-get update && apt-get install -y --no-install-recommends libboost-dev
+      - name: Install Boost and OpenCV for isolated visual Pick tests
+        run: apt-get update && apt-get install -y --no-install-recommends libboost-dev libopencv-dev pkg-config
 
       - name: Bridge core C++ unit tests (no ROS)
         run: npm run test:bridge

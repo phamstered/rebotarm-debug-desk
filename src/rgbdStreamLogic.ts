@@ -31,6 +31,7 @@ export function useRgbdStream(
     setState(resetRgbdSession);
     if (!active || !connected) return;
     const token = crypto.randomUUID();
+    setState(current=>({...current,subscriptionId:token}));
     let valid = true, raf: number | null = null, expiry: number | undefined;
     let pending: { meta: RgbdFrameMeta; payload: Uint8Array; at: number; expiresAt: number } | null = null;
     const clearPending = () => {

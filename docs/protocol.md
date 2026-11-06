@@ -516,9 +516,27 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 
 `hello.visual_pick_supported:true` 表示支持选择预览和服务端执行编排，不代表标定或运动已经就绪。客户端仅发送当前 RGBD 订阅的 ID，不提供任意 ROS Topic、TCP 位姿或抓取配置文件路径。
 
-- 预览：`{"op":"visual_pick_preview","request_id":"uuid","subscription_id":"RGBD-token","object_id":1}`。要求同一客户端正在订阅带检测的 `base_link` RGBD，目标当前可见，源帧龄小于 500 ms，时钟代次匹配。返回 `visual_pick_preview`，包含原令牌/编号、`frame_seq`、`calibrated`、`execution_ready`、`grasp/pregrasp`（各含三个米制 position 和 xyzw orientation）、`opening_m`（单指行程）、`message`。未标定的姿态是抓取坐标系几何候选，不是可执行 TCP。
-- 开始：`{"op":"visual_pick_start","request_id":"uuid","subscription_id":"RGBD-token","object_id":1,"preview_frame_seq":12,"command_id":"UUID","confirmation":"ARMED"}`。command_id 仅允许字母、数字、连字符，最长 60 字符，最近 256 个受理 ID 去重。要求最近 1 秒内同一客户端生成的可执行预览，当前目标/时间代次一致、中心偏移不超过 2 cm、每轴尺寸变化不超过 1 cm、抓取配置一致，且标定/场景核验均通过；后台再核验 MoveIt TCP、夹爪可用性与标定开度。返回关联 request_id 的 `visual_pick_state`，busy:true 表示任务已受理，不代表规划或抓取成功。
+- 预览：`{"op":"visual_pick_preview","request_id":"uuid","subscription_id":"RGBD-token","object_id":1}`。首次绑定要求同一客户端正在订阅带检测的 `base_link` RGBD，目标当前可见，源帧龄小于 500 ms，时钟代次匹配；绑定后使用同一目标 UUID 的跟踪观测。返回 `visual_pick_preview`，包含原令牌/编号、`frame_seq`、`calibrated`、`execution_ready`、`grasp/pregrasp`（各含三个米制 position 和 xyzw orientation）、`opening_m`（单指行程）、`message`。未标定的姿态是抓取坐标系几何候选，不是可执行 TCP。
+- 开始：`{"op":"visual_pick_start","request_id":"uuid","subscription_id":"RGBD-token","object_id":1,"preview_frame_seq":12,"target_id":"selected-target-UUID","command_id":"UUID","confirmation":"ARMED"}`。command_id 仅允许字母、数字、连字符，最长 60 字符，最近 256 个受理 ID 去重。要求最近 1 秒内同一客户端生成的可执行预览，当前目标/时间代次一致、中心偏移不超过 2 cm、每轴尺寸变化不超过 1 cm、抓取配置一致，且标定/场景核验均通过；后台再核验 MoveIt TCP、夹爪可用性与标定开度。返回关联 request_id 的 `visual_pick_state`，busy:true 表示任务已受理，不代表规划或抓取成功。
 - 状态/心跳：`{"op":"visual_pick_status","request_id":"uuid"}`。只有任务所属客户端刷新其 3 秒心跳；建议 500 ms 查询一次。返回 `visual_pick_state`，含 `command_id`、`pick_phase`、`message`、`busy`。`pick_phase` 不复用重力辨识的数字 `phase` 字段。
 - 取消：`{"op":"visual_pick_cancel","request_id":"uuid"}`。只有所属客户端可以取消在执行任务；返回当前状态。不会把取消受理当作停稳。会话断开、DISABLE、取消和错误都禁止继续下发后续段。
 
 阶段为 idle / validating / opening / approaching / descending / closing / lifting / holding / canceling / stop_failed / failed / canceled。异步状态也使用 `visual_pick_state`。holding 表示抬升运动完成并保持，不构成夹持成功证明。规划/执行通过既有 `PositionMotion` 的受限 TCP/夹爪接口，保留其碰撞、模型、时序、反馈、控制器及停稳确认。停止未确认时 busy 保持 true；正常终态才释放视觉运动锁。期间普通 position_move、动作组启动/继续、非 DISABLE 直接命令、轨迹发布及重力辨识被拒绝。未知、重复、非标量请求字段返回 error。
+
+### 所选目标 RGB 跟踪（RCT1）
+
+`hello.rgb_target_tracking_supported:true` 表示已编译 OpenCV 跟踪组件。首次 `visual_pick_preview` 为当前选中物体初始化跟踪，响应新增 `tracking` 对象；后续预览不自动重置失败的绑定。`visual_pick_start` 必须携带预览中的 `target_id`；订阅、原始 object_id、UUID、预览帧序号与时间代次同时核验。`execution_ready` 还要求身份及米制几何就绪。客户端不提供检测坐标或几何核验标记。
+
+仅有已绑定目标时，Bridge 独立于 RGB/Depth 配对以最多 10 Hz 推送二进制 `RCT1`：4 字节 magic、4 字节大端 JSON 长度、UTF-8 JSON、原始 RGB 字节。元数据为：
+
+```json
+{"op":"visual_target_frame","subscription_id":"RGBD-token","tracking":{"target_id":"UUID","object_id":1,"sequence":4,"generation":2,"mode":"rgb","identity_valid":true,"metric_ready":false,"plane_verified":false,"confidence":0.94,"depth_valid_fraction":0,"age_ms":15,"camera_z_m":0.19,"geometry_source":"surface_plane_unverified","message":"RGB 身份保持；顶面几何未核验，禁止继续接近","source_frame":"color_optical","target_frame":"base_link","stamp_ns":1793980000000000000,"roi":[100,70,50,50],"box":{"id":1,"center":[0.2,0,0.025],"size":[0.05,0.05,0.05],"point_count":100},"locked_yaw":0},"rgb":{"width":320,"height":240,"step":960,"encoding":"rgb8","data_length":230400},"data_length":230400}
+```
+
+模式为 `confirming` / `rgbd` / `rgb` / `uncertain`。置信度是投影/轮廓匹配分数，不是成功率。`box` 在 RGB 模式下仅更新平面约束下的 XY，Z/尺寸/point_count 来自初始化，不是当前点云测量。`geometry_source` 为 `depth_verified_surface`、`surface_plane_unverified`、`verified_surface_plane` 或失效时的 `none`。`metric_ready` 与身份独立：RGB 身份成立但平面未核验或视角不适合时仍为 false。
+
+`sequence` 在绑定内随新 RGB 帧递增，UUID 在交接中不变。接收端按订阅令牌、UUID、原物体编号、时间代次和非递减序号过滤，按 `500-age_ms` 毫秒设置显示期限；过期后不能用迟到成功帧自动恢复当前绑定。RGB 处理使用采集时刻 TF 和匹配 RGB 内参，可在 Depth 无消息时继续；无 TF 不生成新跟踪位置。RGB 写入期限最多 100 ms。像素保持二进制，不走 Base64 JSON。
+
+清除选择：`{"op":"visual_target_release","request_id":"uuid","subscription_id":"RGBD-token","target_id":"selected-target-UUID"}`。仅允许持有该订阅及 UUID 的客户端，执行任务期间拒绝释放；先取消并确认终态。返回 `visual_target_released`。释放清空绑定与预览，下次选择生成新 UUID。取消任务不自动重置身份；重新订阅或断线销毁当前会话。未知、重复或非标量字段拒绝。
+
+毫米级 TCP 目标按当前 FK 到目标的位置距离收紧 MoveIt 位置区域半径：距离的 1/4，限制在 0.1–3 mm；位置不变的纯旋转保留 3 mm。`plan_tcp_goal.planning_position_radius_m` 记录本次值。执行终点和实测到位校验仍沿用原有边界。

@@ -18,10 +18,10 @@ static Tree parse(const std::string &s) {
 }
 int main() {
   const auto path = "/tmp/easy-debug-visual-pick-" + std::to_string(getpid()) + ".json";
-  auto config = [&](bool calibrated) {
+  auto config = [&](bool calibrated, bool plane = false) {
     std::ofstream f(path);
     f << "{\"calibrated\":" << (calibrated ? "true" : "false")
-      << ",\"scene_verified\":true,\"grasp_to_tcp\":{\"position\":[0,0,0],\"orientation\":[0,0,0,1]}}";
+      << ",\"rgb_tracking\":{\"plane_verified\":" << (plane?"true":"false") << "},\"scene_verified\":true,\"grasp_to_tcp\":{\"position\":[0,0,0],\"orientation\":[0,0,0,1]}}";
   };
   config(false);
   ObjectBox box{1, {.2, .1, .05}, {.05, .04, .06}, 100};
@@ -57,7 +57,7 @@ int main() {
     });
   };
   std::atomic<bool> lost{false}, hold{false}, release{false}, frozen{false}, flip{false},
-      static_frames{false}, pose_ready{true};
+      static_frames{false}, pose_ready{true}, tracked{false}, rgb_mode{false}, rgb_metric{true}, rgb_identity{true};
   std::atomic<uint64_t> sequence{10};
   int contact_observations = 0;
   TcpPose actual = plan.pre_tcp;
@@ -92,6 +92,10 @@ int main() {
                std::string::npos);
     ++moves;
     if (r.get_child_optional("tcp_pose")) {
+      if(tracked&&rgb_mode&&r.get<std::string>("label").find("抬升")==std::string::npos) {
+        TcpPose target;size_t i=0;for(const auto &v:r.get_child("tcp_pose.position"))target.position[i++]=v.second.get_value<double>();
+        std::lock_guard<std::mutex> lock(pose_mutex);assert(tcp_pose_position_error(actual,target)<=.003000001);
+      }
       if (!frozen) {
         std::lock_guard<std::mutex> lock(pose_mutex);
         size_t i = 0;
@@ -126,6 +130,8 @@ int main() {
         std::swap(observed.size[0], observed.size[1]);
     }
     PickObservation observation{observed, token, static_frames ? sequence.load() : sequence.fetch_add(1), 2};
+    if(tracked){observation.target_id="550e8400-e29b-41d4-a716-446655440000";observation.tracking_mode=rgb_mode?"rgb":"rgbd";
+      observation.identity_valid=rgb_identity;observation.metric_ready=rgb_metric;observation.locked_yaw=1.5707963267948966;}
     observation.source_frame = "camera_optical"; observation.source_to_target.position = {.1,.2,.3};
     observation.rgb_stamp_ns = 1234567890123LL; observation.depth_stamp_ns = 1234567890000LL;
     observation.tf_stamp_ns = observation.rgb_stamp_ns; observation.age_ms = 12.5;
@@ -348,5 +354,40 @@ int main() {
     reject = true;
   }
   assert(reject);
+  // A selected RGB target requires its UUID and an explicitly verified plane.
+  static_frames=false;tracked=true;rgb_mode=true;rgb_metric=false;
+  request.put("target_id","550e8400-e29b-41d4-a716-446655440000");
+  request.put("command_id","rgb-unverified");refresh_preview();
+  const int rgb_before=moves;
+  reject=false;try{pick.request(1,request,capture);}catch(...){reject=true;}assert(reject&&moves==rgb_before);
+  rgb_metric=true;refresh_preview();
+  reject=false;try{pick.request(1,request,capture);}catch(...){reject=true;}assert(reject&&moves==rgb_before);
+  config(true,true);refresh_preview();bad=request;bad.put("target_id","old-target");
+  reject=false;try{pick.request(1,bad,capture);}catch(...){reject=true;}assert(reject&&moves==rgb_before);
+  {std::lock_guard<std::mutex> lock(pose_mutex);actual=make_pick_plan(box,load_pick_config(path),1.5707963267948966).pre_tcp;}
+  request.put("command_id","rgb-verified");refresh_preview();const int rgb_grips=grips;
+  pick.request(1,request,[](const std::string &){});wait();pick.request(1,status,capture);
+  assert(reply.get<std::string>("pick_phase")=="holding"&&grips==rgb_grips+2);
+  assert(logged("rgb-verified","pick_step","max_step_m=0.003"));
+  // Commanded RGB approach travel is bounded before closing.
+  {std::lock_guard<std::mutex> lock(pose_mutex);actual=make_pick_plan(box,load_pick_config(path),1.5707963267948966).pre_tcp;actual.position[0]-=.12;}
+  request.put("command_id","rgb-travel-bound");refresh_preview();const int budget_grips=grips;
+  pick.request(1,request,[](const std::string &){});wait();pick.request(1,status,capture);
+  assert(reply.get<std::string>("pick_phase")=="failed"&&grips==budget_grips+1);
+  assert(reply.get<std::string>("message").find("累计")!=std::string::npos);
+  // Near-square AABB direction changes cannot change the selected grasp yaw.
+  rgb_mode=false;flip=true;contact_observations=0;
+  {std::lock_guard<std::mutex> lock(pose_mutex);actual=make_pick_plan(box,load_pick_config(path),1.5707963267948966).pre_tcp;}
+  request.put("command_id","locked-grasp-yaw");refresh_preview();const int yaw_grips=grips;
+  pick.request(1,request,[](const std::string &){});wait();pick.request(1,status,capture);
+  assert(reply.get<std::string>("pick_phase")=="holding"&&grips==yaw_grips+2);
+  flip=false;
+  // Losing identity during an in-flight segment requests cancellation and no follow-up.
+  hold=true;release=true;
+  request.put("command_id","identity-loss");refresh_preview();const int loss_moves=moves;
+  pick.request(1,request,[](const std::string &){});
+  while(moves==loss_moves)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  rgb_identity=false;wait();assert(moves==loss_moves+1);
+  pick.request(1,status,capture);assert(reply.get<std::string>("pick_phase")=="failed");
   std::remove(path.c_str());
 }
