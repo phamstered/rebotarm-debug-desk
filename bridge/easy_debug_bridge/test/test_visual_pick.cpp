@@ -42,6 +42,20 @@ int main() {
   assert(tcp_pose_position_error(plan.pre_tcp, step) <= .010001 &&
          tcp_pose_orientation_error(plan.pre_tcp, step) <= .150001);
   std::atomic<int> moves{0}, grips{0}, cancel_requests{0};
+  std::atomic<bool> opening_failure{false}, diagnostic_throws{false};
+  struct DiagnosticEntry { uint64_t owner; std::string command, phase, message; };
+  std::vector<DiagnosticEntry> diagnostics;
+  std::mutex diagnostic_mutex;
+  auto diagnostic = [&](uint64_t owner, const std::string &command, const std::string &phase, const std::string &message) {
+    { std::lock_guard<std::mutex> lock(diagnostic_mutex); diagnostics.push_back({owner,command,phase,message}); }
+    if (diagnostic_throws) throw std::runtime_error("diagnostic sink failed");
+  };
+  auto logged = [&](const std::string &command, const std::string &phase, const std::string &field) {
+    std::lock_guard<std::mutex> lock(diagnostic_mutex);
+    return std::any_of(diagnostics.begin(), diagnostics.end(), [&](const auto &e) {
+      return e.owner == 1 && e.command == command && e.phase == phase && e.message.find(field) != std::string::npos;
+    });
+  };
   std::atomic<bool> lost{false}, hold{false}, release{false}, frozen{false}, flip{false},
       static_frames{false}, pose_ready{true};
   std::atomic<uint64_t> sequence{10};
@@ -92,6 +106,10 @@ int main() {
       assert(r.get<std::string>("joint_name") == "gripper_finger_left_joint");
     }
     send("{\"op\":\"position_move_ack\",\"accepted\":true}");
+    if (opening_failure && !r.get_child_optional("tcp_pose")) {
+      send("{\"op\":\"position_motion\",\"motion_phase\":\"failed\",\"message\":\"single-point trajectory rejected\"}");
+      return;
+    }
     if (hold) {
       std::lock_guard<std::mutex> lock(callback_mutex);
       pending = send;
@@ -107,19 +125,23 @@ int main() {
       if (std::abs(actual.position[2] - .065) < 1e-6 && ++contact_observations >= 2)
         std::swap(observed.size[0], observed.size[1]);
     }
-    return PickObservation{observed, token, static_frames ? sequence.load() : sequence.fetch_add(1), 2};
+    PickObservation observation{observed, token, static_frames ? sequence.load() : sequence.fetch_add(1), 2};
+    observation.source_frame = "camera_optical"; observation.source_to_target.position = {.1,.2,.3};
+    observation.rgb_stamp_ns = 1234567890123LL; observation.depth_stamp_ns = 1234567890000LL;
+    observation.tf_stamp_ns = observation.rgb_stamp_ns; observation.age_ms = 12.5;
+    return observation;
   };
   VisualPick pick(path, motion, observe, [&](const std::string &) {
     if (!pose_ready) throw std::runtime_error("TCP feedback unavailable");
     std::lock_guard<std::mutex> lock(pose_mutex);
     return actual;
-  });
+  }, diagnostic);
   Tree request = parse("{\"op\":\"visual_pick_preview\",\"subscription_id\":\"lease\",\"object_id\":1}");
   Tree reply;
   auto capture = [&](const std::string &s) { reply = parse(s); };
   pick.request(1, request, capture);
   assert(!reply.get<bool>("execution_ready"));
-  assert(moves == 0);
+  assert(moves == 0 && diagnostics.empty());
   request.put("op", "visual_pick_start");
   request.put("confirmation", "ARMED");
   request.put("command_id", "test");
@@ -165,12 +187,32 @@ int main() {
   wait();
   assert(moves == 0);
   pose_ready = true;
+  opening_failure = true;
+  const int arm_before_failure = moves - grips;
+  request.put("command_id", "opening-failure"); refresh_preview();
+  pick.request(1, request, [](const std::string &) {}); wait();
+  assert(moves - grips == arm_before_failure);
+  assert(logged("opening-failure", "pick_frame", "source_frame=\"camera_optical\""));
+  assert(logged("opening-failure", "pick_frame", "rgb_stamp_ns=1234567890123"));
+  assert(logged("opening-failure", "pick_frame", "source_to_target="));
+  assert(logged("opening-failure", "pick_config", "grasp_to_tcp="));
+  assert(logged("opening-failure", "pick_geometry", "distance_to_pre_tcp_m="));
+  assert(logged("opening-failure-vp-1", "pick_segment", "phase=opening"));
+  assert(logged("opening-failure", "pick_result", "last_phase=opening"));
+  opening_failure = false;
+  const int grips_before_success = grips;
+  diagnostic_throws = true; // A failing diagnostic sink cannot change control outcomes.
   request.put("command_id", "test");
   refresh_preview();
   // Run the full isolated observe -> segment -> close -> lift sequence with fake motion success.
   pick.request(1, request, [](const std::string &) {});
   wait();
-  assert(moves > 5 && grips == 2);
+  assert(moves > 5 && grips - grips_before_success == 2);
+  diagnostic_throws = false;
+  assert(logged("test", "pick_step", "phase=approaching"));
+  assert(logged("test", "pick_step", "actual_tcp="));
+  assert(logged("test", "pick_step", "target_tcp="));
+  assert(logged("test", "pick_result", "phase=holding"));
   Tree status;
   status.put("op", "visual_pick_status");
   pick.request(1, status, capture);

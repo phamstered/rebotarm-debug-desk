@@ -585,6 +585,22 @@ struct PositionMotion::Impl {
     }
     log(m->owner, m->id, "validating", m->label + " · start=" + numbers(actual) + " target=" + numbers(target) +
         " duration_s=" + std::to_string(duration) + " scaling=1/1");
+    if (m->tcp) {
+      const auto tip = tcp_target_to_arm_tip(m->tcp_model, m->tcp_target);
+      log(m->owner, m->id, "plan_tcp_goal", "frame=" + m->tcp_model.root_link + " tcp_link=" + pose_field->get<std::string>("tcp_link") +
+          " tcp_position_m=" + numbers(std::vector<double>(m->tcp_target.position.begin(), m->tcp_target.position.end())) +
+          " tcp_quaternion_xyzw=" + numbers(std::vector<double>(m->tcp_target.orientation.begin(), m->tcp_target.orientation.end())) +
+          " arm_tip_link=" + m->tcp_model.arm_tip_link + " arm_tip_position_m=" + numbers(std::vector<double>(tip.position.begin(), tip.position.end())) +
+          " arm_tip_quaternion_xyzw=" + numbers(std::vector<double>(tip.orientation.begin(), tip.orientation.end())));
+    }
+    for (const auto &c : constraints.joint_constraints) {
+      const auto it = std::find(motion_model.joint_names.begin(), motion_model.joint_names.end(), c.joint_name);
+      const auto index = size_t(it - motion_model.joint_names.begin());
+      log(m->owner, m->id, "plan_joint_goal", "joint=" + c.joint_name + " unit=" + (c.joint_name == gripper_motion_joint() ? "m" : "rad") +
+          " actual=" + motion_number(actual.at(index)) + " target=" + motion_number(c.position) +
+          " target_delta=" + motion_number(c.position-actual.at(index)) + " tolerance_above=" + motion_number(c.tolerance_above) +
+          " tolerance_below=" + motion_number(c.tolerance_below));
+    }
     goal.request.goal_constraints.push_back(constraints);
     goal.planning_options.plan_only = m->plan_only; goal.planning_options.replan = false;
     goal.planning_options.planning_scene_diff.is_diff = true;
@@ -689,8 +705,17 @@ struct PositionMotion::Impl {
     if (!same_motion_joints(plan.joint_trajectory.joint_names, m->model.joint_names) || !plan.multi_dof_joint_trajectory.points.empty() ||
         !plan.multi_dof_joint_trajectory.joint_names.empty()) throw std::runtime_error("规划轨迹关节集合与请求不匹配");
     const auto &names = plan.joint_trajectory.joint_names;
+    const auto log_point = [&](size_t index) {
+      const auto &p = plan.joint_trajectory.points[index];
+      log(m->owner, m->id, "plan_point", motion_point_summary({p.positions,p.velocities,p.accelerations,{},
+          int64_t(p.time_from_start.sec)*1000000000LL+p.time_from_start.nanosec}, index));
+    };
+    if (!plan.joint_trajectory.points.empty()) {
+      log_point(0);
+      if (plan.joint_trajectory.points.size() > 1) log_point(plan.joint_trajectory.points.size()-1);
+    }
     if (plan.joint_trajectory.points.size() < 2 || plan.joint_trajectory.points.size() > 10000)
-      throw std::runtime_error("规划轨迹点数无效");
+      throw std::runtime_error("规划轨迹点数无效 points=" + std::to_string(plan.joint_trajectory.points.size()) + " required=2..10000；单点结果未执行，需结合目标容差和当前反馈判断");
     std::vector<TimedMotionPoint> points;
     for (const auto &point : plan.joint_trajectory.points) {
       m->validation_stage = "decode_point_" + std::to_string(points.size());
@@ -1130,6 +1155,9 @@ void PositionMotion::request(uint64_t owner, const Tree &data, Send send) {
         (group_op ? ",\"accepted\":false,\"command_id\":" + quote(data.get<std::string>("command_id", "")) : "") + ",\"message\":\"运动请求队列已满\"}"); return;
   }
   impl_->requests.push_back({owner, data, std::move(send), false});
+}
+void PositionMotion::diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message) {
+  impl_->log(owner, command, phase, message);
 }
 void PositionMotion::disconnected(uint64_t owner) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);

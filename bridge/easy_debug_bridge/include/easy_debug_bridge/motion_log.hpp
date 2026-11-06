@@ -3,16 +3,20 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <mutex>
 
 namespace easy_debug_bridge {
-// ROS executor-owned audit window. Full entries are also written via RCLCPP.
+// Thread-safe audit window; worker diagnostics share the same owner-scoped log.
+// Motion state remains owned by the ROS executor.
 class MotionLog {
   struct Entry { uint64_t seq, owner; std::string json; };
+  mutable std::mutex mutex_;
   std::deque<Entry> entries_;
   uint64_t seq_{0};
  public:
   void append(uint64_t owner, const std::string &command, const std::string &phase,
               const std::string &message, const std::string &level) {
+    std::lock_guard<std::mutex> lock(mutex_);
     const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const auto bounded = [](const std::string &text, size_t limit) {
@@ -28,6 +32,7 @@ class MotionLog {
     if (entries_.size() > 2048) entries_.pop_front();
   }
   std::string page(uint64_t owner, uint64_t after) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     std::string data = "\"motion_logs\":[";
     uint64_t cursor = after; size_t count = 0;
     for (const auto &entry : entries_) {

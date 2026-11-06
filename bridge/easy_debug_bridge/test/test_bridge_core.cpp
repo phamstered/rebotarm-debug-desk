@@ -355,6 +355,10 @@ int main() {
     invalid_auto = path; invalid_auto.front().velocities = {-.001};
     assert(rejects([&] { automatic_motion_timing(invalid_auto, gripper, {.02}, {.04}, on_retry); }));
     assert(retries == 0);
+    const auto one_point = motion_point_summary({{.029438824448436887},{0},{0},{},0},0);
+    assert(one_point.find("index=0 time_s=0 positions=[") != std::string::npos);
+    const auto bounded_point = motion_point_summary({std::vector<double>(10000,1),{},{},{},0},0);
+    assert(bounded_point.size() < 512 && bounded_point.find("count=10000") != std::string::npos);
     const auto summaries = motion_plan_summaries(path, gripper, {.02}, {.04});
     assert(summaries.size() == 1 && summaries.front().find("unit=m") != std::string::npos);
     assert(summaries.front().find("p_knot_peak=") != std::string::npos);

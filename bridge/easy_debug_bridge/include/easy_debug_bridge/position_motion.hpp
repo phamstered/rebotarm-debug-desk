@@ -16,6 +16,8 @@ class PositionMotion {
                           std::shared_ptr<ControllerRegistry> controllers);
   ~PositionMotion();
   void request(uint64_t owner, const boost::property_tree::ptree &request, Send send);
+  // Internal diagnostics only; never registered as a WebSocket operation.
+  void diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message);
   void disconnected(uint64_t owner);
   bool busy() const;
  private:

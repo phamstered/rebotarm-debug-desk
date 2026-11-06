@@ -253,6 +253,8 @@ class MockRobot(Node):
                 point = JointTrajectoryPoint(); point.positions = [start + offset]
                 point.velocities = [velocity]; point.accelerations = [acceleration]
                 point.time_from_start.nanosec = nanosec; trajectory.points.append(point)
+        if getattr(self, 'single_point_plan', False):
+            result.planned_trajectory.joint_trajectory.points = result.planned_trajectory.joint_trajectory.points[:1]
         result.error_code.val = 1
         # Legacy arm-only requests execute through MoveGroup itself.
         if not handle.request.planning_options.plan_only:
@@ -305,6 +307,14 @@ def main(binary):
                     return None
             ws = wait_for(connect)
             info = lambda: ws.request('position_motion_info')
+            def command_logs():
+                snapshot = info(); entries = list(snapshot['motion_logs'])
+                for _ in range(8):
+                    if len(snapshot['motion_logs']) < 256: break
+                    snapshot = ws.request('position_motion_info', motion_log_session=snapshot['motion_log_session'], motion_log_after=snapshot['motion_log_cursor'])
+                    entries.extend(snapshot['motion_logs'])
+                return [e for e in entries if e['command_id'] == ws.command_id]
+
             ready = wait_for(lambda: (lambda i: i if i.get('gripper_available') else None)(info()))
             assert ready['gripper_supported'] and ready['gripper_feedback_fresh'], ready
             assert abs(ready['gripper_position'] - .025) < 1e-8, ready
@@ -385,16 +395,27 @@ def main(binary):
             wait_for(completed)
             assert robot.groups[-1] == 'gripper'
             assert robot.executions[-1].joint_names == [GRIPPER]
-            entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
+            entries = command_logs()
             assert any(e['phase']=='plan_request' and 'allowed_planning_time_s=5' in e['message'] for e in entries),entries
             assert any(e['phase']=='plan_timing' and 'duration_source=automatic' in e['message'] for e in entries),entries
+            robot.single_point_plan = True
+            before = len(robot.executions)
+            reply = move(joint_targets={GRIPPER: robot.positions[GRIPPER] + .000434670653491825})
+            assert reply.get('accepted') is not False, reply
+            wait_for(lambda: completed('failed'))
+            assert len(robot.executions) == before
+            entries = command_logs()
+            assert any(e['phase']=='plan_point' and 'index=0 time_s=0' in e['message'] and 'positions=' in e['message'] for e in entries),entries
+            assert any(e['phase']=='plan_joint_goal' and 'tolerance_above=0.001' in e['message'] and 'target_delta=' in e['message'] for e in entries),entries
+            assert any(e['phase']=='plan_rejected' and 'points=1' in e['message'] for e in entries),entries
+            robot.single_point_plan = False
             robot.excessive_plan_velocity = True
             before = len(robot.executions)
             reply = move(joint_targets={GRIPPER: .02}, motion_duration_s=6.)
             assert reply.get('accepted') is not False, reply
             wait_for(lambda: completed('failed'))
             assert len(robot.executions) == before
-            entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
+            entries = command_logs()
             rejection = next(e for e in entries if e['phase']=='plan_rejected')
             assert 'joint='+GRIPPER in rejection['message'] and 'unit=m' in rejection['message'] and 'velocity_endpoints=' in rejection['message'], rejection
             assert any(e['phase']=='plan_timing' and 'duration_source=explicit' in e['message'] for e in entries),entries
@@ -412,7 +433,7 @@ def main(binary):
             scale = duration/.2
             assert abs(trajectory.points[1].velocities[0] - .004/scale) < 1e-10
             assert abs(trajectory.points[1].accelerations[0] - .04/(scale*scale)) < 1e-10
-            entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
+            entries = command_logs()
             assert any(e['phase']=='plan_retime' and 'joint='+GRIPPER in e['message'] for e in entries),entries
             assert any(e['phase']=='plan_timing' and 'spline_validation=passed' in e['message'] for e in entries),entries
             robot.reported_quintic_plan = False
