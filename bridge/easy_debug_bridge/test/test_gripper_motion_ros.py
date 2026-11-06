@@ -406,7 +406,7 @@ def main(binary):
             assert len(robot.executions) == before
             entries = command_logs()
             assert any(e['phase']=='plan_point' and 'index=0 time_s=0' in e['message'] and 'positions=' in e['message'] for e in entries),entries
-            assert any(e['phase']=='plan_joint_goal' and 'tolerance_above=0.001' in e['message'] and 'target_delta=' in e['message'] for e in entries),entries
+            assert any(e['phase']=='plan_joint_goal' and 'tolerance_above=0.0005' in e['message'] and 'target_delta=' in e['message'] for e in entries),entries
             assert any(e['phase']=='plan_rejected' and 'points=1' in e['message'] for e in entries),entries
             robot.single_point_plan = False
             robot.excessive_plan_velocity = True
