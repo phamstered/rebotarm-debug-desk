@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <iomanip>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -28,6 +29,25 @@ static std::string pose_json(const TcpPose &p) {
   o << "{\"position\":" << vec(p.position) << ",\"orientation\":[" << p.orientation[0] << ","
     << p.orientation[1] << "," << p.orientation[2] << "," << p.orientation[3] << "]}";
   return o.str();
+}
+static std::string number(double value) {
+  std::ostringstream out; out << std::setprecision(17) << value; return out.str();
+}
+static std::string coordinates(const std::array<double, 3> &value) {
+  return "[" + number(value[0]) + "," + number(value[1]) + "," + number(value[2]) + "]";
+}
+static std::string pose_detail(const TcpPose &p) {
+  return "{\"position_m\":" + coordinates(p.position) + ",\"quaternion_xyzw\":[" + number(p.orientation[0]) + "," +
+      number(p.orientation[1]) + "," + number(p.orientation[2]) + "," + number(p.orientation[3]) + "]}";
+}
+static std::string frame_detail(const PickObservation &o) {
+  return "object_id=" + std::to_string(o.box.id) + " subscription=" + position_json_quote(o.subscription) +
+      " frame_seq=" + std::to_string(o.sequence) + " generation=" + std::to_string(o.generation) +
+      " target_frame=" + position_json_quote(o.target_frame) + " source_frame=" + position_json_quote(o.source_frame) +
+      " rgb_stamp_ns=" + std::to_string(o.rgb_stamp_ns) + " depth_stamp_ns=" + std::to_string(o.depth_stamp_ns) +
+      " tf_stamp_ns=" + std::to_string(o.tf_stamp_ns) + " observation_age_ms=" + number(o.age_ms) +
+      " box_center_m=" + coordinates(o.box.center) + " box_size_m=" + coordinates(o.box.size) +
+      " point_count=" + std::to_string(o.box.point_count) + " source_to_target=" + pose_detail(o.source_to_target);
 }
 PickConfig load_pick_config(const std::string &path) {
   Tree t;
@@ -113,6 +133,7 @@ struct VisualPick::Impl {
   Motion motion;
   Observe observe;
   Pose pose;
+  Diagnostic diagnostic;
   std::atomic<bool> active{false}, canceled{false}, shutdown{false};
   mutable std::mutex mutex;
   uint64_t owner = 0;
@@ -132,8 +153,12 @@ struct VisualPick::Impl {
     std::string error, phase;
     Tree reply;
   };
-  Impl(std::string path, Motion m, Observe o, Pose p)
-      : config_path(std::move(path)), motion(std::move(m)), observe(std::move(o)), pose(std::move(p)) {}
+  Impl(std::string path, Motion m, Observe o, Pose p, Diagnostic d)
+      : config_path(std::move(path)), motion(std::move(m)), observe(std::move(o)), pose(std::move(p)), diagnostic(std::move(d)) {}
+  void record(uint64_t who, const std::string &command, const std::string &kind, const std::string &detail) noexcept {
+    // Observability must never change task outcomes or weaken cancellation.
+    try { if (diagnostic) diagnostic(who, command, kind, detail); } catch (...) {}
+  }
   std::string state(const std::string &request_id = "") const {
     std::lock_guard<std::mutex> lock(mutex);
     return "{\"op\":\"visual_pick_state\",\"request_id\":" + position_json_quote(request_id) +
@@ -141,20 +166,23 @@ struct VisualPick::Impl {
            ",\"message\":" + position_json_quote(message) + ",\"busy\":" + (active ? "true" : "false") + "}";
   }
   void update(const std::string &p, const std::string &msg, const Send &send) {
+    uint64_t who; std::string command;
     {
       std::lock_guard<std::mutex> lock(mutex);
       phase = p;
-      message = msg;
+      message = msg; who = owner; command = id;
     }
+    record(who, command, "pick_state", "phase=" + p + " message=" + position_json_quote(msg));
     send(state());
   }
   void finish(const std::string &p, const std::string &msg, const Send &send) {
+    uint64_t who; std::string command, last;
     {
       std::lock_guard<std::mutex> lock(mutex);
-      phase = p;
-      message = msg;
-      active = false;
+      who = owner; command = id; last = phase; phase = p; message = msg;
     }
+    record(who, command, "pick_result", "phase=" + p + " last_phase=" + last + " message=" + position_json_quote(msg));
+    { std::lock_guard<std::mutex> lock(mutex); active = false; }
     send(state());
   }
   void check_lease() {
@@ -218,6 +246,13 @@ struct VisualPick::Impl {
     check_lease();
     if (guard) guard();
     const auto command = request.get<std::string>("command_id");
+    std::string parent, stage;
+    { std::lock_guard<std::mutex> lock(mutex); parent = id; stage = phase; }
+    std::ostringstream target;
+    if (const auto tcp = request.get_child_optional("tcp_pose")) boost::property_tree::write_json(target, *tcp, false);
+    else target << "joint=" << request.get<std::string>("joint_name") << " target_m=" << std::setprecision(17) << request.get<double>("joint_position");
+    auto detail = target.str(); if (!detail.empty() && detail.back() == '\n') detail.pop_back();
+    record(who, command, "pick_segment", "parent_id=" + parent + " phase=" + stage + " target=" + detail);
     auto call = dispatch(who, request);
     const auto began = Clock::now();
     auto ping = began;
@@ -273,14 +308,29 @@ struct VisualPick::Impl {
   void run(uint64_t who, Tree request, PickConfig config, PickObservation initial, Send send) {
     const auto began = Clock::now();
     try {
+      const auto task = request.get<std::string>("command_id");
+      record(who, task, "pick_frame", frame_detail(initial));
+      record(who, task, "pick_config", "config=" + position_json_quote(config_path) + " frame=base_link tcp_link=" + position_json_quote(config.tcp_link) +
+          " calibrated=" + (config.calibrated ? "true" : "false") + " scene_verified=" + (config.scene_verified ? "true" : "false") +
+          " grasp_to_tcp=" + pose_detail(config.grasp_to_tcp) + " table_z_m=" + number(config.table_z) +
+          " grasp_depth_m=" + number(config.depth) + " clearance_m=" + number(config.clearance) + " lift_m=" + number(config.lift) +
+          " jaw_gap_at_zero_m=" + number(config.jaw_gap_zero) + " opening_margin_m=" + number(config.opening_margin) + " compression_m=" + number(config.compression));
       auto status = info(who);
       if (!status.get<bool>("available", false) || !status.get<bool>("tcp_pose_supported", false))
         throw std::runtime_error(status.get<std::string>("message", "TCP 规划未就绪"));
       if (status.get<bool>("busy", false) || !status.get<bool>("gripper_available", false) ||
           !status.get<bool>("gripper_feedback_fresh", false))
         throw std::runtime_error(status.get<std::string>("gripper_message", "夹爪未就绪或已有运动"));
-      validate_tcp_pose(pose(config.tcp_link));  // Reject missing/stale TCP TF before opening the gripper.
+      const auto initial_actual = validate_tcp_pose(pose(config.tcp_link));  // Same fresh TCP check as execution preflight.
       const auto plan = make_pick_plan(initial.box, config);
+      record(who, task, "pick_geometry", "frame=base_link tcp_link=" + position_json_quote(config.tcp_link) +
+          " grasp=" + pose_detail(plan.grasp) + " pregrasp=" + pose_detail(plan.pregrasp) +
+          " tcp_target=" + pose_detail(plan.tcp) + " pre_tcp_target=" + pose_detail(plan.pre_tcp) +
+          " actual_tcp=" + pose_detail(initial_actual) + " distance_to_pre_tcp_m=" + number(tcp_pose_position_error(initial_actual, plan.pre_tcp)) +
+          " distance_to_grasp_tcp_m=" + number(tcp_pose_position_error(initial_actual, plan.tcp)) +
+          " orientation_to_pre_tcp_rad=" + number(tcp_pose_orientation_error(initial_actual, plan.pre_tcp)) +
+          " opening_m=" + number(plan.opening) + " closing_m=" + number(plan.closing) +
+          " measured_gripper_m=" + (status.get_optional<double>("gripper_position") ? number(status.get<double>("gripper_position")) : "unavailable"));
       const double lo = status.get<double>("gripper_lower"), hi = status.get<double>("gripper_upper");
       if (!std::isfinite(lo) || !std::isfinite(hi) || lo >= hi || plan.opening < lo || plan.opening > hi ||
           plan.closing < lo || plan.closing > hi)
@@ -324,14 +374,14 @@ struct VisualPick::Impl {
         r.put("command_id", request.get<std::string>("command_id") + "-vp-" + std::to_string(++segment));
         return r;
       };
-      auto grip = [&](double value) {
-        auto r = base();
+      auto grip = [&](double value, const std::string &label) {
+        auto r = base(); r.put("label", "视觉抓取 · " + label);
         r.put("joint_name", "gripper_finger_left_joint");
         r.put("joint_position", value);
         return r;
       };
-      auto tcp = [&](TcpPose target) {
-        auto r = base();
+      auto tcp = [&](TcpPose target, const std::string &label) {
+        auto r = base(); r.put("label", "视觉抓取 · " + label);
         auto p = parse(pose_json(target));
         p.put("frame_id", "base_link");
         p.put("tcp_link", config.tcp_link);
@@ -340,7 +390,7 @@ struct VisualPick::Impl {
       };
       auto guard = [&]() { current(); };
       update("opening", "张开夹爪", send);
-      move(who, grip(plan.opening), send, guard);
+      move(who, grip(plan.opening, "张开夹爪"), send, guard);
       TcpPose grasp_target;
       for (const bool descending : {false, true}) {
         update(descending ? "descending" : "approaching",
@@ -354,6 +404,11 @@ struct VisualPick::Impl {
           const auto target = descending ? desired.tcp : desired.pre_tcp;
           const auto actual = pose(config.tcp_link);
           const double distance = tcp_pose_position_error(actual, target);
+          record(who, task, "pick_frame", frame_detail(observed));
+          record(who, task, "pick_step", std::string("phase=") + (descending ? "descending" : "approaching") + " step=" + std::to_string(step) +
+              " frame=base_link tcp_link=" + position_json_quote(config.tcp_link) + " actual_tcp=" + pose_detail(actual) +
+              " target_tcp=" + pose_detail(target) + " distance_m=" + number(distance) + " orientation_error_rad=" + number(tcp_pose_orientation_error(actual, target)) +
+              " max_step_m=" + number(descending ? .01 : .02));
           if (distance <= .006 && tcp_pose_orientation_error(actual, target) <= .02) {
             grasp_target = desired.tcp;
             reached = true;
@@ -361,7 +416,7 @@ struct VisualPick::Impl {
           }
           const auto next = bounded_pick_step(actual, target, descending ? .01 : .02);
           const auto anchor = observed.box;
-          move(who, tcp(next), send, [&]() {
+          move(who, tcp(next, descending ? "下降" : "接近预抓取位"), send, [&]() {
             auto live = current();
             double shift = 0;
             for (int a = 0; a < 3; ++a) shift += std::pow(live.box.center[a] - anchor.center[a], 2);
@@ -370,7 +425,9 @@ struct VisualPick::Impl {
         }
         if (!reached) throw std::runtime_error("视觉接近未在 30 段内收敛");
       }
-      const auto final_plan = make_pick_plan(next_observation().box, config);
+      const auto final_observation = next_observation();
+      record(who, task, "pick_frame", frame_detail(final_observation));
+      const auto final_plan = make_pick_plan(final_observation.box, config);
       const auto final_actual = pose(config.tcp_link);
       if (std::abs(final_plan.opening - plan.opening) > .003 || final_plan.closing < lo ||
           final_plan.closing > hi || tcp_pose_position_error(final_actual, final_plan.tcp) > .006 ||
@@ -378,20 +435,20 @@ struct VisualPick::Impl {
         throw std::runtime_error("闭合前目标变化，需重新选择");
       grasp_target = final_plan.tcp;
       update("closing", "闭合夹爪；夹持结果需要另行确认", send);
-      move(who, grip(final_plan.closing), send, task_guard);
+      move(who, grip(final_plan.closing, "闭合夹爪"), send, task_guard);
       check_lease();
       auto lift = grasp_target;
       lift.position[2] += config.lift;
       update("lifting", "抬升并保持", send);
-      move(who, tcp(lift), send, task_guard);
+      move(who, tcp(lift, "抬升"), send, task_guard);
       finish("holding", "抬升完成；尚未通过传感器验证夹持成功", send);
     } catch (const std::exception &e) {
       finish(canceled ? "canceled" : "failed", e.what(), send);
     }
   }
 };
-VisualPick::VisualPick(std::string config, Motion m, Observe o, Pose p)
-    : impl_(std::make_unique<Impl>(std::move(config), std::move(m), std::move(o), std::move(p))) {}
+VisualPick::VisualPick(std::string config, Motion m, Observe o, Pose p, Diagnostic d)
+    : impl_(std::make_unique<Impl>(std::move(config), std::move(m), std::move(o), std::move(p), std::move(d))) {}
 VisualPick::~VisualPick() {
   impl_->shutdown = true;
   impl_->canceled = true;

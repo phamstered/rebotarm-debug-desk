@@ -11,6 +11,11 @@ struct PickObservation {
   ObjectBox box;
   std::string subscription;
   uint64_t sequence = 0, generation = 0;
+  // Diagnostics from the exact successfully delivered RGBD frame, never a new TF lookup.
+  std::string source_frame, target_frame = "base_link";
+  int64_t rgb_stamp_ns = 0, depth_stamp_ns = 0, tf_stamp_ns = 0;
+  TcpPose source_to_target;
+  double age_ms = 0;
 };
 struct PickConfig {
   bool calibrated = false, scene_verified = false;
@@ -33,7 +38,8 @@ class VisualPick {
   using Motion = std::function<void(uint64_t, const Tree &, Send)>;
   using Observe = std::function<PickObservation(uint64_t, const std::string &, uint64_t)>;
   using Pose = std::function<TcpPose(const std::string &)>;
-  VisualPick(std::string config, Motion motion, Observe observe, Pose pose);
+  using Diagnostic = std::function<void(uint64_t, const std::string &, const std::string &, const std::string &)>;
+  VisualPick(std::string config, Motion motion, Observe observe, Pose pose, Diagnostic diagnostic = {});
   ~VisualPick();
   bool busy() const;
   void cancel(uint64_t owner = 0);

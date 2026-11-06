@@ -445,6 +445,8 @@ class BridgeNode : public rclcpp::Node {
         if(now().nanoseconds()-stamp< -50000000LL||now().nanoseconds()-stamp>=500000000LL)throw std::runtime_error("TCP TF 已过期");
         easy_debug_bridge::TcpPose p;p.position={t.transform.translation.x,t.transform.translation.y,t.transform.translation.z};
         p.orientation={t.transform.rotation.x,t.transform.rotation.y,t.transform.rotation.z,t.transform.rotation.w};return easy_debug_bridge::validate_tcp_pose(p);
+      }, [this](uint64_t owner, const auto &id, const auto &phase, const auto &message) {
+        position_motion_->diagnostic(owner, id, phase, message);
       });
     rgbd_receiver_ = std::thread([this] {
       while (rclcpp::ok() && !rgbd_receiver_stop_.load()) {
@@ -1455,6 +1457,9 @@ class BridgeNode : public rclcpp::Node {
     easy_debug_bridge::ObjectTracker object_tracker;
     uint64_t object_frame_seq = 0;
     std::vector<easy_debug_bridge::ObjectBox> pick_boxes;
+    std::string pick_source_frame;
+    easy_debug_bridge::TcpPose pick_transform;
+    int64_t pick_rgb_stamp=0, pick_depth_stamp=0, pick_tf_stamp=0;
     int64_t pick_stamp=0;
     uint64_t pick_generation=0, pick_sequence=0;
     int64_t stamp_tolerance_ns = 50000000;
@@ -1921,6 +1926,10 @@ class BridgeNode : public rclcpp::Node {
                         std::chrono::steady_clock::now() + std::chrono::nanoseconds(left_ns))) return;
     {std::lock_guard<std::mutex> lock(session->mutex);
       session->pick_boxes=std::move(pick_boxes);session->pick_stamp=oldest_stamp;session->pick_generation=sync.generation;session->pick_sequence=session->object_frame_seq;
+      session->pick_source_frame=source_frame;session->pick_rgb_stamp=image_stamp(*rgb);session->pick_depth_stamp=image_stamp(*depth);
+      session->pick_tf_stamp=int64_t(transform.header.stamp.sec)*1000000000LL+transform.header.stamp.nanosec;
+      const auto &translation=transform.transform.translation;const auto &rotation=transform.transform.rotation;
+      session->pick_transform.position={translation.x,translation.y,translation.z};session->pick_transform.orientation={rotation.x,rotation.y,rotation.z,rotation.w};
     }
     session->last_success = std::chrono::steady_clock::now();
     session->last_error.clear();
@@ -1944,7 +1953,12 @@ class BridgeNode : public rclcpp::Node {
     if(!s->active||!s->detect_objects||s->subscription_id!=token||s->target_frame!="base_link")throw std::runtime_error("视觉选择已失效，请重新选择");
     const auto age=now().nanoseconds()-s->pick_stamp;
     if(age< -50000000LL||age>=500000000LL||s->pick_generation!=sync.generation)throw std::runtime_error("目标观测已过期");
-    for(const auto &b:s->pick_boxes)if(b.id==id)return {b,token,s->pick_sequence,s->pick_generation};
+    for(const auto &b:s->pick_boxes)if(b.id==id) {
+      easy_debug_bridge::PickObservation result{b,token,s->pick_sequence,s->pick_generation};
+      result.source_frame=s->pick_source_frame;result.target_frame=s->target_frame;
+      result.rgb_stamp_ns=s->pick_rgb_stamp;result.depth_stamp_ns=s->pick_depth_stamp;result.tf_stamp_ns=s->pick_tf_stamp;
+      result.source_to_target=s->pick_transform;result.age_ms=double(age)/1000000.;return result;
+    }
     throw std::runtime_error("所选目标当前不可见");
   }
   std::shared_ptr<easy_debug_bridge::ControllerRegistry> controller_registry_;

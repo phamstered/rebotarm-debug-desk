@@ -2,6 +2,15 @@
 #include "easy_debug_bridge/motion_timing.hpp"
 
 namespace easy_debug_bridge {
+inline std::string motion_point_summary(const TimedMotionPoint &point, size_t index) {
+  const auto values = [](const std::vector<double> &v) {
+    std::string out = "[";
+    for (size_t i = 0; i < std::min(v.size(), size_t{8}); ++i) { if (i) out += ','; out += motion_number(v[i]); }
+    return out + "] count=" + std::to_string(v.size());
+  };
+  return "index=" + std::to_string(index) + " time_s=" + motion_number(point.time_ns/1e9) +
+      " positions=" + values(point.positions) + " velocities=" + values(point.velocities) + " accelerations=" + values(point.accelerations);
+}
 // One bounded line per joint; peaks are at knots, not continuous-spline maxima.
 inline std::vector<std::string> motion_plan_summaries(const std::vector<TimedMotionPoint> &points,
     const PositionMotionModel &model, const std::vector<double> &vlimits, const std::vector<double> &alimits) {

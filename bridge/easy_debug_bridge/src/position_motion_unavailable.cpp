@@ -13,6 +13,9 @@ void PositionMotion::request(uint64_t, const boost::property_tree::ptree &data, 
     send("{\"op\":" + position_json_quote(op + "_ack") + ",\"request_id\":" + id + ",\"accepted\":false,\"command_id\":" + position_json_quote(data.get<std::string>("command_id", "")) + ",\"message\":\"Bridge 未编译 MoveIt2 支持\"}");
   else send("{\"op\":\"error\",\"request_id\":" + id + ",\"message\":\"Bridge 未编译 MoveIt2 支持\"}");
 }
+void PositionMotion::diagnostic(uint64_t, const std::string &command, const std::string &phase, const std::string &message) {
+  RCLCPP_INFO(rclcpp::get_logger("easy_debug_bridge"), "[motion][%s][%s] %s", command.c_str(), phase.c_str(), message.c_str());
+}
 void PositionMotion::disconnected(uint64_t) {}
 bool PositionMotion::busy() const { return false; }
 }
