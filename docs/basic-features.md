@@ -109,7 +109,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - 在 JSON 中右键有限数值叶子、数值数组字段或数组元素，先选择 Monitor **仪表盘（Dashboard）**，再选择已有 **Panel** 或「新建 Panel」；数组字段展开为 `field[0..n]` 多条序列，加入同一个 Panel。已有 Panel 会保留原序列并去重。菜单支持方向键、Esc 和返回上一级。
 - **Monitor** 导航页：Grafana 式 **Dashboard → Panel → Chart**。多仪表盘（创建/重命名/删除，配置写入 localStorage `robot-console-monitor` v2 并在重启后恢复）；默认「Motor Torque」仪表盘含 **7 个可拖拽/缩放 Panel**（`effort[0..6]`，`react-grid-layout` 12 列，共享 30 秒时间窗与共享准星，Y 轴各自缩放）。每个 Panel 可选时序图（折线/点/时间柱）、柱状图（按字段最新值，横向/竖向）、环形图（正值占比）和 Gauge（最新值、可设范围与阈值）；无有效值时显示等待提示。紧凑 Panel 的标题、类型选择和移除按钮位于同一拖拽栏；独立 DataGraph 仍保留右侧图例。支持暂停跟随（冻结采样+时间窗）、双击最大化、重置布局、锁定布局与紧凑排列（锁定/紧凑偏好持久化；最大化仅会话内）。旧版单序列 Panel 和 `panels[].series[]` 标签页配置会在加载时迁移，图表设置与命名布局预设可持久化。全局「暂停显示」与 Monitor「暂停跟随」同源。
 - **运动误差看板**：Monitor 点击「+运动误差」添加三张图：六轴轨迹跟踪误差 `JTC desired.positions − actual.positions`（rad）、六轴反馈差值 `JTC actual.positions − 配置 JointState.position`（rad）、消息头时间差与桌面接收时间差 `JTC − STM32`（ms）。控制器固定读取 `/arm_trajectory_controller/controller_state`；JointState 跟随当前连接配置，按 `joint1`–`joint6` 名称匹配，不包含夹爪。兼容新版 JTC `reference/feedback` 字段（旧字段数组为空时使用）。同一条 JTC 消息计算跟踪误差；反馈差值使用桌面收到的两路最新数据，**未做时间对齐**，不等同于轨迹跟踪误差，也不保证复现 Bridge 内部的采样或告警峰值。消息头时间差不是端到端延迟，JTC 更新时间与 STM32 源时间的语义不同。
-  看板默认散点，缺失、非有限数值、重复关节名或数组长度错误不补零；缺少源时间戳、任一路接收数据超过 1 秒、两路源时间差达到 1 秒时不生成反馈差值。重复源时间戳不续期、不生成重复点；时间戳回退、实时/Bag 模式切换会重置诊断缓存并清除诊断曲线。暂停保留历史，恢复后等待两路新采样；断线重连清空点和配对状态，保留布局。源数据状态会在停止来数后显示过期；订阅失败显示原因。布局与图表设置沿用 Monitor 持久化、共享准星和 30 秒窗口。看板为只读诊断，不修改运动保护；`0.02 rad` 是 Bridge 两路反馈一致性阈值，并非轨迹跟踪容差。
+  看板默认散点，缺失、非有限数值、重复关节名或数组长度错误不补零；缺少源时间戳、任一路接收数据超过 1 秒、两路源时间差达到 1 秒时不生成反馈差值。重复源时间戳不续期、不生成重复点；时间戳回退、实时/Bag 模式切换会重置诊断缓存并清除诊断曲线。暂停保留历史，恢复后等待两路新采样；断线重连清空点和配对状态，保留布局。源数据状态会在停止来数后显示过期；订阅失败显示原因。布局与图表设置沿用 Monitor 持久化、共享准星和 30 秒窗口。看板为只读诊断，不修改运动保护；Bridge 现比较 JTC actual 与 JointState Broadcaster `/joint_states`，六轴阈值为 `0.02 rad`；本看板保留原始 STM32 差值用于底层链路诊断，不是当前 Bridge 门禁比较源，也不是轨迹跟踪容差。
 - Monitor Bag 回放：经 Tauri SSH 在 Jetson 执行 `ros2 bag play <path> --clock`，曲线仍走 Bridge 实时订阅；本机解析 bag / 下载 / 索引未实现。路径校验与录制相同（拒绝 `~`、`.`/`..`、shell 元字符等）。
 - `sensor_msgs/msg/Image` Topic（包括 `/camera/color/image_raw`）在数据 Tab 使用 Canvas 实时预览，支持 rgb8、bgr8、rgba8、bgra8、mono8、mono16 及对应 OpenCV 8UC/16UC1 编码、行步长和大小端转换。
 - 图像只投递给明确订阅的 WebSocket 连接；取消订阅或断线后释放兴趣，最后一个兴趣消失后释放对应 ROS 图像订阅。仅在 Topics 的 Inspector 数据 Tab 可见且实时显示开启时订阅选中图像；切主导航、折叠 Inspector/右侧栏、切详情 Tab、暂停实时或隐藏窗口会取消图像订阅，返回自动恢复。已取消兴趣的残留帧不会重新填充预览。
@@ -334,6 +334,7 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 
 - 位置存储升级为 schemaVersion 2，六轴值仍按 joint1–joint6 保存，可选 `gripperPosition` 保存米制单指行程。version 1 自动迁移且不补夹爪值；旧点位与 HOME 显示「保持当前」。编辑和新增可勾选保存夹爪目标，卡片/缩略图展示夹爪姿态。
 - 「保存当前姿态」在 Bridge 提供新鲜标定夹爪快照时默认带上夹爪；缺失时明确提示只采集六轴，并可手动填写。保存编辑不执行运动。模型不直接应用 `/stm32/joint_states` 的原始夹爪值；优先订阅 `/robot_feedback/joint_states` 的高频标定位置，状态查询快照作为回退，两者一秒过期失效。右手指随主手指 mimic 联动。
+- Bridge 的控制器反馈一致性检查使用 JointState Broadcaster `/joint_states` 与 JTC `actual.positions`，按关节名匹配；六轴容差保持 0.02 rad，夹爪容差保持 0.001 m。Broadcaster 已处于 ros2_control 单位，夹爪不重复标定。缺失、过期、时间戳无效、重复帧停滞、关节不完整/重复或非有限值会阻止受理，运动中沿用取消流程；不回退到原始 STM32 Topic。两路均来自控制器侧状态，但发布时间/到达时间仍可能不同，本次没有实现严格同周期配对。STM32 原始反馈继续承担时钟、限位、规划起点与停稳/到位检查，硬件故障、使能及 Controller active 检查保持。
 - 夹爪执行额外核对模型标定、有效范围、专用 JTC position+velocity、bit0x40、反馈新鲜度与一致性。未就绪给出原因，旧 Bridge 不静默丢弃夹爪目标。夹爪限幅按当前标定配置（首版不超过 0–50 mm、20 mm/s、40 mm/s²），不采用 URDF 71.5 mm 上限替代标定行程。
 - 夹爪 Action 成功后须速度 ≤1 mm/s，连同机械臂停稳持续 200 ms 才报告执行完成；最终夹爪位置误差保留为诊断。取消、故障、断线共享同一运动锁与停止核验。执行完成不等于夹持成功。
 

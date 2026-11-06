@@ -18,7 +18,7 @@ export function MotionErrorMonitorStatus({ status = EMPTY_MOTION_ERROR_STATUS, j
       <strong> 反馈差值：</strong>JTC actual − STM32 position，按 joint1–joint6 名称匹配。</p>
     <details><summary>两路最新采样未对齐 · 查看计算口径与限制</summary>
     <p>反馈差值使用桌面收到的两路最新采样，<strong>未做时间对齐</strong>，不能直接当作跟踪误差或 Bridge 告警复现。
-      Bridge 的反馈一致性阈值为 |差值| &gt; 0.02 rad；仅供对照，不改变控制保护。</p>
+      Bridge 现比较 JTC 与 JointState Broadcaster /joint_states（阈值 0.02 rad）；本图保留 STM32 原始反馈用于底层链路诊断，不是该门禁的比较源。</p>
     <p>时间差：header_stamp_ms 为 JTC 更新时间 − STM32 源时间；receive_time_ms 为桌面接收时间差，均为 ms，均不代表端到端延迟。
       默认使用散点，缺失/无效/过期数据不补零。</p>
     </details>
