@@ -2,6 +2,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/gripper_motion_core.hpp"
 #include <cstdint>
+#include <functional>
 
 namespace easy_debug_bridge {
 inline void validate_motion_duration(double seconds) {
@@ -15,6 +16,11 @@ struct TimedMotionPoint {
 inline std::string motion_number(double value) {
   std::ostringstream out; out << std::setprecision(17) << value; return out.str();
 }
+// Only continuous dynamic-limit failures are eligible for automatic slowing.
+class MotionDynamicLimitError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 // A prismatic finger must remain within calibrated travel between knots too.
 inline void bounded_position_spline(const std::vector<double> &b, double lower, double upper, int depth = 0) {
   const auto within = [&](double x) { return std::isfinite(x) && x >= lower - 1e-9 && x <= upper + 1e-9; };
@@ -37,12 +43,12 @@ inline void bounded_spline(const std::vector<double> &b, double h, double vmax, 
   for (size_t i=1;i<v.size();++i) a.push_back((v.size()-1)*(v[i]-v[i-1])/h);
   auto within=[](double x,double limit){return std::isfinite(x) && std::abs(x)<=limit+1e-7;};
   if (!within(v.front(),vmax)||!within(v.back(),vmax)||!within(a.front(),amax)||!within(a.back(),amax))
-    throw std::runtime_error("轨迹样条速度或加速度超限: velocity_endpoints=[" + motion_number(v.front()) + "," + motion_number(v.back()) +
+    throw MotionDynamicLimitError("轨迹样条速度或加速度超限: velocity_endpoints=[" + motion_number(v.front()) + "," + motion_number(v.back()) +
         "] velocity_limit=" + motion_number(vmax) + " acceleration_endpoints=[" + motion_number(a.front()) + "," + motion_number(a.back()) +
         "] acceleration_limit=" + motion_number(amax) + " subdivision_depth=" + std::to_string(depth) + " subsegment_dt_s=" + motion_number(h));
   if (std::all_of(v.begin(),v.end(),[&](double x){return within(x,vmax);}) &&
       std::all_of(a.begin(),a.end(),[&](double x){return within(x,amax);})) return;
-  if (depth>=12) throw std::runtime_error("无法确认样条速度/加速度满足上限: velocity_control_bound=" +
+  if (depth>=12) throw MotionDynamicLimitError("无法确认样条速度/加速度满足上限: velocity_control_bound=" +
       motion_number(std::abs(*std::max_element(v.begin(), v.end(), [](double x, double y) { return std::abs(x) < std::abs(y); }))) +
       " velocity_limit=" + motion_number(vmax) + " acceleration_control_bound=" +
       motion_number(std::abs(*std::max_element(a.begin(), a.end(), [](double x, double y) { return std::abs(x) < std::abs(y); }))) +
@@ -106,19 +112,45 @@ inline std::vector<TimedMotionPoint> stretch_motion(std::vector<TimedMotionPoint
       } catch (const std::exception &e) {
         const auto value = [&](const std::vector<double> &values) { return values.empty() ? std::string("missing") : motion_number(values[k]); };
         const auto unit = model.joint_names[k] == gripper_motion_joint() ? "m" : "rad";
-        throw std::runtime_error(std::string(e.what()) + " joint=" + model.joint_names[k] + " unit=" + unit +
+        const auto detail = std::string(e.what()) + " joint=" + model.joint_names[k] + " unit=" + unit +
             " segment=" + std::to_string(i-1) + "->" + std::to_string(i) +
             " t_s=[" + motion_number(x.time_ns/1e9) + "," + motion_number(y.time_ns/1e9) + "] dt_s=" + motion_number(h) +
             " duration_s=" + motion_number(seconds) + " time_scale=" + motion_number(scale) +
             " p=[" + value(x.positions) + "," + value(y.positions) + "] v=[" + value(x.velocities) + "," + value(y.velocities) +
             "] a=[" + value(x.accelerations) + "," + value(y.accelerations) + "]" +
             " velocity_limit=" + motion_number(velocity_limits[k]) + " acceleration_limit=" + motion_number(acceleration_limits[k]) +
-            " position_limits=[" + motion_number(model.lower[k]) + "," + motion_number(model.upper[k]) + "]");
+            " position_limits=[" + motion_number(model.lower[k]) + "," + motion_number(model.upper[k]) + "]";
+        if (dynamic_cast<const MotionDynamicLimitError *>(&e)) throw MotionDynamicLimitError(detail);
+        throw std::runtime_error(detail);
       }
     }
   }
 
   return points;
+}
+struct AutomaticMotionTiming {
+  std::vector<TimedMotionPoint> points;
+  double duration_s;
+  size_t adjustments;
+};
+// At most 8 extensions (1.25^8 < 6x). Always start from the original path so
+// derivatives and nanosecond rounding never compound across retries.
+inline AutomaticMotionTiming automatic_motion_timing(const std::vector<TimedMotionPoint> &original,
+    const PositionMotionModel &model, const std::vector<double> &velocity_limits,
+    const std::vector<double> &acceleration_limits,
+    const std::function<void(double, double, const std::string &)> &on_retry = {}) {
+  double seconds = original.empty() ? 0 : original.back().time_ns / 1e9;
+  for (size_t attempt = 0; ; ++attempt) {
+    try { return {stretch_motion(original, seconds, model, velocity_limits, acceleration_limits), seconds, attempt}; }
+    catch (const MotionDynamicLimitError &e) {
+      if (attempt == 8)
+        throw std::runtime_error("自动延长运动时长已达 8 次上限，未执行: duration_s=" + motion_number(seconds) + " reason=" + e.what());
+      const double next = seconds * 1.25;
+      validate_motion_duration(next);
+      if (on_retry) on_retry(seconds, next, e.what());
+      seconds = next;
+    }
+  }
 }
 inline std::vector<double> combined_joint_target(const std::vector<double> &actual,
     const std::vector<std::pair<std::string, double>> &edits, const PositionMotionModel &model) {

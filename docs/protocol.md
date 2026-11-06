@@ -359,6 +359,7 @@ Jetson 侧从各最多三帧的队列按时间戳配对 RGB/Depth（默认容差
 - 单关节受理时由 Bridge 从当前 STM32 JointState 取得其他五轴的目标值，在 MoveIt 请求 `path_constraints.joint_constraints` 中约束其围绕起点 ±0.001 rad；选中轴使用现有关节目标约束。保持原碰撞规划、速度/加速度缩放、会话和取消保护。此约束不构成物理跟踪误差为零的保证。
 - 联合关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","confirmation":"ARMED","joint_targets":{"joint1":0.1,"joint2":-0.3},"motion_duration_s":5}`。`joint_targets` 必须为包含 1–7 个唯一受控关节键的对象，六轴值为有限 rad，可选 `gripper_finger_left_joint` 值为有限 m，不能与 `positions`、`home:true` 或旧单关节字段混用。未编辑轴由 Bridge 实测反馈补齐，并添加 ±0.001 rad 路径保持约束；全部六轴指定时不加保持约束。旧 `joint_name` / `joint_position` 仍兼容。
 - `motion_duration_s` 可选，须为有限正数，精度至少 1 ns、最大 2147483647 秒（ROS 时间表示边界）；无 0.1–120 秒业务门禁。指定时 plan-only 规划的速度/加速度缩放为 1.0，原始时长通过 `position_motion.recommended_duration_s` 返回界面，仅供参考。时间可统一伸长或压缩，速度/加速度按倍率缩放；校验整段样条速度/加速度不超过当前每轴 MoveIt 上限（配置必须启用且不超过 2 rad/s、2 rad/s²），超限时 failed 并且不发送 ExecuteTrajectory。压缩时缺少导数数据不能验证则拒绝。省略且仅涉及六轴时保持原 MoveGroup 直接执行。含夹爪的请求始终先 plan-only，省略时长则采用规划推荐时长，再校验并通过 ExecuteTrajectory 执行。总运动 watchdog 为 max(180, 指定时长+60) 秒；心跳仍为 5 秒。
+- 自动执行时长：未指定 `motion_duration_s` 的 plan-only 路径允许 Bridge 在连续样条动态限幅验证失败时有界延长时长并重新校验；显式指定时长不自动调整。`recommended_duration_s` 仍为 MoveIt 原始推荐时长，最终执行时长及调整原因通过既有 Motion 日志 `plan_retime` / `plan_timing` 返回，不新增协议字段。
 - `position_motion_info` 广告 `joint_targets_supported:true`、`motion_duration_supported:true`。客户端缺少任一能力时不能提交联合定时运动，不能静默丢弃时长或降级为旧点位请求。`motion_duration_message` 非空表示定时执行入口未就绪（例如 `/execute_trajectory` 缺失），客户端显示该原因。规划/执行两个阶段共享 command_id、互斥、心跳与取消状态；断线或取消后不启动下一阶段。
 - 执行前要求 active JTC 认领六关节 `position+velocity`、实测速度 ≤0.05 rad/s、JTC actual 与 JointState Broadcaster `/joint_states` 中对应六轴位置偏差 ≤0.02 rad，并校验反馈新鲜、完整、有限、硬件 TRACK/无故障及六轴使能；不满足时 `available:false` / `accepted:false` 的 `message` 说明原因。点位与单关节请求均已移除启动连续性检查，不再以 JTC desired/reference 的位置偏差、参考速度、字段存在性或连续稳定 200 ms 作为门禁。MoveIt 仍使用真实实测起点，自身起点容差、限位与碰撞检查保持有效。
 - 成功受理返回 `position_move_ack` 与 `command_id`；门禁拒绝返回同一 ACK、`accepted:false` 与 `message`。Bridge 缓存最近 256 个已受理指令的 command_id，缓存内重复请求不重复执行；不同会话不能抢占运动。ACK 不代表规划成功或到达。
@@ -422,7 +423,7 @@ MoveIt 编译依赖缺失时 info 返回 unavailable，move/cancel 返回明确�
 
 - `position` 为精确三个有限米值；`orientation` 为四个有限 xyzw 值，四元数范数与 1 差不超过 1e-3，再在服务端归一化。零四元数、重复/未知字段、错误数组长度拒绝。
 - `frame_id` 必须是当前 URDF 根 link；`tcp_link` 必须在完整 joint1–joint6 链之后、仅通过 fixed joint 连接，或为 joint6 子 link。可动手指、mimic link 目标、未知/循环/断开的模型均拒绝；不提供任意 TF/命令入口。
-- `tcp_pose` 不能与任何 `home`（包括 false）、`positions`、`joint_targets`、`joint_name`、`joint_position` 字段混用。可附带现有 `gripper_position`（m）与 `motion_duration_s`；省略夹爪保持当前，省略时长采用 MoveIt 推荐时长。
+- `tcp_pose` 不能与任何 `home`（包括 false）、`positions`、`joint_targets`、`joint_name`、`joint_position` 字段混用。可附带现有 `gripper_position`（m）与 `motion_duration_s`；省略夹爪保持当前，省略时长先采用 MoveIt 推荐时长，样条动态超限时按自动执行时长规则延长并复验。
 - Bridge 将 TCP fixed 偏移转换为机械臂求解器 tip 的位置与姿态约束，位置球半径 3 mm、旋转向量分量容差 0.005 rad。夹爪存在时附带独立 JointConstraint；其模型、标定、接口与硬件门禁不变。
 - Pose 始终 plan-only；执行前核对关节集合、限位、全段时序/速度/加速度、实测起点及 FK 终点（TCP 位置 ≤5 mm、姿态最短角 ≤0.02 rad）。姿态被规划器忽略时，即使 Action success 也拒绝 ExecuteTrajectory。
 - Action 结果、取消和心跳沿用点位协议。实测 TCP 位姿仍须达标、所有受控轴停稳持续 200 ms 才成功；计划关节最终位置误差不再作为额外完成门槛；姿态不达标报告失败。MoveIt 的关节空间路径不保证笛卡尔直线或逐点跟随鼠标。

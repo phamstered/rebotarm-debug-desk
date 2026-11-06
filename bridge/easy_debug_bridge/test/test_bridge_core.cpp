@@ -326,6 +326,35 @@ int main() {
     assert(diagnostic_error(excessive, 10).find("acceleration_endpoints=") != std::string::npos);
     auto interior = path; interior.back().positions = {.04}; interior.back().time_ns = 3000000000;
     assert(diagnostic_error(interior, 3).find("subdivision_depth=1") != std::string::npos);
+    // Reported 100 ms opening: endpoint derivatives fit, quintic interior does not.
+    const std::vector<TimedMotionPoint> reported{{{.000003285532861328419}, {0}, {0}, {.7}, 0},
+        {{.00020328553286132846}, {.004}, {.04}, {.7}, 100000000}};
+    size_t retries = 0;
+    const auto on_retry = [&](double before, double after, const std::string &reason) {
+      ++retries; assert(after == before * 1.25); assert(reason.find("joint=gripper_finger_left_joint") != std::string::npos);
+    };
+    const auto automatic = automatic_motion_timing(reported, gripper, {.02}, {.04}, on_retry);
+    assert(automatic.duration_s == .125 && automatic.adjustments == 1 && retries == 1);
+    assert(automatic.points.back().time_ns == 125000000);
+    for (size_t i = 0; i < reported.size(); ++i) {
+      assert(automatic.points[i].positions == reported[i].positions && automatic.points[i].effort == reported[i].effort);
+      assert(std::abs(automatic.points[i].velocities[0] - reported[i].velocities[0]/1.25) < 1e-12);
+      assert(std::abs(automatic.points[i].accelerations[0] - reported[i].accelerations[0]/(1.25*1.25)) < 1e-12);
+    }
+    // Explicit timing still refuses the original unsafe duration.
+    assert(rejects([&] { stretch_motion(reported, .1, gripper, {.02}, {.04}); }));
+    const auto unchanged = automatic_motion_timing(path, gripper, {.02}, {.04});
+    assert(unchanged.adjustments == 0 && unchanged.duration_s == 10 && unchanged.points.back().velocities == path.back().velocities);
+    auto impossible = reported; impossible.front().velocities = {1e6}; retries = 0;
+    assert(rejects([&] { automatic_motion_timing(impossible, gripper, {.02}, {.04}, on_retry); }));
+    assert(retries == 8);
+    retries = 0; auto invalid_auto = path; invalid_auto.front().velocities.clear();
+    assert(rejects([&] { automatic_motion_timing(invalid_auto, gripper, {.02}, {.04}, on_retry); }));
+    invalid_auto = path; invalid_auto.front().positions = {NAN};
+    assert(rejects([&] { automatic_motion_timing(invalid_auto, gripper, {.02}, {.04}, on_retry); }));
+    invalid_auto = path; invalid_auto.front().velocities = {-.001};
+    assert(rejects([&] { automatic_motion_timing(invalid_auto, gripper, {.02}, {.04}, on_retry); }));
+    assert(retries == 0);
     const auto summaries = motion_plan_summaries(path, gripper, {.02}, {.04});
     assert(summaries.size() == 1 && summaries.front().find("unit=m") != std::string::npos);
     assert(summaries.front().find("p_knot_peak=") != std::string::npos);

@@ -244,6 +244,15 @@ class MockRobot(Node):
                 point.velocities = [.03 if j == GRIPPER else 0. for j in reversed(names)]
             point.time_from_start.sec = sec
             result.planned_trajectory.joint_trajectory.points.append(point)
+        if getattr(self, 'reported_quintic_plan', False):
+            assert names == [GRIPPER]
+            trajectory = result.planned_trajectory.joint_trajectory
+            trajectory.points = []
+            start = self.positions[GRIPPER]
+            for offset, velocity, acceleration, nanosec in [(0., 0., 0., 0), (.0002, .004, .04, 100000000), (.0004, 0., 0., 200000000)]:
+                point = JointTrajectoryPoint(); point.positions = [start + offset]
+                point.velocities = [velocity]; point.accelerations = [acceleration]
+                point.time_from_start.nanosec = nanosec; trajectory.points.append(point)
         result.error_code.val = 1
         # Legacy arm-only requests execute through MoveGroup itself.
         if not handle.request.planning_options.plan_only:
@@ -381,15 +390,32 @@ def main(binary):
             assert any(e['phase']=='plan_timing' and 'duration_source=automatic' in e['message'] for e in entries),entries
             robot.excessive_plan_velocity = True
             before = len(robot.executions)
-            reply = move(joint_targets={GRIPPER: .02})
+            reply = move(joint_targets={GRIPPER: .02}, motion_duration_s=6.)
             assert reply.get('accepted') is not False, reply
             wait_for(lambda: completed('failed'))
             assert len(robot.executions) == before
             entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
             rejection = next(e for e in entries if e['phase']=='plan_rejected')
             assert 'joint='+GRIPPER in rejection['message'] and 'unit=m' in rejection['message'] and 'velocity_endpoints=' in rejection['message'], rejection
-            assert any(e['phase']=='plan_timing' and 'duration_source=automatic' in e['message'] for e in entries),entries
+            assert any(e['phase']=='plan_timing' and 'duration_source=explicit' in e['message'] for e in entries),entries
             robot.excessive_plan_velocity = False
+            robot.reported_quintic_plan = True
+            before = len(robot.executions)
+            target = robot.positions[GRIPPER] + .0004
+            reply = move(joint_targets={GRIPPER: target})
+            assert reply.get('accepted') is not False, reply
+            wait_for(completed)
+            assert len(robot.executions) == before + 1
+            trajectory = robot.executions[-1]
+            duration = trajectory.points[-1].time_from_start.sec + trajectory.points[-1].time_from_start.nanosec/1e9
+            assert duration > .2
+            scale = duration/.2
+            assert abs(trajectory.points[1].velocities[0] - .004/scale) < 1e-10
+            assert abs(trajectory.points[1].accelerations[0] - .04/(scale*scale)) < 1e-10
+            entries = [e for e in info()['motion_logs'] if e['command_id'] == ws.command_id]
+            assert any(e['phase']=='plan_retime' and 'joint='+GRIPPER in e['message'] for e in entries),entries
+            assert any(e['phase']=='plan_timing' and 'spline_validation=passed' in e['message'] for e in entries),entries
+            robot.reported_quintic_plan = False
             held = robot.positions[GRIPPER]
             reply = move(home=True)
             assert reply.get('accepted') is not False, reply
