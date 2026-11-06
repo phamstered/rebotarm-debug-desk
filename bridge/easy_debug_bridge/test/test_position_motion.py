@@ -52,8 +52,20 @@ class Fixture(rclpy.node.Node):
         for name in NAMES:
             for field, value in [("max_velocity", 1.), ("max_acceleration", 1.), ("has_velocity_limits", True), ("has_acceleration_limits", True)]:
                 params[f"robot_description_planning.joint_limits.{name}.{field}"] = value
+        # Current Bridge queries the complete optional-gripper parameter contract,
+        # even when this fixture intentionally advertises only the arm controller.
+        params.update({
+            "moveit_simple_controller_manager.gripper_trajectory_controller.joints": ["gripper_finger_left_joint"],
+            "moveit_simple_controller_manager.gripper_trajectory_controller.type": "FollowJointTrajectory",
+            "moveit_simple_controller_manager.gripper_trajectory_controller.action_ns": "follow_joint_trajectory",
+            "debug_desk.gripper_position_scale": 1., "debug_desk.gripper_position_offset": 0.,
+            "debug_desk.gripper_lower": 0., "debug_desk.gripper_upper": .05,
+        })
+        for field, value in [("max_velocity", .02), ("max_acceleration", .04), ("has_velocity_limits", True), ("has_acceleration_limits", True)]:
+            params[f"robot_description_planning.joint_limits.gripper_finger_left_joint.{field}"] = value
         for key, value in params.items(): self.declare_parameter(key, value)
         self.pub_joint = self.create_publisher(JointState, "/stm32/joint_states", 10)
+        self.pub_broadcaster = self.create_publisher(JointState, "/joint_states", 10)
         self.pub_state = self.create_publisher(JointTrajectoryControllerState, "/arm_trajectory_controller/controller_state", 10)
         self.pub_hw = self.create_publisher(HardwareStatus, "/stm32/status", 10)
         self.create_service(ListControllers, "/controller_manager/list_controllers", self.controllers, callback_group=self.group)
@@ -75,6 +87,7 @@ class Fixture(rclpy.node.Node):
         if not self.publish_feedback: return
         q = list(self.q)
         j = JointState(); j.header.stamp = self.get_clock().now().to_msg(); j.name = NAMES; j.position = q if self.joint_positions is None else self.joint_positions; j.velocity = [self.speed]*6; j.effort = [0.]*6; self.pub_joint.publish(j)
+        broadcast = JointState(); broadcast.header.stamp = self.get_clock().now().to_msg(); broadcast.name = NAMES; broadcast.position = q; broadcast.velocity = [self.speed]*6; self.pub_broadcaster.publish(broadcast)
         s = JointTrajectoryControllerState(); s.joint_names = NAMES; s.actual.positions = [q[0]+self.state_offset]+q[1:]; s.actual.velocities = [0.]*6
         if not self.omit_reference:
             s.desired.positions = q[:2]+[q[2]+self.reference_offset]+q[3:]
@@ -360,8 +373,10 @@ def main():
             assert constraint.tolerance_above == .001 and constraint.tolerance_below == .001
         ready()
         ready(); move("collision", .5); result,_ = terminal("collision"); assert result["motion_phase"] == "failed" and result["code"] == -12, result
-        ready(); move("not-reached", .3); result,_=terminal("not-reached"); assert result["motion_phase"]=="failed",result
-        assert "未到达" in result["message"],result
+        ready(); move("not-reached", .3); result,_=terminal("not-reached")
+        assert result["motion_phase"]=="succeeded" and result["position_error_check_enforced"] is False,result
+        error = next(e for e in result["arrival_errors"] if e["joint_name"] == "joint1")
+        assert error["target"] == .3 and abs(error["position_error"]) > error["position_tolerance"],error
         ready(); move("cancel", .4); fixture.speed=.2; request("position_cancel", command_id="cancel");time.sleep(.5)
         assert request("position_motion_info")["busy"], "cancel ACK must not mean stopped"
         fixture.speed=0.;result,_=terminal("cancel"); assert result["motion_phase"] == "canceled",result

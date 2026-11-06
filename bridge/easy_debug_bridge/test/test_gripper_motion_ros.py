@@ -135,12 +135,20 @@ class MockRobot(Node):
         self.positions = dict(zip(ARM + [GRIPPER], [0.] * 6 + [.025]))
         self.groups, self.executions = [], []
         self.mismatch = False
+        self.raw_arm_offset = 0.
+        self.raw_gripper_offset = 0.
+        self.broadcaster_enabled = True
+        self.broadcaster_positions = None
+        self.broadcaster_names = None
+        self.broadcaster_stamp_offset = 0.
+        self.broadcaster_frozen_stamp = None
         self.pause = False
         self.hold_plan = False
         self.invalid_pose_plan = False
         self.pose_measurement_bias = False
         self.arm_pub = self.create_publisher(JointTrajectoryControllerState, '/arm_trajectory_controller/controller_state', qos_profile_sensor_data)
         self.gripper_pub = self.create_publisher(JointTrajectoryControllerState, '/gripper_trajectory_controller/controller_state', qos_profile_sensor_data)
+        self.broadcaster_pub = self.create_publisher(JointState, '/joint_states', qos_profile_sensor_data)
         self.joints_pub = self.create_publisher(JointState, '/stm32/joint_states', qos_profile_sensor_data)
         self.hardware_pub = self.create_publisher(HardwareStatus, '/stm32/status', qos_profile_sensor_data)
         self.service = self.create_service(ListControllers, '/controller_manager/list_controllers', self.controllers)
@@ -168,9 +176,24 @@ class MockRobot(Node):
         joints.header.stamp = stamp
         joints.name = ARM + [GRIPPER]
         joints.position = [self.positions[j] for j in ARM] + [(self.positions[GRIPPER] - OFFSET) / SCALE]
+        joints.position[0] += self.raw_arm_offset
+        joints.position[-1] += self.raw_gripper_offset / SCALE
         joints.velocity = [0.] * 7
         joints.effort = [0.] * 7
         self.joints_pub.publish(joints)
+        if self.broadcaster_enabled:
+            broadcast = JointState()
+            source_ns = self.get_clock().now().nanoseconds + int(self.broadcaster_stamp_offset * 1e9)
+            broadcast.header.stamp.sec = source_ns // 10**9
+            broadcast.header.stamp.nanosec = source_ns % 10**9
+            if self.broadcaster_frozen_stamp is not None:
+                broadcast.header.stamp = self.broadcaster_frozen_stamp
+            # Reverse names to exercise name-based matching; gripper is already metres.
+            broadcast.name = self.broadcaster_names if self.broadcaster_names is not None else list(reversed(ARM + [GRIPPER]))
+            broadcast.position = self.broadcaster_positions if self.broadcaster_positions is not None else [self.positions[j] for j in broadcast.name]
+            broadcast.velocity = [0.] * len(broadcast.name)
+            broadcast.effort = [0.] * len(broadcast.name)
+            self.broadcaster_pub.publish(broadcast)
         for publisher, names in [(self.arm_pub, ARM), (self.gripper_pub, [GRIPPER])]:
             state = JointTrajectoryControllerState()
             state.header.stamp = stamp
@@ -280,6 +303,42 @@ def main(binary):
                 reply = move(joint_targets=targets, motion_duration_s=5.)
                 assert reply.get('accepted') is False, reply
             assert not robot.groups
+            # Raw MCU input can lead/lag the controller snapshot. It remains the
+            # clock/limits/stop source, but it is not the consistency comparator.
+            robot.raw_arm_offset = .1
+            robot.raw_gripper_offset = .005
+            time.sleep(.2)
+            assert info()['available'] and info()['gripper_available'], info()
+            robot.raw_arm_offset = robot.raw_gripper_offset = 0.
+            for label, names, values in [
+                ('arm-mismatch', None, [.025, 0., 0., 0., 0., 0., .03]),
+                ('gripper-mismatch', None, [.030, 0., 0., 0., 0., 0., 0.]),
+                ('missing-joint', ARM[1:] + [GRIPPER], [0.] * 5 + [.025]),
+                ('duplicate', ['joint1'] * 7, [0.] * 7),
+                ('nonfinite', None, [.025, 0., 0., 0., 0., 0., float('nan')]),
+                ('short-array', None, [0.]),
+            ]:
+                robot.broadcaster_names, robot.broadcaster_positions = names, values
+                bad = wait_for(lambda: (lambda i: i if not i['gripper_available'] and 'Broadcaster' in (i['message'] + i['gripper_message']) else None)(info()))
+                assert move(joint_targets={GRIPPER: .03})['accepted'] is False, (label, bad)
+                robot.broadcaster_names = robot.broadcaster_positions = None
+                wait_for(lambda: info()['gripper_available'])
+            for offset in [-2., 2.]:
+                robot.broadcaster_stamp_offset = offset
+                wait_for(lambda: not info()['available'])
+                assert move(joint_targets={'joint1': .1})['accepted'] is False
+                robot.broadcaster_stamp_offset = 0.
+                wait_for(lambda: info()['gripper_available'])
+            robot.broadcaster_enabled = False
+            wait_for(lambda: 'Broadcaster' in info()['message'])
+            assert move(joint_targets={'joint1': .1})['accepted'] is False
+            robot.broadcaster_enabled = True
+            wait_for(lambda: info()['gripper_available'])
+            robot.broadcaster_frozen_stamp = robot.get_clock().now().to_msg()
+            wait_for(lambda: 'Broadcaster' in info()['message'])
+            robot.broadcaster_frozen_stamp = None
+            wait_for(lambda: info()['gripper_available'])
+            assert not robot.groups, 'invalid Broadcaster feedback must never admit a motion'
             robot.mismatch = True
             wait_for(lambda: not info()['gripper_available'])
             assert move(joint_targets={GRIPPER: .03})['accepted'] is False
@@ -293,6 +352,16 @@ def main(binary):
                     return False
                 assert phase == expected, event
                 return True
+            robot.hold_plan = True
+            reply = move(joint_targets={GRIPPER: .03}, motion_duration_s=6.)
+            assert reply.get('accepted') is not False, reply
+            wait_for(lambda: info()['busy'])
+            robot.broadcaster_positions = [.025, 0., 0., 0., 0., 0., .03]
+            wait_for(lambda: completed('canceled'))
+            assert not robot.executions
+            robot.hold_plan = False
+            robot.broadcaster_positions = None
+            wait_for(lambda: info()['gripper_available'])
             reply = move(joint_targets={'joint1': .1, GRIPPER: .035}, motion_duration_s=6.)
             assert reply.get('accepted') is not False, reply
             wait_for(completed)

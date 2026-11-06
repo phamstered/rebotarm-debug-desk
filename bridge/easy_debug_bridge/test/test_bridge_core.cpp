@@ -1,3 +1,4 @@
+#include "easy_debug_bridge/controller_feedback_core.hpp"
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
@@ -18,6 +19,27 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    const auto names = arm_motion_joints();
+    const std::vector<std::string> reversed{"joint6", "joint5", "joint4", "joint3", "joint2", "joint1"};
+    assert(controller_feedback_consistency(names, reversed, {6,5,4,3,2,1}, names, {1,2,3,4,5,6}, .02, "rad").empty());
+    const auto mismatch = controller_feedback_consistency(names, names, {0,0,0,0,0,0}, names, {.03,0,0,0,0,0}, .02, "rad");
+    assert(mismatch.find("joint1") != std::string::npos && mismatch.find("/joint_states") != std::string::npos);
+    assert(controller_feedback_consistency(names, names, {0,0,0,0,0,0}, names, {.02,0,0,0,0,0}, .02, "rad").empty());
+    assert(!controller_feedback_consistency(names, names, {0,0}, names, {0,0,0,0,0,0}, .02, "rad").empty());
+    assert(!controller_feedback_consistency(names, {"joint1","joint1"}, {0,0}, names, {0,0,0,0,0,0}, .02, "rad").empty());
+    assert(!controller_feedback_consistency(names, names, {NAN,0,0,0,0,0}, names, {0,0,0,0,0,0}, .02, "rad").empty());
+    const std::vector<std::string> grip{gripper_motion_joint()};
+    assert(controller_feedback_consistency(grip, grip, {.025}, grip, {.025}, .001, "m").empty());
+    assert(!controller_feedback_consistency(grip, grip, {.025}, grip, {.027}, .001, "m").empty());
+    assert(broadcaster_stamp_fresh(10, 0, 10000000000LL));
+    assert(broadcaster_stamp_fresh(10, 0, 10999999999LL));
+    assert(!broadcaster_stamp_fresh(10, 0, 11000000000LL));
+    assert(!broadcaster_stamp_fresh(0, 0, 10000000000LL));
+    assert(!broadcaster_stamp_fresh(10, 1000000000u, 10000000000LL));
+    assert(!broadcaster_stamp_fresh(10, 0, 9949999999LL));
+  }
   {
     using namespace easy_debug_bridge;
     using namespace std::chrono_literals;

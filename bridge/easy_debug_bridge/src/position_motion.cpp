@@ -1,6 +1,7 @@
 #include "easy_debug_bridge/position_motion.hpp"
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
+#include "easy_debug_bridge/controller_feedback_core.hpp"
 #include "easy_debug_bridge/motion_timing.hpp"
 #include "easy_debug_bridge/motion_arrival.hpp"
 #include "easy_debug_bridge/group_hold_core.hpp"
@@ -134,14 +135,16 @@ struct PositionMotion::Impl {
   std::vector<double> velocity_limits, acceleration_limits;
   std::shared_ptr<ControllerRegistry> controller_registry;
   std::shared_ptr<rclcpp::AsyncParametersClient> parameters;
-  rclcpp::Subscription<Joints>::SharedPtr joints_sub;
+  rclcpp::Subscription<Joints>::SharedPtr joints_sub, broadcaster_sub;
   rclcpp::Subscription<State>::SharedPtr state_sub, gripper_state_sub;
   rclcpp::Subscription<Hardware>::SharedPtr hardware_sub;
   rclcpp::Subscription<std_msgs::msg::UInt32MultiArray>::SharedPtr clock_diagnostics_sub;
   ClockSyncMonitor clock_monitor;
   FirmwareClockMonitor firmware_clock;
   rclcpp::TimerBase::SharedPtr timer;
-  Joints joints; State state, gripper_state; Hardware hardware;
+  Joints joints, broadcaster_joints;
+  Clock::time_point broadcaster_at{};
+  State state, gripper_state; Hardware hardware;
   Clock::time_point gripper_state_at{};
   bool gripper_controller_active{false}, gripper_supported{false};
   std::string gripper_error{"等待夹爪模型"};
@@ -173,6 +176,14 @@ struct PositionMotion::Impl {
     joints_sub = node.create_subscription<Joints>(joint_topic, qos, [this](Joints::ConstSharedPtr m) {
       joints = *m; joints_at = Clock::now();
       clock_monitor.observe(m->header.stamp.sec, m->header.stamp.nanosec, node.now().nanoseconds(), joints_at);
+    }, options);
+    // Compare controller-exported feedback with controller-exported feedback.
+    // Raw STM32 input remains the independent clock/stop/arrival source below.
+    broadcaster_sub = node.create_subscription<Joints>("/joint_states", qos, [this](Joints::ConstSharedPtr m) {
+      // Duplicate source frames cannot keep an old snapshot fresh indefinitely.
+      const bool repeated = m->header.stamp == broadcaster_joints.header.stamp;
+      broadcaster_joints = *m;
+      if (!repeated) broadcaster_at = Clock::now();
     }, options);
     clock_diagnostics_sub = node.create_subscription<std_msgs::msg::UInt32MultiArray>(
         "/stm32/microros_diagnostics", qos, [this](std_msgs::msg::UInt32MultiArray::ConstSharedPtr m) {
@@ -353,6 +364,13 @@ struct PositionMotion::Impl {
     firmware_clock.apply(snapshot, steady);
     return snapshot;
   }
+  std::string broadcaster_readiness() const {
+    if (!fresh(broadcaster_at)) return "JointState Broadcaster /joint_states 反馈缺失/已过期";
+    const auto &stamp = broadcaster_joints.header.stamp;
+    if (!broadcaster_stamp_fresh(stamp.sec, stamp.nanosec, node.now().nanoseconds()))
+      return "JointState Broadcaster /joint_states 源时间戳无效/已过期";
+    return "";
+  }
   std::string readiness(bool starting = true) {
     poll_controllers();
     if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
@@ -360,6 +378,8 @@ struct PositionMotion::Impl {
     const auto controller_reason = controller_readiness();
     if (!controller_reason.empty()) return controller_reason;
     if (!fresh(joints_at) || !fresh(state_at) || !fresh(hardware_at)) return "JointState、控制器或硬件反馈缺失/已过期";
+    const auto broadcaster_reason = broadcaster_readiness();
+    if (!broadcaster_reason.empty()) return broadcaster_reason;
     const auto sync = clock_snapshot();
     if (!sync.healthy()) return sync.message;
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || (hardware.active_joint_mask & 0x3f) != 0x3f) return "硬件未处于 TRACK、存在故障或六关节未全部使能";
@@ -367,10 +387,11 @@ struct PositionMotion::Impl {
     try {
       const auto actual = ordered_arm_values(joints.name, joints.position);
       const auto velocity = ordered_arm_values(joints.name, joints.velocity);
-      const auto control = ordered_arm_values(state.joint_names, state.actual.positions);
       validate_position_target(actual, model);
+      const auto consistency = controller_feedback_consistency(arm_motion_joints(),
+          broadcaster_joints.name, broadcaster_joints.position, state.joint_names, state.actual.positions, .02, "rad");
+      if (!consistency.empty()) return consistency;
       for (size_t i = 0; i < 6; ++i) {
-        if (std::abs(actual[i] - control[i]) > 0.02) return "控制器反馈与 STM32 不一致";
         if (starting && std::abs(velocity[i]) > 0.05) return "机械臂尚未停稳";
       }
     } catch (const std::exception &e) { return e.what(); }
@@ -383,13 +404,20 @@ struct PositionMotion::Impl {
     if (!gripper_supported || !fresh(model_at, 10) || !model_error.empty()) return gripper_error.empty() ? "夹爪模型已过期" : gripper_error;
     if (!gripper_controller_active || !fresh(controller_at, ControllerHealthPoll::validity_seconds)) return "夹爪轨迹控制器未激活或未认领 position+velocity 接口";
     if (!fresh(gripper_state_at) || !fresh(joints_at) || !fresh(hardware_at)) return "夹爪反馈缺失或已过期";
+    const auto broadcaster_reason = broadcaster_readiness();
+    if (!broadcaster_reason.empty()) return broadcaster_reason;
     if (hardware.mode != Hardware::MODE_TRACK || hardware.fault_code != 0 || !(hardware.active_joint_mask & 0x40)) return "夹爪未使能、未处于 TRACK 或存在故障";
     try {
       if (gripper_state.joint_names != std::vector<std::string>{gripper_motion_joint()}) return "夹爪控制器关节集合不匹配";
       const auto actual = calibrated_gripper_value(joints.name, joints.position, gripper_calibration);
       const auto velocity = calibrated_gripper_value(joints.name, joints.velocity, gripper_calibration, true);
-      const auto control = ordered_motion_values({gripper_motion_joint()}, gripper_state.joint_names, gripper_state.actual.positions).front();
-      if (actual < gripper_calibration.lower - .001 || actual > gripper_calibration.upper + .001 || std::abs(actual - control) > .001) return "夹爪控制器与标定后的 STM32 反馈不一致或超出行程";
+      const auto consistency = controller_feedback_consistency({gripper_motion_joint()},
+          broadcaster_joints.name, broadcaster_joints.position, gripper_state.joint_names, gripper_state.actual.positions, .001, "m");
+      if (!consistency.empty()) return consistency;
+      const auto broadcast = ordered_motion_values({gripper_motion_joint()}, broadcaster_joints.name, broadcaster_joints.position).front();
+      if (actual < gripper_calibration.lower - .001 || actual > gripper_calibration.upper + .001 ||
+          broadcast < gripper_calibration.lower - .001 || broadcast > gripper_calibration.upper + .001)
+        return "夹爪标定后的 STM32 或 JointState Broadcaster 反馈超出行程";
       if (starting && std::abs(velocity) > .001) return "夹爪尚未停稳";
     } catch (const std::exception &e) { return e.what(); }
     return "";
