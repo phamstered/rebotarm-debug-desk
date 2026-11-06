@@ -1663,3 +1663,10 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .visual-pick-panel .viewer-overlay-row { flex-wrap:wrap; }
 .visual-pick-panel label { display:flex; align-items:flex-start; gap:4px; }
 .visual-pick-panel button { white-space:normal; }
+
+/* Read-only diagnostic context stays readable at the 900px desktop minimum. */
+.motion-error-monitor-status { flex: 0 0 auto; margin: 10px 22px 0; padding: 10px 12px; border: 1px solid #294657; border-radius: 8px; background: #0b1b27; color: #9bb3c2; font-size: 11px; line-height: 1.5; }
+.motion-error-monitor-status p { margin: 3px 0; }
+.motion-error-monitor-status strong { color: #d9e9f1; }
+.motion-error-monitor-sources { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.motion-error-monitor-sources code { overflow-wrap: anywhere; }
