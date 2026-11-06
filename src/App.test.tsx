@@ -906,6 +906,36 @@ describe("App workflow", () => {
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
+  it("subscribes the error dashboard without a controller activation and resets pairing on pause/reconnect", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    emitRosReady();
+    await user.click(await screen.findByRole("button", { name: "Monitor" }));
+    await user.click(screen.getByRole("button", { name: "添加运动误差仪表盘" }));
+    await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({ op: "subscribe", topic: "/arm_trajectory_controller/controller_state", type: "control_msgs/msg/JointTrajectoryControllerState" }));
+    const names = Array.from({ length: 6 }, (_, i) => `joint${i + 1}`);
+    const emit = (topic: string, data: unknown) => act(() => doubles.listener?.({ op: "topic_message", topic, data }));
+    const state = { header: { stamp: { sec: 10, nanosec: 0 } }, joint_names: names, actual: { positions: names.map(() => 0) }, desired: { positions: names.map(() => .1) } };
+    emit("/stm32/joint_states", { header: state.header, name: names, position: names.map(() => 0) });
+    emit("/arm_trajectory_controller/controller_state", state);
+    expect(screen.getByLabelText("运动误差数据说明")).toHaveTextContent("六轴数据有效；最新采样，未对齐");
+    await user.click(screen.getByRole("button", { name: "暂停跟随" }));
+    await user.click(screen.getByRole("button", { name: "跟随实时" }));
+    emit("/arm_trajectory_controller/controller_state", state);
+    expect(screen.getByLabelText("运动误差数据说明")).toHaveTextContent("等待两路有效反馈");
+    await user.click(screen.getByRole("button", { name: "断开" }));
+    await user.click(await screen.findByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("button", { name: "断开" });
+    emitRosReady();
+    await user.click(screen.getByRole("button", { name: "Monitor" }));
+    expect(screen.getByRole("tab", { name: /运动误差/ })).toBeVisible();
+    expect(screen.getByLabelText("运动误差数据说明")).toHaveTextContent("等待控制器反馈");
+    emit("/arm_trajectory_controller/controller_state", state);
+    expect(screen.getByLabelText("运动误差数据说明")).toHaveTextContent("源时间戳无效");
+    expect(doubles.send.mock.calls.some(([m]) => m.op === "trajectory_command" || m.op === "joint_command")).toBe(false);
+  });
+
   it("pauses and resumes live topic data without disconnecting", async () => {
     const user = userEvent.setup();
     render(<App />);

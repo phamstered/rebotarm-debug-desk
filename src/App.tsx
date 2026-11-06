@@ -1,3 +1,4 @@
+import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
 import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady } from "./teachingLogic";
 import { MotionPage } from "./MotionPage";
 import { TopicsPage } from "./TopicsPage";
@@ -444,6 +445,12 @@ export default function App() {
   const [monitorWorkspace, setMonitorWorkspace] = useState<MonitorWorkspace>(() =>
     loadMonitorWorkspace(loadProfile().jointStateTopic),
   );
+  const motionErrorSampler = useRef(new MotionErrorSampler());
+  const [motionErrorStatus, setMotionErrorStatus] = useState<MotionErrorStatus>(EMPTY_MOTION_ERROR_STATUS);
+  const [motionErrorSubscriptionError, setMotionErrorSubscriptionError] = useState("");
+  const motionErrorsEnabled = monitorWorkspace.dashboards.some(hasMotionErrorPanels);
+  const motionErrorsEnabledRef = useRef(motionErrorsEnabled);
+  motionErrorsEnabledRef.current = motionErrorsEnabled;
   const [rosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
   const [bagBusy, setBagBusy] = useState(false);
   const [bagNotice, setBagNotice] = useState("");
@@ -545,6 +552,21 @@ export default function App() {
     });
     return () => { disposed = true; };
   }, [bridge, stage, controllerStateTopic]);
+
+  useEffect(() => {
+    motionErrorSampler.current.reset();
+    setMotionErrorStatus(EMPTY_MOTION_ERROR_STATUS);
+  }, [liveUpdates, profile.jointStateTopic, motionErrorsEnabled]);
+
+  useEffect(() => {
+    setMotionErrorSubscriptionError("");
+    if (stage !== "connected" || !motionErrorsEnabled) return;
+    let disposed = false;
+    void bridge.request({ op: "subscribe", topic: ARM_ERROR_CONTROLLER_TOPIC, type: "control_msgs/msg/JointTrajectoryControllerState" })
+      .catch((reason: unknown) => { if (!disposed) setMotionErrorSubscriptionError(`控制器反馈订阅失败：${String(reason)}`); });
+    // The subscription is shared with Robot View / Inspector until disconnect.
+    return () => { disposed = true; };
+  }, [bridge, stage, motionErrorsEnabled]);
 
   const sendTrajectory = useCallback(async (request: TrajectorySendRequest) => {
     if (controllers.action) throw new Error("Controller 切换进行中，请等待完成");
@@ -817,7 +839,15 @@ export default function App() {
             [message.topic!]: nextTopicSample(previous, message.data, wallNow),
           };
         });
-        setMonitorWorkspace((current) => updateMonitorFromMessage(current, message.topic!, message.data, now));
+        const diagnostic = motionErrorsEnabledRef.current
+          ? motionErrorSampler.current.accept(message.topic, message.data, wallNow, profile.jointStateTopic, bagPlayingRef.current) : null;
+        if (diagnostic) setMotionErrorStatus(diagnostic.status);
+        const diagnosticBagPlaying = bagPlayingRef.current;
+        setMonitorWorkspace((current) => {
+          let next = updateMonitorFromMessage(diagnostic?.reset ? clearMotionErrorPoints(current) : current, message.topic!, message.data, now);
+          for (const frame of diagnostic?.frames ?? []) next = updateMonitorFromMessage(next, frame.topic, frame.data, diagnosticBagPlaying ? frame.sourceTimeMs ?? now : now);
+          return next;
+        });
         if (message.topic === profile.urdfTopic && typeof message.data === "string") setUrdf(message.data);
         if (message.topic === profile.jointStateTopic && message.data && typeof message.data === "object") {
           setJointState(message.data as { name?: string[]; position?: number[] });
@@ -1134,6 +1164,9 @@ export default function App() {
 
 
   function clearConnectionData() {
+    motionErrorSampler.current.reset();
+    setMotionErrorStatus(EMPTY_MOTION_ERROR_STATUS);
+    setMotionErrorSubscriptionError("");
     setPoseToSave(null);
     setPositionEditRequest(undefined);
     setPoseSaveError("");
@@ -1859,6 +1892,8 @@ export default function App() {
       ) : appPage === "monitor" ? (
         <MonitorPage
           workspace={monitorWorkspace}
+          motionErrorStatus={motionErrorStatus}
+          motionErrorSubscriptionError={motionErrorSubscriptionError}
           jointStateTopic={profile.jointStateTopic}
           liveUpdates={liveUpdates}
           bagStatus={rosbagPlayStatus}

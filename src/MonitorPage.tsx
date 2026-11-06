@@ -29,6 +29,9 @@ import {
 import type { RosbagPlayStatus } from "./types";
 import { createVlaChunkDashboard } from "./vlaLogic";
 
+import { createMotionErrorDashboard, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
+import { MotionErrorMonitorStatus } from "./MotionErrorMonitorStatus";
+
 const ReactGridLayout = WidthProvider(GridLayout);
 
 export type MonitorSourceMode = "live" | "bag";
@@ -43,6 +46,8 @@ export function MonitorPage({
   bagClockMs = null,
   bagOriginMs = null,
   bagWallStartedAtMs = null,
+  motionErrorStatus,
+  motionErrorSubscriptionError,
   onSelectDashboard,
   onAddDashboard,
   onRenameDashboard,
@@ -70,6 +75,8 @@ export function MonitorPage({
   bagClockMs?: number | null;
   bagOriginMs?: number | null;
   bagWallStartedAtMs?: number | null;
+  motionErrorStatus?: MotionErrorStatus;
+  motionErrorSubscriptionError?: string;
   onSelectDashboard(dashboardId: string): void;
   onAddDashboard(dashboard: MonitorDashboard): void;
   onRenameDashboard(dashboardId: string, name: string): void;
@@ -354,6 +361,8 @@ export function MonitorPage({
         >
           +VLA
         </button>
+        <button type="button" className="monitor-panel-add" aria-label="添加运动误差仪表盘"
+          onClick={() => onAddDashboard(createMotionErrorDashboard())}>+运动误差</button>
       </div>
 
       <div className="monitor-panel-meta">
@@ -543,6 +552,9 @@ export function MonitorPage({
           )}
         </section>
       )}
+
+      {hasMotionErrorPanels(dashboard) && <MotionErrorMonitorStatus status={motionErrorStatus}
+        jointStateTopic={jointStateTopic} liveUpdates={liveUpdates} subscriptionError={motionErrorSubscriptionError} />}
 
       <div className="monitor-grid-wrap">
         <div className="monitor-grid-toolbar" role="toolbar" aria-label="Monitor 布局与跟随">

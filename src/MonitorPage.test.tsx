@@ -93,6 +93,23 @@ describe("MonitorPage", () => {
     expect(onDeleteDashboard).toHaveBeenCalledWith(workspace.selectedDashboardId);
   });
 
+  it("adds a persistent motion error template with formulas, units and timestamp caveats", async () => {
+    const user = userEvent.setup();
+    let workspace = createDefaultMonitorWorkspace("/js");
+    const add = vi.fn(dashboard => { workspace = addMonitorDashboard(workspace, dashboard); });
+    const { rerender } = render(<MonitorPage workspace={workspace} {...baseProps({ jointStateTopic: "/js", onAddDashboard: add })} />);
+    await user.click(screen.getByRole("button", { name: "添加运动误差仪表盘" }));
+    rerender(<MonitorPage workspace={workspace} {...baseProps({ jointStateTopic: "/js", onAddDashboard: add })} />);
+    expect(screen.getByRole("tab", { name: /运动误差/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("轨迹跟踪误差 · desired − actual (rad) 曲线")).toBeVisible();
+    expect(screen.getByLabelText("反馈差值 · JTC actual − STM32 (rad) 曲线")).toBeVisible();
+    expect(screen.getByLabelText("采样时间差 · JTC − STM32 (ms) 曲线")).toBeVisible();
+    expect(screen.getByLabelText("运动误差数据说明")).toHaveTextContent("未做时间对齐");
+    expect(screen.getByLabelText("运动误差数据说明")).toHaveTextContent("/js");
+    rerender(<MonitorPage workspace={workspace} {...baseProps({ liveUpdates: false })} />);
+    expect(screen.getByText(/已暂停：保留历史/)).toBeVisible();
+  });
+
   it("validates bag path before starting playback", async () => {
     const user = userEvent.setup();
     const onStart = vi.fn();
