@@ -7,7 +7,7 @@ import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
 export function SavePoseDialog({ initial, urdfXml, onSave, onClose }: {
   initial: PositionDraft;
   urdfXml: string;
-  onSave(draft: PositionDraft): string;
+  onSave(draft: PositionDraft): string | Promise<string>;
   onClose(): void;
 }) {
   const [name, setName] = useState(initial.name);
@@ -15,11 +15,11 @@ export function SavePoseDialog({ initial, urdfXml, onSave, onClose }: {
   const [includeGripper, setIncludeGripper] = useState(initial.gripperPosition !== undefined);
   const [gripper, setGripper] = useState(initial.gripperPosition === undefined ? "" : String(initial.gripperPosition * 1000));
   const [error, setError] = useState("");
-  function save() {
+  async function save() {
     if (includeGripper && (!gripper.trim() || !Number.isFinite(Number(gripper)))) {
       setError("请输入有效的夹爪行程"); return;
     }
-    const failure = onSave({ ...initial, name, note, gripperPosition: includeGripper ? Number(gripper) / 1000 : undefined });
+    const failure = await onSave({ ...initial, name, note, gripperPosition: includeGripper ? Number(gripper) / 1000 : undefined });
     if (failure) { setError(failure); return; }
     onClose();
   }
@@ -27,7 +27,7 @@ export function SavePoseDialog({ initial, urdfXml, onSave, onClose }: {
     <button type="button" onClick={onClose}>取消</button>
     <button type="submit" form="save-current-pose" className="primary">保存点位</button>
   </>}>
-    <form id="save-current-pose" className="save-pose-form" onSubmit={event => { event.preventDefault(); save(); }}>
+    <form id="save-current-pose" className="save-pose-form" onSubmit={event => { event.preventDefault(); return save(); }}>
       <p>保存点击时的实测姿态；TCP 预览不会写入，也不会执行运动。</p>
       <UrdfPoseThumbnail xml={urdfXml} label="正在保存" jointNames={includeGripper ? [...ARM_JOINT_NAMES, GRIPPER_JOINT_NAME] : [...ARM_JOINT_NAMES]}
         positions={includeGripper ? [...initial.positions, Number(gripper) / 1000] : initial.positions} />

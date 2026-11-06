@@ -26,6 +26,7 @@ SSH 检查 → micro-ROS Agent 状态 → 启动 Bridge（若未监听）→ ssh
 ## Bridge 监听边界
 
 - Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
+- 「分享到手机」是另一条路径：电脑在用户确认后于局域网提供姿态页面。手机只连接这台电脑；关节反馈和保存由桌面已有的 Bridge 会话转发。手机不需要、也不会去连 Jetson 的 Bridge 端口。
 - 「ROS 环境脚本」（高级）必须指向机器人工作空间的 `install/setup.bash`，可为绝对路径或相对远端用户 `$HOME` 的路径（SSH 命令在 `$HOME` 下执行）；只允许 `[A-Za-z0-9._-/]`，拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 解析 URDF 中的 `package://` 资源。
 
 ## micro-ROS Agent

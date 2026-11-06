@@ -35,6 +35,8 @@ import { useClockSync } from "./clockSyncLogic";
 import { positionMotionBusy, usePositionMotion } from "./positionMotionLogic";
 import { addPosition, captureCurrentArmPose, nextCapturedPoseName, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
 import { loadStoredPositions, saveStoredPositions } from "./positionStore";
+import { TeachShareControl } from "./TeachShareControl";
+import { useTeachShareRelay } from "./useTeachShareRelay";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
 import { useArmModeWorkflow } from "./armModeWorkflowLogic";
@@ -604,10 +606,15 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadStoredPositions().then((store) => {
-      if (!cancelled) setPositionStore(store);
-    });
-    return () => { cancelled = true; };
+    const reload = () => {
+      void loadStoredPositions().then((store) => {
+        if (!cancelled) setPositionStore(store);
+      });
+    };
+    reload();
+    let unlisten = () => {};
+    void listen("teach-poses-changed", reload).then((stop) => { if (cancelled) stop(); else unlisten = stop; }).catch(() => undefined);
+    return () => { cancelled = true; unlisten(); };
   }, []);
 
   const positionProfileKey = profileKeyFor(profile);
@@ -640,6 +647,13 @@ export default function App() {
     const captured = captureCurrentArmPose(captureSamples, performance.now(), profile.jointStateTopic);
     return "error" in captured ? captured.error : "";
   })();
+  useTeachShareRelay({
+    bridgeConnected: stage === "connected",
+    profileKey: positionProfileKey,
+    samples: captureSamples,
+    preferredTopic: profile.jointStateTopic,
+    gripperPosition: positionMotion.gripper?.fresh ? positionMotion.gripper.position : undefined,
+  });
 
   useEffect(() => {
     if (stage !== "connected" || !bridge || !armMode?.teachingRunning) return;
@@ -1684,6 +1698,7 @@ export default function App() {
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
               <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理姿态库</button>
+              <TeachShareControl profileKey={positionProfileKey} bridgeConnected={false} />
               <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
             </div>
           </div>
@@ -1719,6 +1734,7 @@ export default function App() {
         <button type="button" className="toolbar-action" aria-label="连接配置" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效">
           <span aria-hidden="true">⌁</span>连接配置
         </button>
+        <TeachShareControl profileKey={positionProfileKey} bridgeConnected />
         <button type="button" className="toolbar-action" aria-label="设置" onClick={openToolbarSettings} title="配置自动刷新、诊断快照与连接后导航">
           <span aria-hidden="true">⚙</span>设置
         </button>
