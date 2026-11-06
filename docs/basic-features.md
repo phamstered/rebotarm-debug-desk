@@ -204,6 +204,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - 定时执行使用 MoveIt `/move_action` 的 plan-only 结果，校验路径、起终点和时序后，通过 `/execute_trajectory` 一次执行完整轨迹。规划与执行共享运动锁、心跳和取消；执行前再次核对新鲜反馈、实测起点与 MoveIt 起点容差，已取消或断线的规划不进入执行。Action 成功并由新鲜反馈确认停稳后报告执行完成，最终关节位置误差仅作诊断。
 - 保留 active JTC、六关节 position+velocity 接口、TRACK/故障、反馈新鲜度/一致性和实测停稳等安全条件；不恢复已删除的 JTC 参考连续性检查。需要 Bridge 广告 `joint_targets_supported` 和 `motion_duration_supported`，缺失时禁用确认执行；`/execute_trajectory` 未就绪时显示具体原因。其他 URDF 旋转关节可预览；真机执行允许 arm 六轴及经过能力核验的独立夹爪。
 
+规划诊断写入既有 Motion 日志和 Jetson ROS 日志，沿用 command_id 与会话隔离。`plan_request` 记录规划组、pipeline、5 秒规划上限、尝试次数、plan-only、自动/显式执行时长及关节限幅；结果记录请求耗时和 MoveIt 自报规划耗时。plan-only 路径校验还记录点数、首末时间、时间缩放倍率及每轴位置/速度/加速度的轨迹结点峰值（不代表连续样条峰值）。每轴最多一条摘要，不全量打印轨迹点。`plan_rejected` 指出 preflight、轨迹结构/点解码、时序/样条、起终点、TCP 或保持约束阶段；样条拒绝包含从 0 开始的段索引、时间、关节、单位、端点 p/v/a、限幅及递归子段的导数端点或保守控制点上界。无法证明满足上限与已确认超限分开描述。日志仅增强诊断，不自动延长时长或放宽校验。
+
 ### TCP 拖拽
 
 - Robot View 从 URDF 解析关节链并定位 TCP（夹爪）link：连接配置里的 `tcpLink` 优先；留空时优先选择 tool0/tcp/ee_link 等工具坐标系，其次选择 gripper/flange 等稳定 link，可以是带手指子 link 的夹爪基座，不因手指层级更深就选到 finger/jaw。无命名工具 link 时回退到最深叶子 link。视图显示实际使用的 link；rebotarm 默认选择 `gripper_link`。

@@ -257,6 +257,13 @@ def main():
             assert accepted.get("accepted") is not False,accepted
             result,_=terminal(label);assert result["motion_phase"]=="failed",result
             assert len(fixture.executions)==count,"invalid or too-short plan must never execute"
+            audit=request("position_motion_info")
+            entries=[e for e in audit['motion_logs'] if e['command_id']==label]
+            rejection=next(e for e in entries if e['phase']=='plan_rejected')
+            assert 'stage=' in rejection['message'] and 'reason=' in rejection['message'],rejection
+            if label=='over-speed':
+                assert 'stage=timing_and_spline' in rejection['message'] and 'segment=' in rejection['message'] and 'joint=joint2' in rejection['message'],rejection
+                assert any(e['phase']=='plan_timing' and 'duration_source=explicit' in e['message'] for e in entries),entries
         fixture.plan_kind="normal";ready();count=len(fixture.goals)
         for extra in ({"joint_targets":{}},{"joint_targets":{"joint7":0.}},
                       {"joint_targets":{"joint1":99.}},{"joint_targets":{"joint1":.1},"positions":[0.]*6},
