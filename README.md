@@ -31,6 +31,7 @@ Robot View 支持可选的桌面物体几何检测与同帧三维框显示。确
 | **macOS** | Rebotarm Debug Desk（Tauri / React / Three.js）· Rust SSH 会话 |
 | **隧道** | `ssh -N -L` 本地端口 → Jetson `127.0.0.1:8765`（认证 / 主机密钥 / 加密） |
 | **Jetson** | `easy_debug_bridge`（C++ WebSocket · rclcpp）· **仅 loopback** |
+| **手机姿态库** | 可选局域网页面，只连电脑；由桌面 Bridge 会话转发关节与保存 |
 | **ROS 2** | Humble graph · Topics / Controllers / `package://` · URDF |
 | **固件** | micro-ROS Agent · STM32 · 电机（JointCommand / HardwareStatus） |
 

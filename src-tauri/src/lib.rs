@@ -13,6 +13,7 @@ mod positions;
 mod motion_groups;
 mod arm_workflow;
 mod node_runtime;
+mod teach_share;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1683,6 +1684,7 @@ pub fn run() {
         .manage(SessionState::default())
         .manage(control_logs::LogSessions::default())
         .manage(data_collection::CollectionState::default())
+        .manage(teach_share::TeachShareState::default())
         .invoke_handler(tauri::generate_handler![
             check_ssh,
             control_logs::read_control_log,
@@ -1712,7 +1714,11 @@ pub fn run() {
             positions::positions_load,
             motion_groups::motion_groups_load,
             motion_groups::motion_groups_save,
-            positions::positions_save
+            positions::positions_save,
+            teach_share::teach_share_start,
+            teach_share::teach_share_stop,
+            teach_share::teach_share_status,
+            teach_share::teach_share_publish_feedback
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Robot Console");

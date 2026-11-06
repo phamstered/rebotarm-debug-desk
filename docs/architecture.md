@@ -90,6 +90,8 @@ Graph filtering is a presentation preference: only the desktop diagnostic Bridge
 
 ## 保存位置与 MoveIt2
 
+可选的「分享到手机」只在用户确认后由桌面进程监听局域网。手机浏览器只访问该地址上的姿态页和同一服务的反馈 WebSocket / 保存接口。关节数据与保存都转发桌面端已经建立的 Bridge 会话；手机不打开到 Jetson 的 WebSocket，链接里也不包含 Jetson 地址。Bridge 未连接时保存被拒绝。姿态仍写入桌面本机点位文件。
+
 位置卡片、关节调整与 TCP 确认通过 Bridge 的 `position_motion_info` / `position_move` / `position_cancel` 操作连接 Jetson 的固定 `arm`、`gripper` 或 `arm_with_gripper` 组和 `/move_action`。MoveIt 使用当前 Planning Scene 规划，执行控制器仅允许审核过的 `arm_trajectory_controller` 和可选 `gripper_trajectory_controller`。TCP 本地 6D IK 只提供预览与收敛校验，执行使用完整 Pose 位置/姿态约束，而非本地关节解。Bridge 将稳定 TCP 的固定变换换算为 arm tip 目标，MoveIt plan-only 后再校验 FK 终点、时序和实测起点，通过 ExecuteTrajectory 执行。实现独立在 `position_motion.cpp`，无 MoveIt 消息依赖的构建保留只读/管理功能并返回 unavailable。Mac 不加入 DDS。
 
 Bridge 将 WebSocket 请求排队到 ROS executor 的互斥回调组，管理全局单运动所有权、去重、实时门禁和取消 watchdog；会话释放会取消其拥有的 goal。模型与 HOME 来自实际 `/move_group` 参数而非本机文件。端侧从 Action 结果与新鲜关节停稳反馈确认终态。管理数据保存在本机，运动使用点击时的目标快照；编辑/删除只改变后续请求。

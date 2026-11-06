@@ -12,6 +12,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 900px; min-height: 620px; overflow: hidden; }
+body.teach-mode { min-width: 0; min-height: 0; overflow: auto; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 
@@ -1663,3 +1664,15 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .visual-pick-panel .viewer-overlay-row { flex-wrap:wrap; }
 .visual-pick-panel label { display:flex; align-items:flex-start; gap:4px; }
 .visual-pick-panel button { white-space:normal; }
+
+.teach-pendant { min-height: 100vh; max-width: 720px; margin: 0 auto; padding: 16px 16px 32px; display: grid; gap: 16px; color: #d7e6ef; background: #071019; overflow-wrap: anywhere; }
+.teach-pendant h1 { margin: 0; font-size: 28px; }
+.teach-pendant h2, .teach-pendant p { margin: 0; }
+.teach-pendant button, .teach-pendant input { min-height: 44px; font-size: 16px; }
+.teach-pendant .teach-save { width: 100%; border: 0; border-radius: 12px; background: var(--cyan); color: #041316; font-weight: 750; }
+.teach-pendant .teach-save:disabled { opacity: .45; }
+.teach-pose { display: grid; gap: 6px; padding: 12px; border: 1px solid #1b3141; border-radius: 12px; background: #0c1924; }
+.teach-pose div { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+body.teach-mode .toolbar-modal-actions button { min-height: 44px; font-size: 16px; }
+body.teach-mode .modal-backdrop { padding: 12px; }
+body.teach-mode .toolbar-modal { width: min(520px, calc(100vw - 24px)); }

@@ -83,6 +83,101 @@ pub fn write_positions_file(path: &Path, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub struct CapturedPose {
+    pub name: String,
+    pub positions: Vec<f64>,
+    pub note: String,
+    pub gripper_position: Option<f64>,
+}
+
+fn validate_profile_key(profile_key: &str) -> Result<(), String> {
+    if profile_key.is_empty() || profile_key.len() > 512 || profile_key.chars().any(|ch| ch.is_control()) {
+        return Err("连接键无效".into());
+    }
+    Ok(())
+}
+
+pub fn list_captured_poses(path: &Path, profile_key: &str) -> Result<Value, String> {
+    validate_profile_key(profile_key)?;
+    let root: Value = serde_json::from_str(&read_positions_file(path)?).map_err(|error| format!("点位文件不是有效 JSON：{error}"))?;
+    Ok(root
+        .get("profiles")
+        .and_then(|profiles| profiles.get(profile_key))
+        .and_then(|profile| profile.get("positions"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new())))
+}
+
+pub fn append_captured_pose(path: &Path, profile_key: &str, pose: &CapturedPose, now_ms: u64, id: &str) -> Result<Value, String> {
+    validate_profile_key(profile_key)?;
+    let name = pose.name.trim();
+    if name.is_empty() || name == "HOME" {
+        return Err("点位名称无效".into());
+    }
+    if id.is_empty() || id == "builtin:home" {
+        return Err("不能保存 HOME".into());
+    }
+    if pose.positions.len() != 6 || pose.positions.iter().any(|value| !value.is_finite()) {
+        return Err("关节值必须是有限数值".into());
+    }
+    if let Some(gripper) = pose.gripper_position {
+        if !gripper.is_finite() || gripper < 0.0 {
+            return Err("夹爪行程必须是非负有限数值（米）".into());
+        }
+    }
+    let raw = read_positions_file(path)?;
+    let mut root: Value = serde_json::from_str(&raw).map_err(|error| format!("点位文件不是有效 JSON：{error}"))?;
+    root["schemaVersion"] = Value::from(2);
+    let profiles = root.get_mut("profiles").and_then(Value::as_object_mut).ok_or("缺少 profiles")?;
+    let profile = profiles.entry(profile_key.to_string()).or_insert_with(|| serde_json::json!({ "positions": [] }));
+    let positions = profile.get_mut("positions").and_then(Value::as_array_mut).ok_or("positions 必须是数组")?;
+    if positions.iter().any(|item| item.get("name").and_then(Value::as_str).map(str::trim) == Some(name)) {
+        return Err("点位名称重复".into());
+    }
+    let mut item = serde_json::json!({
+        "id": id,
+        "name": name,
+        "group": "arm",
+        "jointNames": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+        "positions": pose.positions,
+        "source": "feedback",
+        "note": pose.note,
+        "capturedAt": Value::Null,
+        "createdAt": now_ms,
+        "updatedAt": now_ms,
+    });
+    if let Some(gripper) = pose.gripper_position {
+        item["gripperPosition"] = Value::from(gripper);
+    }
+    positions.push(item.clone());
+    write_positions_file(path, &root.to_string())?;
+    Ok(item)
+}
+
+pub fn delete_captured_pose(path: &Path, profile_key: &str, id: &str) -> Result<(), String> {
+    validate_profile_key(profile_key)?;
+    if id == "builtin:home" || id == "HOME" {
+        return Err("HOME 不能删除".into());
+    }
+    let raw = read_positions_file(path)?;
+    let mut root: Value = serde_json::from_str(&raw).map_err(|error| format!("点位文件不是有效 JSON：{error}"))?;
+    let Some(positions) = root
+        .get_mut("profiles")
+        .and_then(|profiles| profiles.get_mut(profile_key))
+        .and_then(|profile| profile.get_mut("positions"))
+        .and_then(Value::as_array_mut)
+    else {
+        return Err("点位不存在".into());
+    };
+    let before = positions.len();
+    positions.retain(|item| item.get("id").and_then(Value::as_str) != Some(id));
+    if positions.len() == before {
+        return Err("点位不存在".into());
+    }
+    write_positions_file(path, &root.to_string())?;
+    Ok(())
+}
+
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|error| format!("无法定位应用数据目录：{error}"))?;
     Ok(positions_file(&dir))
@@ -161,6 +256,33 @@ mod tests {
         assert_eq!(read_positions_file(&path).unwrap(), text);
         assert!(write_positions_file(&path, "{\"schemaVersion\":1}").is_err());
         assert_eq!(read_positions_file(&path).unwrap(), text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn appends_feedback_pose_for_one_profile_and_keeps_home_out() {
+        let dir = std::env::temp_dir().join(format!("positions-append-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = positions_file(&dir);
+        let pose = CapturedPose {
+            name: " 取料位 ".into(),
+            positions: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            note: "phone".into(),
+            gripper_position: Some(0.02),
+        };
+        let saved = append_captured_pose(&path, "jetson|op|22", &pose, 10, "pose-1").unwrap();
+        assert_eq!(saved["name"], "取料位");
+        assert!(saved.get("gripperPosition").is_some());
+        let listed = list_captured_poses(&path, "jetson|op|22").unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert!(list_captured_poses(&path, "other|op|22").unwrap().as_array().unwrap().is_empty());
+        assert!(append_captured_pose(&path, "jetson|op|22", &pose, 11, "pose-2").unwrap_err().contains("重复"));
+        let home = CapturedPose { name: "HOME".into(), gripper_position: None, ..pose };
+        assert!(append_captured_pose(&path, "jetson|op|22", &home, 12, "pose-3").is_err());
+        assert!(append_captured_pose(&path, "jetson|op|22", &CapturedPose { name: "其他".into(), ..home }, 13, "builtin:home").is_err());
+        delete_captured_pose(&path, "jetson|op|22", "pose-1").unwrap();
+        assert!(list_captured_poses(&path, "jetson|op|22").unwrap().as_array().unwrap().is_empty());
+        assert!(delete_captured_pose(&path, "jetson|op|22", "builtin:home").is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }
