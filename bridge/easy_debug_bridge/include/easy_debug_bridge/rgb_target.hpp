@@ -24,6 +24,7 @@ struct RgbTargetFrame {
 };
 struct RgbTargetState {
   std::string target_id, mode = "none", message, geometry_source = "none";
+  std::string diagnostic, handoff_reason;
   uint64_t object_id = 0, sequence = 0, generation = 0;
   bool identity_valid = false, metric_ready = false, plane_verified = false;
   double confidence = 0, depth_valid_fraction = 0, age_ms = 0, camera_z_m = 0;

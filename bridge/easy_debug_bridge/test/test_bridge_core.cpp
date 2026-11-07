@@ -333,6 +333,26 @@ int main() {
     const auto on_retry = [&](double before, double after, const std::string &reason) {
       ++retries; assert(after == before * 1.25); assert(reason.find("joint=gripper_finger_left_joint") != std::string::npos);
     };
+    TimedMotionPoint no_motion{{.035142591294956657}, {0}, {0}, {}, 0};
+    const std::vector<double> reached_target{.034947236180305478};
+    assert(valid_gripper_no_motion_plan(no_motion, gripper, reached_target, no_motion.positions));
+    assert(!valid_gripper_no_motion_plan(no_motion, gripper, {.033}, no_motion.positions));
+    assert(!valid_gripper_no_motion_plan(no_motion, gripper, reached_target, {.036}));
+    assert(!valid_gripper_no_motion_plan(no_motion, gripper, reached_target, {NAN}));
+    assert(!valid_gripper_no_motion_plan(no_motion, gripper, {.051}, {.051}));
+    for (int fault=0; fault<7; ++fault) {
+      auto bad=no_motion;
+      if(fault==0) bad.time_ns=1;
+      if(fault==1) bad.positions={NAN};
+      if(fault==2) bad.positions={.035, .035};
+      if(fault==3) bad.velocities={.0001};
+      if(fault==4) bad.accelerations={NAN};
+      if(fault==5) bad.effort={1};
+      if(fault==6) bad.accelerations={0,0};
+      assert(!valid_gripper_no_motion_plan(bad, gripper, reached_target, no_motion.positions));
+    }
+    auto wrong_model=gripper; wrong_model.joint_names={"joint1"};
+    assert(!valid_gripper_no_motion_plan(no_motion, wrong_model, reached_target, no_motion.positions));
     const auto automatic = automatic_motion_timing(reported, gripper, {.02}, {.04}, on_retry);
     assert(automatic.duration_s == .125 && automatic.adjustments == 1 && retries == 1);
     assert(automatic.points.back().time_ns == 125000000);

@@ -346,7 +346,15 @@ struct VisualPick::Impl {
       };
       auto current = [&]() {
         task_guard();
-        auto o = observe(who, initial.subscription, initial.box.id);
+        PickObservation o;
+        try { o = observe(who, initial.subscription, initial.box.id); }
+        catch (const std::exception &e) {
+          record(who, task, "pick_guard", "observation_error=" + position_json_quote(e.what()));
+          throw;
+        }
+        if (!o.identity_valid || !o.metric_ready || o.target_id != initial.target_id ||
+            (!o.target_id.empty() && o.tracking_mode == "rgb" && !config.rgb_plane_verified))
+          record(who, task, "pick_guard", "rejected_observation " + frame_detail(o));
         if (!o.identity_valid || !o.metric_ready || (!o.target_id.empty()&&o.tracking_mode=="rgb"&&!config.rgb_plane_verified))throw std::runtime_error(o.tracking_message.empty()?"RGB 目标身份或几何未就绪":o.tracking_message);
         if(o.target_id!=initial.target_id)throw std::runtime_error("视觉目标身份改变，需重新选择");
         if (o.generation != initial.generation || o.sequence < initial.sequence)

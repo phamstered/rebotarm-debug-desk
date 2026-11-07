@@ -144,7 +144,13 @@ int main() {
   s = t.snapshot();
   assert(s.mode == "rgb" && s.target_id == id && !s.metric_ready &&
          s.identity_valid);
+  assert(s.diagnostic.find("depth_status=missing") != std::string::npos);
+  assert(s.handoff_reason.find("depth_unavailable") != std::string::npos);
+  assert(s.handoff_reason.find("camera_z_m=") != std::string::npos);
+  assert(rgb_target_json(s).find("\"diagnostic\"") != std::string::npos);
+  const auto cause = s.handoff_reason;
   t.update(frame(5, false, .01, .4, .003));
+  assert(t.snapshot().handoff_reason == cause);
   s = t.snapshot();
   assert(s.identity_valid && std::abs(s.box.center[0] - .003) < .002);
   // Opaque occlusion must latch uncertain. A later similar green target cannot
@@ -174,6 +180,8 @@ int main() {
   t.update(frame(4, true, 0, .28));
   auto close = t.snapshot();
   assert(close.mode == "rgb" && close.identity_valid && close.metric_ready);
+  assert(close.handoff_reason.find("near_range") != std::string::npos);
+  assert(close.diagnostic.find("depth_status=valid") != std::string::npos);
   assert(close.target_id == approaching_id &&
          std::abs(close.box.center[0]) < .001);
   t.update(frame(5, false, 0, .24));

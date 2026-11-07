@@ -26,8 +26,8 @@ it('preserves UUID across RGBD/RGB but rejects other targets, old epochs and rec
  expect(acceptRgbTarget({...target,mode:'uncertain',identity_valid:false,metric_ready:false},rgb,target.target_id,1)).toBe(false);
 });
 it('decodes independent binary RGB target frames and rejects truncated or mismatched envelopes',()=>{
- const metadata=new TextEncoder().encode(JSON.stringify({op:'visual_target_frame',tracking:target,subscription_id:'lease',data_length:3}));
+ const metadata=new TextEncoder().encode(JSON.stringify({op:'visual_target_frame',tracking:{...target,diagnostic:'depth_status=missing',handoff_reason:'depth_unavailable'},subscription_id:'lease',data_length:3}));
  const bytes=new Uint8Array(8+metadata.length+3);bytes.set([82,67,84,49]);new DataView(bytes.buffer).setUint32(4,metadata.length,false);bytes.set(metadata,8);bytes.set([10,20,30],8+metadata.length);
- const decoded=decodeBridgeEnvelope(bytes.buffer);expect(decoded.tracking?.target_id).toBe(target.target_id);expect([...decoded.target_rgb_payload!]).toEqual([10,20,30]);
+ const decoded=decodeBridgeEnvelope(bytes.buffer);expect(decoded.tracking?.target_id).toBe(target.target_id);expect(decoded.tracking?.diagnostic).toBe("depth_status=missing");expect(decoded.tracking?.handoff_reason).toBe("depth_unavailable");expect([...decoded.target_rgb_payload!]).toEqual([10,20,30]);
  expect(()=>decodeBridgeEnvelope(bytes.slice(0,-1).buffer)).toThrow();
 });

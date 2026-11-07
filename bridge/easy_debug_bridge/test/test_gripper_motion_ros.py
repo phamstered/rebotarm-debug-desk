@@ -142,6 +142,7 @@ class MockRobot(Node):
         self.broadcaster_names = None
         self.broadcaster_stamp_offset = 0.
         self.broadcaster_frozen_stamp = None
+        self.feedback_speed = 0.
         self.pause = False
         self.hold_plan = False
         self.invalid_pose_plan = False
@@ -178,7 +179,7 @@ class MockRobot(Node):
         joints.position = [self.positions[j] for j in ARM] + [(self.positions[GRIPPER] - OFFSET) / SCALE]
         joints.position[0] += self.raw_arm_offset
         joints.position[-1] += self.raw_gripper_offset / SCALE
-        joints.velocity = [0.] * 7
+        joints.velocity = [self.feedback_speed] * 6 + [0.]
         joints.effort = [0.] * 7
         self.joints_pub.publish(joints)
         if self.broadcaster_enabled:
@@ -402,12 +403,48 @@ def main(binary):
             before = len(robot.executions)
             reply = move(joint_targets={GRIPPER: robot.positions[GRIPPER] + .000434670653491825})
             assert reply.get('accepted') is not False, reply
-            wait_for(lambda: completed('failed'))
+            wait_for(completed)
             assert len(robot.executions) == before
             entries = command_logs()
+            assert any(e['phase']=='plan_no_motion' for e in entries), entries
             assert any(e['phase']=='plan_point' and 'index=0 time_s=0' in e['message'] and 'positions=' in e['message'] for e in entries),entries
             assert any(e['phase']=='plan_joint_goal' and 'tolerance_above=0.0005' in e['message'] and 'target_delta=' in e['message'] for e in entries),entries
-            assert any(e['phase']=='plan_rejected' and 'points=1' in e['message'] for e in entries),entries
+            # Off-target and malformed single-point results cannot become success.
+            for off_target, bad_velocity in [(True, False), (False, True)]:
+                robot.excessive_plan_velocity = bad_velocity
+                reply = move(joint_targets={GRIPPER: robot.positions[GRIPPER] + (.002 if off_target else .000195)})
+                assert reply.get('accepted') is not False, reply
+                wait_for(lambda: completed('failed'))
+                assert len(robot.executions) == before
+                assert any(e['phase']=='plan_rejected' and 'no_motion_goal' in e['message'] for e in command_logs())
+            robot.excessive_plan_velocity = False
+            # Hold the arm moving to make the observation-only verification deterministic.
+            def verifying():
+                info()
+                return ws.events.get(ws.command_id, {}).get('motion_phase') == 'verifying'
+            for failure in ['drift', 'stale', 'cancel']:
+                robot.feedback_speed = .04
+                time.sleep(.15)
+                assert move(joint_targets={GRIPPER: robot.positions[GRIPPER] + .000195}).get('accepted') is not False
+                wait_for(verifying)
+                if failure == 'drift':
+                    robot.raw_gripper_offset = .002
+                    robot.feedback_speed = 0.
+                    wait_for(lambda: completed('failed'))
+                    robot.raw_gripper_offset = 0.
+                elif failure == 'stale':
+                    robot.pause = True
+                    time.sleep(.8)
+                    assert not completed(), 'stale feedback cannot release the lock'
+                    robot.pause = False
+                    robot.feedback_speed = 0.
+                    wait_for(lambda: completed('canceled'))
+                else:
+                    ws.request('position_cancel', command_id=ws.command_id)
+                    robot.feedback_speed = 0.
+                    wait_for(lambda: completed('canceled'))
+                assert len(robot.executions) == before
+                wait_for(lambda: info()['gripper_available'])
             robot.single_point_plan = False
             robot.excessive_plan_velocity = True
             before = len(robot.executions)

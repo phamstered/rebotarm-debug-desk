@@ -13,6 +13,28 @@ struct TimedMotionPoint {
   std::vector<double> positions, velocities, accelerations, effort;
   int64_t time_ns{};
 };
+// A successful one-point gripper plan can describe an already-reached goal.
+// This authorizes observation only: never synthesize or dispatch a trajectory.
+inline bool gripper_no_motion_reached(const PositionMotionModel &model,
+    const std::vector<double> &target, const std::vector<double> &actual) {
+  if (model.joint_names != std::vector<std::string>{gripper_motion_joint()} ||
+      target.size() != 1 || actual.size() != 1) return false;
+  try { validate_position_target(target, model); validate_position_target(actual, model); }
+  catch (...) { return false; }
+  return std::abs(actual[0] - target[0]) <= motion_goal_tolerance(gripper_motion_joint());
+}
+inline bool valid_gripper_no_motion_plan(const TimedMotionPoint &point,
+    const PositionMotionModel &model, const std::vector<double> &target,
+    const std::vector<double> &actual) {
+  if (point.time_ns != 0 || !gripper_no_motion_reached(model, target, actual) ||
+      !gripper_no_motion_reached(model, target, point.positions) ||
+      !gripper_no_motion_reached(model, actual, point.positions)) return false;
+  for (const auto *values : {&point.velocities, &point.accelerations, &point.effort}) {
+    if (!values->empty() && (values->size() != 1 || !std::isfinite(values->front()) ||
+                            std::abs(values->front()) > 1e-9)) return false;
+  }
+  return true;
+}
 inline std::string motion_number(double value) {
   std::ostringstream out; out << std::setprecision(17) << value; return out.str();
 }

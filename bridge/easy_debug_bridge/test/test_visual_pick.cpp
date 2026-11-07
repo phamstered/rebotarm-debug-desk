@@ -131,7 +131,7 @@ int main() {
     }
     PickObservation observation{observed, token, static_frames ? sequence.load() : sequence.fetch_add(1), 2};
     if(tracked){observation.target_id="550e8400-e29b-41d4-a716-446655440000";observation.tracking_mode=rgb_mode?"rgb":"rgbd";
-      observation.identity_valid=rgb_identity;observation.metric_ready=rgb_metric;observation.locked_yaw=1.5707963267948966;}
+      observation.tracking_json="{\"diagnostic\":\"depth_status=missing\"}";observation.identity_valid=rgb_identity;observation.metric_ready=rgb_metric;observation.locked_yaw=1.5707963267948966;}
     observation.source_frame = "camera_optical"; observation.source_to_target.position = {.1,.2,.3};
     observation.rgb_stamp_ns = 1234567890123LL; observation.depth_stamp_ns = 1234567890000LL;
     observation.tf_stamp_ns = observation.rgb_stamp_ns; observation.age_ms = 12.5;
@@ -388,6 +388,8 @@ int main() {
   pick.request(1,request,[](const std::string &){});
   while(moves==loss_moves)std::this_thread::sleep_for(std::chrono::milliseconds(10));
   rgb_identity=false;wait();assert(moves==loss_moves+1);
+  assert(logged("identity-loss", "pick_guard", "rejected_observation"));
+  assert(logged("identity-loss", "pick_guard", "depth_status=missing"));
   pick.request(1,status,capture);assert(reply.get<std::string>("pick_phase")=="failed");
   std::remove(path.c_str());
 }

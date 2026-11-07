@@ -542,3 +542,9 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 毫米级 TCP 目标按当前 FK 到目标的位置距离收紧 MoveIt 位置区域半径：距离的 1/4，限制在 0.1–3 mm；位置不变的纯旋转保留 3 mm。`plan_tcp_goal.planning_position_radius_m` 记录本次值。执行终点和实测到位校验仍沿用原有边界。
 
 身份进入 `uncertain` 后保留首次失效 `message`；`age_ms` 继续增长，但后续过期不会抹去原始关联/遮挡原因。桌面显式重选（包括相同 `object_id`）先串行完成旧 UUID 的 `visual_target_release`，再发送新 `visual_pick_preview`；普通轮询不得重新绑定失效身份。预览响应的 `tracking` 与 RCT1 使用同一有效期，即使后续未收到 RCT1，也不能持续显示可执行候选。
+
+### Pick fallback and no-motion diagnostics
+
+`RgbTargetState` in preview/RCT1 optionally includes `diagnostic` and `handoff_reason` strings. `diagnostic` describes the last depth evaluation (capture stamps, pairing delta, valid samples/fraction and surface height error where available); `handoff_reason` retains the first RGB fallback cause and capture-time distance. They do not authorize motion. `pick_guard` logs the rejected observation or observation exception before cancellation.
+
+A successful single-point gripper-only MoveIt plan can enter `verifying` without ExecuteTrajectory (`plan_no_motion`). The zero-time stationary point and fresh measured position must both satisfy the requested 0.5 mm goal tolerance and calibrated bounds. Completion requires that position tolerance and whole-arm stopped feedback hold for 200 ms after verification starts. Existing health, freshness, lease and cancellation checks apply; other single-point plans remain invalid. No synthetic Action success or motor command is emitted.

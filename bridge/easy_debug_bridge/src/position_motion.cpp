@@ -115,7 +115,7 @@ struct PositionMotion::Impl {
     double duration{0}, recommended_duration{0};
     std::string validation_stage;
     Clock::time_point started{Clock::now()}, lease_at{Clock::now()}, result_at{}, settled_at{}, cancel_at{};
-    bool cancel_requested{false}, terminal{false};
+    bool cancel_requested{false}, terminal{false}, no_motion{false};
     int code{0}; bool failed_result{false}, planning_finished{false};
     std::shared_ptr<GroupRun> group;
     std::vector<double> hold_reference;
@@ -717,8 +717,8 @@ struct PositionMotion::Impl {
       log_point(0);
       if (plan.joint_trajectory.points.size() > 1) log_point(plan.joint_trajectory.points.size()-1);
     }
-    if (plan.joint_trajectory.points.size() < 2 || plan.joint_trajectory.points.size() > 10000)
-      throw std::runtime_error("规划轨迹点数无效 points=" + std::to_string(plan.joint_trajectory.points.size()) + " required=2..10000；单点结果未执行，需结合目标容差和当前反馈判断");
+    if (plan.joint_trajectory.points.empty() || plan.joint_trajectory.points.size() > 10000)
+      throw std::runtime_error("规划轨迹点数无效 points=" + std::to_string(plan.joint_trajectory.points.size()) + " required=1..10000（单点仅支持已到位夹爪核验）");
     std::vector<TimedMotionPoint> points;
     for (const auto &point : plan.joint_trajectory.points) {
       m->validation_stage = "decode_point_" + std::to_string(points.size());
@@ -728,6 +728,19 @@ struct PositionMotion::Impl {
           point.accelerations.empty() ? std::vector<double>{} : ordered_motion_values(m->model.joint_names, names, point.accelerations),
           point.effort.empty() ? std::vector<double>{} : ordered_motion_values(m->model.joint_names, names, point.effort),
           static_cast<int64_t>(point.time_from_start.sec) * 1000000000 + point.time_from_start.nanosec});
+    }
+    if (points.size() == 1) {
+      m->validation_stage = "no_motion_goal";
+      const auto actual = measured(m->model, false, &m->calibration);
+      if (m->tcp || !valid_gripper_no_motion_plan(points.front(), m->model, m->target, actual))
+        throw std::runtime_error("单点规划不满足已到位夹爪核验条件；未下发轨迹 target=" + numbers(m->target) + " actual=" + numbers(actual));
+      m->no_motion = true;
+      m->code = 1;
+      m->result_at = Clock::now();
+      log(m->owner, m->id, "plan_no_motion", "gripper already within planning tolerance; no ExecuteTrajectory dispatched target=" +
+          numbers(m->target) + " actual=" + numbers(actual) + " tolerance_m=0.0005 verification_s=0.2");
+      update(m, "verifying", "夹爪已在目标容差内，未下发轨迹；正在核对连续新鲜到位及停稳反馈");
+      return;
     }
     if (!points.empty()) { m->recommended_duration=points.back().time_ns/1e9; update(m,"planning","MoveIt 推荐运动时长："+std::to_string(m->recommended_duration)+" 秒（仅供参考）"); }
     const bool automatic_duration = m->duration == 0;
@@ -1117,7 +1130,7 @@ struct PositionMotion::Impl {
         const auto measured_pose = tcp_forward_pose(m->tcp_model, ordered_arm_values(joints.name, joints.position));
         pose_reached = tcp_pose_position_error(measured_pose, m->tcp_target) <= .005 && tcp_pose_orientation_error(measured_pose, m->tcp_target) <= .02;
       }
-      const bool reached = stopped && pose_reached && motion_completion_stopped(m->model.joint_names, actual, velocity);
+      const bool reached = stopped && pose_reached && (!m->no_motion || gripper_no_motion_reached(m->model, m->target, actual)) && motion_completion_stopped(m->model.joint_names, actual, velocity);
       if (((m->cancel_requested || m->failed_result) && stopped) || (m->phase == "verifying" && reached)) {
         if (m->settled_at == Clock::time_point{}) m->settled_at = Clock::now();
         if (!fresh(m->settled_at, 0.2)) {
@@ -1132,7 +1145,7 @@ struct PositionMotion::Impl {
             return;
           }
           update(m, m->group && m->group->failed ? "failed" : m->cancel_requested ? "canceled" : m->failed_result ? "failed" : "succeeded",
-            m->group && m->group->failed ? "动作组失败，后续步骤未执行；" + m->message + "；已确认停稳" : m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->code == 1 ? "执行已结束但未满足 TCP 位姿精度，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : "Action 成功且已停稳（关节目标误差仅诊断）"), true);
+            m->group && m->group->failed ? "动作组失败，后续步骤未执行；" + m->message + "；已确认停稳" : m->cancel_requested ? "已取消且确认关节停稳" : m->failed_result ? (m->no_motion ? "夹爪无运动核验未通过，已确认停稳" : m->code == 1 ? "执行已结束但未满足 TCP 位姿精度，已确认停稳" : "MoveIt 失败（error_code=" + std::to_string(m->code) + "），已确认停稳") : (m->no_motion ? "夹爪已在目标容差内并连续停稳 200 ms，未下发轨迹" : m->tcp ? "已到达 TCP 位姿（位置误差 ≤5 mm、姿态误差 ≤0.02 rad，已停稳）" : "Action 成功且已停稳（关节目标误差仅诊断）"), true);
         }
       } else {
         m->settled_at = {};
