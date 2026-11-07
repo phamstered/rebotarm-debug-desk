@@ -87,7 +87,7 @@ struct RgbTargetTracker::Impl {
   unsigned agreements = 0;
   bool handed_off = false;
   void lose(const std::string &why) {
-    if (state.target_id.empty())
+    if (state.target_id.empty() || state.mode == "uncertain")
       return;
     state.mode = "uncertain";
     state.message = why;
@@ -189,7 +189,7 @@ struct RgbTargetTracker::Impl {
   };
   std::vector<Candidate>
   candidates(const cv::Mat &image,
-             const std::vector<cv::Point> &expected) const {
+             const std::vector<cv::Point> &expected, bool seed = false) const {
     cv::Mat mask(image.rows, image.cols, CV_8U, cv::Scalar(0));
     for (int y = 0; y < image.rows; ++y)
       for (int x = 0; x < image.cols; ++x) {
@@ -218,7 +218,7 @@ struct RgbTargetTracker::Impl {
       const auto r = cv::boundingRect(c);
       const double area = cv::contourArea(c);
       if (area < 25 || r.x <= 0 || r.y <= 0 || r.br().x >= image.cols - 1 ||
-          r.br().y >= image.rows - 1 || area / double(r.area()) < .60)
+          r.br().y >= image.rows - 1 || area / double(r.area()) < .40)
         continue;
       cv::Mat component(mask.size(), CV_8U, cv::Scalar(0));
       cv::drawContours(component, std::vector<std::vector<cv::Point>>{c}, -1,
@@ -234,7 +234,12 @@ struct RgbTargetTracker::Impl {
       const double displacement =
           cv::norm(actual - center) /
           std::max(10., std::hypot(rect.width, rect.height));
-      if (overlap < .85 || ratio < .85 || ratio > 1.20 || displacement > .5)
+      // An AABB encloses background at rotated corners and includes side faces.
+      // Only initialization uses enclosure occupancy; tracking still compares
+      // against the learned contour with the original strict overlap limits.
+      if (overlap < (seed ? .40 : .85) || ratio < (seed ? .40 : .85) ||
+          ratio > 1.20 || displacement > (seed ? .25 : .5) ||
+          (seed && overlap / ratio < .90))
         continue;
       result.push_back(
           {c, r, actual,
@@ -305,6 +310,21 @@ struct RgbTargetTracker::Impl {
       lose("RGB 与目标顶面深度不一致");
       return false;
     }
+    return true;
+  }
+  bool inside_selected_box(const RgbTargetFrame &f, int x, int y) const {
+    if (!f.depth || f.depth->width != f.rgb->width ||
+        f.depth->height != f.rgb->height ||
+        std::llabs(f.depth_stamp_ns - f.stamp_ns) > 50000000LL)
+      return false;
+    const double z = depth(*f.depth, x, y);
+    if (!std::isfinite(z) || z < .03 || z > 3) return false;
+    std::vector<cv::Point2f> in{{float(x), float(y)}}, out;
+    cv::undistortPoints(in, out, camera(f), distortion(f));
+    const auto p = point(f.camera_to_base, {out[0].x*z, out[0].y*z, z});
+    for (int i=0; i<3; ++i)
+      if (std::abs(p[i]-initial.center[i]) > initial.size[i]/2 + .006)
+        return false;
     return true;
   }
   void process(const RgbTargetFrame &f) {
@@ -519,10 +539,12 @@ RgbTargetState RgbTargetTracker::select(const RgbTargetFrame &f,
     impl_->anchor = {b.center[0], b.center[1], b.center[2] + b.size[2] / 2};
     std::vector<cv::Point> expected;
     for (double x : {-.5, .5})
-      for (double y : {-.5, .5}) {
-        auto p = impl_->anchor;
+      for (double y : {-.5, .5})
+       for (double z : {-.5, .5}) {
+        auto p = b.center;
         p[0] += x * b.size[0];
         p[1] += y * b.size[1];
+        p[2] += z * b.size[2];
         auto v = Impl::project(f, p);
         expected.emplace_back(cvRound(v.x), cvRound(v.y));
       }
@@ -537,14 +559,27 @@ RgbTargetState RgbTargetTracker::select(const RgbTargetFrame &f,
     for (int y = roi.y; y < roi.br().y; ++y)
       for (int x = roi.x; x < roi.br().x; ++x) {
         auto pixel = impl_->hsv.at<cv::Vec3b>(y, x);
-        if (pixel[1] >= 60 && pixel[2] >= 35)
+        if (pixel[1] >= 60 && pixel[2] >= 35 &&
+            impl_->inside_selected_box(f, x, y))
           ++bins[pixel[0]];
       }
     impl_->hue = int(std::max_element(bins.begin(), bins.end()) - bins.begin());
     impl_->saturation = 80;
     if (bins[impl_->hue] < 12)
       throw std::runtime_error("目标缺少可稳定跟踪的颜色");
-    auto found = impl_->candidates(impl_->hsv, expected);
+    auto found = impl_->candidates(impl_->hsv, expected, true);
+    // A looser AABB silhouette is never sufficient evidence by itself:
+    // require depth-supported membership in this exact selected 3D box.
+    found.erase(std::remove_if(found.begin(), found.end(), [&](const auto &c) {
+      unsigned pixels=0, members=0;
+      for (int y=c.roi.y; y<c.roi.br().y; y+=2)
+        for (int x=c.roi.x; x<c.roi.br().x; x+=2)
+          if (cv::pointPolygonTest(c.contour, cv::Point2f(x,y), false)>=0) {
+            ++pixels;
+            if (impl_->inside_selected_box(f,x,y)) ++members;
+          }
+      return members<8 || members < pixels*.80;
+    }), found.end());
     if (found.empty() ||
         (found.size() > 1 && found[0].score - found[1].score < .25))
       throw std::runtime_error("无法将 RGB 区域唯一对应到所选三维物体");

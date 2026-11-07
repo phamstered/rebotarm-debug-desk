@@ -540,3 +540,5 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 清除选择：`{"op":"visual_target_release","request_id":"uuid","subscription_id":"RGBD-token","target_id":"selected-target-UUID"}`。仅允许持有该订阅及 UUID 的客户端，执行任务期间拒绝释放；先取消并确认终态。返回 `visual_target_released`。释放清空绑定与预览，下次选择生成新 UUID。取消任务不自动重置身份；重新订阅或断线销毁当前会话。未知、重复或非标量字段拒绝。
 
 毫米级 TCP 目标按当前 FK 到目标的位置距离收紧 MoveIt 位置区域半径：距离的 1/4，限制在 0.1–3 mm；位置不变的纯旋转保留 3 mm。`plan_tcp_goal.planning_position_radius_m` 记录本次值。执行终点和实测到位校验仍沿用原有边界。
+
+身份进入 `uncertain` 后保留首次失效 `message`；`age_ms` 继续增长，但后续过期不会抹去原始关联/遮挡原因。桌面显式重选（包括相同 `object_id`）先串行完成旧 UUID 的 `visual_target_release`，再发送新 `visual_pick_preview`；普通轮询不得重新绑定失效身份。预览响应的 `tracking` 与 RCT1 使用同一有效期，即使后续未收到 RCT1，也不能持续显示可执行候选。

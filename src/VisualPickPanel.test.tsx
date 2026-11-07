@@ -36,7 +36,7 @@ it('does not apply preview responses after a lease change',async()=>{
  let resolve!:(v:unknown)=>void;
  const bridge={request:vi.fn((m:{op:string})=>m.op==='visual_pick_preview'?new Promise(r=>{resolve=r}):Promise.resolve({op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false})),send:vi.fn(),onMessage:()=>()=>{}} as unknown as BridgeClient;
  const onPreview=vi.fn();const p={bridge,token:'a',selected:box,active:true,onPreview,onBusy:vi.fn(),onClear:vi.fn()};
- const view=render(<VisualPickPanel {...p}/>);view.rerender(<VisualPickPanel {...p} token='b' selected={null}/>);
+ const view=render(<VisualPickPanel {...p}/>);await waitFor(()=>expect(resolve).toBeTypeOf("function"));view.rerender(<VisualPickPanel {...p} token='b' selected={null}/>);
  await act(async()=>resolve(preview));expect(onPreview).not.toHaveBeenCalledWith(expect.objectContaining({object_id:1}));
 });
 it('starts only after explicit click and cancels its own task on leaving the view',async()=>{
@@ -89,4 +89,51 @@ it('cannot clear a newer selection when an earlier release completes late',async
  await act(async()=>release({op:'visual_target_released'}));
  expect(p.onClear).not.toHaveBeenCalled();expect(screen.getByText('已选物体 #2')).toBeVisible();
  view.unmount();
+});
+
+const tracked={target_id:'550e8400-e29b-41d4-a716-446655440000',object_id:1,sequence:3,generation:2,mode:'rgbd',identity_valid:true,metric_ready:true,plane_verified:false,confidence:.95,age_ms:10,camera_z_m:.3,depth_valid_fraction:.9,geometry_source:'depth_verified_surface',message:'一致跟踪',source_frame:'color_optical',target_frame:'base_link',stamp_ns:1000000000,roi:[10,10,30,30],box};
+it('keeps the first association rejection when the invalid image ages out',async()=>{
+ const tracking={...tracked,mode:'uncertain',identity_valid:false,metric_ready:false,confidence:0,age_ms:495,message:'无法将 RGB 区域唯一对应到所选三维物体'};
+ const bridge={request:vi.fn(async(m:any)=>m.op==='visual_pick_preview'?{...preview,tracking}:{op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false}),send:vi.fn(),onMessage:()=>()=>{}} as unknown as BridgeClient;
+ const view=render(<VisualPickPanel bridge={bridge} token='a' selected={box} active onPreview={vi.fn()} onBusy={vi.fn()} onClear={vi.fn()}/>);
+ await screen.findAllByText(tracking.message);
+ await act(async()=>{await new Promise(r=>setTimeout(r,30));});
+ expect(screen.getAllByText(tracking.message).length).toBeGreaterThan(0);
+ expect(screen.queryByText(/RGB 观测过期/)).toBeNull();view.unmount();
+});
+it('expires identity seeded by a preview even if no RGB stream frame arrives',async()=>{
+ const bridge={request:vi.fn(async(m:any)=>m.op==='visual_pick_preview'?{...preview,tracking:{...tracked,age_ms:495}}:{op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false}),send:vi.fn(),onMessage:()=>()=>{}} as unknown as BridgeClient;
+ const view=render(<VisualPickPanel bridge={bridge} token='a' selected={box} active onPreview={vi.fn()} onBusy={vi.fn()} onClear={vi.fn()}/>);
+ await screen.findByText(/550e8400.*身份待确认/);
+ expect(screen.getByRole('button',{name:'接近、抓取并抬升'})).toBeDisabled();view.unmount();
+});
+it('explicitly reselects the same object with a new UUID after acknowledged release',async()=>{
+ let released=false;
+ const old={...tracked,mode:'uncertain',identity_valid:false,metric_ready:false,message:'轮廓不匹配'};
+ const fresh={...tracked,target_id:'660e8400-e29b-41d4-a716-446655440000',mode:'confirming',identity_valid:false,metric_ready:false,message:'RGBD/RGB 多帧核验中'};
+ const bridge={request:vi.fn(async(m:any)=>{
+   if(m.op==='visual_target_release'){released=true;return {op:'visual_target_released'};}
+   return m.op==='visual_pick_preview'?{...preview,tracking:released?fresh:old}:{op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false};
+ }),send:vi.fn(),onMessage:()=>()=>{}} as unknown as BridgeClient;
+ const p={bridge,token:'a',selected:box,active:true,onPreview:vi.fn(),onBusy:vi.fn(),onClear:vi.fn()};
+ const view=render(<VisualPickPanel {...p} selectionRevision={1}/>);await screen.findByText(/550e8400.*身份待确认/);
+ view.rerender(<VisualPickPanel {...p} selectionRevision={2}/>);
+ await screen.findByText(/660e8400.*核验中/);
+ expect(bridge.request).toHaveBeenCalledWith({op:'visual_target_release',subscription_id:'a',target_id:old.target_id},2500);
+ expect(screen.getByRole('button',{name:'接近、抓取并抬升'})).toBeDisabled();
+ expect(vi.mocked(bridge.request).mock.calls.some(([m])=>m.op==='visual_pick_start')).toBe(false);view.unmount();
+});
+it('serializes a late previous preview before releasing and binding a newer selection',async()=>{
+ let resolve!:(v:unknown)=>void,first=true;
+ const bridge={request:vi.fn((m:any)=>{
+   if(m.op==='visual_pick_preview'&&first){first=false;return new Promise(r=>resolve=r);}
+   return Promise.resolve(m.op==='visual_target_release'?{op:'visual_target_released'}:m.op==='visual_pick_preview'?{...preview,object_id:2,tracking:{...tracked,target_id:'660e8400-e29b-41d4-a716-446655440000',object_id:2,box:{...box,id:2}}}:{op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false});
+ }),send:vi.fn(),onMessage:()=>()=>{}} as unknown as BridgeClient;
+ const p={bridge,token:'a',selected:box,active:true,onPreview:vi.fn(),onBusy:vi.fn(),onClear:vi.fn()};
+ const view=render(<VisualPickPanel {...p}/>);await waitFor(()=>expect(resolve).toBeTypeOf('function'));
+ view.rerender(<VisualPickPanel {...p} selected={{...box,id:2}}/>);
+ await act(async()=>resolve({...preview,tracking:tracked}));
+ await screen.findByText(/660e8400.*RGBD/);
+ expect(bridge.request).toHaveBeenCalledWith({op:'visual_target_release',subscription_id:'a',target_id:tracked.target_id},2500);
+ expect(p.onPreview).not.toHaveBeenCalledWith(expect.objectContaining({object_id:1}));view.unmount();
 });

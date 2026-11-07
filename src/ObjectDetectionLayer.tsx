@@ -27,7 +27,7 @@ function ObjectWireBox({ box, labels, dimensions, selected, onSelect }: { box: O
     </mesh>}
     <lineSegments geometry={geometry} raycast={ignoreRaycast}><lineBasicMaterial color={selected?"#ffc66d":"#70efbc"} /></lineSegments>
     {texture && <sprite position={urdfToScenePoint([box.center[0], box.center[1], box.center[2] + box.size[2] / 2 + .025])}
-      scale={[.025 * texture.image.width / texture.image.height, .025, 1]} raycast={ignoreRaycast}>
+      scale={[.025 * texture.image.width / texture.image.height, .025, 1]} raycast={onSelect?undefined:ignoreRaycast} onClick={onSelect?pick:undefined}>
       <spriteMaterial map={texture} transparent depthWrite={false} />
     </sprite>}
   </group>;

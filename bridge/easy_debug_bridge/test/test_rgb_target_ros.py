@@ -31,9 +31,10 @@ class RgbRobot(ClockRobot):
         w,h=320,240
         pixels=array.array('B',[30])*(w*h*3);depths=array.array('H',[400])*(w*h)
         for n,cx in enumerate((-.05,.08)):
-            center=int(160+(cx-self.camera_x)*300/.35);half=int(.025*300/.35)
+            center=int(160+(cx-self.camera_x)*300/.35);half=30 if n==0 else int(.025*300/.35)
             for y in range(120-half,121+half):
                 for x in range(center-half,center+half+1):
+                    if n==0 and abs(x-center)+abs(y-120)>30:continue
                     depths[y*w+x]=350
                     if not(self.hidden and n==0):pixels[(y*w+x)*3:(y*w+x)*3+3]=array.array('B',[20,220,20])
         rgb=Image();rgb.header.frame_id='rgb_target_optical';rgb.header.stamp=stamp
@@ -88,9 +89,10 @@ def main(binary):
             assert ws.request('visual_target_release',subscription_id=params['subscription_id'],target_id='old')['op']=='error'
             robot.hidden=True
             uncertain=wait_for(lambda:tracked('uncertain'));assert not uncertain['tracking']['identity_valid']
-            robot.hidden=False;time.sleep(.3)
+            robot.hidden=False;time.sleep(.7)
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert preview['tracking']['mode']=='uncertain' and preview['tracking']['target_id']==target,preview
+            assert preview['tracking']['message']==uncertain['tracking']['message'],preview
             assert ws.request('visual_target_release',subscription_id=params['subscription_id'],target_id=target)['op']=='visual_target_released'
             robot.depth_enabled=True;time.sleep(.6);objects=wait_for(boxes);obj=min(objects,key=lambda b:b['center'][0])['id']
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
