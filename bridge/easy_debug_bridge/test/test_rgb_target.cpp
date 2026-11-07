@@ -56,9 +56,80 @@ void confirmed(RgbTargetTracker &t, RgbTargetConfig c = {}) {
   assert(t.snapshot().mode == "rgbd");
   assert(t.snapshot().identity_valid);
 }
+// A 45-degree cube has a diamond footprint occupying half of its XY AABB.
+RgbTargetFrame rotated_frame(int tick) {
+  auto f = frame(tick);
+  auto rgb = std::make_shared<DownsampledImage>(*f.rgb);
+  auto d = std::make_shared<DownsampledImage>(*f.depth);
+  std::fill(rgb->data.begin(), rgb->data.end(), 30);
+  std::fill(d->data.begin(), d->data.end(), 0);
+  for (int y = 90; y <= 150; ++y)
+    for (int x = 130; x <= 190; ++x)
+      if (std::abs(x-160) + std::abs(y-120) <= 30) {
+        const int i = y*320+x;
+        rgb->data[i*3]=20; rgb->data[i*3+1]=220; rgb->data[i*3+2]=20;
+        d->data[i*2]=350&255; d->data[i*2+1]=350>>8;
+      }
+  f.rgb=rgb; f.depth=d; return f;
+}
+// Ray-cast a rotated solid cube viewed obliquely: visible side faces must
+// initialize within the volume projection rather than only its top rectangle.
+RgbTargetFrame oblique_frame(int tick) {
+  auto f=frame(tick);
+  const double tilt=.52, yaw=.52, c=std::cos(yaw), s=std::sin(yaw);
+  f.camera_to_base.position={.4*std::sin(tilt),0,.025+.4*std::cos(tilt)};
+  f.camera_to_base.orientation={std::cos(tilt/2),0,-std::sin(tilt/2),0};
+  auto rgb=std::make_shared<DownsampledImage>(*f.rgb);
+  auto d=std::make_shared<DownsampledImage>(*f.depth);
+  std::fill(rgb->data.begin(),rgb->data.end(),30);
+  std::fill(d->data.begin(),d->data.end(),0);
+  const auto origin=f.camera_to_base.position;
+  const ObjectPoint local_origin{c*origin[0]+s*origin[1],-s*origin[0]+c*origin[1],origin[2]-.025};
+  for(int y=0;y<240;++y) for(int x=0;x<320;++x) {
+    auto v=tcp_rotate_vector(f.camera_to_base.orientation,{(x-160)/300.,(y-120)/300.,1});
+    const ObjectPoint direction{c*v[0]+s*v[1],-s*v[0]+c*v[1],v[2]};
+    double near=0,far=3;
+    for(int a=0;a<3;++a) {
+      if(std::abs(direction[a])<1e-9) {
+        if(std::abs(local_origin[a])>.025)far=-1;
+      } else {
+        auto lo=(-.025-local_origin[a])/direction[a],hi=(.025-local_origin[a])/direction[a];
+        if(lo>hi)std::swap(lo,hi);
+        near=std::max(near,lo);far=std::min(far,hi);
+      }
+    }
+    if(near>=far)continue;
+    const int i=y*320+x,z=std::lround(near*1000);
+    rgb->data[i*3]=20;rgb->data[i*3+1]=220;rgb->data[i*3+2]=20;
+    d->data[i*2]=z&255;d->data[i*2+1]=z>>8;
+  }
+  f.rgb=rgb;f.depth=d;return f;
+}
 int main() {
   assert(rgb_target_supported());
   RgbTargetTracker t;
+  auto oblique_box=box();
+  oblique_box.size[0]=oblique_box.size[1]=.05*(std::cos(.52)+std::sin(.52));
+  assert(t.select(oblique_frame(0),oblique_box,{}).mode=="confirming");
+  t.update(oblique_frame(1));t.update(oblique_frame(2));
+  assert(t.snapshot().identity_valid);
+  auto rotated_box = box();
+  rotated_box.size[0] = rotated_box.size[1] = .05 * std::sqrt(2.);
+  auto rotated = t.select(rotated_frame(0), rotated_box, {});
+  assert(rotated.mode == "confirming");
+  t.update(rotated_frame(1)); t.update(rotated_frame(2));
+  assert(t.snapshot().identity_valid);
+  auto wrong_depth = rotated_frame(3);
+  auto too_far = std::make_shared<DownsampledImage>(*wrong_depth.depth);
+  for(size_t i=0;i<too_far->data.size();i+=2) {
+    too_far->data[i]=450&255; too_far->data[i+1]=450>>8;
+  }
+  wrong_depth.depth=too_far;
+  assert(t.select(wrong_depth, rotated_box, {}).mode=="uncertain");
+  t.select(rotated_frame(0), rotated_box, {});
+  t.invalidate("original association failure");
+  std::this_thread::sleep_for(std::chrono::milliseconds(505));
+  assert(t.snapshot().message == "original association failure");
   confirmed(t);
   const auto id = t.snapshot().target_id;
   // Camera translation moves pixels, while the selected world target stays

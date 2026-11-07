@@ -18,7 +18,7 @@ from test_gripper_motion_ros import wait_for
 
 class RgbRobot(ClockRobot):
     def __init__(self):
-        self.depth_enabled=True;self.hidden=False;self.camera_x=0.
+        self.depth_enabled=True;self.hidden=False;self.camera_x=0.;self.tf_delay=0.;self.pending_tf=[];self.depth_delay=.08;self.pending_depth=[]
         super().__init__();self.raw_enabled=True;self.camera_enabled=True
     def publish_camera(self):
         if not self.camera_enabled:return
@@ -27,13 +27,16 @@ class RgbRobot(ClockRobot):
         tf.header.frame_id,tf.child_frame_id='base_link','rgb_target_optical'
         tf.transform.translation.x=self.camera_x;tf.transform.translation.z=.4
         tf.transform.rotation.x=1.;tf.transform.rotation.w=0.
-        self.dynamic_tf.sendTransform(tf)
+        self.pending_tf.append((time.monotonic()+self.tf_delay,tf))
+        while self.pending_tf and self.pending_tf[0][0]<=time.monotonic():
+            self.dynamic_tf.sendTransform(self.pending_tf.pop(0)[1])
         w,h=320,240
         pixels=array.array('B',[30])*(w*h*3);depths=array.array('H',[400])*(w*h)
         for n,cx in enumerate((-.05,.08)):
-            center=int(160+(cx-self.camera_x)*300/.35);half=int(.025*300/.35)
+            center=int(160+(cx-self.camera_x)*300/.35);half=30 if n==0 else int(.025*300/.35)
             for y in range(120-half,121+half):
                 for x in range(center-half,center+half+1):
+                    if n==0 and abs(x-center)+abs(y-120)>30:continue
                     depths[y*w+x]=350
                     if not(self.hidden and n==0):pixels[(y*w+x)*3:(y*w+x)*3+3]=array.array('B',[20,220,20])
         rgb=Image();rgb.header.frame_id='rgb_target_optical';rgb.header.stamp=stamp
@@ -42,7 +45,11 @@ class RgbRobot(ClockRobot):
         depth.data=array.array('B',depths.tobytes())
         info=CameraInfo();info.header=rgb.header;info.width,info.height=w,h;info.k=[300.,0.,160.,0.,300.,120.,0.,0.,1.]
         self.info.publish(info);self.rgb.publish(rgb)
-        if self.depth_enabled:self.depth.publish(depth)
+        if self.depth_enabled:
+            self.pending_depth.append((time.monotonic()+self.depth_delay,depth))
+            while self.pending_depth and self.pending_depth[0][0]<=time.monotonic():
+                self.depth.publish(self.pending_depth.pop(0)[1])
+        else:self.pending_depth.clear()
 
 def main(binary):
     assert os.environ.get('ROS_DOMAIN_ID')=='226','Isolated domain required'
@@ -74,6 +81,9 @@ def main(binary):
                 matches=[m for m in ws.targets if m['tracking']['target_id']==target and m['tracking']['mode']==mode]
                 return matches[-1] if matches else None
             first=wait_for(lambda:tracked('rgbd'));assert first['tracking']['identity_valid']
+            # Images arrive ahead of their capture-time TF. The tracker must
+            # retry a fixed pending frame instead of chasing each newest image.
+            robot.tf_delay=.08
             robot.depth_enabled=False;robot.camera_x=.002
             rgb=wait_for(lambda:tracked('rgb'))
             assert rgb['tracking']['identity_valid'] and not rgb['tracking']['metric_ready'],rgb
@@ -88,13 +98,20 @@ def main(binary):
             assert ws.request('visual_target_release',subscription_id=params['subscription_id'],target_id='old')['op']=='error'
             robot.hidden=True
             uncertain=wait_for(lambda:tracked('uncertain'));assert not uncertain['tracking']['identity_valid']
-            robot.hidden=False;time.sleep(.3)
+            robot.hidden=False;time.sleep(.7)
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert preview['tracking']['mode']=='uncertain' and preview['tracking']['target_id']==target,preview
+            assert preview['tracking']['message']==uncertain['tracking']['message'],preview
             assert ws.request('visual_target_release',subscription_id=params['subscription_id'],target_id=target)['op']=='visual_target_released'
             robot.depth_enabled=True;time.sleep(.6);objects=wait_for(boxes);obj=min(objects,key=lambda b:b['center'][0])['id']
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert preview['tracking']['target_id']!=target,preview
+            target=preview['tracking']['target_id']
+            wait_for(lambda:tracked('rgbd'))
+            # A bounded retry must not relax expiry when TF stops arriving.
+            robot.tf_delay=2.
+            lost=wait_for(lambda:tracked('uncertain'))
+            assert not lost['tracking']['identity_valid'] and not lost['tracking']['metric_ready'],lost
             assert ws.request('visual_pick_status')['busy'] is False
             assert not robot.groups and not robot.executions,'No production or simulated motion should be requested'
             print('PASS: real binary RGB handoff with depth absent, UUID/lease isolation, loss latch, release and reselection')

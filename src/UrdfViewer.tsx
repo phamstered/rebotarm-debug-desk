@@ -213,7 +213,7 @@ export function UrdfViewer({
   onRgbdNearFarChange?(nearM: number, farM: number): void;
 }) {
   const [visualBusy,setVisualBusy]=useState(false),[visualPreview,setVisualPreview]=useState<VisualPickPreview|null>(null);
-  const [selection,setSelection]=useState<{token:string;id:number;box:ObjectBox}|null>(null);
+  const [selection,setSelection]=useState<{token:string;id:number;box:ObjectBox;revision:number}|null>(null);
   const token=rgbdSubscriptionId??rgbdCloud?.subscriptionId??"";
   const selected=selection?.token===token?selection.box:null;
   const visualActive=active&&objectsEnabled&&rgbdVisible&&visualPickSupported&&Boolean(token);
@@ -464,7 +464,7 @@ export function UrdfViewer({
       <ViewerHeadsUp revealControls={revealControls} error={overlayError} leading={<MotionControlPanel info={motionInfo} />} rgbd={rgbdStatus?.enabled !== false && (
           <div className="viewer-overlay-rgbd" data-testid="rgbd-controls">
             {clockSync && <ClockSyncStatus value={clockSync} />}
-            {visualPickSupported&&objectsEnabled&&<VisualPickPanel bridge={bridge} token={token} selected={selected} active={active&&objectsEnabled&&rgbdVisible&&visualPickSupported}
+            {visualPickSupported&&objectsEnabled&&<VisualPickPanel bridge={bridge} token={token} selected={selected} selectionRevision={selection?.revision} active={active&&objectsEnabled&&rgbdVisible&&visualPickSupported}
               motion={providedJointMotion} onPreview={setVisualPreview} onBusy={setVisualBusy} onClear={()=>{setSelection(null);setVisualPreview(null);}}/>}
             <ObjectDetectionControls supported={objectsSupported} enabled={objectsEnabled} onEnabledChange={onObjectsEnabledChange}
               frame={rgbdCloud?.objects} labels={objectLabels} dimensions={objectDimensions}
@@ -580,7 +580,7 @@ export function UrdfViewer({
         <Scene view={cameraView} showGrid={showGrid} showAxes={showAxes} robot={robot} controlsEnabled={active && !dragging} onPick={pickJoint}>
           {/* Cloud and robot share the scene root; cloud positions use the same ROS Z-up to scene Y-up rotation. */}
           <ObjectDetectionLayer frame={rgbdCloud?.objects} visible={active && rgbdVisible && objectsEnabled} labels={objectLabels} dimensions={objectDimensions} selectedId={selected?.id}
-            onSelect={visualActive&&!visualBusy?(id)=>{const box=rgbdCloud?.objects?.items.find(b=>b.id===id);if(box)setSelection({token,id,box});providedJointMotion?.setArmed(false);}:undefined}/>
+            onSelect={visualActive&&!visualBusy?(id)=>{const box=rgbdCloud?.objects?.items.find(b=>b.id===id);if(box)setSelection(previous=>({token,id,box,revision:(previous?.revision??0)+1}));providedJointMotion?.setArmed(false);}:undefined}/>
           <VisualPickPreviewLayer preview={visualActive&&selected?visualPreview:null}/>
           <RgbdPointCloudLayer
             cloud={rgbdCloud}
