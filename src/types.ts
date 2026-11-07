@@ -4,6 +4,7 @@ export type RgbTargetState = {
   mode: "confirming" | "rgbd" | "rgb" | "uncertain";
   identity_valid: boolean; metric_ready: boolean; plane_verified: boolean;
   confidence: number; age_ms: number; camera_z_m: number; depth_valid_fraction: number;
+  diagnostic?: string; handoff_reason?: string;
   geometry_source: string; message: string; source_frame: string; target_frame: string; stamp_ns: number;
   roi: [number,number,number,number]; box: ObjectBox;
 };

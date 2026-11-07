@@ -38,6 +38,8 @@ std::string rgb_target_json(const RgbTargetState &s) {
     << ",\"generation\":" << s.generation
     << ",\"mode\":" << position_json_quote(s.mode)
     << ",\"message\":" << position_json_quote(s.message)
+    << ",\"diagnostic\":" << position_json_quote(s.diagnostic)
+    << ",\"handoff_reason\":" << position_json_quote(s.handoff_reason)
     << ",\"identity_valid\":" << (s.identity_valid ? "true" : "false")
     << ",\"metric_ready\":" << (s.metric_ready ? "true" : "false")
     << ",\"plane_verified\":" << (s.plane_verified ? "true" : "false")
@@ -273,6 +275,11 @@ struct RgbTargetTracker::Impl {
   }
   bool depth_agrees(const RgbTargetFrame &f, const Candidate &c) {
     state.depth_valid_fraction = 0;
+    std::ostringstream detail;
+    detail << std::setprecision(17) << "rgb_stamp_ns=" << f.stamp_ns
+           << " depth_stamp_ns=" << (f.depth ? f.depth_stamp_ns : 0)
+           << " delta_ms=" << (f.depth ? double(f.depth_stamp_ns-f.stamp_ns)/1e6 : 0);
+    state.diagnostic = detail.str() + " depth_status=" + (!f.depth ? "missing" : "incompatible_dimensions_or_timestamp");
     if (!f.depth || f.depth->width != f.rgb->width ||
         f.depth->height != f.rgb->height ||
         std::llabs(f.depth_stamp_ns - f.stamp_ns) > 50000000LL)
@@ -302,10 +309,17 @@ struct RgbTargetTracker::Impl {
           f.camera_to_base, {normalized[i].x * z, normalized[i].y * z, z})[2]);
     }
     state.depth_valid_fraction = total ? double(heights.size()) / total : 0;
+    detail << " samples=" << heights.size() << " total=" << total
+           << " valid_fraction=" << state.depth_valid_fraction;
+    state.diagnostic = detail.str() + " depth_status=insufficient_valid_samples";
     if (state.depth_valid_fraction < .3 || heights.size() < 8)
       return false;
     std::sort(heights.begin(), heights.end());
     const auto height = heights[heights.size() * 4 / 5];
+    detail << " height_m=" << height << " anchor_height_m=" << anchor[2]
+           << " height_error_m=" << height-anchor[2];
+    state.diagnostic = detail.str() + " depth_status=" +
+        (std::abs(height-anchor[2]) > .01 ? "height_mismatch" : "valid");
     if (std::abs(height - anchor[2]) > .01) {
       lose("RGB 与目标顶面深度不一致");
       return false;
@@ -395,9 +409,15 @@ struct RgbTargetTracker::Impl {
                  double(c.roi.height)};
     state.confidence = std::clamp(found[0].score, 0., 1.);
     state.identity_valid = agreements >= config.confirmation_frames;
-    if (state.identity_valid &&
-        (state.camera_z_m <= config.handoff_distance_m || !depth_valid))
+    if (!handed_off && state.identity_valid &&
+        (state.camera_z_m <= config.handoff_distance_m || !depth_valid)) {
+      std::ostringstream cause;
+      cause << std::setprecision(17) << (depth_valid ? "near_range" : "depth_unavailable")
+            << " camera_z_m=" << state.camera_z_m << " threshold_m=" << config.handoff_distance_m
+            << " " << state.diagnostic;
+      state.handoff_reason = cause.str();
       handed_off = true;
+    }
     if (handed_off && rgb_started == Steady::time_point{})
       rgb_started = Steady::now();
     if (handed_off &&
