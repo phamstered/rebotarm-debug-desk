@@ -1,12 +1,14 @@
 # Rebotarm Debug Desk 基本功能与测试覆盖
 
-更新日期：2026-10-16
+更新日期：2026-11-02
 
 产品名：**Rebotarm Debug Desk** · 仓库：[`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)。npm 包名为 `rebotarm-debug-desk`；Tauri `productName` / 窗口标题 / `/Applications` 安装包仍为 **Robot Console**（`Robot Console.app`），文档不在此处静默改代码侧显示名。
 
 本文档记录当前已经实现的基本功能、运行边界以及对应的自动化单元测试。项目由 macOS Tauri 桌面端、React/Three.js WebView 和 Jetson ROS 2 Bridge 三部分组成。
 
-面向操作的模块说明与流程图见 [功能概览](./features)；本文保留测试覆盖矩阵与更细的行为边界。
+面向操作的模块说明、按钮文案和界面截图见 [功能概览](./features)、[连接](./connect)、[姿态库与 MoveIt2](./positions) 和 [VLA](./vla#_4-在-desk-中使用)。只读抖动采集见 [运动诊断](./motion-diagnostics)。本文保留测试覆盖矩阵与更细的行为边界。
+
+当前 Status 是三个分区：连接、硬件健康、控制模式。RealSense 在硬件健康，没有单独的「传感器」分区。控制启停在模式条，按钮是 Teleop、Trajectory、VLA、「启动所选模式」或「切换模式（先回零）」，以及「回零并退出控制」。截图均为无 Jetson 的空闲界面，见功能概览。左腕 RGBD、姿态执行和诊断脚本已按当前代码计入下文。
 
 macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 `Robot Console.app` 安装到 `/Applications`，更新失败时恢复原安装。

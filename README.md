@@ -52,7 +52,9 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 | Topics / Graph / Inspector | [§2](docs/features.md#2-topics--graph--inspector) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_2-topics-graph-inspector) |
 | Monitor（多面板曲线 / bag 回放） | [Monitor](docs/features.md#monitor) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#monitor) |
 | LeRobot 数据采集 | [数据采集](docs/features.md#数据采集-lerobot-v3) |
-| Robot View（URDF） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_3-robot-view-urdf) |
+| Robot View（URDF + 左腕 RGBD 点云） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_3-robot-view-urdf) |
+| 姿态库 / MoveIt2 执行 | [用法](docs/positions.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/positions) |
+| 只读运动诊断 | [采集与分析](docs/motion-diagnostics.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/motion-diagnostics) |
 | MIT 电机控制 | [§4](docs/features.md#4-mit-电机控制) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_4-mit-电机控制) |
 | TCP 拖拽轨迹 | [§5](docs/features.md#5-tcp-拖拽轨迹) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_5-tcp-拖拽轨迹) |
 | Joint4 标定 | [§6](docs/features.md#6-joint4-标定) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_6-joint4-标定) |
@@ -65,11 +67,11 @@ Controller 列表通过 Bridge 的常驻 ROS 客户端查询，与运动健康�
 
 动作组用时间轴编排已保存位置的姿态快照、过渡时长和停留，支持独立保存、修改和删除。Jetson Bridge 先准备到首姿态，再逐段 MoveIt 规划执行与实际停稳确认，支持段间暂停和整组取消；桌面端不使用定时器派发下一段。名义时间轴不包含准备、规划及停稳的额外耗时。详见 [基本功能](docs/basic-features.md#motion-动作组)。
 
-Motion 的 Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐藏时暂停渲染并取消未完成加载；资源使用二进制传输（兼容旧 Base64）。图像仅发送给订阅它的连接，Inspector 隐藏时释放图像订阅。RGBD 仅在 Motion → Robot View、窗口可见且实时显示开启时订阅；切到姿态库或其他页即释放当前客户端兴趣。断开重连后重新获取资源，详见 [架构](docs/architecture.md#urdf-assets)。
+Motion 的 Robot View 在同一连接内保留已加载场景和 128 MiB 资源缓存，隐藏时暂停渲染并取消未完成加载；资源使用二进制传输（兼容旧 Base64）。图像仅发送给订阅它的连接，Inspector 隐藏时释放图像订阅。RGBD 仅在 Motion → Robot View、窗口可见、实时显示开启且连接配置启用 RGBD 时订阅；切到姿态库或其他页即释放当前客户端兴趣。断开重连后重新获取资源，详见 [架构](docs/architecture.md#urdf-assets)。
 
 行为细节与单元测试矩阵见 [docs/basic-features.md](docs/basic-features.md)；连接补充见 [docs/connect.md](docs/connect.md)。
 
-Robot View 的 TCP 操作区底部可保存当前实测姿态，姿态库页支持编辑、删除及点击执行：Status 的 Trajectory 一键启动会在真实轨迹控制器与重力补偿自检通过后启动 MoveIt。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置和可选夹爪（joint7）目标；HOME 从当前 SRDF 同步并保持夹爪当前开度，支持取消、停稳确认和实际位置误差诊断。Robot View 的关节调整与 TCP 预览也通过同一运动入口执行；TCP 保留青色球自由拖拽快速定位，使用 XYZ 平移箭头与 RPY 旋转圆环（支持基座/工具坐标）或输入 mm/度微调；松手保留位姿预览，点击确认后以完整 Pose 目标交给 MoveIt 执行。夹爪需要配套控制栈的独立轨迹控制器和标定配置。详见 [已实现功能](docs/basic-features.md)；[设计文档](docs/positions-moveit-design.md) 中的独立窗口等内容仍为后续方案。
+Robot View 的 TCP 操作区底部可保存当前实测姿态，姿态库页支持编辑、删除及点击执行：Status 的 Trajectory 一键启动会在真实轨迹控制器与重力补偿自检通过后启动 MoveIt。会话安全解锁后，MoveIt2 规划并执行到保存的六关节位置和可选夹爪（joint7）目标；HOME 从当前 SRDF 同步并保持夹爪当前开度，支持取消、停稳确认和实际位置误差诊断。Robot View 的关节调整与 TCP 预览也通过同一运动入口执行；TCP 保留青色球自由拖拽快速定位，使用 XYZ 平移箭头与 RPY 旋转圆环（支持基座/工具坐标）或输入 mm/度微调；松手保留位姿预览，点击确认后以完整 Pose 目标交给 MoveIt 执行。夹爪需要配套控制栈的独立轨迹控制器和标定配置。详见 [姿态库用法](docs/positions.md) 与 [基本功能](docs/basic-features.md)。[历史方案](docs/positions-moveit-design.md) 里的独立窗口和「仅规划」按钮当前仍没有入口。
 
 Status 与 Robot View 显示 STM32 相对 Jetson 的时间同步状态；Bridge 校验源时间戳和新版固件同步诊断，失步期间阻止 MoveIt 执行，时间基准改变后重建 RGBD 的 TF 历史。时钟偏差由 Jetson 测量，不依赖 Mac 校时；固件周期同步和控制栈时间过滤需要配套部署。
 
@@ -165,6 +167,8 @@ node scripts/smoke-bridge.mjs 18765
 - 用户文档站点：[https://phamstered.github.io/rebotarm-debug-desk/](https://phamstered.github.io/rebotarm-debug-desk/)
 - 基本功能与测试覆盖：[docs/basic-features.md](docs/basic-features.md)
 - TODO / 待办列表：[docs/todo.md](docs/todo.md)
+- 姿态库与 MoveIt2：[docs/positions.md](docs/positions.md)
+- 运动诊断：[docs/motion-diagnostics.md](docs/motion-diagnostics.md)
 - 协议说明：[docs/protocol.md](docs/protocol.md)
 - 架构说明：[docs/architecture.md](docs/architecture.md)
 - Joint4 标定：[docs/joint4-calibration.md](docs/joint4-calibration.md)

@@ -1,7 +1,8 @@
-# 位置管理 Panel 与 MoveIt2 规划方案（Draft）
+# 位置管理与 MoveIt2 方案记录（历史）
 
 > 方案日期：2026-10-25 · 跟踪 [Issue #120](https://github.com/phamstered/rebotarm-debug-desk/issues/120)。
-> **点位点击执行已接入 MoveIt `/move_action`，以当前实现文档为准。** 拖出独立窗口和 Robot View 误差汇总面板仍属后续设计。已实现「位置」Tab、当前 SRDF HOME、点位文件、点位运动状态和取消 watchdog。joint7 扩展已加入可选夹爪目标，TCP 松手改为保留预览、确认后经 MoveIt 执行；本文首版六轴、不含夹爪的描述是历史设计，当前行为见 [已实现功能](./basic-features#joint7-夹爪与位置兼容)。本文下述独立窗口等内容仍包含尚未实现的设计项。
+>
+> **这是当时的设计记录，不是当前操作说明。** 保存姿态、锁定 `builtin:home`、会话解锁后经 `/move_action` 执行与取消已经落地，用法见 [姿态库与 MoveIt2](./positions)。线上操作名是 `position_motion_info` / `position_move` / `position_cancel` / `position_group_*`，不是下文的 `motion_move`。文中未勾选的验收项、独立窗口和「仅规划」按钮不要当成尚未发货的产品缺口，除非 [当前用法](./positions#当前界面没有的能力) 仍然列出它们。
 
 ## 1. 需求与设计结论
 
@@ -178,11 +179,11 @@ MoveIt2 在 Jetson 运行，Mac 不安装 ROS、不加入 DDS。适配层放在 
 6. 使用当前 Planning Scene 检查自碰撞和已知环境碰撞。配置/SRDF 免检对必须审核，不能为通过 HOME 自动扩大免检范围。
 7. 带时间参数的完整轨迹大小和执行时长受限；实施时在控制栈基准路径上确定 MoveIt 专用点数/时长/字节上限，并覆盖超限失败。旧 Topic 路径 64 点限制不能被静默删除，也不能让新路径无界接收数据。
 
-首版可包含已建模的地面、桌面与固定障碍，但未录入场景的物体无法避障。RGBD 点云方案尚未落地，不能宣称本功能已经感知相机画面中的障碍。场景来源及更新时间需可见。
+首版可包含已建模的地面、桌面与固定障碍，但未录入场景的物体无法避障。Robot View 的 RGBD 彩色点云已经可以预览（见 [功能概览](./features#_3-robot-view-urdf)），仍然不会写入 Planning Scene，不能据此声称已检查相机画面中的全部障碍。场景来源及更新时间需可见。
 
-## 7. 拟新增接口（均未实现）
+## 7. 设计时拟新增接口（历史名称）
 
-不在当前 [已实现协议](./protocol) 中把这些操作写成已支持；实施时同步 `src/types.ts`、Bridge、测试和协议。
+下面的 `motion_*` 名称没有按原样落地。当前协议是 [MoveIt2 保存点位执行](./protocol#moveit2-保存点位执行)：`position_motion_info`、`position_move`、`position_cancel`，以及动作组的 `position_group_start` / `pause` / `resume`。存储文件名仍是 `positions.v1.json`，内容 `schemaVersion` 为 2。下表只保留当时的拟定形状，便于对照 Issue #120。
 
 | 操作 | 请求/返回重点 | 权限与行为 |
 | --- | --- | --- |
@@ -259,11 +260,13 @@ MoveIt2 在 Jetson 运行，Mac 不安装 ROS、不加入 DDS。适配层放在 
 
 ## 10. 本次审核决策
 
+下列 5 条是 2026-10-25 的方案结论。第 2 条的「不保存夹爪」和第 5 条的「本轮只交付方案」已被后续实现取代：可选夹爪已保存，执行通道已接入。以 [姿态库与 MoveIt2](./positions) 为准。
+
 1. HOME 为默认目标和显式「回 HOME」操作，不在连接/切模式时自动运动。
 2. 首版保存的是六关节位置，夹爪开合不随点位保存/执行；TCP 位姿为辅助显示。
 3. 保存/删除永远独立于控制可用性；读取真实当前位置需要反馈，离线采用手动值/已填写草稿。
 4. 推荐 MoveIt2 完整 Action 执行通道及对应 AGENTS 规范变更；HOME / 用户点先落地，Robot View 随后统一到同一规划服务。
-5. 本轮只交付方案 Draft；后续运行代码与控制栈变更另开功能 PR 审核。
+5. （已被后续实现取代）当时决定本轮只交付方案；保存、执行和协议后来已合入，见 [姿态库与 MoveIt2](./positions)。
 
 ## 11. 参考依据
 

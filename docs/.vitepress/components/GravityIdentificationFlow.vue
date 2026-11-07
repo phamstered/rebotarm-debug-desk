@@ -1,6 +1,6 @@
 <template>
   <figure class="rdd-diagram" role="img" aria-labelledby="rdd-gid-flow-title" aria-describedby="rdd-gid-flow-desc">
-    <p id="rdd-gid-flow-title" class="rdd-diagram__title">重力辨识 · 职责与会话流（设计草案）</p>
+    <p id="rdd-gid-flow-title" class="rdd-diagram__title">重力辨识 · 职责与会话流</p>
     <p id="rdd-gid-flow-desc" class="rdd-diagram__sr">
       Desk 发 StartGravityID；ros2-stack 编排激励与拟合；executor 仅 meas + HOLD/TRACK。
       Abort / 超时 / 命令丢失(fault 11) → HOLD；静置前馈 TRACK@v≈0；Desk 断开再走既有 DISABLE。
