@@ -18,7 +18,7 @@ from test_gripper_motion_ros import wait_for
 
 class RgbRobot(ClockRobot):
     def __init__(self):
-        self.depth_enabled=True;self.hidden=False;self.camera_x=0.;self.tf_delay=0.;self.pending_tf=[]
+        self.depth_enabled=True;self.hidden=False;self.camera_x=0.;self.tf_delay=0.;self.pending_tf=[];self.depth_delay=.08;self.pending_depth=[]
         super().__init__();self.raw_enabled=True;self.camera_enabled=True
     def publish_camera(self):
         if not self.camera_enabled:return
@@ -45,7 +45,11 @@ class RgbRobot(ClockRobot):
         depth.data=array.array('B',depths.tobytes())
         info=CameraInfo();info.header=rgb.header;info.width,info.height=w,h;info.k=[300.,0.,160.,0.,300.,120.,0.,0.,1.]
         self.info.publish(info);self.rgb.publish(rgb)
-        if self.depth_enabled:self.depth.publish(depth)
+        if self.depth_enabled:
+            self.pending_depth.append((time.monotonic()+self.depth_delay,depth))
+            while self.pending_depth and self.pending_depth[0][0]<=time.monotonic():
+                self.depth.publish(self.pending_depth.pop(0)[1])
+        else:self.pending_depth.clear()
 
 def main(binary):
     assert os.environ.get('ROS_DOMAIN_ID')=='226','Isolated domain required'
