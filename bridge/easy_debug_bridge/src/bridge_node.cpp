@@ -1471,6 +1471,10 @@ class BridgeNode : public rclcpp::Node {
     easy_debug_bridge::RgbTargetTracker target_tracker;
     easy_debug_bridge::RgbTargetFrame pick_rgb_frame;
     sensor_msgs::msg::Image::SharedPtr tracking_rgb, tracking_depth;
+    // Worker-owned capture snapshot: retry this exact frame while TF catches up.
+    // Replacing it with every newest RGB frame can starve exact-time lookup.
+    std::optional<Pair> tracking_pending;
+    std::string tracking_pending_target;
     std::chrono::steady_clock::time_point tracking_sent{};
     std::vector<easy_debug_bridge::ObjectBox> pick_boxes;
     std::string pick_source_frame;
@@ -1968,8 +1972,10 @@ class BridgeNode : public rclcpp::Node {
     if (!s->active || !s->detect_objects)
       return;
     auto state = s->target_tracker.snapshot();
-    if (state.target_id.empty())
+    if (state.target_id.empty()) {
+      s->tracking_pending.reset();
       return;
+    }
     const auto steady = std::chrono::steady_clock::now();
     if (steady - s->tracking_sent < std::chrono::milliseconds(100))
       return;
@@ -1978,11 +1984,21 @@ class BridgeNode : public rclcpp::Node {
       return;
     sensor_msgs::msg::Image::SharedPtr rgb, depth;
     sensor_msgs::msg::CameraInfo::SharedPtr info;
-    {
+    if (s->tracking_pending_target != state.target_id) {
+      s->tracking_pending.reset();
+      s->tracking_pending_target = state.target_id;
+    }
+    if (!s->tracking_pending) {
       std::lock_guard<std::mutex> lock(s->mutex);
-      rgb = s->tracking_rgb;
-      depth = s->tracking_depth;
-      info = s->latest_info;
+      if (s->tracking_rgb && s->latest_info &&
+          image_stamp(*s->tracking_rgb) > state.stamp_ns)
+        s->tracking_pending = RgbdSession::Pair{
+            s->tracking_rgb, s->tracking_depth, s->latest_info, steady};
+    }
+    if (s->tracking_pending) {
+      rgb = s->tracking_pending->rgb;
+      depth = s->tracking_pending->depth;
+      info = s->tracking_pending->info;
     }
     const auto sync = clock_snapshot();
     if (!sync.healthy() || sync.generation != state.generation)
@@ -2046,11 +2062,15 @@ class BridgeNode : public rclcpp::Node {
           f.source_age_ms = std::max(0., double(now().nanoseconds() - f.stamp_ns) / 1000000.);
           s->target_tracker.update(f);
         } catch (const tf2::TransformException &) {
-          // Exact capture-time TF may arrive after the image. Retry within the 500 ms freshness window.
+          // Keep the same timestamp and retry on the worker's next iteration,
+          // without consuming the 10 Hz send slot or replacing the image.
+          if (steady - s->tracking_pending->claimed < std::chrono::milliseconds(150))
+            return;
         } catch (const std::exception &e) {
           s->target_tracker.invalidate(e.what());
         }
     }
+    s->tracking_pending.reset();
     state = s->target_tracker.snapshot();
     s->tracking_sent = steady;
     if (!state.frame.rgb)
