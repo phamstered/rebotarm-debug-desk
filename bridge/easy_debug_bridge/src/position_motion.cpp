@@ -209,7 +209,7 @@ struct PositionMotion::Impl {
     }
     return "{\"op\":\"position_motion\",\"command_id\":" + quote(m.id) + ",\"label\":" + quote(m.label) +
         ",\"motion_phase\":" + quote(m.phase) + ",\"message\":" + quote(m.message) + ",\"code\":" + std::to_string(m.code) +
-        ",\"position_error_check_enforced\":false" + (m.arrival_errors ? ",\"arrival_errors\":" + motion_arrival_json(*m.arrival_errors) : "") +
+        ",\"position_error_check_enforced\":" + (m.no_motion ? "true" : "false") + (m.arrival_errors ? ",\"arrival_errors\":" + motion_arrival_json(*m.arrival_errors) : "") +
         (m.hold_failure ? ",\"hold_failure\":" + group_hold_failure_json(*m.hold_failure) : "") +
         ",\"recommended_duration_s\":" + std::to_string(m.recommended_duration) + ",\"elapsed_s\":" + std::to_string(std::chrono::duration<double>(Clock::now()-m.started).count()) + group_fields + (m.group && !m.group->last_capture.empty() ? ",\"capture_result\":" + m.group->last_capture : "") + "}";
   }
@@ -226,7 +226,9 @@ struct PositionMotion::Impl {
     if ((m->result_at != Clock::time_point{} || phase == "stop_failed") && fresh(joints_at) && clock_snapshot().healthy() &&
         (m->result_at == Clock::time_point{} || joints_at >= m->result_at)) {
       try { m->arrival_errors = motion_arrival_errors(m->model.joint_names, m->target,
-          measured(m->model, false, &m->calibration), measured(m->model, true, &m->calibration)); } catch (...) {}
+          measured(m->model, false, &m->calibration), measured(m->model, true, &m->calibration));
+        if (m->no_motion) for (auto &e : *m->arrival_errors) e.position_tolerance = motion_goal_tolerance(e.joint_name);
+      } catch (...) {}
     }
     const auto detail = phase == "stop_failed" && !m->arrival_errors ? message + "；当前无新鲜有效反馈，未提供误差快照" : message;
     if (m->phase != phase || m->message != detail)

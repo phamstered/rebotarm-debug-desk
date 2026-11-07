@@ -407,6 +407,9 @@ def main(binary):
             assert len(robot.executions) == before
             entries = command_logs()
             assert any(e['phase']=='plan_no_motion' for e in entries), entries
+            event = ws.events[ws.command_id]
+            assert event['position_error_check_enforced'] is True, event
+            assert event['arrival_errors'][0]['position_tolerance'] == .0005, event
             assert any(e['phase']=='plan_point' and 'index=0 time_s=0' in e['message'] and 'positions=' in e['message'] for e in entries),entries
             assert any(e['phase']=='plan_joint_goal' and 'tolerance_above=0.0005' in e['message'] and 'target_delta=' in e['message'] for e in entries),entries
             # Off-target and malformed single-point results cannot become success.
@@ -434,7 +437,7 @@ def main(binary):
                     robot.raw_gripper_offset = 0.
                 elif failure == 'stale':
                     robot.pause = True
-                    time.sleep(.8)
+                    wait_for(lambda: not info()['available'])
                     assert not completed(), 'stale feedback cannot release the lock'
                     robot.pause = False
                     robot.feedback_speed = 0.
