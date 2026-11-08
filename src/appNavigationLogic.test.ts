@@ -32,3 +32,8 @@ describe("navigation preferences", () => {
     expect(loadMotionSidebar(unavailable)).toBe(false);
   });
 });
+
+it('restores the URDF analysis tab', () => {
+  localStorage.setItem('robot-console-motion-tab', 'urdf');
+  expect(loadMotionTab()).toBe('urdf');
+});

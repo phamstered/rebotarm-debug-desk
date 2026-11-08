@@ -1,0 +1,81 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { UrdfInspectorPage } from './UrdfInspectorPage';
+import xml from './testFixtures/urdf-inspector.urdf?raw';
+const observed = vi.hoisted(() => ({ props: null as any }));
+vi.mock('./UrdfInspectorScene', () => ({ UrdfInspectorScene: (props: any) => { observed.props = props; return <div data-testid="inspector-scene"><button onClick={() => props.onSelect('link:1/collision[1]')}>Pick collision</button></div>; } }));
+const bridge = { getResource: vi.fn() };
+const props = { active: true, xml, bridge, jointState: null, topic: '/robot_description', liveUpdates: true };
+beforeEach(() => localStorage.clear());
+afterEach(() => vi.restoreAllMocks());
+describe('URDF analysis page', () => {
+ it('links tree, geometry picking and source XML; preview is local and follows mimic', async () => {
+  render(<UrdfInspectorPage {...props}/>);
+  await screen.findByTestId('inspector-scene');
+  fireEvent.click(screen.getByText('Pick collision'));
+  fireEvent.click(screen.getByRole('button', { name: 'XML' }));
+  expect(screen.getByLabelText('URDF 原始 XML')).toHaveTextContent('0 0 0.3');
+  fireEvent.click(screen.getByRole('button', { name: '参数', pressed: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'joint shoulder' }));
+  fireEvent.click(screen.getByRole('button', { name: '启用手动预览' }));
+  fireEvent.change(screen.getByLabelText('关节预览数值'), { target: { value: '1' } });
+  fireEvent.blur(screen.getByLabelText('关节预览数值'));
+  expect(observed.props.pose).toEqual({ shoulder: 1, follower: -1.9 });
+  fireEvent.change(screen.getByLabelText('关节预览数值'), { target: { value: '20' } });
+  fireEvent.blur(screen.getByLabelText('关节预览数值'));
+  expect(observed.props.pose.shoulder).toBe(1.5);
+  fireEvent.change(screen.getByLabelText('关节预览数值'), { target: { value: '' } });
+  expect(observed.props.pose.shoulder).toBe(1.5);
+  fireEvent.change(screen.getByLabelText('关节预览数值'), { target: { value: '-0.7' } });
+  fireEvent.blur(screen.getByLabelText('关节预览数值'));
+  expect(observed.props.pose.shoulder).toBe(-.7);
+  expect(bridge.getResource).not.toHaveBeenCalled();
+ });
+ it('expires live feedback, blocks incomplete feedback and respects pause', async () => {
+  const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
+  const { rerender } = render(<UrdfInspectorPage {...props} jointState={{ name: ['shoulder'], position: [.2] }} receivedAt={900}/>);
+  await screen.findByTestId('inspector-scene');
+  fireEvent.change(screen.getByLabelText('URDF 姿态'), { target: { value: 'live' } });
+  expect(observed.props.pose.shoulder).toBe(.2);
+  now.mockReturnValue(1600);
+  await waitFor(() => expect(screen.queryByTestId('inspector-scene')).not.toBeInTheDocument());
+  expect(screen.getByRole('status')).toHaveTextContent('超过 500 ms');
+  rerender(<UrdfInspectorPage {...props} jointState={{ name: [], position: [] }} receivedAt={1600}/>);
+  expect(screen.getByRole('status')).toHaveTextContent('缺少关节反馈');
+  rerender(<UrdfInspectorPage {...props} liveUpdates={false}/>);
+  expect(screen.getByRole('status')).toHaveTextContent('实时显示已暂停');
+ });
+ it('unmounts rendering when hidden and resets on description changes', async () => {
+  const view = render(<UrdfInspectorPage {...props}/>); await screen.findByTestId('inspector-scene');
+  view.rerender(<UrdfInspectorPage {...props} active={false}/>);
+  expect(screen.queryByTestId('inspector-scene')).not.toBeInTheDocument();
+  view.rerender(<UrdfInspectorPage {...props} xml=""/>); expect(screen.getByText(/等待 \/robot_description/)).toBeVisible();
+ });
+ it('keeps invalid configuration inspectable without loading or creating a scene', () => {
+  render(<UrdfInspectorPage {...props} xml={xml.replace('upper="1.5"','upper="-2"')}/>);
+  expect(screen.queryByTestId('inspector-scene')).not.toBeInTheDocument();
+  expect(screen.getByText(/修正下方检查项/)).toBeVisible();
+  fireEvent.click(screen.getByText(/关节限位缺失或上下限颠倒/));
+  expect(screen.getByRole('button', { name: 'joint shoulder' })).toHaveAttribute('aria-pressed','true');
+ });
+ it('reports failed resource URI and its owning object, with retry', async () => {
+  const failBridge = { getResource: vi.fn().mockRejectedValue(Error('missing mesh')) };
+  const mesh = '<robot name="mesh"><link name="base"><collision><geometry><mesh filename="package://robot/missing.stl"/></geometry></collision></link></robot>';
+  render(<UrdfInspectorPage {...props} bridge={failBridge} xml={mesh}/>);
+  expect(await screen.findByRole('alert')).toHaveTextContent('package://robot/missing.stl');
+  fireEvent.click(screen.getByRole('button', { name: '定位 base / collision[0]' }));
+  expect(screen.getByRole('button', {name: 'collision collision[0]'})).toHaveAttribute('aria-pressed','true');
+  fireEvent.click(screen.getByRole('button', {name: '重试资源加载'}));
+  await waitFor(() => expect(failBridge.getResource).toHaveBeenCalledTimes(2));
+ });
+ it('does not display a resource from a superseded model', async () => {
+  let resolve!: (value: any) => void;
+  const resourceBridge = { getResource: vi.fn(() => new Promise<any>(r => { resolve = r; })) };
+  const mesh = '<robot name="old"><link name="old"><visual><geometry><mesh filename="package://old/a.stl"/></geometry></visual></link></robot>';
+  const view = render(<UrdfInspectorPage {...props} xml={mesh} bridge={resourceBridge}/>);
+  await waitFor(() => expect(resourceBridge.getResource).toHaveBeenCalledOnce());
+  view.rerender(<UrdfInspectorPage {...props}/>); await screen.findByTestId('inspector-scene');
+  await act(async () => resolve({ bytes: new Uint8Array(), mime: 'model/stl' }));
+  expect(screen.getByText('Inspection arm')).toBeVisible(); expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+ });
+});
