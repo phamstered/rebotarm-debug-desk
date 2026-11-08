@@ -31,6 +31,17 @@ describe('URDF analysis page', () => {
   expect(observed.props.pose.shoulder).toBe(-.7);
   expect(bridge.getResource).not.toHaveBeenCalled();
  });
+ it('uses layout dividers instead of width sliders and persists resizing', async () => {
+  const view = render(<UrdfInspectorPage {...props}/>);
+  await screen.findByTestId('inspector-scene');
+  expect(screen.queryByRole('slider', {name: /宽度/})).not.toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole('separator', {name: '调整 URDF 结构树宽度'}), {key: 'ArrowRight'});
+  fireEvent.keyDown(screen.getByRole('separator', {name: '调整 URDF 参数面板宽度'}), {key: 'ArrowLeft'});
+  expect(JSON.parse(localStorage.getItem('robot-console-urdf-layout')!)).toMatchObject({treeWidth:240,propertiesWidth:330});
+  view.rerender(<UrdfInspectorPage {...props} xml={xml.replace('Inspection arm','Reloaded arm')}/>);
+  expect(screen.getByRole('separator', {name: '调整 URDF 结构树宽度'})).toHaveAttribute('aria-valuenow','240');
+  expect(screen.getByRole('separator', {name: '调整 URDF 参数面板宽度'})).toHaveAttribute('aria-valuenow','330');
+ });
  it('expires live feedback, blocks incomplete feedback and respects pause', async () => {
   const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
   const { rerender } = render(<UrdfInspectorPage {...props} jointState={{ name: ['shoulder'], position: [.2] }} receivedAt={900}/>);
