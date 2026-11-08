@@ -1,3 +1,4 @@
+import { UrdfPanelDivider } from "./UrdfPanelDivider";
 import { Component, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import type { URDFRobot } from 'urdf-loader';
 import type { BridgeClient } from './bridge';
@@ -107,7 +108,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
       <aside className="urdf-tree" hidden={!treeOpen} aria-label="URDF 结构树">
         <input type="search" aria-label="搜索 URDF 对象" placeholder="搜索名称…" value={query} onChange={e => setQuery(e.target.value)}/>
         <select aria-label="URDF 对象类型" value={filter} onChange={e => setFilter(e.target.value)}>{['all','link','joint','visual','collision','inertial'].map(k => <option key={k} value={k}>{k === 'all' ? '全部对象' : k}</option>)}</select>
-        <label className="urdf-panel-size">宽度<input type="range" aria-label="结构树宽度" min={170} max={360} value={treeWidth} onChange={e => setTreeWidth(Number(e.target.value))}/></label>
+        <UrdfPanelDivider side="tree" value={treeWidth} active={active && treeOpen} onChange={setTreeWidth}/>
         <div className="urdf-tree-scroll">{roots.map(id => tree(id,0))}</div>
       </aside>
       <div className="urdf-scene-area">
@@ -126,7 +127,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
       </div>
       <aside className="urdf-properties" hidden={!propertiesOpen} aria-label="URDF 参数">
         <header><small>{node?.kind}</small><strong>{node?.name ?? '选择模型对象'}</strong><button onClick={() => setPropertiesOpen(false)} aria-label="关闭 URDF 参数">×</button></header>
-        <label className="urdf-panel-size">宽度<input type="range" aria-label="参数面板宽度" min={260} max={460} value={propertiesWidth} onChange={e => setPropertiesWidth(Number(e.target.value))}/></label>
+        <UrdfPanelDivider side="properties" value={propertiesWidth} active={active && propertiesOpen} onChange={setPropertiesWidth}/>
         <nav aria-label="URDF 属性视图">{[['parameters','参数'],['xml','XML']].map(([id,label]) => <button key={id} aria-pressed={details === id} onClick={() => setDetails(id)}>{label}</button>)}</nav>
         <div className="urdf-properties-scroll">{details === 'xml' ? <pre aria-label="URDF 原始 XML">{node ? new XMLSerializer().serializeToString(node.element) : ''}</pre> : <>
           <p className="urdf-reference">{node?.kind === 'joint' ? `origin 相对 parent Link：${joint?.parent}` : node?.owner ? `origin 相对所属 Link：${model.nodes.find(n => n.id === node.owner)?.name}` : 'Link 坐标由父 Joint 定义；根 Link 为模型基准'}</p>
