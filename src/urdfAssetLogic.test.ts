@@ -80,6 +80,15 @@ describe("URDF assets", () => {
     await expect(scene).rejects.toThrow("package://test/a.stl");
     await expect(loadUrdfScene({ ...assets, hydrated: '<robot name="test"><link name="base"/></robot>' }, new AbortController().signal)).resolves.toMatchObject({ name: "base" });
   });
+  it("loads collisions only for the opt-in inspector scene", async () => {
+    const hydrated = '<robot name="primitive"><link name="base"><visual><geometry><box size="1 1 1"/></geometry></visual><collision><geometry><sphere radius="0.5"/></geometry></collision></link></robot>';
+    const assets = { hydrated, formats: new Map<string, string>(), originals: new Map<string, string>(), dispose: vi.fn() };
+    const normal = await loadUrdfScene(assets, new AbortController().signal);
+    const inspection = await loadUrdfScene(assets, new AbortController().signal, true);
+    expect(normal.links.base.children).toHaveLength(1);
+    expect(inspection.links.base.children).toHaveLength(2);
+    disposeUrdfObject(normal); disposeUrdfObject(inspection);
+  });
   it("disposes shared geometry, material and texture only once", () => {
     const root = new Group(), geometry = new BoxGeometry(), texture = new Texture(), material = new MeshStandardMaterial({ map: texture });
     root.add(new Mesh(geometry, material), new Mesh(geometry, material));

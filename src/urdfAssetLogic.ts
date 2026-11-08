@@ -74,7 +74,7 @@ export async function hydrateUrdfResources(xml: string, bridge: Pick<BridgeClien
   } catch (reason) { dispose(); throw reason; }
 }
 
-export async function loadUrdfScene(assets: Awaited<ReturnType<typeof hydrateUrdfResources>>, signal: AbortSignal) {
+export async function loadUrdfScene(assets: Awaited<ReturnType<typeof hydrateUrdfResources>>, signal: AbortSignal, collisions = false) {
   if (signal.aborted) throw loadAborted();
   const manager = new LoadingManager();
   const jobs: Promise<void>[] = [];
@@ -86,6 +86,7 @@ export async function loadUrdfScene(assets: Awaited<ReturnType<typeof hydrateUrd
   manager.onLoad = resolveLoaded;
   manager.onError = (url) => rejectLoaded(new Error(`资源加载失败：${assets.originals.get(url) ?? url}`));
   const loader = new URDFLoader(manager);
+  loader.parseCollision = collisions;
   loader.loadMeshCb = (path, meshManager, done) => {
     const job = new Promise<void>((resolve, reject) => {
       const failed = (reason: unknown) => {

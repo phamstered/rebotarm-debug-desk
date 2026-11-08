@@ -1,0 +1,86 @@
+.motion-urdf { height: 100%; min-height: 0; overflow: hidden; }
+.urdf-inspector { container-type: inline-size; display: flex; flex-direction: column; height: 100%; min-height: 0; color: #d0e3ec; background: #0b1923; font-size: 12px; }
+.urdf-inspector button, .urdf-inspector select, .urdf-inspector input { font-size: 12px; min-width: 0; }
+.urdf-inspector button { padding: 5px 9px; }
+.urdf-inspector [hidden] { display: none !important; }
+.urdf-inspector-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #28414e; flex-wrap: wrap; }
+.urdf-inspector-toolbar > div { margin-right: auto; min-width: 120px; }
+.urdf-inspector-toolbar strong { display: block; font-size: 15px; }
+.urdf-inspector-toolbar small { display: block; color: #819eae; margin-top: 3px; overflow-wrap: anywhere; }
+.urdf-inspector-toolbar label { display: flex; align-items: center; gap: 5px; }
+.urdf-inspector-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,var(--urdf-tree)) minmax(200px,1fr) minmax(0,var(--urdf-properties)); position: relative; }
+.urdf-tree, .urdf-properties { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #0d1d28; }
+.urdf-tree { border-right: 1px solid #28414e; padding: 9px 0; gap: 7px; }
+.urdf-tree > input, .urdf-tree > select { margin: 0 9px; width: calc(100% - 18px); }
+.urdf-panel-size { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: #819eae; }
+.urdf-panel-size input { flex: 1; width: 50px; height: 14px; }
+.urdf-tree-scroll { flex: 1; overflow: auto; }
+.urdf-tree-row { display: flex; align-items: center; min-height: 37px; width: max-content; min-width: 100%; }
+.urdf-tree-row > button { background: transparent; border: 0; display: flex; gap: 6px; align-items: center; text-align: left; white-space: nowrap; }
+.urdf-tree-row > button:last-child { flex: 1; }
+.urdf-tree-row small { color: #82a4b7; font-size: 10px; }
+.urdf-tree-row b { color: #ffc879; }
+.urdf-tree-row.selected { background: #234555; box-shadow: inset 3px 0 #42c9b7; }
+.urdf-tree-spacer { width: 25px; flex-shrink: 0; }
+.urdf-scene-area { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.urdf-scene-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 7px; background: #102430; }
+.urdf-scene-tools label { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+.urdf-scene-tools input[type=checkbox] { width: 13px; }
+.urdf-viewport { position: relative; flex: 1; min-height: 180px; background: #081520; }
+.urdf-scene-message { position: absolute; inset: 30% 12px auto; padding: 14px; color: #e3c48b; background: #112735; overflow-wrap: anywhere; }
+.urdf-scene-message button { display: block; margin-top: 10px; }
+.urdf-scene-caption { padding: 7px 10px; color: #88a9b9; display: flex; gap: 6px; flex-wrap: wrap; }
+.urdf-scene-caption span { margin-left: auto; font-size: 10px; }
+.urdf-properties { border-left: 1px solid #28414e; }
+.urdf-properties > header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px; }
+.urdf-properties > header strong { overflow-wrap: anywhere; flex: 1; min-width: 0; }
+.urdf-properties > header small { color: #52c8b9; }
+.urdf-properties nav { display: flex; gap: 5px; padding: 8px 10px; border-bottom: 1px solid #28414e; }
+.urdf-properties button[aria-pressed=true] { border-color: #42c9b7; background: #204652; }
+.urdf-properties-scroll { padding: 10px; overflow: auto; min-height: 0; }
+.urdf-properties pre { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; color: #a7d6c8; }
+.urdf-reference { color: #8daab9; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.urdf-field { padding: 8px 0; border-bottom: 1px solid #1c3543; }
+.urdf-field > span { display: flex; justify-content: space-between; color: #85a6b8; }
+.urdf-field small { color: #648394; font-size: 10px; }
+.urdf-field code { display: block; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.urdf-joint-preview { padding: 12px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.urdf-joint-preview > strong, .urdf-joint-preview > p, .urdf-joint-preview > input { width: 100%; margin: 0; }
+.urdf-joint-preview label { display: flex; gap: 5px; align-items: center; }
+.urdf-joint-preview label input { width: 110px; }
+.urdf-diagnostics { border-top: 1px solid #28414e; padding: 8px 12px; flex-shrink: 0; }
+.urdf-diagnostics summary { cursor: pointer; color: #a3becc; }
+.urdf-diagnostics summary span { color: #6e91a3; margin-left: 12px; }
+.urdf-diagnostics > div { max-height: 150px; overflow: auto; margin-top: 6px; }
+.urdf-issue { display: block; width: 100%; text-align: left; border: 0; background: transparent; overflow-wrap: anywhere; }
+.urdf-issue.error b { color: #ff9a94; }.urdf-issue.warning b { color: #ffd088; }.urdf-issue.info b { color: #75b6ca; }
+.urdf-empty { padding: 30px; color: #8daab9; }
+@media(max-width: 1150px) {
+ .urdf-inspector-body { grid-template-columns: minmax(0,var(--urdf-tree)) minmax(200px,1fr); }
+ .urdf-properties { position: absolute; z-index: 5; right: 0; top: 0; bottom: 0; width: min(var(--urdf-properties), 85%); box-shadow: -12px 0 30px #0008; }
+}
+@media(max-width: 700px) {
+ .urdf-inspector-body { grid-template-columns: minmax(0,1fr); }
+ .urdf-tree { position: absolute; z-index: 4; top: 0; bottom: 0; left: 0; width: min(var(--urdf-tree),85%); box-shadow: 10px 0 30px #0008; }
+ .urdf-panel-size { display: none; }
+ .urdf-inspector-toolbar { gap: 6px; padding: 7px; }
+ .urdf-inspector-toolbar > div { width: 100%; }
+ .urdf-diagnostics summary span { display: block; margin: 4px 0 0; }
+}
+.urdf-inspector button, .urdf-inspector select, .urdf-inspector input:not([type=checkbox]):not([type=range]) { color: #d0e3ec; background: #132b39; border: 1px solid #35505f; border-radius: 5px; padding: 5px 7px; }
+.urdf-inspector button:hover { background: #244858; }
+.urdf-inspector button:disabled { opacity: .45; }
+.urdf-inspector input:focus-visible, .urdf-inspector button:focus-visible, .urdf-inspector select:focus-visible { outline: 2px solid #50cfbd; outline-offset: 1px; }
+.urdf-inspector .urdf-tree-row > button { color: #c3dce7; background: transparent; border: 0; }
+.urdf-inspector .urdf-issue { background: transparent; border: 0; }
+
+@container (max-width: 1000px) {
+ .urdf-inspector-body { grid-template-columns: minmax(0,var(--urdf-tree)) minmax(200px,1fr); }
+ .urdf-properties { position: absolute; z-index: 5; right: 0; top: 0; bottom: 0; width: min(var(--urdf-properties),85%); box-shadow: -12px 0 30px #0008; }
+}
+@container (max-width: 650px) {
+ .urdf-inspector-body { grid-template-columns: minmax(0,1fr); }
+ .urdf-tree { position: absolute; z-index: 4; top: 0; bottom: 0; left: 0; width: min(var(--urdf-tree),85%); box-shadow: 10px 0 30px #0008; }
+ .urdf-panel-size { display: none; }
+ .urdf-inspector-toolbar > div { width: 100%; }
+}

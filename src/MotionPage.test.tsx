@@ -122,3 +122,14 @@ it("starts compact output folded, preserves the scene in focus and allows report
   await user.click(screen.getByRole('tab',{name:'执行报告'}));expect(exit).toHaveBeenCalledOnce();
   view.rerender(<MotionPage {...props}/>);expect(screen.getByText('control body')).toBeVisible();
 });
+
+it("opens URDF alongside Robot View without exposing the robot controls", async () => {
+  const change = vi.fn();
+  const props = { active: true, tab: "robot" as const, onTabChange: change, controllersOpen: false, onToggleControllers: vi.fn(), controllers: null, readiness: null, robot: <div>Robot control view</div>, urdf: <div>Model inspection</div>, positions: null, log: null };
+  const view = render(<MotionPage {...props}/>);
+  await userEvent.click(screen.getByRole("tab", {name: "URDF"}));
+  expect(change).toHaveBeenCalledWith("urdf");
+  view.rerender(<MotionPage {...props} tab="urdf"/>);
+  expect(screen.getByText("Model inspection")).toBeVisible();
+  expect(screen.getByText("Robot control view")).not.toBeVisible();
+});

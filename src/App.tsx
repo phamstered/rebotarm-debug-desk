@@ -1,3 +1,4 @@
+import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
 import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady } from "./teachingLogic";
 import { MotionPage } from "./MotionPage";
@@ -2108,6 +2109,7 @@ export default function App() {
             />
           )}
 </>}
+        urdf={<UrdfInspectorPage active={appPage === "motion" && motionTab === "urdf" && windowVisible} xml={urdf} bridge={bridge} jointState={jointState} receivedAt={messages[profile.jointStateTopic]?.lastAt} topic={profile.urdfTopic} liveUpdates={liveUpdates} />}
         positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
             profileKey={positionProfileKey}
             editRequest={positionEditRequest}

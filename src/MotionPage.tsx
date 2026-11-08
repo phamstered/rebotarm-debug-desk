@@ -5,7 +5,7 @@ import { MotionOutputPanel, MotionOutputProvider } from "./MotionOutput";
 import type { MotionTab } from "./appNavigationLogic";
 
 export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggleControllers,
-  controllers, readiness, robot, positions, groups, log, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators }: {
+  controllers, readiness, robot, urdf, positions, groups, log, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators }: {
   compact?: boolean; focusMode?: boolean; onToggleFocus?(): void; connection?: ReactNode; connectionLabel?: ReactNode; tools?: ReactNode; indicators?: ReactNode;
   resetVersion?: number;
   active: boolean;
@@ -16,6 +16,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
   controllers: ReactNode;
   readiness: ReactNode;
   robot: ReactNode;
+  urdf?: ReactNode;
   positions: ReactNode;
   groups?: ReactNode;
   log: ReactNode;
@@ -31,6 +32,8 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
         <div role="tablist" aria-label="Motion 视图" className="center-tab-list">
           <button type="button" role="tab" aria-selected={tab === "robot"} aria-controls="motion-robot"
             className={tab === "robot" ? "active" : ""} onClick={() => onTabChange("robot")}>Robot View</button>
+          <button type="button" role="tab" aria-selected={tab === "urdf"} aria-controls="motion-urdf"
+            className={tab === "urdf" ? "active" : ""} onClick={() => onTabChange("urdf")}>URDF</button>
           <button type="button" role="tab" aria-selected={tab === "positions"} aria-controls="motion-positions"
             className={tab === "positions" ? "active" : ""} onClick={() => onTabChange("positions")}>姿态库</button>
           <button type="button" role="tab" aria-selected={tab === "groups"} aria-controls="motion-groups"
@@ -49,6 +52,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
     {controllersOpen && !focusMode && <MotionDivider size="controllersWidth" label="调整 Controllers 宽度" axis="x" panel=".motion-controller-sidebar" container=".motion-workspace" maxFraction={.5} className="motion-controllers-divider" />}
     <section className="motion-content">
       <div id="motion-robot" className="robot-view-pane" hidden={tab !== "robot"}>{robot}</div>
+      <div id="motion-urdf" className="motion-urdf" hidden={tab !== "urdf"}>{urdf}</div>
       <div id="motion-positions" className="motion-positions" hidden={tab !== "positions"}>{positions}</div>
       <div id="motion-groups" className="motion-groups" hidden={tab !== "groups"}>{groups}</div>
     </section>

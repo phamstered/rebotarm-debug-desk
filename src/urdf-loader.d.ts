@@ -9,6 +9,7 @@ declare module "urdf-loader" {
 
   export default class URDFLoader {
     constructor(manager?: LoadingManager);
+    parseCollision: boolean;
     loadMeshCb: (path: string, manager: LoadingManager, done: (object: Object3D | null, error?: Error) => void) => void;
     parse(content: string): URDFRobot;
   }
