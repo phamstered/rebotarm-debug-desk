@@ -165,6 +165,10 @@ int main() {
   assert(!t.snapshot().identity_valid);
   confirmed(t);
   assert(t.snapshot().target_id != id);
+  auto obsolete=frame(0); obsolete.generation=99;
+  t.update(obsolete, true, id);
+  t.invalidate("obsolete worker error", id);
+  assert(t.snapshot().identity_valid); // old worker cannot poison a new binding
   // An explicit verified plane is required for RGB metric observations.
   RgbTargetConfig verified;
   verified.plane_verified = true;
@@ -266,7 +270,31 @@ int main() {
   assert(t.snapshot().mode == "uncertain");
   confirmed(t);
   std::this_thread::sleep_for(std::chrono::milliseconds(505));
-  assert(t.snapshot().mode == "uncertain");
+  assert(t.snapshot().mode == "waiting" && !t.snapshot().identity_valid);
+  const auto recovery_id=t.snapshot().target_id;
+  t.update(frame(13)); // caller cannot prove stopped: no recovery
+  assert(t.snapshot().mode == "waiting");
+  t.update(frame(14), true);
+  assert(t.snapshot().mode == "recovering" && !t.snapshot().identity_valid);
+  t.update(frame(14), true); // duplicate cannot count
+  t.update(frame(15), true);
+  assert(!t.snapshot().identity_valid);
+  t.update(frame(16), true);
+  assert(t.snapshot().identity_valid && t.snapshot().target_id==recovery_id);
+  // A timestamp gap also requires revalidation even without a snapshot poll.
+  t.update(frame(28), true);
+  assert(!t.snapshot().identity_valid);
+  auto foreign=frame(29); foreign.generation++;
+  t.update(foreign, true);
+  assert(t.snapshot().mode=="uncertain");
+  t.update(frame(30), true);
+  assert(t.snapshot().mode=="uncertain");
+  confirmed(t);
+  t.update(frame(50), true);
+  assert(t.snapshot().mode=="uncertain");
+  confirmed(t);
+  std::this_thread::sleep_for(std::chrono::milliseconds(2005));
+  assert(t.snapshot().mode=="uncertain");
   confirmed(t);
   const auto preserved = t.snapshot().target_id;
   auto malformed = box();

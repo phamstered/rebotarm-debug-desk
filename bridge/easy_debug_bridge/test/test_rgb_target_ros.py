@@ -81,6 +81,34 @@ def main(binary):
                 matches=[m for m in ws.targets if m['tracking']['target_id']==target and m['tracking']['mode']==mode]
                 return matches[-1] if matches else None
             first=wait_for(lambda:tracked('rgbd'));assert first['tracking']['identity_valid']
+            # 20 FPS source must be tracked above the 10 Hz preview rate.
+            robot.depth_delay=0.
+            time.sleep(.3)
+            baseline=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)['tracking']
+            begin=time.monotonic();time.sleep(1.0)
+            newer=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)['tracking']
+            elapsed=time.monotonic()-begin
+            assert (newer['sequence']-baseline['sequence'])/elapsed>12, (baseline,newer,elapsed)
+            # Short loss invalidates motion, but a stationary robot can revalidate
+            # the original UUID. It never dispatches a new motion automatically.
+            robot.camera_enabled=False
+            time.sleep(.6)
+            waiting=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
+            assert waiting['tracking']['mode']=='waiting' and not waiting['execution_ready'],waiting
+            robot.feedback_speed=.1
+            time.sleep(.15)
+            robot.camera_enabled=True
+            time.sleep(.25)
+            blocked=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
+            assert not blocked['tracking']['identity_valid'],blocked
+            robot.feedback_speed=0.
+            def recovered():
+                value=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)['tracking']
+                return value if value['identity_valid'] else None
+            restored=wait_for(recovered)
+            assert restored['target_id']==target,restored
+            assert not robot.groups and not robot.executions
+            robot.depth_delay=.08
             # Images arrive ahead of their capture-time TF. The tracker must
             # retry a fixed pending frame instead of chasing each newest image.
             robot.tf_delay=.08

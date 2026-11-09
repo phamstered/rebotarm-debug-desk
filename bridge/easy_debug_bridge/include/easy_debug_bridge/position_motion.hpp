@@ -20,6 +20,7 @@ class PositionMotion {
   void diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message);
   void disconnected(uint64_t owner);
   bool busy() const;
+  bool rgb_recovery_ready() const;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

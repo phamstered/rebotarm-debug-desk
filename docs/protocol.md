@@ -533,9 +533,9 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 {"op":"visual_target_frame","subscription_id":"RGBD-token","tracking":{"target_id":"UUID","object_id":1,"sequence":4,"generation":2,"mode":"rgb","identity_valid":true,"metric_ready":false,"plane_verified":false,"confidence":0.94,"depth_valid_fraction":0,"age_ms":15,"camera_z_m":0.19,"geometry_source":"surface_plane_unverified","message":"RGB 身份保持；顶面几何未核验，禁止继续接近","source_frame":"color_optical","target_frame":"base_link","stamp_ns":1793980000000000000,"roi":[100,70,50,50],"box":{"id":1,"center":[0.2,0,0.025],"size":[0.05,0.05,0.05],"point_count":100},"locked_yaw":0},"rgb":{"width":320,"height":240,"step":960,"encoding":"rgb8","data_length":230400},"data_length":230400}
 ```
 
-模式为 `confirming` / `rgbd` / `rgb` / `uncertain`。置信度是投影/轮廓匹配分数，不是成功率。`box` 在 RGB 模式下仅更新平面约束下的 XY，Z/尺寸/point_count 来自初始化，不是当前点云测量。`geometry_source` 为 `depth_verified_surface`、`surface_plane_unverified`、`verified_surface_plane` 或失效时的 `none`。`metric_ready` 与身份独立：RGB 身份成立但平面未核验或视角不适合时仍为 false。
+模式为 `confirming` / `rgbd` / `rgb` / `waiting` / `recovering` / `uncertain`。置信度是投影/轮廓匹配分数，不是成功率。`box` 在 RGB 模式下仅更新平面约束下的 XY，Z/尺寸/point_count 来自初始化，不是当前点云测量。`geometry_source` 为 `depth_verified_surface`、`surface_plane_unverified`、`verified_surface_plane` 或失效时的 `none`。`metric_ready` 与身份独立：RGB 身份成立但平面未核验或视角不适合时仍为 false。
 
-`sequence` 在绑定内随新 RGB 帧递增，UUID 在交接中不变。接收端按订阅令牌、UUID、原物体编号、时间代次和非递减序号过滤，按 `500-age_ms` 毫秒设置显示期限；过期后不能用迟到成功帧自动恢复当前绑定。RGB 处理使用采集时刻 TF 和匹配 RGB 内参，可在 Depth 无消息时继续；无 TF 不生成新跟踪位置。RGB 写入期限最多 100 ms。像素保持二进制，不走 Base64 JSON。
+`sequence` 在绑定内随新 RGB 帧及进入等待状态递增，UUID 在交接中不变。接收端按订阅令牌、UUID、原物体编号、时间代次和非递减序号过滤，按 `500-age_ms` 毫秒设置显示期限；本地过期进入 waiting；只有更新的采集时间且序号至少增加 3 的有效观测，或服务端明确的恢复核验流程，才可恢复预览；单张迟到帧不得恢复。uncertain 仍永久锁定。RGB 处理使用采集时刻 TF 和匹配 RGB 内参，可在 Depth 无消息时继续；无 TF 不生成新跟踪位置。RGB 写入期限最多 100 ms。像素保持二进制，不走 Base64 JSON。
 
 清除选择：`{"op":"visual_target_release","request_id":"uuid","subscription_id":"RGBD-token","target_id":"selected-target-UUID"}`。仅允许持有该订阅及 UUID 的客户端，执行任务期间拒绝释放；先取消并确认终态。返回 `visual_target_released`。释放清空绑定与预览，下次选择生成新 UUID。取消任务不自动重置身份；重新订阅或断线销毁当前会话。未知、重复或非标量字段拒绝。
 
@@ -548,3 +548,5 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 `RgbTargetState` in preview/RCT1 optionally includes `diagnostic` and `handoff_reason` strings. `diagnostic` describes the last depth evaluation (capture stamps, pairing delta, valid samples/fraction and surface height error where available); `handoff_reason` retains the first RGB fallback cause and capture-time distance. They do not authorize motion. `pick_guard` logs the rejected observation or observation exception before cancellation.
 
 A successful single-point gripper-only MoveIt plan can enter `verifying` without ExecuteTrajectory (`plan_no_motion`). The zero-time stationary point and fresh measured position must both satisfy the requested 0.5 mm goal tolerance and calibrated bounds. Completion requires that position tolerance and whole-arm stopped feedback hold for 200 ms after verification starts. Existing health, freshness, lease and cancellation checks apply; other single-point plans remain invalid. Its motion event reports `position_error_check_enforced=true` and a 0.0005 m arrival tolerance. No synthetic Action success or motor command is emitted.
+
+`waiting` / `recovering` 必须同时令 `identity_valid=false`、`metric_ready=false`。500 ms 过期撤销运动资格，最多 2 秒短时窗口保留 UUID；服务端仅在任务空闲和新鲜健康反馈证明停稳 200 ms 后进行连续多帧核验。恢复只更新观测，不重启已取消的任务。`rgb_tracking` 是 Motion 诊断事件，记录帧龄/源时间/序号、TF 和深度最近等待耗时、CV 耗时、阶段及原因；每秒或状态变化时输出。RCT1 仍最高 10 Hz，内部跟踪最高 30 Hz。

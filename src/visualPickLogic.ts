@@ -21,7 +21,7 @@ export function parseRgbTarget(value:unknown):RgbTargetState {
   const t=value as RgbTargetState;
   if(!t||typeof t!=="object"||typeof t.target_id!=="string"||! /^[a-f0-9-]{36}$/.test(t.target_id)||
     !Number.isSafeInteger(t.object_id)||t.object_id<1||!Number.isSafeInteger(t.sequence)||t.sequence<1||
-    !Number.isSafeInteger(t.generation)||t.generation<0||!["confirming","rgbd","rgb","uncertain"].includes(t.mode)||
+    !Number.isSafeInteger(t.generation)||t.generation<0||!["confirming","rgbd","rgb","waiting","recovering","uncertain"].includes(t.mode)||
     typeof t.identity_valid!=="boolean"||typeof t.metric_ready!=="boolean"||typeof t.plane_verified!=="boolean"||
     !Number.isFinite(t.confidence)||t.confidence<0||t.confidence>1||!Number.isFinite(t.age_ms)||t.age_ms<0||
     !Number.isFinite(t.camera_z_m)||!Number.isFinite(t.depth_valid_fraction)||t.depth_valid_fraction<0||t.depth_valid_fraction>1||
@@ -29,11 +29,13 @@ export function parseRgbTarget(value:unknown):RgbTargetState {
     !Number.isFinite(t.stamp_ns)||t.stamp_ns<=0||!Array.isArray(t.roi)||t.roi.length!==4||!t.roi.every(Number.isFinite)||t.roi.some(x=>x<0)||
     !t.box||t.box.id!==t.object_id||!Number.isSafeInteger(t.box.point_count)||t.box.point_count<0||![t.box.center,t.box.size].every(a=>Array.isArray(a)&&a.length===3&&a.every(Number.isFinite))||t.box.size.some(x=>x<=0||x>.5)||t.box.center.some(x=>Math.abs(x)>3))throw new Error("RGB 目标跟踪数据无效");
   if(t.metric_ready&&(!t.identity_valid||(t.mode==="rgb"&&!t.plane_verified)))throw new Error("RGB 目标几何门禁无效");
-  if((t.mode==="uncertain"||t.mode==="confirming")&&(t.identity_valid||t.metric_ready))throw new Error("RGB 目标身份门禁无效");
+  if((["uncertain","confirming","waiting","recovering"].includes(t.mode))&&(t.identity_valid||t.metric_ready))throw new Error("RGB 目标身份门禁无效");
   return t;
 }
 export function acceptRgbTarget(previous:RgbTargetState|null,next:RgbTargetState,targetId:string,objectId:number):boolean {
   return next.target_id===targetId&&next.object_id===objectId&&(!previous||
     (next.generation===previous.generation&&next.sequence>=previous.sequence&&next.stamp_ns>=previous.stamp_ns&&
-     (previous.mode!=="uncertain"||next.mode==="uncertain")));
+     (previous.mode!=="uncertain"||next.mode==="uncertain")&&
+     (previous.mode!=="waiting"||!next.identity_valid||
+       (next.sequence>=previous.sequence+3&&next.stamp_ns>previous.stamp_ns))));
 }

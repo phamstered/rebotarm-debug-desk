@@ -78,7 +78,27 @@ struct RgbTargetTracker::Impl {
   std::mutex mutex;
   RgbTargetState state;
   RgbTargetConfig config;
-  Steady::time_point received{}, rgb_started{};
+  Steady::time_point received{}, rgb_started{}, recovery_deadline{};
+  unsigned recovery_frames = 0;
+  void age() {
+    if (state.target_id.empty() || received == Steady::time_point{}) return;
+    state.age_ms = state.frame.source_age_ms + std::chrono::duration<double, std::milli>(Steady::now()-received).count();
+    if (state.mode == "uncertain") return;
+    if (recovery_deadline != Steady::time_point{} && Steady::now() >= recovery_deadline) {
+      lose("RGB 观测中断超过恢复窗口，需重新选择"); return;
+    }
+    if (state.age_ms >= 500 && recovery_deadline == Steady::time_point{}) {
+      recovery_deadline = received + std::chrono::milliseconds(static_cast<int>(2000-state.frame.source_age_ms));
+      recovery_frames = 0;
+      state.sequence++;
+      state.mode = "waiting";
+      state.identity_valid = state.metric_ready = false;
+      state.confidence = 0;
+      state.geometry_source = "none";
+      state.message = "等待新鲜 RGB 观测；停稳后重新核验目标";
+      if (Steady::now() >= recovery_deadline) lose("RGB 观测中断超过恢复窗口，需重新选择");
+    }
+  }
 #ifdef EASY_DEBUG_HAS_OPENCV
   cv::Mat hsv;
   int hue = 0, saturation = 0;
@@ -341,13 +361,14 @@ struct RgbTargetTracker::Impl {
         return false;
     return true;
   }
-  void process(const RgbTargetFrame &f) {
+  void process(const RgbTargetFrame &f, bool recovery_allowed) {
+    const auto processing_started = Steady::now();
+    age();
     if (state.target_id.empty() || state.mode == "uncertain")
       return;
     if (f.stamp_ns == state.stamp_ns)
       return;
     if (f.stamp_ns < state.stamp_ns ||
-        f.stamp_ns - state.stamp_ns > 500000000LL ||
         f.generation != reference.generation ||
         f.subscription != reference.subscription ||
         f.source_frame != reference.source_frame ||
@@ -359,6 +380,20 @@ struct RgbTargetTracker::Impl {
       lose("RGB 来源、内参、时间代次改变或观测中断，需重新选择");
       return;
     }
+    if (f.stamp_ns-state.stamp_ns >= 2000000000LL) {
+      lose("RGB 观测中断超过恢复窗口，需重新选择"); return;
+    }
+    if (f.stamp_ns-state.stamp_ns >= 500000000LL && recovery_deadline == Steady::time_point{}) {
+      recovery_deadline = Steady::now() + std::chrono::nanoseconds(2000000000LL-(f.stamp_ns-state.stamp_ns));
+      recovery_frames = 0;
+      state.mode = "waiting";
+      state.identity_valid = state.metric_ready = false;
+      state.message = "等待停稳后重新核验 RGB 目标";
+      state.sequence++;
+    }
+    const bool recovering = recovery_deadline != Steady::time_point{};
+    if (recovering && (state.age_ms >= 500 || f.stamp_ns-state.stamp_ns >= 500000000LL)) recovery_frames = 0;
+    if (recovering && !recovery_allowed) { recovery_frames = 0; return; }
     hsv = image(f);
     std::vector<cv::Point> expected;
     for (auto p : polygon) {
@@ -393,10 +428,13 @@ struct RgbTargetTracker::Impl {
       lose("深度丢失前未完成 RGBD/RGB 多帧核验");
       return;
     }
+    if (recovering && Steady::now() >= recovery_deadline) {
+      lose("RGB 观测中断超过恢复窗口，需重新选择"); return;
+    }
     state.frame = f;
     state.stamp_ns = f.stamp_ns;
     state.sequence++;
-    received = Steady::now();
+    received = processing_started;
     correction = delta;
     state.box = initial;
     state.box.center[0] += delta[0];
@@ -408,7 +446,10 @@ struct RgbTargetTracker::Impl {
     state.roi = {double(c.roi.x), double(c.roi.y), double(c.roi.width),
                  double(c.roi.height)};
     state.confidence = std::clamp(found[0].score, 0., 1.);
-    state.identity_valid = agreements >= config.confirmation_frames;
+    if (recovering) ++recovery_frames;
+    state.identity_valid = agreements >= config.confirmation_frames &&
+        (!recovering || recovery_frames >= config.confirmation_frames);
+    if (recovering && state.identity_valid) recovery_deadline = {};
     if (!handed_off && state.identity_valid &&
         (state.camera_z_m <= config.handoff_distance_m || !depth_valid)) {
       std::ostringstream cause;
@@ -426,7 +467,7 @@ struct RgbTargetTracker::Impl {
       lose("RGB 接管时限已到");
       return;
     }
-    state.mode = !state.identity_valid ? "confirming"
+    state.mode = !state.identity_valid ? (recovering ? "recovering" : "confirming")
                  : handed_off          ? "rgb"
                                        : "rgbd";
     state.geometry_source =
@@ -474,34 +515,33 @@ void RgbTargetTracker::release() {
   impl_->state = {};
   impl_->received = {};
   impl_->rgb_started = {};
+  impl_->recovery_deadline = {};
+  impl_->recovery_frames = 0;
 }
-void RgbTargetTracker::invalidate(const std::string &why) {
+void RgbTargetTracker::invalidate(const std::string &why, const std::string &expected_target_id) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
+  if (!expected_target_id.empty() && impl_->state.target_id != expected_target_id) return;
   impl_->lose(why);
 }
 RgbTargetState RgbTargetTracker::snapshot() {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   auto &s = impl_->state;
-  if (!s.target_id.empty() && impl_->received != Steady::time_point{}) {
-    s.age_ms =
-        s.frame.source_age_ms + std::chrono::duration<double, std::milli>(
-                                    Steady::now() - impl_->received)
-                                    .count();
-    if (s.age_ms >= 500)
-      impl_->lose("RGB 目标观测已过期，需重新选择");
-  }
+  impl_->age();
   return s;
 }
-void RgbTargetTracker::update(const RgbTargetFrame &f) {
+void RgbTargetTracker::update(const RgbTargetFrame &f, bool recovery_allowed, const std::string &expected_target_id) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
 #ifdef EASY_DEBUG_HAS_OPENCV
   try {
-    impl_->process(f);
+    if (!expected_target_id.empty() && impl_->state.target_id != expected_target_id) return;
+    impl_->process(f, recovery_allowed);
   } catch (const std::exception &e) {
     impl_->lose(e.what());
   }
 #else
   (void)f;
+  (void)recovery_allowed;
+  (void)expected_target_id;
 #endif
 }
 RgbTargetState RgbTargetTracker::select(const RgbTargetFrame &f,
@@ -521,6 +561,8 @@ RgbTargetState RgbTargetTracker::select(const RgbTargetFrame &f,
   impl_->state = {};
   impl_->received = Steady::now();
   impl_->rgb_started = {};
+  impl_->recovery_deadline = {};
+  impl_->recovery_frames = 0;
   auto &s = impl_->state;
   std::random_device random;
   std::ostringstream uuid;
