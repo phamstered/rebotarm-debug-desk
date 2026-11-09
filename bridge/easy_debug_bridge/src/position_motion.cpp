@@ -131,6 +131,8 @@ struct PositionMotion::Impl {
   rclcpp::CallbackGroup::SharedPtr callback_group;
   std::mutex queue_mutex; std::deque<Request> requests;
   std::atomic<bool> in_motion{false};
+  std::atomic<int64_t> rgb_stopped_until{0};
+  Clock::time_point rgb_stopped_since{}, rgb_stopped_sample{};
   rclcpp_action::Client<Group>::SharedPtr action;
   rclcpp_action::Client<Execute>::SharedPtr execute_action;
   double start_tolerance{.01};
@@ -1073,6 +1075,20 @@ struct PositionMotion::Impl {
     }
   }
   void tick() {
+    bool stationary = false;
+    try {
+      stationary = !in_motion.load() && fresh(joints_at, .3) && clock_snapshot().healthy() &&
+          readiness().empty() && gripper_readiness().empty() &&
+          motion_stopped(arm_motion_joints(), ordered_arm_values(joints.name, joints.velocity)) &&
+          motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, gripper_calibration, true)});
+    } catch (...) {}
+    if (!stationary) { rgb_stopped_since = {}; rgb_stopped_until.store(0); }
+    else if (joints_at != rgb_stopped_sample) {
+      if (rgb_stopped_since == Clock::time_point{}) rgb_stopped_since = Clock::now();
+      if (Clock::now()-rgb_stopped_since >= std::chrono::milliseconds(200))
+        rgb_stopped_until.store(std::chrono::duration_cast<std::chrono::nanoseconds>((Clock::now()+std::chrono::milliseconds(150)).time_since_epoch()).count());
+    }
+    rgb_stopped_sample = joints_at;
     poll_controllers();
     if (!fresh(model_request_at, 3)) poll_model();
     const auto controller_reason = controller_readiness();
@@ -1180,6 +1196,9 @@ void PositionMotion::diagnostic(uint64_t owner, const std::string &command, cons
 void PositionMotion::disconnected(uint64_t owner) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);
   impl_->requests.push_back({owner, {}, [](const std::string &) {}, true});
+}
+bool PositionMotion::rgb_recovery_ready() const {
+  return !busy() && std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count() < impl_->rgb_stopped_until.load();
 }
 bool PositionMotion::busy() const { return impl_->in_motion.load(); }
 }

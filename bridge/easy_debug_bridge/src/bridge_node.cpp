@@ -468,10 +468,11 @@ class BridgeNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Easy Debug Bridge configured on 127.0.0.1:%d", port_);
   }
   ~BridgeNode() override {
-    visual_pick_.reset();
+    visual_pick_->cancel();
     std::vector<uint64_t> clients;
     { std::lock_guard<std::mutex> lock(rgbd_mutex_); for (const auto &item : rgbd_sessions_) clients.push_back(item.first); }
     for (const auto client : clients) clear_rgbd_session(client);
+    visual_pick_.reset();
     rgbd_receiver_stop_.store(true);
     if (rgbd_receiver_.joinable()) rgbd_receiver_.join();
     retired_rgbd_.clear();
@@ -1476,7 +1477,10 @@ class BridgeNode : public rclcpp::Node {
     // Replacing it with every newest RGB frame can starve exact-time lookup.
     std::optional<Pair> tracking_pending;
     std::string tracking_pending_target;
-    std::chrono::steady_clock::time_point tracking_sent{};
+    std::chrono::steady_clock::time_point tracking_sent{}, tracking_processed{}, tracking_logged{};
+    std::string tracking_log_mode, tracking_wait_reason;
+    double tracking_tf_wait_ms=0, tracking_depth_wait_ms=0, tracking_process_ms=0;
+    int64_t tracking_consumed=0;
     std::vector<easy_debug_bridge::ObjectBox> pick_boxes;
     std::string pick_source_frame;
     easy_debug_bridge::TcpPose pick_transform;
@@ -1498,7 +1502,7 @@ class BridgeNode : public rclcpp::Node {
     uint64_t clock_generation{UINT64_MAX};
     std::atomic<bool> active{true};
     std::mutex publish_mutex;
-    std::thread worker;
+    std::thread worker, tracking_worker;
     std::chrono::steady_clock::time_point last_sent{};
     std::chrono::steady_clock::time_point last_success{};
     std::mutex mutex;
@@ -1581,6 +1585,7 @@ class BridgeNode : public rclcpp::Node {
     if (previous) {
       previous->active.store(false);
       if (previous->worker.joinable()) previous->worker.join();
+      if (previous->tracking_worker.joinable()) previous->tracking_worker.join();
       // Fence any in-flight frame before the unsubscribe/replacement ACK.
       { std::lock_guard<std::mutex> lock(previous->publish_mutex); }
       std::lock_guard<std::mutex> lock(rgbd_jobs_mutex_);
@@ -1699,8 +1704,15 @@ class BridgeNode : public rclcpp::Node {
         const auto current = weak.lock();
         if (!current || !current->active.load()) break;
         try_emit_rgbd(current);
-        try_emit_rgb_target(current);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    });
+    rgbd->tracking_worker = std::thread([this, weak] {
+      while (rclcpp::ok()) {
+        const auto current = weak.lock();
+        if (!current || !current->active.load()) break;
+        try_emit_rgb_target(current);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
       }
     });
     session->send("{\"op\":\"subscribed_rgbd\",\"request_id\":" + json_quote(request_id) +
@@ -1984,7 +1996,7 @@ class BridgeNode : public rclcpp::Node {
       return;
     }
     const auto steady = std::chrono::steady_clock::now();
-    if (steady - s->tracking_sent < std::chrono::milliseconds(100))
+    if (steady - s->tracking_processed < std::chrono::microseconds(33333))
       return;
     const auto ws = find_session(s->client_id);
     if (!ws)
@@ -1994,11 +2006,12 @@ class BridgeNode : public rclcpp::Node {
     if (s->tracking_pending_target != state.target_id) {
       s->tracking_pending.reset();
       s->tracking_pending_target = state.target_id;
+      s->tracking_consumed = 0;
     }
     if (!s->tracking_pending) {
       std::lock_guard<std::mutex> lock(s->mutex);
       if (s->tracking_rgb && s->latest_info &&
-          image_stamp(*s->tracking_rgb) > state.stamp_ns)
+          image_stamp(*s->tracking_rgb) > std::max(state.stamp_ns, s->tracking_consumed))
         s->tracking_pending = RgbdSession::Pair{
             s->tracking_rgb, s->tracking_depth, s->latest_info, steady};
     }
@@ -2013,20 +2026,25 @@ class BridgeNode : public rclcpp::Node {
       };
       for (const auto &candidate : s->tracking_depth_history)
         if (difference(candidate) < difference(pending.depth)) pending.depth = candidate;
-      if (difference(pending.depth) > 50000000LL &&
-          steady - pending.claimed < std::chrono::milliseconds(150))
+      if (state.mode != "rgb" && difference(pending.depth) > 50000000LL &&
+          steady - pending.claimed < std::chrono::milliseconds(150)) {
+        s->tracking_depth_wait_ms = std::chrono::duration<double,std::milli>(steady-pending.claimed).count();
+        s->tracking_wait_reason = "waiting_depth";
         return;
+      }
       rgb = s->tracking_pending->rgb;
       depth = s->tracking_pending->depth;
       info = s->tracking_pending->info;
     }
     const auto sync = clock_snapshot();
     if (!sync.healthy() || sync.generation != state.generation)
-      s->target_tracker.invalidate("视觉时钟失效，需重新选择");
+      s->target_tracker.invalidate("视觉时钟失效，需重新选择", state.target_id);
     else if (rgb && info && image_stamp(*rgb) > state.stamp_ns) {
       const auto age = now().nanoseconds() - image_stamp(*rgb);
-      if (age < -50000000LL || age >= 500000000LL)
-        s->target_tracker.invalidate("RGB 帧时间无效或过期");
+      if (age < -50000000LL)
+        s->target_tracker.invalidate("RGB 帧时间无效", state.target_id);
+      else if (age >= 500000000LL)
+        s->tracking_wait_reason = "discard_stale_source";
       else
         try {
           if (info->width != rgb->width || info->height != rgb->height ||
@@ -2080,18 +2098,37 @@ class BridgeNode : public rclcpp::Node {
           if (!after.healthy() || after.generation != sync.generation)
             throw std::runtime_error("RGB 处理期间时钟改变");
           f.source_age_ms = std::max(0., double(now().nanoseconds() - f.stamp_ns) / 1000000.);
-          s->target_tracker.update(f);
+          const auto processing = std::chrono::steady_clock::now();
+          s->target_tracker.update(f, !visual_pick_->busy() && position_motion_->rgb_recovery_ready(), state.target_id);
+          s->tracking_process_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-processing).count();
+          s->tracking_wait_reason = "processed";
         } catch (const tf2::TransformException &) {
           // Keep the same timestamp and retry on the worker's next iteration,
           // without consuming the 10 Hz send slot or replacing the image.
+          s->tracking_tf_wait_ms = std::chrono::duration<double,std::milli>(steady-s->tracking_pending->claimed).count();
+          s->tracking_wait_reason = "waiting_tf";
           if (steady - s->tracking_pending->claimed < std::chrono::milliseconds(150))
             return;
         } catch (const std::exception &e) {
-          s->target_tracker.invalidate(e.what());
+          s->target_tracker.invalidate(e.what(), state.target_id);
         }
     }
+    if (rgb) s->tracking_consumed = image_stamp(*rgb);
     s->tracking_pending.reset();
+    if (rgb) s->tracking_processed = steady;
     state = s->target_tracker.snapshot();
+    if (state.mode != s->tracking_log_mode || steady-s->tracking_logged >= std::chrono::seconds(1)) {
+      s->tracking_log_mode=state.mode; s->tracking_logged=steady;
+      position_motion_->diagnostic(s->client_id, state.target_id, "rgb_tracking",
+        "mode="+state.mode+" age_ms="+std::to_string(state.age_ms)+
+        " stamp_ns="+std::to_string(state.stamp_ns)+
+        " source_age_ms="+std::to_string(state.frame.source_age_ms)+
+        " sequence="+std::to_string(state.sequence)+" stage="+s->tracking_wait_reason+
+        " tf_wait_ms="+std::to_string(s->tracking_tf_wait_ms)+
+        " depth_wait_ms="+std::to_string(s->tracking_depth_wait_ms)+
+        " cv_ms="+std::to_string(s->tracking_process_ms)+" reason="+state.message);
+    }
+    if (steady-s->tracking_sent < std::chrono::milliseconds(100)) return;
     s->tracking_sent = steady;
     if (!state.frame.rgb)
       return;

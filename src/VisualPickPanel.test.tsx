@@ -66,16 +66,20 @@ it('retains the selected UUID across handoff, blocks unverified RGB and releases
  await waitFor(()=>expect(bridge.request).toHaveBeenCalledWith({op:'visual_target_release',subscription_id:'a',target_id:t.target_id},2500));
  expect(clear).toHaveBeenCalledOnce();view.unmount();
 });
-it('expires RGB identity and rejects a later automatic recovery of the same binding',async()=>{
+it('waits on expiry, rejects a single late frame and accepts a newer multi-frame observation without starting motion',async()=>{
  const t={target_id:'550e8400-e29b-41d4-a716-446655440000',object_id:1,sequence:3,generation:2,mode:'rgbd',identity_valid:true,metric_ready:true,plane_verified:false,confidence:.95,age_ms:490,camera_z_m:.3,depth_valid_fraction:.9,geometry_source:'depth_verified_surface',message:'一致跟踪',source_frame:'color_optical',target_frame:'base_link',stamp_ns:1000000000,roi:[10,10,30,30],box};
  const listeners=new Set<(m:any)=>void>();
  const bridge={request:vi.fn(async(m:any)=>m.op==='visual_pick_preview'?{...preview,tracking:t}:{op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false}),send:vi.fn(),onMessage:(cb:any)=>{listeners.add(cb);return()=>listeners.delete(cb);}} as unknown as BridgeClient;
  const view=render(<VisualPickPanel bridge={bridge} token='a' selected={box} active onPreview={vi.fn()} onBusy={vi.fn()} onClear={vi.fn()}/>);
  await screen.findByText(/550e8400.*RGBD/);
  await act(async()=>{for(const cb of listeners)cb({op:'visual_target_frame',subscription_id:'a',tracking:t});await new Promise(r=>setTimeout(r,50));});
- expect(screen.getByText(/550e8400.*身份待确认/)).toBeVisible();
+ expect(screen.getByText(/550e8400.*等待观测/)).toBeVisible();
  await act(async()=>{for(const cb of listeners)cb({op:'visual_target_frame',subscription_id:'a',tracking:{...t,sequence:4,age_ms:0}});await new Promise(r=>requestAnimationFrame(r));});
- expect(screen.getByText(/550e8400.*身份待确认/)).toBeVisible();view.unmount();
+ expect(screen.getByText(/550e8400.*等待观测/)).toBeVisible();
+ await act(async()=>{for(const cb of listeners)cb({op:'visual_target_frame',subscription_id:'a',tracking:{...t,sequence:6,stamp_ns:t.stamp_ns+100000000,age_ms:0}});await new Promise(r=>requestAnimationFrame(r));});
+ expect(screen.getByText(/550e8400.*RGBD/)).toBeVisible();
+ expect(vi.mocked(bridge.request).mock.calls.some(([m])=>m.op==='visual_pick_start')).toBe(false);
+ view.unmount();
 });
 it('cannot clear a newer selection when an earlier release completes late',async()=>{
  const t={target_id:'550e8400-e29b-41d4-a716-446655440000',object_id:1,sequence:3,generation:2,mode:'rgbd',identity_valid:true,metric_ready:true,plane_verified:false,confidence:.95,age_ms:10,camera_z_m:.3,depth_valid_fraction:.9,geometry_source:'depth_verified_surface',message:'一致跟踪',source_frame:'color_optical',target_frame:'base_link',stamp_ns:1000000000,roi:[10,10,30,30],box};
@@ -104,7 +108,7 @@ it('keeps the first association rejection when the invalid image ages out',async
 it('expires identity seeded by a preview even if no RGB stream frame arrives',async()=>{
  const bridge={request:vi.fn(async(m:any)=>m.op==='visual_pick_preview'?{...preview,tracking:{...tracked,age_ms:495}}:{op:'visual_pick_state',command_id:'',pick_phase:'idle',message:'',busy:false}),send:vi.fn(),onMessage:()=>()=>{}} as unknown as BridgeClient;
  const view=render(<VisualPickPanel bridge={bridge} token='a' selected={box} active onPreview={vi.fn()} onBusy={vi.fn()} onClear={vi.fn()}/>);
- await screen.findByText(/550e8400.*身份待确认/);
+ await screen.findByText(/550e8400.*等待观测/);
  expect(screen.getByRole('button',{name:'接近、抓取并抬升'})).toBeDisabled();view.unmount();
 });
 it('explicitly reselects the same object with a new UUID after acknowledged release',async()=>{

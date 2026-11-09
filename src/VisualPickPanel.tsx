@@ -21,7 +21,7 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
     const expire=()=>{
       const current=bound.current;
       if(!current)return;
-      const expired=current.mode==="uncertain"?current:{...current,mode:"uncertain" as const,identity_valid:false,metric_ready:false,confidence:0,message:"RGB 观测过期，请点击物体框重新选择"};
+      const expired=current.mode==="uncertain"?current:{...current,mode:"waiting" as const,identity_valid:false,metric_ready:false,confidence:0,message:"等待新鲜 RGB 观测；停稳后重新核验目标"};
       bound.current=expired;setTracking(expired);setPreview(null);onPreview(null);
     };
     bound.current=t;setTracking(t);
@@ -128,7 +128,7 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
     <strong>视觉抓取 · 分段闭环</strong>
     <div>{selected?`已选物体 #${selected.id}`:"未选择当前可见目标"}</div>
     {tracking&&<div aria-live="polite">
-      <div>目标 {tracking.target_id.slice(0,8)} · {{confirming:"核验中",rgbd:"RGBD",rgb:"RGB",uncertain:"身份待确认"}[tracking.mode]} · 置信度 {(tracking.confidence*100).toFixed(0)}%</div>
+      <div>目标 {tracking.target_id.slice(0,8)} · {{confirming:"核验中",waiting:"等待观测",recovering:"恢复核验中",rgbd:"RGBD",rgb:"RGB",uncertain:"身份待确认"}[tracking.mode]} · 置信度 {(tracking.confidence*100).toFixed(0)}%</div>
       <div>{tracking.mode==="rgb"?tracking.plane_verified?"固定顶面几何已核验":"固定顶面未核验，禁止接近":tracking.message}</div>
     </div>}
     {tracking&&<canvas ref={canvas} aria-label="所选目标 RGB 跟踪区域" style={{display:"block",width:"100%",maxWidth:320,aspectRatio:"4 / 3",opacity:tracking.mode==="uncertain"?.45:1}}/>}

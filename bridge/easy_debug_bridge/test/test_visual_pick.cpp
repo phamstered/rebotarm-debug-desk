@@ -391,5 +391,8 @@ int main() {
   assert(logged("identity-loss", "pick_guard", "rejected_observation"));
   assert(logged("identity-loss", "pick_guard", "depth_status=missing"));
   pick.request(1,status,capture);assert(reply.get<std::string>("pick_phase")=="failed");
+  rgb_identity=true;
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  assert(moves==loss_moves+1 && !pick.busy()); // recovery never resumes a failed task
   std::remove(path.c_str());
 }

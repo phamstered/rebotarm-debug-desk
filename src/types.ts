@@ -1,7 +1,7 @@
 export type VisualPickPose = { position: [number,number,number]; orientation: [number,number,number,number] };
 export type RgbTargetState = {
   target_id: string; object_id: number; sequence: number; generation: number;
-  mode: "confirming" | "rgbd" | "rgb" | "uncertain";
+  mode: "confirming" | "rgbd" | "rgb" | "waiting" | "recovering" | "uncertain";
   identity_valid: boolean; metric_ready: boolean; plane_verified: boolean;
   confidence: number; age_ms: number; camera_z_m: number; depth_valid_fraction: number;
   diagnostic?: string; handoff_reason?: string;

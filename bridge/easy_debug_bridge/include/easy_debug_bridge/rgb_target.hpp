@@ -42,8 +42,9 @@ public:
   ~RgbTargetTracker();
   RgbTargetState select(const RgbTargetFrame &frame, const ObjectBox &box,
                         const RgbTargetConfig &config);
-  void update(const RgbTargetFrame &frame);
-  void invalidate(const std::string &reason);
+  // Recovery requires a caller-verified stationary, idle robot. Normal tracking does not.
+  void update(const RgbTargetFrame &frame, bool recovery_allowed = false, const std::string &expected_target_id = "");
+  void invalidate(const std::string &reason, const std::string &expected_target_id = "");
   void release();
   bool matches_config(const RgbTargetConfig &config);
   RgbTargetState snapshot();
