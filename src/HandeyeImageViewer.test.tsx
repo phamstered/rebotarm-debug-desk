@@ -63,7 +63,9 @@ it("leaves ordinary wheel scrolling alone, zooms with Ctrl and restores focus af
   await waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );
-  expect(screen.getByRole("button", { name: "放大查看" })).toHaveFocus();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "放大查看" })).toHaveFocus(),
+  );
 });
 it("retains live zoom between frames but hides stale images and closes on page departure", async () => {
   const user = userEvent.setup();

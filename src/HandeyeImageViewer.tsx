@@ -127,7 +127,9 @@ function ImageViewport({
     closeButton.current?.focus();
     return () => {
       dialog.current?.close();
-      expandButton.current?.focus();
+      // WebKit restores its saved dialog focus after the cancel event. Restore
+      // the visible opener on the next frame, after that native restoration.
+      requestAnimationFrame(() => expandButton.current?.focus());
     };
   }, [expanded]);
   function keyboard(event: KeyboardEvent) {
