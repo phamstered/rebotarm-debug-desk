@@ -68,7 +68,10 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
           TZ: Etc/UTC
-        run: apt-get update && apt-get install -y --no-install-recommends libboost-dev libopencv-dev pkg-config
+        run: apt-get update && apt-get install -y --no-install-recommends libboost-dev libopencv-dev nlohmann-json3-dev pkg-config
+
+      - name: Hand-eye native numerical and capture tests
+        run: npm run test:handeye
 
       - name: Bridge core C++ unit tests (no ROS)
         run: npm run test:bridge

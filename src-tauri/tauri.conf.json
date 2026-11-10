@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run prepare:handeye",
     "frontendDist": "../dist"
   },
   "app": {
@@ -26,7 +26,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
-    "icon": ["icons/icon.png"]
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "resources": {
+      "../native/build/": "handeye/"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

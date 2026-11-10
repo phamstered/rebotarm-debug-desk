@@ -107,6 +107,17 @@ vi.mock("./MotorControl", () => ({ MotorControl: () => <div data-testid="motor">
 import App from "./App";
 
 describe("App workflow", () => {
+  it("opens offline hand-eye without connecting and preserves settings on return", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", {name: "手眼标定 / 离线样本"}));
+    await user.selectOptions(screen.getByLabelText("ArUco dictionary"), "DICT_6X6_250");
+    await user.click(screen.getByRole("button", {name: "返回连接"}));
+    await user.click(screen.getByRole("button", {name: "手眼标定 / 离线样本"}));
+    expect(screen.getByLabelText("ArUco dictionary")).toHaveValue("DICT_6X6_250");
+    expect(doubles.connect).not.toHaveBeenCalled();
+  });
+
   function emitRosReady() {
     act(() => {
       doubles.listener?.({
@@ -174,6 +185,18 @@ describe("App workflow", () => {
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
+  });
+
+  it("provides a keyboard-focusable hand-eye content region only on its connected page", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
+    await user.click(await screen.findByRole("button", {name: "手眼标定"}));
+    const region=screen.getByRole("region", {name: "手眼标定内容"});
+    expect(region).toHaveAttribute("tabIndex", "0");
+    expect(within(region).getByRole("tab", {name: "Target · 标定板"})).toBeVisible();
+    await user.click(screen.getByRole("button", {name: "Topics"}));
+    expect(screen.queryByRole("region", {name: "手眼标定内容"})).not.toBeInTheDocument();
   });
 
   it("opens data collection from Navigation before ROS feedback is ready", async () => {

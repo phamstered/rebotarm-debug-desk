@@ -10,3 +10,6 @@ __pycache__/
 *.log
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+native/build/*
+!native/build/.gitkeep
