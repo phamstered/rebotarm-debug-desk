@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { BridgeClient } from "./bridge";
 import type { ConnectionProfile } from "./types";
-import { RosImagePreview } from "./RosImagePreview";
+import { HandeyeImageViewer } from "./HandeyeImageViewer";
 import {
   DEFAULT_BOARD,
   defaultHandeyeContext,
@@ -92,6 +92,12 @@ export function HandeyeCalibrationPage({
   const [notice, setNotice] = useState("");
   const [boardImage, setBoardImage] = useState("");
   const [preview, setPreview] = useState("");
+  const [previewOriginal, setPreviewOriginal] = useState("");
+  const [previewStamp, setPreviewStamp] = useState("");
+  const [imageView, setImageView] = useState<"live" | "board" | "observation">(
+    "live",
+  );
+  const [overlay, setOverlay] = useState(true);
   const [quality, setQuality] = useState<HandeyeDetection | null>(null);
   const [frames, setFrames] = useState<string[]>([]);
   const [role, setRole] = useState<"training" | "validation">("training");
@@ -207,6 +213,8 @@ export function HandeyeCalibrationPage({
     setResult(null);
     setQuality(null);
     setPreview("");
+    setPreviewOriginal("");
+    setPreviewStamp("");
   }
   function editContext<K extends keyof HandeyeContext>(
     key: K,
@@ -216,6 +224,8 @@ export function HandeyeCalibrationPage({
     setResult(null);
     setQuality(null);
     setPreview("");
+    setPreviewOriginal("");
+    setPreviewStamp("");
   }
   async function saveFile(filename: string, content: string, ext: string) {
     const path = await save({
@@ -235,6 +245,10 @@ export function HandeyeCalibrationPage({
         });
         if (!valid()) return;
         setPreview(capture.image_png);
+        setPreviewOriginal(capture.image_png);
+        setPreviewStamp(capture.stamp_ns);
+        setImageView("observation");
+        setOverlay(true);
         setQuality(null);
         const detection = await invoke<HandeyeDetection>("handeye_local", {
           request: {
@@ -296,7 +310,31 @@ export function HandeyeCalibrationPage({
       }
     });
   }
+  function removeSample(id: string) {
+    const removed = samples.find((s) => s.id === id);
+    setSamples((ss) => ss.filter((s) => s.id !== id));
+    setResult(null);
+    if (selected === id || removed?.capture.stamp_ns === previewStamp) {
+      setSelected("");
+      setPreview("");
+      setPreviewOriginal("");
+      setPreviewStamp("");
+      setQuality(null);
+      setImageView("live");
+    }
+  }
   const shown = samples.find((s) => s.id === selected);
+  const observationQuality = shown?.detection || quality;
+  const observationPng = overlay
+    ? shown?.detection.annotated_png || preview
+    : shown?.capture.image_png || previewOriginal;
+  const observationStamp = shown?.capture.stamp_ns || previewStamp;
+  const availableView =
+    (imageView === "board" && !boardImage) ||
+    (imageView === "observation" && !observationPng)
+      ? "live"
+      : imageView;
+
   return (
     <section className="handeye-page" aria-label="手眼标定">
       <header className="handeye-header">
@@ -437,7 +475,10 @@ export function HandeyeCalibrationPage({
                         "handeye_local",
                         { request: { op: "board", board } },
                       );
-                      if (valid()) setBoardImage(r.image_png);
+                      if (valid()) {
+                        setBoardImage(r.image_png);
+                        setImageView("board");
+                      }
                     })
                   }
                 >
@@ -595,9 +636,7 @@ export function HandeyeCalibrationPage({
                 <button
                   disabled={!samples.length || Boolean(busy)}
                   onClick={() => {
-                    setSamples((s) => s.slice(0, -1));
-                    setResult(null);
-                    setSelected("");
+                    removeSample(samples[samples.length - 1].id);
                   }}
                 >
                   Delete latest sample
@@ -617,6 +656,8 @@ export function HandeyeCalibrationPage({
                     setResult(null);
                     setSelected("");
                     setPreview("");
+                    setPreviewOriginal("");
+                    setPreviewStamp("");
                     setQuality(null);
                   }}
                 >
@@ -656,7 +697,16 @@ export function HandeyeCalibrationPage({
                           setSamples(data.samples);
                           setSourceKey(data.source_key);
                           setResult(null);
-                          setSelected("");
+                          setSelected(data.samples[0]?.id || "");
+                          setPreview("");
+                          setPreviewOriginal("");
+                          setPreviewStamp("");
+                          setQuality(null);
+                          setBoardImage("");
+                          setImageView(
+                            data.samples.length ? "observation" : "live",
+                          );
+                          setOverlay(true);
                           setBoardConfirmed(true);
                           setNotice(
                             "样本已载入；请重新求解，旧求解结果不会被信任",
@@ -771,39 +821,96 @@ export function HandeyeCalibrationPage({
               检测标定板
             </button>
           </div>
-          {live && <RosImagePreview data={image} />}
-          {tab === "target" && boardImage && (
-            <figure>
-              <img
-                src={`data:image/png;base64,${boardImage}`}
-                alt="生成的标定板"
+          <div
+            className="handeye-image-sources"
+            role="group"
+            aria-label="图片来源"
+          >
+            <button
+              aria-pressed={availableView === "live"}
+              onClick={() => setImageView("live")}
+            >
+              实时画面
+            </button>
+            <button
+              aria-pressed={availableView === "board"}
+              disabled={!boardImage}
+              onClick={() => setImageView("board")}
+            >
+              标定板图
+            </button>
+            <button
+              aria-pressed={availableView === "observation"}
+              disabled={!observationPng}
+              onClick={() => setImageView("observation")}
+            >
+              {shown ? `样本 #${samples.indexOf(shown) + 1}` : "最近检测"}
+            </button>
+          </div>
+          {availableView === "observation" && (
+            <label className="handeye-check">
+              <input
+                type="checkbox"
+                checked={overlay}
+                disabled={!observationQuality}
+                onChange={(e) => setOverlay(e.target.checked)}
               />
-              <figcaption>打印后按实测格子尺寸核对比例</figcaption>
-            </figure>
+              角点与坐标轴叠加
+            </label>
           )}
-          {(shown?.detection.annotated_png || preview) && (
-            <figure>
-              <img
-                src={`data:image/png;base64,${shown?.detection.annotated_png || preview}`}
-                alt="标定板角点与坐标轴"
-              />
-              <figcaption>
-                {shown ? "所选样本" : "最近一次检测"} · 图像不是实时检测结果
-              </figcaption>
-            </figure>
-          )}
-          {(shown?.detection || quality) && (
-            <p>
-              {(shown?.detection || quality)!.corners} 个角点 · 重投影 RMS{" "}
-              {(shown?.detection || quality)!.rms_px.toFixed(3)} px · 覆盖率{" "}
-              {((shown?.detection || quality)!.coverage * 100).toFixed(1)}%
-            </p>
-          )}
-          {!samples.length && !preview && !boardImage && (
-            <div className="handeye-empty">
-              先配置标定板与坐标系，再检测目标。调整机械臂姿态后，停稳采集。
-            </div>
-          )}
+          <HandeyeImageViewer
+            sourceKey={
+              availableView === "live"
+                ? `live:${currentSource}:${context.image_topic}`
+                : availableView === "board"
+                  ? `board:${boardImage.length}:${board.kind}:${board.dictionary}:${board.squares_x}:${board.squares_y}`
+                  : `observation:${shown?.id || observationStamp}`
+            }
+            title={
+              availableView === "live"
+                ? "实时 RGB"
+                : availableView === "board"
+                  ? "生成的标定板"
+                  : overlay && observationQuality
+                    ? "标定板角点与坐标轴"
+                    : "原始采样图像"
+            }
+            caption={
+              availableView === "live"
+                ? !connected
+                  ? "连接已断开"
+                  : !live
+                    ? "实时接收已关闭"
+                    : "实时图像 · 超过 1 秒未更新将隐藏"
+                : availableView === "board"
+                  ? "静态标定板 · 打印后按实测格子尺寸核对比例"
+                  : `${shown ? "所选样本" : "最近一次检测"} · 静态截图，非实时画面 · 源时间戳 ${observationStamp}`
+            }
+            live={availableView === "live"}
+            liveData={
+              availableView === "live" && live && connected && active
+                ? image
+                : null
+            }
+            png={
+              availableView === "live"
+                ? undefined
+                : availableView === "board"
+                  ? boardImage
+                  : observationPng
+            }
+            active={active}
+            empty={
+              connected && live
+                ? "等待新鲜 RGB 图像…"
+                : "实时画面不可用；仍可查看标定板和已保存样本"
+            }
+            details={
+              availableView === "observation" && observationQuality
+                ? `${observationQuality.corners} 个角点 · 重投影 RMS ${observationQuality.rms_px.toFixed(3)} px · 覆盖率 ${(observationQuality.coverage * 100).toFixed(1)}%`
+                : undefined
+            }
+          />
           {samples.length > 0 && (
             <div className="handeye-table-wrap">
               <table>
@@ -823,7 +930,13 @@ export function HandeyeCalibrationPage({
                       className={s.id === selected ? "selected" : ""}
                     >
                       <td>
-                        <button onClick={() => setSelected(s.id)}>
+                        <button
+                          onClick={() => {
+                            setSelected(s.id);
+                            setImageView("observation");
+                            setOverlay(true);
+                          }}
+                        >
                           #{i + 1}
                         </button>
                       </td>
@@ -864,8 +977,7 @@ export function HandeyeCalibrationPage({
                           disabled={Boolean(busy)}
                           aria-label={`删除样本 ${i + 1}`}
                           onClick={() => {
-                            setSamples((ss) => ss.filter((x) => x.id !== s.id));
-                            setResult(null);
+                            removeSample(s.id);
                           }}
                         >
                           删除

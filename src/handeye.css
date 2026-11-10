@@ -148,35 +148,6 @@
 .handeye-notice {
   color: #8ddfc6;
 }
-.handeye-view figure {
-  margin: 16px 0;
-}
-.handeye-view img {
-  max-width: 100%;
-  max-height: 520px;
-  object-fit: contain;
-  background: #08141c;
-  border-radius: 8px;
-}
-.handeye-view figcaption {
-  font-size: 12px;
-  color: #91a8b5;
-  margin-top: 6px;
-}
-.handeye-view .ros-image-preview {
-  min-height: 180px;
-  max-height: 420px;
-  overflow: hidden;
-}
-.handeye-view canvas {
-  max-height: 400px;
-  object-fit: contain;
-}
-.handeye-empty {
-  padding: 60px 20px;
-  text-align: center;
-  color: #859fab;
-}
 .handeye-table-wrap {
   overflow-x: auto;
   margin-top: 20px;
@@ -273,4 +244,163 @@
 }
 .handeye-page fieldset:disabled {
   opacity: 0.7;
+}
+
+.handeye-image-sources,
+.handeye-image-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.handeye-image-sources [aria-pressed="true"] {
+  background: #1e6157;
+  border-color: #70c7b1;
+  color: #e0fff4;
+}
+.handeye-image-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #b5d4df;
+  font-size: 14px;
+  margin-top: 16px;
+}
+.handeye-image-heading span {
+  font-size: 12px;
+  color: #90a9b6;
+}
+.handeye-image-tools output {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #aad7d0;
+}
+.handeye-image-stage {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: clamp(240px, 42vh, 440px);
+  background: #050e15;
+  border: 1px solid #294957;
+  border-radius: 9px;
+  touch-action: none;
+  user-select: none;
+}
+.handeye-image-stage.ready {
+  cursor: grab;
+}
+.handeye-image-stage.ready:active {
+  cursor: grabbing;
+}
+.handeye-image-stage:focus-visible {
+  outline: 2px solid #70c7b1;
+  outline-offset: 2px;
+}
+.handeye-image-stage .handeye-image-media {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+  pointer-events: none;
+}
+.handeye-image-stage .handeye-image-media > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+}
+.handeye-image-stage .ros-image-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+.handeye-image-stage .ros-image-preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+}
+.handeye-image-stage .ros-image-preview canvas[hidden] {
+  display: none;
+}
+.handeye-image-stage .ros-image-preview > span {
+  display: none;
+}
+.handeye-image-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+  margin: 0;
+  color: #8faab8;
+}
+.handeye-page .handeye-image-caption {
+  overflow-wrap: anywhere;
+  color: #9bb8c5;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.handeye-page .handeye-image-help {
+  color: #7e9ca9;
+  font-size: 11px;
+  margin: 8px 0;
+}
+.handeye-image-quality {
+  color: #92d8c6;
+}
+.handeye-image-dialog {
+  box-sizing: border-box;
+  width: calc(100vw - 40px);
+  max-width: 1800px;
+  height: calc(100dvh - 40px);
+  max-height: calc(100dvh - 40px);
+  padding: 20px;
+  background: #0d202b;
+  color: #d9e7ed;
+  border: 1px solid #527888;
+  border-radius: 12px;
+  overflow: auto;
+}
+.handeye-image-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.handeye-image-dialog::backdrop {
+  background: rgba(0, 8, 14, 0.85);
+}
+.handeye-image-dialog .handeye-image-stage {
+  flex: 1 1 auto;
+  min-height: 140px;
+  height: auto;
+}
+.handeye-image-dialog .handeye-image-heading {
+  margin-top: 0;
+}
+.handeye-image-dialog .handeye-image-tools {
+  flex-shrink: 0;
+}
+@media (max-width: 1100px) {
+  .handeye-image-dialog {
+    padding: 12px;
+    width: calc(100vw - 24px);
+    height: calc(100dvh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
 }

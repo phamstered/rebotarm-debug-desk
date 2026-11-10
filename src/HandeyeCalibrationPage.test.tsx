@@ -162,15 +162,82 @@ it("preserves session samples when the connected page unmounts on disconnect", a
 });
 
 it("shows the latest detection after inspecting a saved sample", async () => {
-  const user=userEvent.setup();
-  render(<HandeyeCalibrationPage profile={defaultProfile} bridge={bridge} connected active onMotion={()=>{}}/>);
+  const user = userEvent.setup();
+  render(
+    <HandeyeCalibrationPage
+      profile={defaultProfile}
+      bridge={bridge}
+      connected
+      active
+      onMotion={() => {}}
+    />,
+  );
   await user.click(screen.getByLabelText("已核对实体标定板布局及实测尺寸"));
-  await user.click(screen.getByRole("tab", {name:"Calibrate · 采样求解"}));
-  await user.click(screen.getByRole("button", {name:"Take sample · 采样"}));
-  await waitFor(()=>expect(screen.getByText(/所选样本/)).toBeInTheDocument());
-  doubles.invoke.mockImplementation((command:string)=>Promise.resolve(command==="handeye_capture"?structuredClone(captureFixture):{...detectionFixture,corners:45,annotated_png:"iVBORw0KGgonew"}));
-  await user.click(screen.getByRole("button", {name:"检测标定板"}));
-  await waitFor(()=>expect(screen.getByAltText("标定板角点与坐标轴")).toHaveAttribute("src","data:image/png;base64,iVBORw0KGgonew"));
+  await user.click(screen.getByRole("tab", { name: "Calibrate · 采样求解" }));
+  await user.click(screen.getByRole("button", { name: "Take sample · 采样" }));
+  await waitFor(() => expect(screen.getByText(/所选样本/)).toBeInTheDocument());
+  doubles.invoke.mockImplementation((command: string) =>
+    Promise.resolve(
+      command === "handeye_capture"
+        ? structuredClone(captureFixture)
+        : { ...detectionFixture, corners: 45, annotated_png: "iVBORw0KGgonew" },
+    ),
+  );
+  await user.click(screen.getByRole("button", { name: "检测标定板" }));
+  await waitFor(() =>
+    expect(screen.getByAltText("标定板角点与坐标轴")).toHaveAttribute(
+      "src",
+      "data:image/png;base64,iVBORw0KGgonew",
+    ),
+  );
   expect(screen.getByText(/最近一次检测/)).toBeInTheDocument();
-  expect(screen.getByRole("button", {name:"#1"})).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "#1" })).toBeInTheDocument();
+});
+
+it("switches between a sample's original and overlay without stacking images, and clears a deleted preview", async () => {
+  const user = userEvent.setup();
+  doubles.invoke.mockImplementation((command: string) =>
+    Promise.resolve(
+      command === "handeye_capture"
+        ? structuredClone(captureFixture)
+        : { ...detectionFixture, annotated_png: "iVBORw0KGgoOVERLAY" },
+    ),
+  );
+  render(
+    <HandeyeCalibrationPage
+      profile={defaultProfile}
+      bridge={bridge}
+      connected
+      active
+      onMotion={() => {}}
+    />,
+  );
+  await user.click(screen.getByLabelText("已核对实体标定板布局及实测尺寸"));
+  await user.click(screen.getByRole("tab", { name: "Calibrate · 采样求解" }));
+  await user.click(screen.getByRole("button", { name: "Take sample · 采样" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "样本 #1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    ),
+  );
+  expect(screen.getByAltText("标定板角点与坐标轴")).toHaveAttribute(
+    "src",
+    "data:image/png;base64,iVBORw0KGgoOVERLAY",
+  );
+  expect(screen.queryByText("实时图像")).not.toBeInTheDocument();
+  await user.click(screen.getByLabelText("角点与坐标轴叠加"));
+  expect(screen.getByAltText("原始采样图像")).toHaveAttribute(
+    "src",
+    `data:image/png;base64,${captureFixture.image_png}`,
+  );
+  await user.click(screen.getByRole("button", { name: "实时画面" }));
+  expect(screen.queryByAltText("原始采样图像")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "#1" }));
+  expect(screen.getByAltText("标定板角点与坐标轴")).toBeInTheDocument();
+  await user.click(
+    screen.getByRole("button", { name: "Delete latest sample" }),
+  );
+  expect(screen.queryByAltText("标定板角点与坐标轴")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "最近检测" })).toBeDisabled();
 });
