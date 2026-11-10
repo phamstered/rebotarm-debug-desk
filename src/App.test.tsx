@@ -191,11 +191,11 @@ describe("App workflow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
-    await user.click(await screen.findByRole("button", {name: "手眼标定", exact: true}));
+    await user.click(await screen.findByRole("button", {name: "手眼标定"}));
     const region=screen.getByRole("region", {name: "手眼标定内容"});
     expect(region).toHaveAttribute("tabIndex", "0");
     expect(within(region).getByRole("tab", {name: "Target · 标定板"})).toBeVisible();
-    await user.click(screen.getByRole("button", {name: "Topics", exact: true}));
+    await user.click(screen.getByRole("button", {name: "Topics"}));
     expect(screen.queryByRole("region", {name: "手眼标定内容"})).not.toBeInTheDocument();
   });
 

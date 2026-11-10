@@ -110,6 +110,7 @@ struct Board {
   cv::Ptr<cv::aruco::Dictionary> dict;
   cv::Ptr<cv::aruco::Board> board;
   cv::Ptr<cv::aruco::CharucoBoard> charuco;
+  cv::Ptr<cv::aruco::GridBoard> grid;
   int x, y;
   double square, marker;
   bool is_charuco;
@@ -161,9 +162,11 @@ struct Board {
       charuco = cv::aruco::CharucoBoard::create(x, y, float(square),
                                                 float(marker), dict);
       board = charuco;
-    } else
-      board = cv::aruco::GridBoard::create(x, y, float(marker),
-                                           float(square - marker), dict);
+    } else {
+      grid = cv::aruco::GridBoard::create(x, y, float(marker),
+                                          float(square - marker), dict);
+      board = grid;
+    }
 #endif
   }
   cv::Mat render() const {
@@ -175,7 +178,7 @@ struct Board {
     if (is_charuco)
       charuco->draw(size, image, 20, 1);
     else
-      board.dynamicCast<cv::aruco::GridBoard>()->draw(size, image, 20, 1);
+      grid->draw(size, image, 20, 1);
 #endif
     return image;
   }
