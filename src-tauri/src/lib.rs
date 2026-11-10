@@ -1,3 +1,4 @@
+mod handeye;
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -1698,6 +1699,9 @@ pub fn run() {
             switch_ros_controllers,
             call_joint4_calibration_service,
             save_joint4_calibration_report,
+            handeye::handeye_capture,
+            handeye::handeye_local,
+            handeye::handeye_save,
             save_diagnostics_snapshot,
             save_motion_log,
             get_rosbag_status,

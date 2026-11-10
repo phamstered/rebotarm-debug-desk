@@ -1,0 +1,249 @@
+.handeye-page {
+  padding: 24px;
+  max-width: 1700px;
+  margin: auto;
+  color: var(--text, #d9e7ed);
+}
+.handeye-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+.handeye-header h1 {
+  font-size: 24px;
+  margin: 0 0 8px;
+}
+.handeye-header p {
+  margin: 0 0 18px;
+  color: #90a9b6;
+}
+.handeye-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #284451;
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.handeye-tabs [aria-selected="true"] {
+  background: #163c39;
+  border-color: #70c7b1;
+  color: #b2f4e3;
+}
+.handeye-workspace {
+  display: grid;
+  grid-template-columns: minmax(290px, 390px) minmax(0, 1fr);
+  gap: 22px;
+}
+.handeye-controls,
+.handeye-view {
+  min-width: 0;
+  background: #0d202b;
+  border: 1px solid #294957;
+  border-radius: 12px;
+  padding: 20px;
+}
+.handeye-page h2 {
+  font-size: 17px;
+  margin: 0 0 16px;
+}
+.handeye-page h3 {
+  font-size: 15px;
+}
+.handeye-page p {
+  line-height: 1.6;
+  font-size: 13px;
+}
+.handeye-page label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #a9c3ce;
+}
+.handeye-page input,
+.handeye-page select {
+  width: 100%;
+  min-width: 0;
+}
+.handeye-page fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.handeye-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.handeye-page .handeye-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.handeye-check input {
+  width: auto;
+}
+.handeye-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+  align-items: center;
+}
+.handeye-page button {
+  white-space: normal;
+}
+.handeye-file {
+  border: 1px solid #365661;
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+  margin: 0 !important;
+}
+.handeye-file input {
+  max-width: 220px;
+  font-size: 11px;
+}
+.handeye-error {
+  background: #472629;
+  padding: 12px;
+  color: #ffb4ad;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.handeye-warning {
+  color: #ecc28b;
+}
+.handeye-notice {
+  color: #8ddfc6;
+}
+.handeye-view figure {
+  margin: 16px 0;
+}
+.handeye-view img {
+  max-width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  background: #08141c;
+  border-radius: 8px;
+}
+.handeye-view figcaption {
+  font-size: 12px;
+  color: #91a8b5;
+  margin-top: 6px;
+}
+.handeye-view .ros-image-preview {
+  min-height: 180px;
+  max-height: 420px;
+  overflow: hidden;
+}
+.handeye-view canvas {
+  max-height: 400px;
+  object-fit: contain;
+}
+.handeye-empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: #859fab;
+}
+.handeye-table-wrap {
+  overflow-x: auto;
+  margin-top: 20px;
+}
+.handeye-page table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.handeye-page td,
+.handeye-page th {
+  padding: 9px;
+  text-align: left;
+  border-bottom: 1px solid #28404c;
+}
+.handeye-page tr.selected {
+  background: #193d41;
+}
+.handeye-metrics {
+  display: flex;
+  gap: 14px;
+  padding: 12px 0;
+}
+.handeye-metrics strong {
+  font-size: 26px;
+  color: #9de0ce;
+}
+.handeye-metrics small {
+  display: block;
+  font-size: 11px;
+  color: #91a7b3;
+  font-weight: normal;
+}
+.handeye-result {
+  margin-top: 20px;
+  border-top: 1px solid #345461;
+  padding-top: 12px;
+}
+.handeye-result pre {
+  font-size: 10px;
+  overflow-x: auto;
+}
+.handeye-page button.primary {
+  background: #1e6157;
+  color: #e0fff4;
+}
+@media (max-width: 1100px) {
+  .handeye-page {
+    padding: 14px;
+  }
+  .handeye-workspace {
+    grid-template-columns: 1fr;
+  }
+  .handeye-header {
+    align-items: flex-start;
+  }
+  .handeye-controls,
+  .handeye-view {
+    padding: 14px;
+  }
+}
+.handeye-page button,
+.handeye-offline > button {
+  border: 1px solid #365661;
+  border-radius: 7px;
+  padding: 8px 12px;
+  background: #102731;
+  color: #c2dbe4;
+  font: inherit;
+  cursor: pointer;
+}
+.handeye-page button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.handeye-page select {
+  border: 1px solid #365661;
+  border-radius: 7px;
+  padding: 8px;
+  background: #091b25;
+  color: #d9e7ed;
+  font: inherit;
+}
+.handeye-offline {
+  width: 100%;
+  height: 100vh;
+  overflow: auto;
+}
+.handeye-offline > button {
+  margin: 12px 24px 0;
+}
+.handeye-page input {
+  box-sizing: border-box;
+}
+.handeye-page fieldset:disabled {
+  opacity: 0.7;
+}

@@ -107,6 +107,17 @@ vi.mock("./MotorControl", () => ({ MotorControl: () => <div data-testid="motor">
 import App from "./App";
 
 describe("App workflow", () => {
+  it("opens offline hand-eye without connecting and preserves settings on return", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", {name: "手眼标定 / 离线样本"}));
+    await user.selectOptions(screen.getByLabelText("ArUco dictionary"), "DICT_6X6_250");
+    await user.click(screen.getByRole("button", {name: "返回连接"}));
+    await user.click(screen.getByRole("button", {name: "手眼标定 / 离线样本"}));
+    expect(screen.getByLabelText("ArUco dictionary")).toHaveValue("DICT_6X6_250");
+    expect(doubles.connect).not.toHaveBeenCalled();
+  });
+
   function emitRosReady() {
     act(() => {
       doubles.listener?.({

@@ -4,7 +4,7 @@ const stored = (key: string, value: string | null) => ({ getItem: (requested: st
 
 describe("navigation preferences", () => {
   beforeEach(() => localStorage.clear());
-  it.each(["status", "dashboard", "motion", "monitor", "collection", "motor", "calibration", "gravity"] as const)("restores %s without migrating the Topics identifier", (page) => {
+  it.each(["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "calibration", "gravity"] as const)("restores %s without migrating the Topics identifier", (page) => {
     expect(loadAppPage(stored("robot-console-page", page))).toBe(page);
   });
   it.each([null, "", "topics", "robot", "positions", "unknown"])("uses Topics for absent/unknown page %s", (page) => {

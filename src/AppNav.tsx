@@ -44,6 +44,7 @@ const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () =
   { page: "motion", label: "Motion", title: "Motion", icon: MotionIcon },
   { page: "monitor", label: "Monitor", title: "Monitor", icon: MonitorIcon },
   { page: "collection", label: "数据采集", title: "LeRobot 数据采集", icon: CollectionIcon },
+  { page: "handeye", label: "手眼标定", title: "Hand-eye Calibration", icon: CalibrationIcon },
   { page: "motor", label: "Motor", title: "Motor", icon: MotorIcon },
   { page: "calibration", label: "Calibration", title: "Joint4 Calibration", icon: CalibrationIcon },
   { page: "gravity", label: "重力辨识", title: "重力辨识 /StartGravityID", icon: GravityIcon },

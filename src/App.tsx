@@ -24,6 +24,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { BridgeClient } from "./bridge";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
+import { HandeyeCalibrationPage, useHandeyeSession } from "./HandeyeCalibrationPage";
 import { DataCollectionPage } from "./DataCollectionPage";
 import type { AppPage } from "./AppNav";
 import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
@@ -376,6 +377,8 @@ export default function App() {
   const [appPage, setAppPage] = useState<AppPage>(loadAppPage);
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
+  const handeyeSession = useHandeyeSession(profile);
+  const [manageHandeye, setManageHandeye] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [failedStep, setFailedStep] = useState<ConnectStepId | null>(null);
   const [sshOk, setSshOk] = useState(false);
@@ -1654,6 +1657,10 @@ export default function App() {
     onBack={offline ? () => setManageMotionGroups(false) : undefined}
     onOpenPoseLibrary={(id,intent) => { if(id)setPositionEditRequest({id,intent}); if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
+  if (stage !== "connected" && manageHandeye) {
+    return <main className="handeye-offline"><button onClick={() => setManageHandeye(false)}>返回连接</button><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
+  }
+
   if (stage !== "connected" && manageMotionGroups) {
     return <main className="connect-shell"><section className="offline-motion-groups">
       <MotionLayoutProvider active>{renderGroupEditor(true)}</MotionLayoutProvider>
@@ -1718,6 +1725,7 @@ export default function App() {
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
               <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理姿态库</button>
+              <button type="button" className="ghost" onClick={() => setManageHandeye(true)}>手眼标定 / 离线样本</button>
               <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
             </div>
           </div>
@@ -1844,7 +1852,8 @@ export default function App() {
         {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
       </div>}
       <div className="app-page-content">
-      {appPage === "status" ? (
+      <div hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>
+      {appPage === "handeye" ? null : appPage === "status" ? (
         <StatusPage
           clockSync={clockSync}
           workflow={armWorkflow.workflow}
