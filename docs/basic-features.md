@@ -19,6 +19,9 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 ## 1. 连接与会话
 
+- 安装版的 Bridge WebSocket 由 Rust 会话持有，WebView 不再直接建立上游连接。连接代次及窗口身份由原生 IPC 核验，断开使旧请求与在途数据失效。图像仍为二进制；每个消费者只有一个在途拉取，预览队列按流保留最新帧，ACK/任务事件不使用预览覆盖策略。
+- 同一 Topic 的组件订阅可按消费者名称合并，手眼 RGB 与其他观察组件分别持有兴趣；最后一个 Image 消费者释放时才取消上游订阅。普通 Topic 按现有 Bridge 能力保留上游订阅至断连。跨 IPC 的排队与传输耗时计入反馈/图像新鲜度，不把晚收到的旧帧重置为新鲜。
+
 - 首页 / 连接配置主表单只编辑 SSH 主机、用户名、端口、私钥；「高级」（默认折叠）编辑 ROS Domain 与 ROS 环境脚本。URDF / JointState / Command / Status Topic 与 TCP Link 用内置默认，界面不编辑；持久化仍写出这些键，旧 localStorage 字段会继续读入。
 - 连接后可从全局工具栏重新打开连接配置；保存不会中断当前 SSH/Bridge 会话，新值在下次重连时生效。
 - 默认 Profile：SSH 主机 `jetson`，ROS 环境脚本 `Project/rebotarm-ros2-stack/install/setup.bash`（相对远端 `$HOME`）。旧 `leader_follower` Profile 会迁移到新默认路径；自定义路径保留。ROS 环境脚本路径同样拒绝 `~`、`.`/`..`、空段和以 `-` 开头的段。

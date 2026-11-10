@@ -197,6 +197,8 @@ export type MotionArrivalError = {
 };
 
 export type BridgeEnvelope = {
+  /** Desktop-only receipt time in this WebView's performance clock; not sent to ROS. */
+  desktop_received_at_ms?: number;
   controllers_info_supported?: boolean;
   refresh?: boolean;
   manager?: string;

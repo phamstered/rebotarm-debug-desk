@@ -134,6 +134,12 @@ impl SubscriptionRegistry {
             .unwrap_or_default()
     }
 
+    pub fn message_type(&self, topic: &str) -> Option<&str> {
+        self.topics
+            .get(topic)
+            .map(|entry| entry.message_type.as_str())
+    }
+
     fn reconcile(&mut self) -> Vec<Transition> {
         let mut changes = Vec::new();
         for (topic, entry) in &mut self.topics {

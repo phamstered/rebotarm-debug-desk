@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import type { BridgeClient } from "./bridge";
 import type { BridgeEnvelope, MotionArrivalError, MotionHoldFailure, MotionLogEntry, TcpPose } from "./types";
 import { parseMotionArrivalErrors, parseMotionHoldFailure } from "./motionFeedbackLogic";
@@ -165,11 +166,12 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
             names.some((name) => typeof name !== "string" || !name) || new Set(names).size !== names.length) { clearLive(); return; }
         const position = values[names.indexOf(GRIPPER_JOINT_NAME)];
         if (typeof position !== "number" || !Number.isFinite(position) || position < g.lower || position > g.upper) { clearLive(); return; }
-        livePosition = position; liveAt = performance.now();
+        livePosition = position; liveAt = bridgeReceivedAt(message);
+        if (performance.now() - liveAt >= 1000) { clearLive(); return; }
         if (liveExpiry !== undefined) window.clearTimeout(liveExpiry);
         liveExpiry = window.setTimeout(() => {
           if (generation.current === current && !abort.signal.aborted) clearLive();
-        }, 1000);
+        }, Math.max(0, 1000 - (performance.now() - liveAt)));
         setInfo((value) => ({ ...value, gripper: { ...value.gripper, fresh: true, position } }));
         return;
       }

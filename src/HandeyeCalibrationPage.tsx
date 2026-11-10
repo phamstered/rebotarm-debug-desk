@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { BridgeClient } from "./bridge";
@@ -131,7 +132,9 @@ export function HandeyeCalibrationPage({
         m.op === "topic_message" &&
         m.topic === context.image_topic
       ) {
-        last = Date.now();
+        const age = performance.now() - bridgeReceivedAt(m);
+        last = Date.now() - age;
+        if (age >= 1000) { setImage(null); return; }
         setImage(m.data);
       }
       if (m.op === "disconnected") {
@@ -144,7 +147,7 @@ export function HandeyeCalibrationPage({
         op: "subscribe",
         topic: context.image_topic,
         type: "sensor_msgs/msg/Image",
-      })
+      }, 10000, undefined, "handeye-rgb")
       .catch((e) => {
         if (alive) setError(explain(e));
       });
@@ -156,7 +159,7 @@ export function HandeyeCalibrationPage({
       window.clearInterval(timer);
       if (alive)
         void bridge
-          .request({ op: "unsubscribe", topic: context.image_topic })
+          .request({ op: "unsubscribe", topic: context.image_topic }, 10000, undefined, "handeye-rgb")
           .catch(() => {});
       alive = false;
       setImage(null);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import type { BridgeClient } from "./bridge";
 import type { ObjectBox, RgbTargetState, VisualPickPreview, VisualPickState } from "./types";
 import type { PositionMotionControls } from "./positionMotionLogic";
@@ -45,6 +46,7 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
         raf=null;const frame=pending;pending=null;if(!valid||!frame||!bound.current)return;
         try{
           const t=parseRgbTarget(frame.tracking);
+          t.age_ms += Math.max(0, performance.now() - bridgeReceivedAt(frame));
           if(!acceptRgbTarget(bound.current,t,bound.current.target_id,selected.id))return;
           applyTracking(t);
           if(frame.target_rgb_payload&&frame.rgb&&typeof frame.rgb==="object"){

@@ -558,3 +558,13 @@ A successful single-point gripper-only MoveIt plan can enter `verifying` without
 - `handeye_save {path, content}` writes an explicitly selected JSON/YAML report or PNG board file, with extension and size validation. Dataset schema `version:1` stores board/context/source configuration and samples with original capture metadata, board detection, and `training | validation | excluded` role. Import invalidates any previous solve.
 
 These IPC commands do not alter Bridge motion capabilities or remove any execution/calibration gate. Export uses `T_parent_body = T_parent_sensor * inverse(T_body_sensor)` and marks `applied:false`, `plane_verified:false` independently of the numerical hand-eye validation result.
+
+## Native shared Bridge IPC (desktop only)
+
+- `native_bridge_attach {port?}` returns `{attachment:{epoch,window:{label,incarnation}},hello}`. The Tauri caller's actual window label is authoritative. Only `main` may supply a port, and it must equal the established SSH tunnel's selected port. Other approved page windows attach to an existing session; no frontend URL or hostname is accepted.
+- `native_bridge_request {attachment,consumer,message,timeoutMs}` uses the shared socket with a native request ID. The adapter restores the UI request ID for listeners. Timeout is 1–60000 ms; commands with unknown execution status are not retried. `consumer` distinguishes subscription owners in a window, including `handeye-rgb`.
+- `native_bridge_next {attachment}` permits one outstanding pull per window and returns one frame or an empty response after one second. Native `Response` transports raw bytes: byte 0 is 0 (JSON) or 1 (existing RCI1/RCR1/RCD1/RCT1 binary); bytes 1–8 are little-endian u64 native queue age in ms; bytes 9–16 are little-endian u64 elapsed native handler time in ms; bytes 17 onward contain the unchanged wire envelope. Requests use the same wrapper. Excluding native elapsed time from total IPC round-trip time avoids treating long-poll waiting as stale source data, while retaining a conservative bound on IPC transit delay.
+- The frontend adds `desktop_received_at_ms` in its performance-clock domain after decoding. This field is desktop-only, never a ROS/Bridge input. Feedback, RGBD, RGB target tracking and calibration consumers preserve this age through rendering and freshness checks.
+- `native_bridge_detach {attachment}` releases that window's interests. Other windows' subscriptions and the connection remain active. `stop_session` invalidates the native epoch before stopping the SSH tunnel.
+
+These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import type { BridgeClient } from "./bridge";
 import type { BridgeEnvelope, ConnectionProfile } from "./types";
 import {
@@ -59,13 +60,13 @@ export function useRgbdStream(
         const meta = parseRgbdFrameMeta(message);
         if (detectObjects && meta.objects === undefined) meta.objects = null;
         if (!meta.tf_ok) { fail(meta.error || meta.tf_error || "TF 查询失败"); return; }
-        const at = performance.now();
+        const at = bridgeReceivedAt(message);
         const remaining = RGBD_FRAME_TTL_MS - (meta.frame_age_ms ?? 0);
         pending = { meta, payload: message.rgbd_payload ?? new Uint8Array(), at, expiresAt: at + remaining };
         if (expiry !== undefined) window.clearTimeout(expiry);
         expiry = window.setTimeout(() => {
           if (valid) setState((current) => expireRgbdSession(current, performance.now()));
-        }, remaining);
+        }, Math.max(0, at + remaining - performance.now()));
         if (raf !== null) return;
         raf = window.requestAnimationFrame(() => {
           raf = null;

@@ -22,6 +22,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { BridgeClient } from "./bridge";
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
 import { HandeyeCalibrationPage, useHandeyeSession } from "./HandeyeCalibrationPage";
@@ -820,7 +821,7 @@ export default function App() {
         if (!liveUpdatesRef.current) return;
         const data = message.data as { data_bytes?: unknown; encoding?: unknown; width?: unknown } | null;
         if ((imageTopicNamesRef.current.has(message.topic) || (data && typeof data === "object" && data.data_bytes != null)) && message.topic !== imageInterestRef.current) return;
-        const wallNow = performance.now();
+        const wallNow = bridgeReceivedAt(message);
         const resolved = resolveMonitorSampleTimeMs({
           bagPlaying: bagPlayingRef.current,
           topic: message.topic,

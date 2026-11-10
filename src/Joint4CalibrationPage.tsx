@@ -1,3 +1,4 @@
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
@@ -104,7 +105,7 @@ export function Joint4CalibrationPage({
     });
     const unsubscribe = bridge.onMessage((message: BridgeEnvelope) => {
       if (message.op !== "topic_message" || message.topic !== JOINT4_CALIBRATION_STATUS_TOPIC) return;
-      const parsed = parseJoint4CalibrationStatus(message.data);
+      const parsed = parseJoint4CalibrationStatus(message.data, Date.now() - (performance.now() - bridgeReceivedAt(message)));
       if (parsed) {
         setStatus(parsed);
         setClock(parsed.receivedAt);

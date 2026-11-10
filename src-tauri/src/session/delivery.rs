@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub struct Frame {
     pub epoch: u64,
     pub received_ms: u64,
+    pub binary: bool,
     pub bytes: Arc<[u8]>,
 }
 
@@ -158,6 +159,7 @@ mod tests {
         Frame {
             epoch,
             received_ms: at,
+            binary: false,
             bytes: vec![value; size].into(),
         }
     }

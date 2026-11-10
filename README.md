@@ -36,6 +36,8 @@ Robot View 支持可选的桌面物体几何检测与同帧三维框显示。确
 
 数据流概要：Topics / HardwareStatus / JointState **入站** → App；`joint_command` / `trajectory_command` **出站** → ROS（含 ACK）；断开时若电机命令流在运行，先请求 **DISABLE**。
 
+安装版由 Rust 原生会话持有 Bridge WebSocket；WebView 通过有界二进制拉取接收预览，并通过独立请求通道取得 ACK。连接与消费者代次会阻止旧会话数据进入新连接。多窗口页面拆出仍在开发，当前界面尚未提供拆窗入口。
+
 交互式分层图与标注数据流见用户文档 **[架构](https://phamstered.github.io/rebotarm-debug-desk/architecture)**（HTML 图，非 Mermaid）。源文件：[docs/architecture.md](docs/architecture.md)。
 
 Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。本机连接 Profile 中的「ROS 环境脚本」必须指向机器人工作空间的 `install/setup.bash`；Bridge 会在该环境之后再 source 自己的安装空间，以便 `ament_index` 能解析 URDF 中的资源包。

@@ -35,6 +35,7 @@ struct ConnectionProfile {
 #[derive(Default)]
 struct SessionState {
     tunnel: Mutex<Option<Child>>,
+    local_port: Mutex<Option<u16>>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -1246,8 +1247,10 @@ async fn stop_rosbag_playback(profile: ConnectionProfile) -> Result<RosbagPlaySt
 async fn start_session(
     profile: ConnectionProfile,
     state: State<'_, SessionState>,
+    hub: State<'_, session::runtime::Runtime>,
 ) -> Result<u16, String> {
     let transport = ros_transport_setup();
+    hub.close();
     stop_tunnel(&state).await;
 
     if !is_safe_setup_script(&profile.ros_setup_script) {
@@ -1331,10 +1334,12 @@ async fn start_session(
         return Err(format!("SSH 隧道提前退出（{status}）：{}", stderr.trim()));
     }
     *state.tunnel.lock().map_err(|_| "隧道状态锁异常")? = Some(child);
+    *state.local_port.lock().map_err(|_| "隧道状态锁异常")? = Some(local_port);
     Ok(local_port)
 }
 
 async fn stop_tunnel(state: &State<'_, SessionState>) {
+    if let Ok(mut port) = state.local_port.lock() { *port = None; }
     let child = state.tunnel.lock().ok().and_then(|mut guard| guard.take());
     if let Some(mut child) = child {
         let _ = child.kill().await;
@@ -1673,7 +1678,8 @@ async fn start_arm_mode(profile: ConnectionProfile, mode: String, support_confir
 
 
 #[tauri::command]
-async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
+async fn stop_session(state: State<'_, SessionState>, hub: State<'_, session::runtime::Runtime>) -> Result<(), String> {
+    hub.close();
     stop_tunnel(&state).await;
     Ok(())
 }
@@ -1683,9 +1689,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
+        .manage(session::runtime::Runtime::default())
         .manage(control_logs::LogSessions::default())
         .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
+            session::ipc::native_bridge_attach,
+            session::ipc::native_bridge_detach,
+            session::ipc::native_bridge_next,
+            session::ipc::native_bridge_request,
             check_ssh,
             control_logs::read_control_log,
             control_logs::download_control_log,

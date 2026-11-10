@@ -2,6 +2,8 @@
 //! The modules are intentionally independent of WebView scheduling so they can be
 //! exercised with slow/disconnected consumers without controlling hardware.
 pub mod delivery;
+pub mod ipc;
+pub mod runtime;
 pub mod subscriptions;
 pub mod transport;
 pub mod windows;

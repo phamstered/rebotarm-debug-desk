@@ -16,44 +16,17 @@ import { SessionResourceCache, loadAborted } from "./resourceCacheLogic";
 
 type Listener = (message: BridgeEnvelope) => void;
 
-const IMAGE_MAGIC = [0x52, 0x43, 0x49, 0x31]; // RCI1
-const RESOURCE_MAGIC = [0x52, 0x43, 0x52, 0x31]; // RCR1
-const TARGET_MAGIC = [0x52, 0x43, 0x54, 0x31]; // RCT1
-const RGBD_MAGIC = [0x52, 0x43, 0x44, 0x31]; // RCD1
-
-export function decodeBridgeEnvelope(payload: string | ArrayBuffer): BridgeEnvelope {
-  if (typeof payload === "string") return JSON.parse(payload) as BridgeEnvelope;
-  const bytes = new Uint8Array(payload);
-  const image = IMAGE_MAGIC.every((value, index) => bytes[index] === value);
-  const resource = RESOURCE_MAGIC.every((value, index) => bytes[index] === value);
-  const rgbd = RGBD_MAGIC.every((value, index) => bytes[index] === value);
-  const target = TARGET_MAGIC.every((value, index) => bytes[index] === value);
-  if (bytes.length < 8 || (!image && !resource && !rgbd && !target)) throw new Error("未知的 Bridge 二进制消息");
-  const metadataLength = new DataView(payload).getUint32(4, false);
-  const offset = 8 + metadataLength;
-  if (offset > bytes.length) throw new Error("Bridge 二进制元数据不完整");
-  const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(8, offset))) as BridgeEnvelope;
-  if (resource) {
-    if (metadata.op !== "resource" || !metadata.request_id || !metadata.uri || metadata.data_length !== bytes.length - offset) {
-      throw new Error("Bridge 资源帧长度或元数据无效");
-    }
-    metadata.resource_bytes = bytes.subarray(offset);
-  } else if (target) {
-    if(metadata.op!=="visual_target_frame" || metadata.data_length!==bytes.length-offset)throw new Error("Bridge RGB 目标帧无效");
-    metadata.target_rgb_payload=bytes.subarray(offset);
-  } else if (rgbd) {
-    if (metadata.op !== "rgbd_frame") throw new Error("Bridge RGBD 元数据无效");
-    const expected = Number(metadata.data_length ?? bytes.length - offset);
-    if (expected !== bytes.length - offset) throw new Error("Bridge RGBD 帧长度无效");
-    metadata.rgbd_payload = bytes.subarray(offset);
-  } else {
-    if (metadata.op !== "topic_message" || !metadata.data || typeof metadata.data !== "object") throw new Error("Bridge 图像元数据无效");
-    (metadata.data as Record<string, unknown>).data_bytes = bytes.subarray(offset);
-  }
-  return metadata;
-}
+export { decodeBridgeEnvelope } from "./bridgeWireLogic";
+import { decodeBridgeEnvelope } from "./bridgeWireLogic";
+import { NativeBridgeTransport } from "./nativeBridgeLogic";
 
 export class BridgeClient {
+  private generation = 0;
+  private native: NativeBridgeTransport | null = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+    ? new NativeBridgeTransport(message => {
+      if (message.op === "disconnected") this.resources.clear();
+      this.listeners.forEach(listener => listener(message));
+    }) : null;
   private socket: WebSocket | null = null;
   private resources = new SessionResourceCache();
   private listeners = new Set<Listener>();
@@ -129,11 +102,16 @@ export class BridgeClient {
 
   async connect(profile: ConnectionProfile): Promise<BridgeHello> {
     this.close();
+    const generation = this.generation;
     let lastError: unknown = new Error("Bridge 尚未就绪");
     for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (generation !== this.generation) throw new Error("Bridge 连接已取消");
       try {
-        return await this.connectOnce(profile);
+        const hello = this.native ? await this.native.connect(profile.localPort) : await this.connectOnce(profile);
+        if (generation !== this.generation) throw new Error("Bridge 连接已取消");
+        return hello;
       } catch (error) {
+        if (generation !== this.generation) throw new Error("Bridge 连接已取消");
         lastError = error;
         await new Promise((resolve) => window.setTimeout(resolve, 500));
       }
@@ -142,6 +120,8 @@ export class BridgeClient {
   }
 
   close() {
+    this.generation++;
+    this.native?.close();
     this.resources.clear();
     const socket = this.socket;
     this.socket = null;
@@ -157,13 +137,15 @@ export class BridgeClient {
   }
 
   send(message: BridgeEnvelope) {
+    if (this.native) { this.native.send(message); return; }
     if (this.socket?.readyState !== WebSocket.OPEN) {
       throw new Error("Bridge 尚未连接");
     }
     this.socket.send(JSON.stringify(message));
   }
 
-  request(message: BridgeEnvelope, timeoutMs = 10000, signal?: AbortSignal): Promise<BridgeEnvelope> {
+  request(message: BridgeEnvelope, timeoutMs = 10000, signal?: AbortSignal, consumer = "default"): Promise<BridgeEnvelope> {
+    if (this.native) return this.native.request(message, timeoutMs, signal, consumer);
     if (signal?.aborted) return Promise.reject(loadAborted());
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {

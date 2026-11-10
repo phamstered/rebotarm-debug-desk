@@ -22,7 +22,7 @@ The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `
 
 1. React / Three.js UI 通过 Tauri `invoke` 驱动 Rust SSH session manager。
 2. Rust 建立本地端口转发：本机端口 → Jetson `127.0.0.1:8765`。
-3. WebView 连接本地转发端口上的 WebSocket。
+3. 安装版由 Rust 会话管理器连接本地转发端口上的 WebSocket，WebView 使用原生 IPC 请求和有界二进制拉取。纯浏览器开发环境保留直接 WebSocket 适配器。
 4. Jetson 上的 `easy_debug_bridge`（C++ / Boost.Beast / rclcpp）接入 ROS 2 Humble graph（含 Micro XRCE-DDS Agent 暴露的实体）。
 
 ## Connection sequence
@@ -31,7 +31,7 @@ The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `
 2. Desktop sources `/opt/ros/humble/setup.bash`, the configured robot overlay, and the Bridge overlay.
 3. Desktop starts the Bridge if its configured loopback port is not listening.
 4. Desktop starts `ssh -N -L` local forwarding.
-5. WebView opens a WebSocket to the local forwarded port.
+5. The native session runtime opens one WebSocket to the actual SSH-forwarded port; the main WebView attaches using its native window identity and connection epoch.
 6. UI requests Topic discovery and the node/topic endpoint graph, then subscribes to URDF and JointState topics.
 7. Topic Graph applies a deterministic force layout before rendering publisher → topic → subscriber SVG edges. A Node is a rounded rectangle and a Topic is an ellipse. Selecting a Topic creates a read-only Bridge subscription and focuses the graph; selecting a Node opens its details in Inspector.
 8. Inspector requests `topic_info` / `node_info` from Bridge on demand. The Bridge reads current ROS graph endpoint metadata, including GID and QoS, without running remote CLI commands. Monitor Panels accept numeric fields picked from Inspector, including multiple fields per Panel; time-series charts plot a 30s sliding window, while bar, pie, and gauge charts use the latest value per field.
