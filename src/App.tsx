@@ -1852,7 +1852,7 @@ export default function App() {
         {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
       </div>}
       <div className="app-page-content">
-      <div hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>
+      <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>
       {appPage === "handeye" ? null : appPage === "status" ? (
         <StatusPage
           clockSync={clockSync}

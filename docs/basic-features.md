@@ -476,6 +476,7 @@ Motion 日志 `rgb_tracking` 按状态变化及最多每秒一次记录 UUID、�
 
 连接页也可从「手眼标定 / 离线样本」进入；断线后样本保留在本次应用会话中。Navigation →「手眼标定」提供与 RViz 对应的 Target、Context、Calibrate 三步操作。
 
+- 连接后的内容区与离线页面均可纵向滚动，滚动条位于页面右侧；图像、样本列表和求解结果不会被窗口裁切。内容区可用键盘聚焦滚动，窄窗口按上下布局排列。查看历史样本后点击「检测标定板」会切换为最新检测图。
 - **Target**：ChArUco / ArUco Grid、三种字典、行列数、实测格子/标记尺寸及旧版排列；可生成并保存 PNG 标定板。打印后必须核对实际边长，尺寸不包含纸张白边。首个样本后锁定板参数与坐标配置。
 - **Context**：Eye-in-hand / Eye-to-hand，RGB 与 CameraInfo Topic、测量关节 Topic、Sensor 光学帧、End-effector、Robot base 及导出用 camera body 帧。Frames 列表通过只读 TF 查询刷新，允许手动填写，不依赖 MoveGroup 或 RViz 的 SRDF 下拉框。Object frame 来自本地标定板检测。
 - **Calibrate**：Take sample、Delete latest sample、Clear all samples、Save / Load samples、五种 OpenCV 求解器和 Save camera pose。切换到 Motion 调姿后返回，内存中的样本保留；退出应用前应保存 JSON 数据集。

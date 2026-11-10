@@ -228,6 +228,7 @@ export function HandeyeCalibrationPage({
     void run(
       record ? "采样中（等待停稳与同步帧）" : "检测标定板",
       async (valid) => {
+        setSelected("");
         const capture = await invoke<HandeyeCapture>("handeye_capture", {
           profile,
           config: { ...context, mode: record ? "capture" : "preview" },

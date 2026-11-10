@@ -4,6 +4,33 @@
   margin: auto;
   color: var(--text, #d9e7ed);
 }
+.handeye-viewport {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.handeye-viewport:focus-visible {
+  outline: 2px solid #70c7b1;
+  outline-offset: -2px;
+}
+.handeye-viewport::-webkit-scrollbar,
+.handeye-offline::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.handeye-viewport::-webkit-scrollbar-track,
+.handeye-offline::-webkit-scrollbar-track {
+  background: #091b25;
+}
+.handeye-viewport::-webkit-scrollbar-thumb,
+.handeye-offline::-webkit-scrollbar-thumb {
+  background: #527888;
+  border: 2px solid #091b25;
+  border-radius: 8px;
+}
 .handeye-header {
   display: flex;
   justify-content: space-between;

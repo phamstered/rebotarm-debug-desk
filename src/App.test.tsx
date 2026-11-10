@@ -187,6 +187,18 @@ describe("App workflow", () => {
     });
   });
 
+  it("provides a keyboard-focusable hand-eye content region only on its connected page", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
+    await user.click(await screen.findByRole("button", {name: "手眼标定", exact: true}));
+    const region=screen.getByRole("region", {name: "手眼标定内容"});
+    expect(region).toHaveAttribute("tabIndex", "0");
+    expect(within(region).getByRole("tab", {name: "Target · 标定板"})).toBeVisible();
+    await user.click(screen.getByRole("button", {name: "Topics", exact: true}));
+    expect(screen.queryByRole("region", {name: "手眼标定内容"})).not.toBeInTheDocument();
+  });
+
   it("opens data collection from Navigation before ROS feedback is ready", async () => {
     const user = userEvent.setup();
     render(<App />);
