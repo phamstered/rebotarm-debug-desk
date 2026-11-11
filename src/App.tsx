@@ -357,6 +357,8 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
       <details className="profile-advanced">
         <summary>高级</summary>
         <div className="profile-grid profile-advanced-grid">
+          <label>远端 Bridge 端口<input type="number" min="1" max="65535" value={profile.remotePort} onChange={(e) => field("remotePort", Number(e.target.value))} /></label>
+          <label>连接时启动 host Bridge<input type="checkbox" checked={profile.bridgeAutoStart !== false} onChange={(e) => field("bridgeAutoStart", e.target.checked)} /></label>
           <label>ROS_DOMAIN_ID<input type="number" value={profile.rosDomainId} onChange={(e) => field("rosDomainId", Number(e.target.value))} /></label>
           <label>ROS 环境脚本<input value={profile.rosSetupScript} onChange={(e) => field("rosSetupScript", e.target.value)} placeholder="/path/to/install/setup.bash" /></label>
           <label>RGBD 启用<input type="checkbox" checked={profile.rgbdEnabled} onChange={(e) => field("rgbdEnabled", e.target.checked)} /></label>

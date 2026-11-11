@@ -1,0 +1,23 @@
+name: Docker runtime
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  runtime:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: phamstered/rebotarm-ros2-stack
+          ref: 3ec3071275f89b7ec20cdc291ef1f1226565a597
+          path: stack-runtime
+      - name: Build paired stack runtime
+        run: stack-runtime/scripts/docker-runtime.sh build
+      - name: Build Bridge runtime
+        run: node scripts/docker-bridge.mjs build
+      - name: Test Bridge runtime on isolated domain
+        run: ROS_DOMAIN_ID=222 node scripts/docker-bridge.mjs run verify-bridge-runtime

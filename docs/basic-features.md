@@ -489,3 +489,9 @@ Motion 日志 `rgb_tracking` 按状态变化及最多每秒一次记录 UUID、�
 - 至少 8 个训练姿态，建议 12–20 个，围绕至少两个不同轴旋转。复验样本不参与拟合；至少 3 个新姿态，训练/复验最大固定标定板偏差都 ≤ 5 mm、2° 才显示「独立复验通过」。这是当前参考门槛，不是抓取精度保证；关节模型、板尺寸和机械松动仍会影响结果。
 - JSON 数据集包含原始 RGB、内参、源时间戳、测量关节、机器人 TF、检测结果和样本用途；最大 200 个样本，内存数据达到 120 MiB 时需保存后新建。导入不信任旧求解结果，须重新求解。
 - 外参导出同时标明 `parent ← optical sensor` 与换算后的 `parent ← camera body`（矩阵为行优先、平移单位米，含 XYZ/RPY）。Eye-in-hand 的 parent 为末端；Eye-to-hand 为基座。导出不修改 URDF、不发布替代 TF，不自动设置 `plane_verified=true`。使用新外参前仍应复验桌面/方块顶面。
+
+## Docker 运行入口
+
+新增 `npm run docker:bridge -- build|run`，支持 Humble 镜像、独立端口和 ROS domain、只读外部 overlay；无效端口/domain 在执行 Docker 前拒绝。启动、验证及桌面管理边界见 [Docker 运行说明](docker.md)。
+
+连接高级配置可关闭“连接时启动 host Bridge”，直接连接已运行的 Docker Bridge；该模式拒绝 host 升级入口，旧配置默认保留 host 自动启动。

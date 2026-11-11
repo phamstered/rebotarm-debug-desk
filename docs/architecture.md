@@ -225,3 +225,7 @@ The hand-eye page keeps RViz's Target / Context / Calibrate organization but exe
 Continuous raw RGB uses the existing binary WebSocket path. A user-requested sample is a separate, bounded SSH operation from Tauri, running a fixed Python script with a 12-second remote deadline and an 18-second local deadline. This script only subscribes to RGB, CameraInfo, measured JointState and TF, and encodes one PNG with Python's standard library. It avoids Jetson OpenCV/NumPy ABI dependencies. Sampling requires measured stop and capture-time TF, and never uses the old base-to-camera extrinsic to infer end-effector pose. No camera transform, joint command, action goal or controller mutation is published.
 
 Local vision calls have a single-operation semaphore, size limits and a deadline. Detector output and the original synchronized sample are committed together; failed detection cannot append a partial record. Connection/profile/page changes invalidate pending results. Sample data stays in page memory across navigation and can be explicitly saved/imported; application restart does not silently restore large images. Calibration configuration changes are locked once samples exist. Exported results are reviewable files only, not a production configuration change.
+
+## Docker runtime
+
+Humble 容器使用 host 网络及独立 PID 命名空间，构建目录与 host 分离。部署与权限边界见 [Docker 运行说明](docker.md)。
