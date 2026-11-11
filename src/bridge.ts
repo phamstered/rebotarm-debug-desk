@@ -28,7 +28,9 @@ export class BridgeClient {
       this.listeners.forEach(listener => listener(message));
     }) : null;
   private socket: WebSocket | null = null;
-  private resources = new SessionResourceCache();
+  // Desktop retains bytes once in Rust; the WebView only coalesces in-flight
+  // loads. Browser fallback owns its own bounded connection cache.
+  private resources = new SessionResourceCache(this.native ? 0 : 128 * 1024 * 1024);
   private listeners = new Set<Listener>();
   private pending = new Map<
     string,

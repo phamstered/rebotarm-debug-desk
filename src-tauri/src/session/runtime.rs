@@ -67,6 +67,7 @@ impl Core {
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
     pub observations: Arc<super::observations::Observations>,
+    resources: Arc<super::resources::Resources>,
     core: Arc<Mutex<Core>>,
     connect_gate: AsyncMutex<()>,
     subscriptions_gate: AsyncMutex<()>,
@@ -78,6 +79,7 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             observations: Arc::new(super::observations::Observations::default()),
+            resources: Arc::new(super::resources::Resources::default()),
             core: Arc::new(Mutex::new(Core {
                 epoch: 0,
                 windows: WindowRegistry::default(),
@@ -114,6 +116,7 @@ impl Runtime {
             let mut core = self.core.lock().unwrap();
             core.epoch += 1;
             self.observations.stop(core.epoch);
+            self.resources.reset(core.epoch);
             core.error = Some("Bridge 会话已关闭".into());
             core.subscriptions = SubscriptionRegistry::new(core.epoch, 256);
             core.rgbd_owner = None;
@@ -151,6 +154,7 @@ impl Runtime {
         let errors_core = self.core.clone();
         let errors_changed = self.changed.clone();
         let observations = self.observations.clone();
+        let resources = self.resources.clone();
         let origin = self.origin;
         let transport = Transport::connect(
             port,
@@ -170,6 +174,7 @@ impl Runtime {
                 core.error = Some(error);
                 core.transport = None;
                 observations.stop(epoch);
+                resources.reset(epoch);
                 for client in core.clients.values() {
                     client.notify.notify_one();
                 }
@@ -337,6 +342,12 @@ impl Runtime {
             core.transport.clone().ok_or("Bridge 尚未连接")?
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
+        if op == "resource" {
+            let key = super::resources::Key::new(message["uri"].as_str().ok_or("资源缺少 URI")?, message["encoding"].as_str().unwrap_or("base64"))?;
+            let reply = self.resources.get(attachment.epoch, key, async move { transport.request(message, timeout).await }).await?;
+            self.core.lock().unwrap().validate(native_label, attachment)?;
+            return Ok(reply);
+        }
         if op == "topics" && self.observations.snapshot().connected {
             let snapshot = if message["refresh"] == true {
                 self.observations.refresh(attachment.epoch, super::observations::Source::Topics, false).await?
@@ -586,6 +597,12 @@ mod tests {
                         }
                         match message["op"].as_str().unwrap() {
                             "hello" => json!({"op":"hello"}),
+                            "resource" => {
+                                let metadata = serde_json::to_vec(&json!({"op":"resource", "uri":message["uri"], "request_id":message["request_id"], "data_length":3})).unwrap();
+                                let mut binary = b"RCR1".to_vec(); binary.extend((metadata.len() as u32).to_be_bytes()); binary.extend(metadata); binary.extend([7, 8, 9]);
+                                socket.send(Message::Binary(binary.into())).await.unwrap();
+                                continue;
+                            },
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             _ => json!({"op":"error", "request_id":message["request_id"], "message":"isolated bridge: unsupported"}),
@@ -691,6 +708,28 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn resource_reads_across_native_pages_use_one_upstream_binary_response() {
+        let (port, _events, requests, server) = fake_bridge().await;
+        let hub = Runtime::default(); hub.connect(port).await.unwrap();
+        let (motion, _) = hub.attach("page-motion").unwrap();
+        let (topics, _) = hub.attach("page-dashboard").unwrap();
+        let message = json!({"op":"resource", "uri":"package://robot/link.stl", "encoding":"binary"});
+        let (first, second) = tokio::join!(
+            hub.request("page-motion", &motion, "model", message.clone(), Duration::from_secs(1)),
+            hub.request("page-dashboard", &topics, "model", message.clone(), Duration::from_secs(1)),
+        );
+        let first = first.unwrap(); let second = second.unwrap();
+        assert!(first.binary);
+        assert!(Arc::ptr_eq(&first.bytes, &second.bytes));
+        assert_eq!(&first.bytes[first.bytes.len()-3..], &[7,8,9]);
+        hub.detach("page-motion", &motion).await.unwrap();
+        let later = hub.request("page-dashboard", &topics, "model", message, Duration::from_secs(1)).await.unwrap();
+        assert!(Arc::ptr_eq(&later.bytes, &first.bytes));
+        assert_eq!(requests.lock().unwrap().iter().filter(|message| message["op"] == "resource").count(), 1);
+        hub.close(); server.await.unwrap();
     }
 
     #[tokio::test]

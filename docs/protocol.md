@@ -581,3 +581,5 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 `native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。六个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
 
 `native_observation_refresh {epoch, source, afterPending}` 通过每 source 的串行锁查询；普通同时刷新可共用同一结果，`afterPending:true` 强制在此前工作完成后重新发起，用于控制器操作后的实态核验。刷新响应额外携带 `handler_elapsed_ms`，前端从 IPC 往返耗时中扣除原生等待时间，剩余传输时间计入 age；Controller 的服务器等待也只扣除一次。`native_observation_interval {seconds}` 仅主 WebView 可调用，Topics 间隔为 5–300 秒。原有 Bridge `topics` 请求在桌面原生层复用该源，显式 `refresh:true` 触发共享刷新；浏览器回退仍直接查询 Bridge。
+
+原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。

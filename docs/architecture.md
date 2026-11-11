@@ -236,3 +236,5 @@ Local vision calls have a single-operation semaphore, size limits and a deadline
 ### 多窗口公共状态查询（开发分支）
 
 Rust 会话以固定来源调度 Agent、USB、arm mode、Controller、Topics 与时钟诊断，各来源只有一个在途查询。主窗口和功能窗口通过事件失效通知读取有界快照，主 WebView 不负责中转或定时驱动。手动刷新与自动查询共用串行锁；用于操作后核验的请求在已有请求完成后重新发起。窗口接收端保留源帧龄并独立过期，连接代次和递增快照版本隔离旧响应。运动状态/日志、rosbag 与共享编辑状态仍待迁移；完整范围见多窗口实现记录。
+
+模型和纹理的连接级字节缓存也由 Rust 持有，按 URI/编码合并在途读取并使用 LRU 限制为 128 MiB / 512 项。每个 WebView 仍需接收当前展示所需的 IPC 字节并创建自己的 GPU 场景，但不再长期保存重复的原始字节缓存。断线取消在途资源读取；资源缓存不承载控制 ACK 或改变路径边界校验。

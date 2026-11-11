@@ -261,4 +261,17 @@ describe("binary resource transport", () => {
     ws.binaryMessage(resourceFrame(id)); // A late response cannot recreate the cancelled request.
     bridge.close();
   });
+  it("lets native windows share the Rust byte cache without retaining another copy in each WebView", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    let bridge: BridgeClient;
+    try { bridge = new BridgeClient(); }
+    finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+    const request = vi.spyOn(bridge, "request").mockResolvedValue({ op: "resource", resource_bytes: new Uint8Array([1, 2]), mime: "model/stl" });
+    const [a, b] = await Promise.all([bridge.getResource("package://robot/a.stl"), bridge.getResource("package://robot/a.stl")]);
+    expect(a).toBe(b);
+    expect(request).toHaveBeenCalledOnce();
+    await bridge.getResource("package://robot/a.stl");
+    expect(request).toHaveBeenCalledTimes(2); // This second IPC reads the shared native cache.
+    bridge.close();
+  });
 });

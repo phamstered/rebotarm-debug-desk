@@ -4,6 +4,7 @@
 pub mod delivery;
 pub mod ipc;
 pub mod observations;
+pub mod resources;
 pub mod runtime;
 pub mod subscriptions;
 pub mod transport;
