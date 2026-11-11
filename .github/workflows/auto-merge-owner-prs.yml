@@ -13,7 +13,7 @@ name: Auto-merge owner PRs
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["CI", "Docker runtime"]
     types: [completed]
 
 # GITHUB_TOKEN note: an explicit permissions block sets every unlisted scope
@@ -65,14 +65,16 @@ jobs:
             echo "PR is a draft; skipping."
             exit 0
           fi
-          # Required check must have succeeded on this exact head SHA.
-          CONCLUSION=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=$(jq -rn --arg c "$REQUIRED_CHECK" '$c|@uri')&filter=latest" \
-            --jq '[.check_runs[] | select(.status == "completed")] | sort_by(.completed_at) | last | .conclusion // "missing"')
-          echo "Required check '${REQUIRED_CHECK}' on ${HEAD_SHA}: ${CONCLUSION}"
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "Required check not successful; skipping."
-            exit 0
-          fi
+          # All runtime architectures and host CI must succeed on the same head.
+          for CHECK in "$REQUIRED_CHECK" "runtime (ubuntu-22.04)" "runtime (ubuntu-24.04-arm)"; do
+            CONCLUSION=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=$(jq -rn --arg c "$CHECK" '$c|@uri')&filter=latest" \
+              --jq '[.check_runs[]] | sort_by(.started_at) | last | if .status == "completed" then .conclusion else "pending" end // "missing"')
+            echo "Required check '${CHECK}' on ${HEAD_SHA}: ${CONCLUSION}"
+            if [ "$CONCLUSION" != "success" ]; then
+              echo "Required check not successful; skipping."
+              exit 0
+            fi
+          done
           # --match-head-commit refuses the merge if the branch moved meanwhile.
           for attempt in 1 2; do
             if gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --match-head-commit "$HEAD_SHA"; then
