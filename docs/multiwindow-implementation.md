@@ -84,3 +84,7 @@
 - Bridge 保存至多 256 个 / 2 MiB 的完整 Position 终态（每项 256 KiB）；跨连接恢复必须匹配编号和状态，重启/淘汰导致未知时保留占用。恢复事件保留动作组元数据，不能以仅 busy=false 释放任务。
 - Rust 运动日志至多 5000 项 / 2 MiB，按每窗口独立游标分页；截断、跨会话、非法序号及迟到响应均覆盖测试。缓存回复计入源年龄；抓取 UI 拒绝旧缓存重置任务，夹爪旧反馈不被重新续鲜。
 - 验证环境：Mac loopback 假 Bridge；Jetson 独立 `~/easy_debug_bridge_260_motion_observe`，脚本同步、单线程 colcon 构建。ROS 测试使用测试文件明确限定的隔离域和模拟机器人，未向正式机械臂发送动作。构建保留 `-UNDEBUG`，确保 Release 测试中的 assert 生效。正式应用未更新。
+
+本阶段合入 main 的 Release 断言与时间戳溢出测试修复后，全量 `npm test` 通过（845 前端 / 114 Rust 与其余脚本），前端、文档和独立 Debug Tauri bundle 构建、codesign 核验通过。日志为本机 `/tmp/260-integrated-main-{tests,build,docs-build,bundle}.log`。Jetson 完整 `colcon build` / `colcon test` / `colcon test-result --verbose` 通过：22 tests，0 errors，0 failures，0 skipped（`/tmp/260-integrated-main-ros-build-test.log`）。修复前的一次 ROS 测试因旧测试时间戳溢出停滞并被定向终止，不计为通过。
+
+手眼页离线原生拆收验收已完成 40 次完整循环：16 mm 标定板参数、生成图片及 100% 缩放均保留。受前台焦点变化打断的批次未计数；其中一次主窗口仍显示“已在独立窗口打开”，聚焦独立窗口后内容完整。尚未完成 50 次及 30 分钟性能验收。过程中仅采样了父进程 RSS（约 119–170 MiB），不含 WebKit 子进程，不能据此声称整体内存稳定。正式应用和生产 Bridge 均未替换。
