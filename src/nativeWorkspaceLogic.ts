@@ -15,7 +15,7 @@ export const PAGE_TITLES: Record<AppPage, string> = {
   status: "Status", dashboard: "Topics", motion: "Motion", monitor: "Monitor", collection: "数据采集",
   handeye: "手眼标定", motor: "Motor", calibration: "Joint4 标定", gravity: "重力辨识",
 };
-export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string };
+export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string; recovery_required?: boolean };
 export type NativeWorkspaceSnapshot = { selected: AppPage; pages: Partial<Record<AppPage, NativePageState>> };
 export type NativeSessionContext = { epoch: number; connected: boolean; profile: ConnectionProfile | null; error: string | null };
 
@@ -42,7 +42,7 @@ export function useNativeWorkspace(enabled: boolean) {
     })().catch(reason => { if (!disposed) setError(String(reason)); });
     return () => { disposed = true; unsubscribes.forEach(unlisten => unlisten()); };
   }, [enabled]);
-  async function action(command: "workspace_select" | "workspace_detach" | "workspace_dock" | "workspace_show_main", page: AppPage) {
+  async function action(command: "workspace_select" | "workspace_detach" | "workspace_dock" | "workspace_show_main" | "workspace_recover", page: AppPage) {
     setError("");
     try { await invoke(command, { page }); } catch (reason) { setError(String(reason)); }
   }

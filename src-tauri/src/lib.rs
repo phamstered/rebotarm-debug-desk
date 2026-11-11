@@ -1718,6 +1718,7 @@ pub fn run() {
             session::workspace::workspace_cover,
             session::workspace::workspace_page_ready,
             session::workspace::workspace_show_main,
+            session::workspace::workspace_recover,
             session::ipc::native_bridge_attach,
             session::ipc::native_bridge_detach,
             session::ipc::native_bridge_next,

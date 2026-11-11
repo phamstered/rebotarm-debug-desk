@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { NativePageToolbar, NativeWorkspaceHost } from "./NativeWorkspace";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn().mockResolvedValue({}) }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
-beforeEach(() => { mocks.invoke.mockClear(); vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }); });
+beforeEach(() => { mocks.invoke.mockReset().mockResolvedValue({}); vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it("shows the matching window operation and blocks migration during sampling", async () => {
   const user = userEvent.setup(); const onAction = vi.fn();
@@ -28,4 +28,24 @@ it("hides native pages for root modals without refocusing a detached window, and
   await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("workspace_cover", { covered: true }));
   expect(mocks.invoke).not.toHaveBeenCalledWith("workspace_select", expect.anything());
   unmount(); expect(mocks.invoke).toHaveBeenLastCalledWith("workspace_cover", { covered: true });
+});
+it("offers recovery after an incomplete rollback while keeping sampling migration gates", async () => {
+  const user=userEvent.setup(); const onAction=vi.fn();
+  const props={page:"handeye" as const, connected:false, busyReason:"", onAction, state:{detached:true,visible:true,ready:true,busy_reason:"",recovery_required:true}};
+  const {rerender}=render(<NativePageToolbar {...props}/>);
+  expect(screen.queryByRole("button",{name:"收回主窗口"})).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"恢复窗口"}));
+  expect(onAction).toHaveBeenCalledWith("workspace_recover","handeye");
+  rerender(<NativePageToolbar {...props} busyReason="正在采样"/>);
+  expect(screen.getByRole("button",{name:"恢复窗口"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"主窗口"})).toBeEnabled();
+});
+it("offers recovery in the main placeholder even if the failed page was originally embedded", async () => {
+  const user=userEvent.setup(); const onError=vi.fn();
+  render(<NativeWorkspaceHost page="handeye" covered={false} onError={onError} snapshot={{selected:"handeye",pages:{handeye:{detached:false,visible:true,ready:true,busy_reason:"",recovery_required:true}}}}/>);
+  expect(screen.getByRole("alert")).toHaveTextContent("窗口需要恢复");
+  mocks.invoke.mockImplementation(async(command:string)=>{if(command==="workspace_recover") throw new Error("恢复失败");return {};});
+  await user.click(screen.getByRole("button",{name:"恢复窗口"}));
+  expect(mocks.invoke).toHaveBeenCalledWith("workspace_recover",{page:"handeye"});
+  await waitFor(()=>expect(onError).toHaveBeenCalledWith("Error: 恢复失败"));
 });

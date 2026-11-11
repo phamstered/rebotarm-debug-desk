@@ -587,7 +587,7 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 桌面原生 IPC 与 Jetson Bridge 操作分开。主 WebView 调用 `native_bridge_attach` 时传入当前 SSH 会话实际分配的端口及 Profile；Rust 核验端口归属、Profile 格式和 16 KiB 大小上限。功能 WebView 通过 `native_bridge_context` 读取连接代次/连接状态/Profile，再不带端口地附着当前会话，不能据此新建第二个上游连接。原生调用者身份取 WebView label，不取可变的父 Window label。取消中的附着完成清理后才能进行替代附着，旧 token 不允许覆盖新消费者。
 
-窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready/show_main`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_show_main` 只显示已有主窗口，不迁移页面或重建连接。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。
+窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready/show_main/recover`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_show_main` 只显示已有主窗口，不迁移页面或重建连接。页面状态的 `recovery_required` 表示自动回滚未完成；此时拒绝再次拆收，用 `workspace_recover` 重试恢复，仍需页面 ready、无采样等 busy 状态且通过原生任务迁移锁。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。
 
 ### 原生共享只读状态（多窗口开发分支）
 

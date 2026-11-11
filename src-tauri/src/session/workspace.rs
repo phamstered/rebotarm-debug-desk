@@ -14,6 +14,8 @@ use tauri::{
     WebviewUrl, Window, WindowBuilder, WindowEvent,
 };
 use tokio::sync::Mutex as AsyncMutex;
+#[path = "workspace_migration.rs"]
+mod movement;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PageState {
@@ -21,6 +23,8 @@ pub struct PageState {
     pub visible: bool,
     pub ready: bool,
     pub busy_reason: String,
+    #[serde(default)]
+    pub recovery_required: bool,
 }
 
 impl PageState {
@@ -30,6 +34,9 @@ impl PageState {
         }
         if !self.busy_reason.is_empty() {
             return Err(self.busy_reason.clone());
+        }
+        if self.recovery_required {
+            return Err("请先恢复窗口，再继续拆出或收回".into());
         }
         Ok(())
     }
@@ -50,6 +57,8 @@ pub struct Workspace {
     layout: LayoutStore,
     restoring: Mutex<BTreeSet<Page>>,
     restore_started: Mutex<BTreeSet<Page>>,
+    moving: Mutex<BTreeSet<Page>>,
+    recoveries: Mutex<BTreeMap<Page, movement::Recovery>>,
 }
 
 impl Default for Workspace {
@@ -61,6 +70,8 @@ impl Default for Workspace {
             layout: LayoutStore::default(),
             restoring: Mutex::new(BTreeSet::new()),
             restore_started: Mutex::new(BTreeSet::new()),
+            moving: Mutex::new(BTreeSet::new()),
+            recoveries: Mutex::new(BTreeMap::new()),
             state: Mutex::new(Snapshot {
                 selected: Page::Status,
                 pages: BTreeMap::new(),
@@ -339,7 +350,7 @@ impl Workspace {
             for (page, state) in &snapshot.pages {
                 // Startup creates hidden views before their first ready event.
                 // Do not erase the intended detached layout during that interval.
-                if restoring.contains(page) {
+                if restoring.contains(page) || state.recovery_required {
                     continue;
                 }
                 let entry = saved.pages.entry(*page).or_insert(PageLayout {
@@ -401,7 +412,7 @@ impl Workspace {
         let mut snapshot = self.snapshot();
         let selected = snapshot.selected;
         for (page, state) in &mut snapshot.pages {
-            if state.detached {
+            if state.detached || state.recovery_required {
                 continue;
             }
             state.visible = shown && *page == selected;
@@ -504,6 +515,7 @@ impl Workspace {
                 visible: false,
                 ready: false,
                 busy_reason: String::new(),
+                recovery_required: false,
             });
         let result = main
             .add_child(
@@ -537,6 +549,14 @@ impl Workspace {
 
     pub async fn select(&self, app: &AppHandle, page: Page) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().await;
+        if self
+            .snapshot()
+            .pages
+            .get(&page)
+            .is_some_and(|state| state.recovery_required)
+        {
+            return Err("请先点击“恢复窗口”完成上次移动".into());
+        }
         let view = self.ensure(app, page).await?;
         if self
             .snapshot()
@@ -555,7 +575,7 @@ impl Workspace {
             let mut snapshot = self.snapshot();
             snapshot.selected = page;
             for (other, state) in &mut snapshot.pages {
-                if state.detached {
+                if state.detached || state.recovery_required {
                     continue;
                 }
                 state.visible = *other == page && !*self.covered.lock().unwrap();
@@ -598,6 +618,7 @@ impl Workspace {
             return Ok(self.snapshot());
         }
         let label = detached_label(page);
+        self.clear_empty_window(app, &label)?;
         let saved = self
             .layout
             .snapshot()
@@ -619,44 +640,56 @@ impl Workspace {
             builder = builder.position(geometry.outer.x, geometry.outer.y);
         }
         let window = builder.build().map_err(|e| e.to_string())?;
-        // tauri-runtime-wry 2.11 on macOS reports the first WebView frame as
-        // inner_size after reparenting into an otherwise empty Window. Capture
-        // the actual empty Window size before the view can influence that query.
-        let target_size = window
-            .inner_size()
-            .map_err(|e| e.to_string())?
-            .to_logical::<f64>(window.scale_factor().map_err(|e| e.to_string())?);
-        let old_window = view.window();
-        let old_bounds = view.bounds().map_err(|e| e.to_string())?;
-        let moved = (|| {
-            view.reparent(&window)?;
-            let size = target_size;
-            view.set_bounds(native_bounds(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: size.width,
-                height: size.height,
-            }))?;
-            view.set_auto_resize(false)?;
-            view.show()?;
-            window.show()?;
-            window.set_focus()?;
-            Ok::<_, tauri::Error>(())
+        // Read the target geometry before moving anything. A failed preparation
+        // must clean up the new empty window without touching the source page.
+        let target_size = (|| {
+            Ok::<_, tauri::Error>(
+                window
+                    .inner_size()?
+                    .to_logical::<f64>(window.scale_factor()?),
+            )
         })();
-        if let Err(error) = moved {
-            let _ = view.reparent(&old_window);
-            let _ = view.set_bounds(old_bounds);
-            let _ = view.show();
-            let _ = window.destroy();
-            return Err(format!("拆出失败，已尝试恢复原页面：{error}"));
+        let target_size = match target_size {
+            Ok(size) => size,
+            Err(error) => {
+                return Err(match self.clear_empty_window(app, &label) {
+                    Ok(()) => format!("无法读取独立窗口尺寸，原页面保持不变：{error}"),
+                    Err(cleanup) => {
+                        format!("无法读取独立窗口尺寸：{error}；空窗口清理失败：{cleanup}")
+                    }
+                });
+            }
+        };
+        let result = self.transfer_page(
+            app,
+            page,
+            &view,
+            super::migration::Placement {
+                parent: label.clone(),
+                bounds: Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: target_size.width,
+                    height: target_size.height,
+                },
+            },
+            true,
+            true,
+        );
+        if let Err(error) = result {
+            if !self.recoveries.lock().unwrap().contains_key(&page)
+                && !self
+                    .snapshot()
+                    .pages
+                    .get(&page)
+                    .is_some_and(|state| state.detached)
+            {
+                if let Err(cleanup) = self.clear_empty_window(app, &label) {
+                    return Err(format!("{error}；空窗口清理失败：{cleanup}"));
+                }
+            }
+            return Err(error);
         }
-        if let Some(state) = self.state.lock().unwrap().pages.get_mut(&page) {
-            state.detached = true;
-            state.visible = true;
-        }
-        self.restoring.lock().unwrap().remove(&page);
-        self.save_layout(app);
-        self.emit(app);
         Ok(self.snapshot())
     }
 
@@ -674,45 +707,19 @@ impl Workspace {
         self.migration_allowed(page)?;
         let view = app.get_webview(page.label()).ok_or("页面不存在")?;
         let window = view.window();
-        let main = app.get_window("main").ok_or("主窗口不可用")?;
         self.remember_geometry(&window);
-        if window.label() != "main" {
-            view.set_auto_resize(false).map_err(|e| e.to_string())?;
-            view.reparent(&main).map_err(|e| e.to_string())?;
-            view.set_bounds(native_bounds(*self.bounds.lock().unwrap()))
-                .map_err(|e| e.to_string())?;
-        }
-        let mut snapshot = self.snapshot();
-        if reveal {
-            snapshot.selected = page;
-        }
-        let selected = snapshot.selected;
-        for (other, state) in &mut snapshot.pages {
-            if *other == page {
-                state.detached = false;
-            }
-            if !state.detached {
-                state.visible = (reveal || self.main_shown(app))
-                    && !*self.covered.lock().unwrap()
-                    && (reveal && *other == page || !reveal && *other == selected);
-                if let Some(view) = app.get_webview(other.label()) {
-                    if state.visible {
-                        let _ = view.show();
-                    } else {
-                        let _ = view.hide();
-                    }
-                }
-            }
-        }
-        self.commit_layout(&snapshot);
-        if window.label() != "main" {
-            window.destroy().map_err(|e| e.to_string())?;
-        }
-        if reveal {
-            self.reveal_main(app)?;
-        }
-        self.save_layout(app);
-        self.emit(app);
+        let bounds = *self.bounds.lock().unwrap();
+        self.transfer_page(
+            app,
+            page,
+            &view,
+            super::migration::Placement {
+                parent: "main".into(),
+                bounds,
+            },
+            false,
+            reveal,
+        )?;
         Ok(self.snapshot())
     }
 
@@ -729,7 +736,7 @@ impl Workspace {
         *self.bounds.lock().unwrap() = bounds;
         let snapshot = self.snapshot();
         for (page, state) in snapshot.pages {
-            if !state.detached {
+            if !state.detached && !state.recovery_required {
                 if let Some(view) = app.get_webview(page.label()) {
                     view.set_bounds(native_bounds(bounds))
                         .map_err(|e| e.to_string())?;
@@ -745,7 +752,7 @@ impl Workspace {
         let mut snapshot = self.snapshot();
         let selected = snapshot.selected;
         for (page, state) in &mut snapshot.pages {
-            if state.detached {
+            if state.detached || state.recovery_required {
                 continue;
             }
             state.visible = self.main_shown(app) && !covered && *page == selected;
@@ -786,6 +793,22 @@ impl Workspace {
                         let _ = app.emit("workspace-error", error);
                     }
                 });
+            }
+        }
+        if let Some(page) = window
+            .label()
+            .strip_prefix("detached-")
+            .and_then(Page::from_label)
+        {
+            let workspace = app.state::<Workspace>();
+            if workspace.moving.lock().unwrap().contains(&page)
+                || workspace
+                    .snapshot()
+                    .pages
+                    .get(&page)
+                    .is_some_and(|state| state.recovery_required)
+            {
+                return;
             }
         }
         if matches!(
@@ -831,6 +854,9 @@ impl Workspace {
                 let mut snapshot = workspace.state.lock().unwrap();
                 let selected = snapshot.selected;
                 for (page, state) in &mut snapshot.pages {
+                    if state.recovery_required || workspace.moving.lock().unwrap().contains(page) {
+                        continue;
+                    }
                     if window.label() == "main" && !state.detached {
                         state.visible =
                             shown && *page == selected && !*workspace.covered.lock().unwrap();
@@ -891,6 +917,17 @@ pub async fn workspace_detach(
 ) -> Result<Snapshot, String> {
     authorize(&view, Some(page))?;
     workspace.detach(&app, page).await
+}
+
+#[tauri::command]
+pub async fn workspace_recover(
+    app: AppHandle,
+    view: Webview,
+    workspace: State<'_, Workspace>,
+    page: Page,
+) -> Result<Snapshot, String> {
+    authorize(&view, Some(page))?;
+    workspace.recover(&app, page).await
 }
 
 #[tauri::command]
@@ -988,6 +1025,7 @@ mod tests {
             visible: false,
             ready: false,
             busy_reason: String::new(),
+            recovery_required: false,
         };
         assert!(page.migration_allowed().unwrap_err().contains("加载"));
         page.ready = true;
@@ -997,6 +1035,8 @@ mod tests {
         assert!(page.migration_allowed().is_err());
         page.busy_reason.clear();
         assert!(page.migration_allowed().is_ok());
+        page.recovery_required = true;
+        assert!(page.migration_allowed().unwrap_err().contains("恢复窗口"));
     }
     #[test]
     fn layout_commit_preserves_concurrent_readiness_and_busy_updates() {
@@ -1006,6 +1046,7 @@ mod tests {
             visible: false,
             ready: false,
             busy_reason: String::new(),
+            recovery_required: false,
         };
         workspace
             .state

@@ -233,6 +233,8 @@ Local vision calls have a single-operation semaphore, size limits and a deadline
 
 主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。关闭主窗口保留其 WebView 与原生会话，只隐藏嵌入页；独立页和 Dock 可恢复主窗口。`layout.rs` 以最多 32 KiB 的版本化配置保存窗口偏好，临时文件写入后原子替换；不序列化连接、任务或授权。后台检查显示器工作区变化，恢复普通窗口到可见范围。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。
 
+`migration.rs` / `workspace_migration.rs` 将拆收作为可恢复的事务执行，失败恢复不重建 WebView。使用仓库内补丁版 `tauri 2.11.5` 与 `tauri-runtime-wry 2.11.4`：原生 reparent 成功前保留源窗口对 WebView 的持有及父窗口元数据，失败或目标消失时返回错误，防止目标销毁事件误删存活页面的 IPC 注册。详情及许可证见两个 vendor 目录的 `PATCHES.md`。`npm run test:rust` 同时执行运行库迁移和页面注册回归测试。真实错误注入仅允许独立标识的 Debug 测试应用消费一次性配置文件，正式应用和 Release 构建没有故障注入入口。
+
 Position/动作组/Pick 的任务占用已进入 Rust 原生会话。实际 WebView 身份、连接代次和任务编号在提交、发送前许可、迁移和终态处理间保持关联；窗口存活只由新的 IPC 入口调用刷新。Rust 看门狗处理所属窗口失联，其他窗口不能通过 Bridge 查询代为续租。传输队列另外维护停止代次，撤销停止之前尚未发送的执行指令。Position 已接入 Bridge 进程内有界终态记录与按编号恢复；未知记录不解锁。完整的非 Position/Pick 生命周期仍未接齐，不能将此机制视作完整多窗口控制安全验收。
 
 ### 多窗口公共状态查询（开发分支）

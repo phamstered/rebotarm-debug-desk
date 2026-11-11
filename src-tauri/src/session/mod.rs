@@ -15,3 +15,4 @@ pub mod windows;
 pub mod wire;
 pub mod workspace;
 pub mod layout;
+pub mod migration;
