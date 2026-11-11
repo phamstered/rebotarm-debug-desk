@@ -24,7 +24,7 @@ node scripts/smoke-bridge.mjs 18766
 ```
 
 `ROS_DOMAIN_ID` must match the intended stack. Default runtime domain is 0;
-validation requires a reserved domain 220–232 and forces localhost discovery.
+the verification entrypoint requires a reserved domain 220–232 and forces localhost discovery. Individual CTest fixtures select their own isolated domains 213–226; reserve that range too.
 Never validate motion by connecting test nodes to the production arm domain.
 The container runs in the foreground; Ctrl-C stops only this container. It does
 not stop a host Bridge, launch controllers or issue motor commands. Its PID
@@ -53,3 +53,6 @@ connection profile advanced settings, clear “连接时启动 host Bridge” be
 connecting to the container port. This opens only the SSH tunnel and leaves
 the managed Bridge running. Host upgrade is rejected in this mode; rebuild
 and restart the container explicitly. Existing profiles retain host auto-start.
+
+Release images keep C++ test assertions enabled and enforce bounded CTest
+timeouts. `assertions_enabled` fails if a test build removes assertions.
