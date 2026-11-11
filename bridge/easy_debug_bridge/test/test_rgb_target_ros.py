@@ -64,6 +64,14 @@ def main(binary):
                 try:return BinaryWebSocket(port)
                 except OSError:return None
             ws=wait_for(connect)
+            def drain(seconds):
+                # Model a live preview reader while waiting for ROS state. A
+                # sleeping socket intentionally triggers the 250 ms slow-client
+                # watchdog on small receive buffers (not a tracking failure).
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    ws.request('clock_sync_info')
+                    time.sleep(min(.02, max(0., deadline - time.monotonic())))
             wait_for(lambda:ws.request('clock_sync_info')['state']=='synchronized')
             params=dict(subscription_id='rgb-target-a',rgb_topic='/clock_test/rgb',depth_topic='/clock_test/depth',camera_info_topic='/clock_test/info',target_frame='base_link',max_width=320,max_height=240,max_fps=10.,detect_objects=True)
             assert ws.request('subscribe_rgbd',**params)['op']=='subscribed_rgbd'
@@ -83,22 +91,22 @@ def main(binary):
             first=wait_for(lambda:tracked('rgbd'));assert first['tracking']['identity_valid']
             # 20 FPS source must be tracked above the 10 Hz preview rate.
             robot.depth_delay=0.
-            time.sleep(.3)
+            drain(.3)
             baseline=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)['tracking']
-            begin=time.monotonic();time.sleep(1.0)
+            begin=time.monotonic();drain(1.0)
             newer=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)['tracking']
             elapsed=time.monotonic()-begin
             assert (newer['sequence']-baseline['sequence'])/elapsed>12, (baseline,newer,elapsed)
             # Short loss invalidates motion, but a stationary robot can revalidate
             # the original UUID. It never dispatches a new motion automatically.
             robot.camera_enabled=False
-            time.sleep(.6)
+            drain(.6)
             waiting=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert waiting['tracking']['mode']=='waiting' and not waiting['execution_ready'],waiting
             robot.feedback_speed=.1
-            time.sleep(.15)
+            drain(.15)
             robot.camera_enabled=True
-            time.sleep(.25)
+            drain(.25)
             blocked=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert not blocked['tracking']['identity_valid'],blocked
             robot.feedback_speed=0.
@@ -117,7 +125,7 @@ def main(binary):
             assert rgb['tracking']['identity_valid'] and not rgb['tracking']['metric_ready'],rgb
             assert rgb['tracking']['object_id']==obj and rgb['tracking']['sequence']>first['tracking']['sequence']
             # Keep RGB running beyond the entire depth cloud's freshness budget.
-            time.sleep(.7);ws.targets.clear();rgb=wait_for(lambda:tracked('rgb'))
+            drain(.7);ws.targets.clear();rgb=wait_for(lambda:tracked('rgb'))
             assert rgb['tracking']['age_ms']<500,rgb
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert preview['tracking']['target_id']==target and not preview['execution_ready'],preview
@@ -126,12 +134,12 @@ def main(binary):
             assert ws.request('visual_target_release',subscription_id=params['subscription_id'],target_id='old')['op']=='error'
             robot.hidden=True
             uncertain=wait_for(lambda:tracked('uncertain'));assert not uncertain['tracking']['identity_valid']
-            robot.hidden=False;time.sleep(.7)
+            robot.hidden=False;drain(.7)
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert preview['tracking']['mode']=='uncertain' and preview['tracking']['target_id']==target,preview
             assert preview['tracking']['message']==uncertain['tracking']['message'],preview
             assert ws.request('visual_target_release',subscription_id=params['subscription_id'],target_id=target)['op']=='visual_target_released'
-            robot.depth_enabled=True;time.sleep(.6);objects=wait_for(boxes);obj=min(objects,key=lambda b:b['center'][0])['id']
+            robot.depth_enabled=True;drain(.6);objects=wait_for(boxes);obj=min(objects,key=lambda b:b['center'][0])['id']
             preview=ws.request('visual_pick_preview',subscription_id=params['subscription_id'],object_id=obj)
             assert preview['tracking']['target_id']!=target,preview
             target=preview['tracking']['target_id']
