@@ -5,16 +5,19 @@
 ## 目录
 
 1. [连接与会话](#_1-连接与会话)
-2. [Status（状态总览）](#status状态总览)
+2. [Status（状态总览）](#status-状态总览)
 3. [Topics / Graph / Inspector](#_2-topics-graph-inspector)
 4. [Motion 工作区](#motion-工作区)
-5. [Monitor](#monitor)
-6. [Robot View（URDF）](#_3-robot-view-urdf)
-7. [MIT 电机控制](#_4-mit-电机控制)
-8. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
-9. [Joint4 标定](#_6-joint4-标定)
-10. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
-10. [重力辨识（设计草案）](#_8-重力辨识设计草案)
+5. [姿态库与 MoveIt2](#姿态库与-moveit2)
+6. [Monitor](#monitor)
+7. [数据采集（LeRobot v3）](#数据采集-lerobot-v3)
+8. [Robot View（URDF）](#_3-robot-view-urdf)
+9. [MIT 电机控制](#_4-mit-电机控制)
+10. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
+11. [Joint4 标定](#_6-joint4-标定)
+12. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
+13. [运动诊断（只读）](#运动诊断-只读)
+14. [重力辨识](#_8-重力辨识)
 
 ---
 
@@ -26,7 +29,7 @@
 
 ### 怎么用
 
-1. 打开连接配置（首次启动首页或顶部「连接配置」），填写 SSH：主机 / 用户 / 端口 / 私钥。需要时展开「高级」编辑 `ROS_DOMAIN_ID` 与 ROS 环境脚本（`install/setup.bash`）。URDF / JointState 等 Topic 使用内置默认，无需（也无法）在表单中改。首页可看上次连接摘要；Enter 连接，失败可用重试 / Esc 关闭错误。
+1. 打开连接配置（首次启动首页或顶部「连接配置」），填写 SSH：主机 / 用户 / 端口 / 私钥。需要时展开「高级」编辑 `ROS_DOMAIN_ID`、ROS 环境脚本（`install/setup.bash`），以及左腕 RGBD 开关、RGB / Depth / CameraInfo Topic、目标 TF 和预览宽高、帧率。URDF / JointState / Command / Status Topic 与 TCP Link 使用内置默认，表单不提供这些字段。首页可看上次连接摘要；Enter 连接，失败可用重试 / Esc 关闭错误。
 2. 点击连接。界面按阶段推进并展示失败原因。
 3. **默认**进入 Status；顶部工具条显示「断开并重连…」、状态灯、Bridge 版本徽章、连接名、隧道端口、Agent；可断开。`fault_code !== 0` 时 Fault 芯片可跳到 Status Hardware。
 4. JointState 冒烟（ROS 就绪）前 Monitor / Motor 导航不可用。设置中可关闭「连接成功后打开 Status」。
@@ -36,7 +39,7 @@
 
 ```text
 SSH host: jetson
-ROS setup: leader_follower/install/setup.bash   # 「高级」；相对远端 $HOME，或绝对路径
+ROS setup: Project/rebotarm-ros2-stack/install/setup.bash   # 「高级」；相对远端 $HOME，或绝对路径
 Remote port: 8765
 Local port: 18765
 URDF topic: /robot_description                  # 内置默认
@@ -64,16 +67,30 @@ JointState topic: /stm32/joint_states           # 内置默认
 
 ### 做什么
 
-左侧导航第一项 **Status** 分为「连接 / 硬件健康 / 控制模式 / 传感器」四个 Tab；每个 Tab 按分区内卡片的最高严重程度显示色标和数量，未打开的分区也会更新。卡片汇总 SSH/隧道、Bridge、micro-ROS Agent、Hardware、ROS 就绪、ros2_control、DDS Domain、USB CDC、Teleop、Trajectory/MoveIt、VLA、RealSense。成功卡片展示详情，失败卡片展示原因；禁用的一键/卡片操作旁显示短中文原因。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。VLA 卡片提示 Desk 一键 Teleop 拉起的 ros2_control 风险（见 PR #102）。可重启项提供「重新拉起」，USB 仅「刷新检测」。顶部提供一键 Teleop / Trajectory / VLA（及停止）。
+左侧导航第一项 **Status** 只有三个分区：**连接**、**硬件健康**、**控制模式**。每个分区按钮带色标和数量，未打开的分区也会更新。没有单独的「传感器」页；RealSense 在硬件健康里。
+
+![Status 的连接分区。此图没有真实 Jetson：Agent 显示未运行，并等待 JointState](/screenshots/status-connection.png)
+
+连接分区是 SSH、Bridge、micro-ROS Agent。硬件健康是 USB CDC / ACM、Hardware、时钟同步、RealSense。控制模式是模式条，加上 ros2_control 与 ROS 就绪；Teleop、Trajectory、VLA 的详情卡片只在该模式已成为当前控制器后出现。HOLD 且 fault_code=0 时 Hardware 用注意色并提示「无重力补偿，可能下垂」。禁用按钮旁边是短中文原因，例如还没有 JointState 时模式按钮标题为「等待 JointState」。
+
+![控制模式分区：Teleop、Trajectory、VLA，以及「启动所选模式」「回零并退出控制」](/screenshots/status-vla.png)
+
+模式条文案是 **Teleop**、**Trajectory**、**VLA**。没有单独的「一键 VLA」或卡片上的「启动 VLA」。当前没有运行中的模式时，主按钮是「启动所选模式」；已有别的模式时是「切换模式（先回零）」；已经是所选模式时是「当前模式已启用」。停止是「回零并退出控制」，说明写着「回到零位，确认输出关闭后退出。不是暂停或保持。」「直接关闭输出…」收在折叠里，确认现场支撑后才是解除电机输出。JointState 未到时，导航里的 Monitor、Motor、Calibration、重力辨识保持禁用，提示「需先收到 JointState（ROS 就绪）后才能打开…」。
+
+![硬件健康：USB、Hardware、时钟同步、RealSense。没有相机时 RealSense 为「无 USB」](/screenshots/status-hardware.png)
+
+RealSense 卡片在没有 `8086:*` 设备时写「未检测到 Intel RealSense（lsusb 8086:*）」。重新拉起按钮的备注仍写 `ros2 launch realsense2_camera rs_launch.py`；实际一键命令是 `ros2 launch rebotarm_gazebo left_wrist_camera.launch.py`。以启动命令为准，不要按卡片备注去找 `rs_launch.py`。USB 未看到 MCU 时失败文案会提到期望的 VID:PID `0483:5740`，这不是已经识别到的设备。Agent 卡片的操作是「重新拉起」。本页不刷写 STM32。
 
 ### 怎么用
 
-连接成功后默认打开 Status（可在设置关闭）。查看各卡片色标、详情与失败原因；工具条 Fault 芯片会打开硬件健康 Tab、滚到 Hardware 并高亮。SSH 可用时刷新 USB、重启 Agent；JointState 就绪后可一键 Teleop/Trajectory/VLA（沿用现有安全停止流程，互斥停旧进程）。一键 Teleop 使用 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=true --start-leader=true`。一键 VLA 经 `switch_controllers` 激活 `vla_position_controller`、停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`；chunk 来自 `/vla/joint_chunk`（`VlaJointChunk.positions[]`），Desk 不直写 `/stm32/joint_commands`。需要升级 Bridge 时仍走既有版本不匹配提示，本页不提供升级全部或刷写 STM32。
+连接成功后默认打开 Status（可在设置关闭）。工具条左侧是「断开并重连…」「连接配置」「设置」；右侧是连接名、`localhost:` 实际转发端口、micro-ROS Agent 徽章和「断开」。Fault 芯片会打开硬件健康并高亮 Hardware。Topics 与 Motion 另有一条工具栏：「全部刷新」「暂停显示」或「继续显示」「开始录制」或「停止录制」「诊断快照」「重置布局」。
+
+选择 Teleop 后，「启动所选模式」执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。选择 Trajectory 时同一脚本使用 `--position-controller=trajectory --gravity=true`，夹爪参数由当时硬件状态决定，`--clean=false`，并在控制器自检后启动 `rebotarm_moveit_config` 的 `real_move_group.launch.py`。选择 VLA 时不跑这支 teleop 脚本，而是在已有控制栈上 `switch_controllers`：激活 `vla_position_controller`，停用 `arm_teleop_controller` / `arm_trajectory_controller`，并尽量保持 `gravity_compensation_controller`。chunk 来自 `/vla/joint_chunk`。Desk 不直写 `/stm32/joint_commands`。用法见 [VLA](./vla#_4-在-desk-中使用)。需要升级 Bridge 时仍走版本不匹配提示。
 
 ### 边界
 
 - 不自动 flash STM32；不把 Bridge 部署与 ros2-stack 同步绑成一键操作。
-- Agent 重启仅为 `systemctl restart`；RealSense 用 `rs_launch.py`，不写入 ros2-stack。
+- Agent 重启仅为 `systemctl restart`。一键 RealSense 执行 `ros2 launch rebotarm_gazebo left_wrist_camera.launch.py`（包需已安装在 Jetson），不写入 ros2-stack。进程检测把已在运行的 `realsense2_camera rs_launch.py` 也视为相机进程。Status 卡片的失败文案仍写 `rs_launch.py`，有帧率时详情仍写成 `/camera/camera/color/image_raw`；实际采样的是连接配置里的 RGB Topic（默认左腕彩色图）。
 - `bridge_build_id` / 最近部署结果 / XRCE 端口 / Bridge systemd 单元：仍可能显示「未知」。
 - VLA chunk Hz / Monitor `positions[]` 依赖 Bridge 能订阅 `microros_stm32h723_bridge/msg/VlaJointChunk`；类型未进入远端 Bridge 环境时 Status 仍可按 controller 状态启停。
 - VLA 前置条件、mock 测试、推理节点编写与排障见 [VLA 使用指南](./vla)。
@@ -141,7 +158,34 @@ Navigation → **Motion** 集中运动相关操作：中心切换 **Robot View /
 - Status 继续负责 Teleop / Trajectory / VLA 的整栈启动、模式切换、安全停止和解除输出。
 - 运动过程中切到其他页，全局任务条仍显示阶段，可返回 Motion 或取消本会话的运动；切页本身不视为任务完成。
 - Motion Tab 与侧栏展开偏好独立记忆；默认 Robot View 和展开侧栏。导航记忆兼容旧 Topics `dashboard` 标识。
-- RGBD 仅在可见的 Motion → Robot View 且实时显示开启时订阅，切到姿态库或其他页会释放当前客户端兴趣并清空点云。
+- RGBD 仅在可见的 Motion → Robot View、窗口可见、实时显示开启且配置里启用 RGBD 时订阅，切到姿态库或其他页会释放当前客户端兴趣并清空点云。
+- 保存姿态、锁定 HOME 和 MoveIt 执行见 [姿态库与 MoveIt2](#姿态库与-moveit2)。
+
+## 姿态库与 MoveIt2
+
+### 做什么
+
+在当前 SSH 连接下保存 joint1–joint6 和可选夹爪行程，解锁后由 Jetson MoveIt2 从实测状态规划并执行到该快照。HOME 固定为 `builtin:home`，数值来自当前 SRDF `arm/home`，不能删除或覆盖。
+
+### 怎么用
+
+1. 在 Status → 控制模式选择 **Trajectory**，再点「启动所选模式」。自检通过后桌面会启动 `rebotarm_moveit_config` 的 `real_move_group.launch.py`。姿态库没有第二个「启动 MoveIt」按钮。
+2. 在 Robot View 的 TCP 操作区点「保存当前姿态」。对话框锁住点击时的实测关节，可选夹爪和备注，不执行运动。未连接时用连接页「管理姿态库」编辑已有点。
+3. 打开 Motion → 姿态库，勾选「我已确认工作区安全，允许点位运动」，再点击卡片。取消只作用于本会话已受理的运动；ACK 不等于到位。
+
+![Motion → 姿态库。没有控制器时提示先激活 arm_trajectory_controller；HOME 显示待同步](/screenshots/positions.png)
+
+未连接时也可以从首页「管理姿态库」打开同一份数据，此时执行被禁用，原因是「请先连接 Jetson」。
+
+![未连接时的姿态库：锁定的 HOME 为待同步，还没有自定义点位](/screenshots/positions-offline.png)
+
+操作步骤、安全门，以及尚未提供的独立窗口 / 仅规划按钮，见 [姿态库与 MoveIt2](./positions)。
+
+### 边界
+
+- 点云只用于 Robot View 预览，不写入 Planning Scene。
+- 未编译 MoveIt 的 Bridge 仍可管理姿态，执行保持禁用并说明原因。
+- 保存文件是应用数据目录的 `positions.v1.json`（内容 schema 2）。HOME 不进这个文件。
 
 ## Monitor
 
@@ -187,16 +231,28 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ### 做什么
 
-在 Motion → Robot View 中，从配置的 `std_msgs/msg/String` Topic（默认 `/robot_description`）加载 URDF，用 Three.js + React Three Fiber + `urdf-loader` 渲染机器人，并由 `JointState` 驱动关节。TCP 拖拽手柄也挂在本视图上（见 [§5](#_5-tcp-拖拽轨迹)）。
+在 Motion → Robot View 中，从配置的 `std_msgs/msg/String` Topic（默认 `/robot_description`）加载 URDF，用 Three.js + React Three Fiber + `urdf-loader` 渲染机器人，并由 `JointState` 驱动关节。同一视图叠加左腕 RGBD 彩色点云，并挂 TCP 拖拽手柄（见 [§5](#_5-tcp-拖拽轨迹)）。
 
 ### 怎么用
 
 1. 确认内置 URDF Topic（默认 `/robot_description`）与 JointState Topic 与当前固件 / ros2-stack 一致（界面不再编辑这些字段）。
 2. 连接后打开 Navigation → Motion →「Robot View」；Bridge 拉取 URDF 与 `package://` 网格 / 纹理。
 3. 模型随 JointState 的 name/position 更新；缺少的位置按 0 处理。
-4. 视图内 heads-up 会显示 URDF 错误或轨迹控制器状态（与窄面板布局兼容，互不遮挡）。
+4. 画布上有三个浮窗：「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」。可拖动、缩放、折叠；「重置浮窗」恢复默认位置。折叠不改变点云订阅或执行状态。没有 URDF 时画面中央是「等待 URDF Topic 数据…」。
+
+![Motion → Robot View。没有 URDF、没有关节反馈、没有点云；RGBD 浮窗停在 0.0 Hz · 0 pts](/screenshots/robot-view.png)
+
+上图是空闲界面：Controller 管理写着「服务不可用 / Controller Manager 未响应」，就绪行是「机械臂：未知」「夹爪：未知」「MoveIt：请先激活 arm_trajectory_controller 轨迹控制」「关节反馈：没有新鲜的关节反馈」「时钟：等待同步」。点云控件已经在，但没有相机帧。现场连上左腕相机后，这里才会出现彩色点，而不是另一套页面。
 
 <RobotViewDataFlow />
+
+### 左腕彩色点云
+
+默认订阅 `/cameras/left_arm/wrist/` 下的彩色图、对齐深度和 CameraInfo，目标坐标系 `base_link`。连接配置「高级」可改 Topic、目标 TF、最大宽高（默认 320×240）和最大帧率（默认 12）。一键相机启动 `left_wrist_camera.launch.py`，由它打开深度对齐、帧同步，以及 URDF `camera_link` 到 `left_arm/wrist_link` 的 TF。该 launch 需已安装在 Jetson 的 `rebotarm_gazebo` 包里。
+
+点云控件在 RGBD 浮窗：显隐、RGB / 深度着色、点大小、近距 / 远距。尚未收到完整帧时显示等待；TF 或解码失败会收起点云并保留错误详情。Bridge 按采集时刻查 TF，最多等 150 ms；源帧或显示超过约 500 ms 会丢掉过期云，避免和实时 URDF 错位。时钟基准变化后会重建 TF 历史。
+
+只在 Motion → Robot View、窗口可见、实时显示开启且 RGBD 启用时订阅。切到姿态库或其他页会退订并清空点云，已加载的机器人场景仍留着。这条流和 Inspector 的 Image 订阅互不取消。点云不参与 MoveIt 碰撞场景。字段见 [协议 · RGBD](./protocol#rgbd-点云预览-rcd1)。
 
 ### 注意与边界
 
@@ -329,6 +385,15 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 - 停止/状态检查会校验进程存在且命令行为 `ros2 bag record`，避免误信号复用 PID。**断开桌面端不会自动停止录制**；重连会恢复显示远端录制状态。
 - 诊断快照含脱敏连接信息、Topics、Controller、Agent、HardwareStatus、选中 Topic 与统计；**不含** SSH 私钥路径；大消息预览约 4 KiB，文件上限约 5 MiB。
 - Topics 页的 Topics、ROS Control、Inspector 可独立展开/收起；左右侧栏可整列最小化，侧栏宽与 Topics/ROS Control 上下分割可拖动（含键盘微调），状态和尺寸持久化。
+- 工具栏诊断快照不是运动抖动分析。规划轨迹与关节跟踪的只读采集见 [运动诊断](#运动诊断-只读)。
+
+---
+
+## 运动诊断（只读）
+
+`scripts/motion_diagnostics/monitor_motion.py` 在 Jetson 上单独运行，不经过桌面，也不更新 Bridge。它订阅规划轨迹、JTC 参考/反馈和 STM32 指令，落盘后可在 Mac 上用同一脚本离线分析。脚本不发送运动或取消、不切换控制器、不改参数；Ctrl+C 只停止采集。
+
+安装、Topic、输出文件和解读限制见 [运动诊断](./motion-diagnostics)。
 
 ---
 
@@ -359,4 +424,4 @@ ARMED 门、运行中禁用 Motor 滑块；Abort/超时/**命令丢失(fault 11)
 
 ## 明确不在当前切片内
 
-见 [架构 · Current limits](./architecture#current-limits)：例如 TF 可视化、rosbag 本地下载/索引/客户端解析等仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。重力辨识 UI / Bridge 见上节；Desk 已落地，stack #24 FULL_ARM 编排已提供，Jetson 实机 E2E 仍 pending。
+见 [架构 · Current limits](./architecture#current-limits)：例如 TF 树可视化、rosbag 本地下载/索引/客户端解析、把 RGBD 写入 Planning Scene、姿态库独立窗口和「仅规划」按钮，仍属后续工作。Monitor 页已提供 Jetson 侧 `ros2 bag play` 回放。左腕彩色点云、姿态保存与 MoveIt 执行、只读运动诊断已经按当前代码提供，分别见 [Robot View](#_3-robot-view-urdf)、[姿态库](./positions) 和 [运动诊断](./motion-diagnostics)。重力辨识 UI / Bridge 见上节；Desk 已落地，stack #24 FULL_ARM 编排已提供，Jetson 实机 E2E 仍 pending。

@@ -1,6 +1,6 @@
 <template>
   <figure class="rdd-diagram" role="img" aria-labelledby="rdd-gid-wf-title" aria-describedby="rdd-gid-wf-desc">
-    <p id="rdd-gid-wf-title" class="rdd-diagram__title">重力辨识 · UI 线框（设计草案）</p>
+    <p id="rdd-gid-wf-title" class="rdd-diagram__title">重力辨识 · UI 线框（与已落地页面同字段）</p>
     <p id="rdd-gid-wf-desc" class="rdd-diagram__sr">
       独立页面：关节掩码复选框、安全 ARMED 门、Start/Abort、进度与残差、结果表与 Apply。
       Joint4 负载细标定作为可选子模式入口，不与本页主流程混用。
@@ -9,7 +9,7 @@
     <div class="rdd-gid-wire" aria-hidden="true">
       <header class="rdd-gid-wire__bar">
         <span class="rdd-gid-wire__page">Navigation · 重力辨识</span>
-        <span class="rdd-gid-wire__badge rdd-gid-wire__badge--warn">设计草案 · 未实现</span>
+        <span class="rdd-gid-wire__badge rdd-gid-wire__badge--warn">Desk 页面已落地 · 实机 E2E 待现场</span>
         <span class="rdd-gid-wire__link">可选子模式 → Joint4 标定</span>
       </header>
 

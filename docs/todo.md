@@ -64,7 +64,7 @@ p_base = T_base_link6(t) × T_link6_camera × T_camera_optical × p_optical
 - [x] Robot View 增加点云显隐、RGB / 深度着色、点大小和近远距离裁剪；显示实际帧率、配对时间差、数据过期及 TF 错误。可增加相机坐标轴 / 视锥辅助检查安装方向。（视锥 / 坐标轴辅助延期）
 - [x] 将真实相机位姿与 TCP 拖拽预览分开；点云固定在真实基座坐标系中，虚拟机械臂预览不带动环境点云。TF 失效时停止更新并明确标记保留画面已过期。
 - [x] 按消费者管理图像订阅，避免与 Inspector 共用 Topic 时互相取消；Robot View 隐藏或窗口不可见时释放自己的实时订阅，返回时重新获取新帧。断开 / 重连时清除点云、配对缓存、待处理任务和 GPU 资源，迟到结果不得污染新会话。
-- [ ] 实现完成后更新 `docs/basic-features.md`、`docs/architecture.md` 等实际行为文档；Bridge 源码变更后生成 build ID，使用仓库部署脚本部署并核对运行进程。
+- [ ] 实现完成后更新 `docs/basic-features.md`、`docs/architecture.md` 等实际行为文档；Bridge 源码变更后生成 build ID，使用仓库部署脚本部署并核对运行进程。用户文档（功能概览、姿态库、首页和 VitePress 导航）已按当前 Desk/Bridge 代码描述 RGBD 预览；本项仍未勾选，因为实机部署和运行进程核对不在文档更新范围内。
 
 ### 验证与验收待办
 

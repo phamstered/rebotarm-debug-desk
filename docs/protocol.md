@@ -350,6 +350,8 @@ Jetson 侧从各最多三帧的队列按时间戳配对 RGB/Depth（默认容差
 
 ## MoveIt2 保存点位执行
 
+当前操作名是 `position_motion_info`、`position_move`、`position_cancel` 和动作组的 `position_group_*`。用法见 [姿态库与 MoveIt2](./positions)。历史方案里的 `motion_move` / `motion_capabilities` 没有实现。
+
 固定组为 `arm`（joint1–joint6）、`gripper`（独立夹爪）或 `arm_with_gripper`（联合七自由度）。固定 MoveIt Action `/move_action`，执行仅允许真实 `arm_trajectory_controller` 和可选 `gripper_trajectory_controller`；客户端不能指定组名或任意 Action/Topic。
 
 - `{"op":"position_motion_info","request_id":"..."}` 返回 `available`、门禁失败 `message`、当前 SRDF `home_positions`（未同步为空）、全局 `busy` 和本会话拥有的 `command_id`。连接期间每秒轮询该操作续约会话心跳（5 秒超时取消）。若本会话有运动，随后发送其最新状态。
