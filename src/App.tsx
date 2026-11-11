@@ -1,3 +1,5 @@
+import { NativeWorkspaceHost, NativePageToolbar } from "./NativeWorkspace";
+import { nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
 import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady } from "./teachingLogic";
@@ -374,8 +376,17 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
   );
 }
 
-export default function App() {
-  const [appPage, setAppPage] = useState<AppPage>(loadAppPage);
+export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
+  const nativeMain = nativeDesktop() && !hostedPage;
+  const workspace = useNativeWorkspace(nativeDesktop());
+  const [appPage, setLocalAppPage] = useState<AppPage>(() => hostedPage ?? loadAppPage());
+  const setAppPage = useCallback((page: AppPage) => {
+    if (hostedPage) { void workspace.action("workspace_select", page); return; }
+    setLocalAppPage(page);
+  }, [hostedPage]);
+  useEffect(() => { if (nativeMain) setLocalAppPage(workspace.snapshot.selected); }, [nativeMain, workspace.snapshot.selected]);
+  const [handeyeBusy, setHandeyeBusy] = useState("");
+  const [pageBusy, setPageBusy] = useState("");
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
   const handeyeSession = useHandeyeSession(profile);
@@ -444,7 +455,8 @@ export default function App() {
   const [manageMotionGroups, setManageMotionGroups] = useState(false);
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
-  const [windowVisible, setWindowVisible] = useState(!document.hidden);
+  const [documentVisible, setDocumentVisible] = useState(!document.hidden);
+  const windowVisible = documentVisible && (!hostedPage || workspace.snapshot.pages[hostedPage]?.visible === true);
   const [inspectorDataVisible, setInspectorDataVisible] = useState(true);
   const [imageSubscriptionRevision, setImageSubscriptionRevision] = useState(0);
   const [monitorWorkspace, setMonitorWorkspace] = useState<MonitorWorkspace>(() =>
@@ -453,7 +465,8 @@ export default function App() {
   const motionErrorSampler = useRef(new MotionErrorSampler());
   const [motionErrorStatus, setMotionErrorStatus] = useState<MotionErrorStatus>(EMPTY_MOTION_ERROR_STATUS);
   const [motionErrorSubscriptionError, setMotionErrorSubscriptionError] = useState("");
-  const motionErrorsEnabled = monitorWorkspace.dashboards.some(hasMotionErrorPanels);
+  const monitorOwner = !nativeDesktop() || hostedPage === "monitor";
+  const motionErrorsEnabled = monitorOwner && monitorWorkspace.dashboards.some(hasMotionErrorPanels);
   const motionErrorsEnabledRef = useRef(motionErrorsEnabled);
   motionErrorsEnabledRef.current = motionErrorsEnabled;
   const [rosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
@@ -508,7 +521,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem("robot-console-motion-tab", motionTab); }, [motionTab]);
   useEffect(() => { localStorage.setItem("robot-console-motion-controllers", String(motionControllersOpen)); }, [motionControllersOpen]);
   useEffect(() => {
-    const changed = () => setWindowVisible(!document.hidden);
+    const changed = () => setDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", changed);
     return () => document.removeEventListener("visibilitychange", changed);
   }, []);
@@ -530,7 +543,7 @@ export default function App() {
   const [objectsEnabled, setObjectsEnabled] = useState(false);
   const objectsSupported = bridgeHello?.objectDetectionSupported === true && profile.rgbdTargetFrame === "base_link";
   const [rgbdSession, setRgbdSession] = useRgbdStream(bridge,
-    appPage === "motion" && motionTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
+    !nativeMain && appPage === "motion" && motionTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
     stage === "connected", profile, bridgeHello?.rgbdSubscriptionIdSupported === true,
     JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, effectiveLocalPort, profile.remotePort, profile.rosDomainId]), objectsEnabled && objectsSupported);
 
@@ -618,8 +631,8 @@ export default function App() {
   }, [layout]);
 
   useEffect(() => {
-    localStorage.setItem("robot-console-page", appPage);
-  }, [appPage]);
+    if (!hostedPage) localStorage.setItem("robot-console-page", appPage);
+  }, [appPage, hostedPage]);
 
   useEffect(() => {
     saveMonitorWorkspace(monitorWorkspace);
@@ -848,7 +861,7 @@ export default function App() {
           ? motionErrorSampler.current.accept(message.topic, message.data, wallNow, profile.jointStateTopic, bagPlayingRef.current) : null;
         if (diagnostic) setMotionErrorStatus(diagnostic.status);
         const diagnosticBagPlaying = bagPlayingRef.current;
-        setMonitorWorkspace((current) => {
+        if (monitorOwner) setMonitorWorkspace((current) => {
           let next = updateMonitorFromMessage(diagnostic?.reset ? clearMotionErrorPoints(current) : current, message.topic!, message.data, now);
           for (const frame of diagnostic?.frames ?? []) next = updateMonitorFromMessage(next, frame.topic, frame.data, diagnosticBagPlaying ? frame.sourceTimeMs ?? now : now);
           return next;
@@ -879,7 +892,7 @@ export default function App() {
         setStage("failed");
       }
     });
-  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic]);
+  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic, monitorOwner]);
 
   useEffect(() => {
     if (stage !== "connected") return;
@@ -1227,6 +1240,36 @@ export default function App() {
     // Keep Monitor panel config; clear live points by reloading persisted configs without points.
     setMonitorWorkspace(loadMonitorWorkspace(profile.jointStateTopic));
   }
+
+  useNativePageSession({
+    page: hostedPage, bridge, reset: () => { clearConnectionData(); setStage("bridge"); },
+    profile: setProfile,
+    connected: (sharedProfile, hello, discovered) => {
+      setProfile(sharedProfile);
+      setEffectiveLocalPort(sharedProfile.localPort);
+      setSshOk(true); setBridgeUp(true); setError("");
+      setBridgeHello({ bridgeVersion: hello.bridge_version, bridgeBuildId: hello.bridge_build_id,
+        rosDistro: hello.ros_distro, controllersInfoSupported: hello.controllers_info_supported,
+        rgbdSubscriptionIdSupported: hello.rgbd_subscription_id_supported,
+        objectDetectionSupported: hello.object_detection_supported, visualPickSupported: hello.visual_pick_supported });
+      setTopics(discovered);
+      bridge.send({ op: "subscribe", topic: sharedProfile.urdfTopic, type: "std_msgs/msg/String" });
+      bridge.send({ op: "subscribe", topic: sharedProfile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
+      if (sharedProfile.jointStateTopic !== "/joint_states") bridge.send({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
+      bridge.send({ op: "subscribe", topic: sharedProfile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
+      bridge.send({ op: "subscribe", topic: VLA_CHUNK_TOPIC, type: VLA_CHUNK_MESSAGE_TYPE });
+      setStage("connected");
+    },
+    disconnected: message => { setStage("idle"); setError(message); },
+  });
+  const migrationBusyReason = handeyeBusy ? `标定${handeyeBusy}中，请完成后移动页面` :
+    statusActionBusy ? "控制模式操作中，请完成后移动页面" : controllerAction ? "Controller 切换中，请完成后移动页面" :
+    controlStreaming ? "电机指令发送中，请先停止" : gravitySessionActive ? "重力辨识中，请结束后移动页面" :
+    hostedPage === "motion" && positionMotion.busy ? "运动任务尚未结束，请确认停止后移动页面" : pageBusy ? pageBusy : bagBusy ? "录制或回放操作中，请稍后移动页面" : "";
+  useEffect(() => {
+    if (!hostedPage) return;
+    void invoke("workspace_page_ready", { busyReason: migrationBusyReason }).catch(reason => setError(String(reason)));
+  }, [hostedPage, migrationBusyReason]);
 
   async function connect() {
     clearConnectionData();
@@ -1658,17 +1701,23 @@ export default function App() {
     onBack={offline ? () => setManageMotionGroups(false) : undefined}
     onOpenPoseLibrary={(id,intent) => { if(id)setPositionEditRequest({id,intent}); if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
-  if (stage !== "connected" && manageHandeye) {
+  if (nativeMain && stage !== "connected" && manageHandeye) {
+    return <main className="native-offline-workspace"><header><button onClick={() => setManageHandeye(false)}>返回连接</button></header>
+      <NativeWorkspaceHost page="handeye" snapshot={workspace.snapshot} covered={false} onError={setError} />
+      {(workspace.error || error) && <p role="alert">{workspace.error || error}</p>}
+    </main>;
+  }
+  if (!hostedPage && stage !== "connected" && manageHandeye) {
     return <main className="handeye-offline"><button onClick={() => setManageHandeye(false)}>返回连接</button><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
   }
 
-  if (stage !== "connected" && manageMotionGroups) {
+  if (!hostedPage && stage !== "connected" && manageMotionGroups) {
     return <main className="connect-shell"><section className="offline-motion-groups">
       <MotionLayoutProvider active>{renderGroupEditor(true)}</MotionLayoutProvider>
     </section></main>;
   }
 
-  if (stage !== "connected" && managePositions) {
+  if (!hostedPage && stage !== "connected" && managePositions) {
     return (
       <main className="connect-shell">
         <PositionPage
@@ -1685,7 +1734,7 @@ export default function App() {
     );
   }
 
-  if (stage !== "connected") {
+  if (!hostedPage && stage !== "connected") {
     return (
       <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
         <section className="connect-card">
@@ -1749,7 +1798,7 @@ export default function App() {
     );
   }
 
-  const connectionPanel = <div className="connection-panel">
+  const connectionPanel = hostedPage ? <span>{profile.host} · {stage === "connected" ? "共享会话" : "未连接"}</span> : <div className="connection-panel">
         <button
           type="button"
           className="toolbar-action switch-host"
@@ -1832,8 +1881,8 @@ export default function App() {
     .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
 
   return (
-    <div className={`app-shell ${appPage === "motion" ? `motion-shell${motionFocus ? " motion-focus" : motionNav ? "" : " nav-icons"}` : navExpanded ? "" : "nav-collapsed"}`}>
-      <AppNav
+    <div className={`app-shell ${hostedPage ? "native-hosted-page" : ""} ${appPage === "motion" ? `motion-shell${motionFocus ? " motion-focus" : motionNav ? "" : " nav-icons"}` : navExpanded ? "" : "nav-collapsed"}`}>
+      {!hostedPage && <AppNav
         page={appPage}
         expanded={appPage === "motion" ? motionNav && !motionFocus : navExpanded}
         iconRail={appPage === "motion" && !motionFocus}
@@ -1843,17 +1892,23 @@ export default function App() {
           if (next !== "status") setStatusHighlightCardId(null);
         }}
         onToggle={() => appPage === "motion" ? setMotionNav(v => !v) : setNavExpanded((current) => !current)}
-      />
-      {appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
+        detachedPages={nativeMain ? workspace.snapshot.pages : undefined}
+      />}
+      {!hostedPage && appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
       <div className="app-main-column">
-      {appPage !== "motion" && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
+      {!hostedPage && (nativeMain || appPage !== "motion") && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
+      {hostedPage && <NativePageToolbar page={hostedPage} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
+      {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
+      {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>
         {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
       </div>}
       <div className="app-page-content">
-      <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>
+      {nativeMain ? <NativeWorkspaceHost page={appPage} snapshot={workspace.snapshot}
+        covered={connectionDialogOpen || settingsDialogOpen || versionDialogOpen || Boolean(poseToSave)} onError={setError} /> : <>
+      {(!hostedPage || hostedPage === "handeye") && <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onBusyChange={setHandeyeBusy} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>}
       {appPage === "handeye" ? null : appPage === "status" ? (
         <StatusPage
           clockSync={clockSync}
@@ -1886,16 +1941,19 @@ export default function App() {
           onQuickAction={handleStatusQuickAction}
         />
       ) : appPage === "collection" ? (
-        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
+        <DataCollectionPage connected={stage === "connected"} onBusyChange={setPageBusy} profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
       ) : appPage === "gravity" ? (
         <GravityIdentificationPage
           bridge={bridge}
+          connected={stage === "connected"}
           onNavigateCalibration={() => setAppPage("calibration")}
           onSessionActiveChange={setGravitySessionActive}
         />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}
+          connected={stage === "connected"}
+          onBusyChange={setPageBusy}
           bridge={bridge}
           controllerState={calibrationControllerState}
           onRefreshControllers={() => void refreshRosControllers()}
@@ -1936,6 +1994,7 @@ export default function App() {
       ) : appPage === "motor" ? (
         <MotorPage
           bridge={bridge}
+          active={stage === "connected" && windowVisible}
           jointState={jointState}
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
@@ -1946,7 +2005,7 @@ export default function App() {
       ) : null}
       {appPage === "dashboard" && <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">{workspaceTools}</header>}
       {(appPage === "dashboard" || topicsVisited) && (
-      <TopicsPage active={appPage === "dashboard"} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
+      <TopicsPage active={appPage === "dashboard" && windowVisible} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
       <aside
         ref={topicSidebarRef}
         className={`topic-sidebar ${sidebars.left ? "" : "sidebar-collapsed"} ${panels.topics ? "" : "topics-pane-collapsed"} ${panels.rosControl ? "" : "control-pane-collapsed"}`}
@@ -2058,10 +2117,10 @@ export default function App() {
       />}
       </TopicsPage>
       )}
-      <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
+      {(!hostedPage || hostedPage === "motion") && <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
         connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
         tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <button className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</button>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
-        resetVersion={motionLayoutReset} active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
+        resetVersion={motionLayoutReset} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
           onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}
@@ -2133,8 +2192,8 @@ export default function App() {
         groups={renderGroupEditor()}
         log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
           plannerLog={(outputActive) => <ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible && outputActive} connected={stage === "connected"} preferredSource="moveit" />} />}
-      />
-
+      />}
+      </>}
       </div>
       </div>
       {poseToSave && <SavePoseDialog key={positionProfileKey} initial={poseToSave} urdfXml={urdf || previewUrdf}

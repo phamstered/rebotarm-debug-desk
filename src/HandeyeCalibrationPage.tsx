@@ -60,6 +60,7 @@ type Props = {
   connected: boolean;
   active: boolean;
   onMotion(): void;
+  onBusyChange?(reason: string): void;
 };
 const explain = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function HandeyeCalibrationPage({
@@ -68,6 +69,7 @@ export function HandeyeCalibrationPage({
   connected,
   active,
   onMotion,
+  onBusyChange,
   session,
 }: Props) {
   const [tab, setTab] = useState<"target" | "context" | "calibrate">("target");
@@ -89,6 +91,7 @@ export function HandeyeCalibrationPage({
     setBoardConfirmed,
   } = session || internal;
   const [busy, setBusy] = useState("");
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [boardImage, setBoardImage] = useState("");

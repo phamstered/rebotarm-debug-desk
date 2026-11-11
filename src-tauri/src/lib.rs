@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Duration};
 
@@ -1690,9 +1690,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
         .manage(session::runtime::Runtime::default())
+        .manage(session::workspace::Workspace::default())
         .manage(control_logs::LogSessions::default())
         .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
+            session::ipc::native_bridge_context,
+            session::workspace::workspace_snapshot,
+            session::workspace::workspace_select,
+            session::workspace::workspace_detach,
+            session::workspace::workspace_dock,
+            session::workspace::workspace_bounds,
+            session::workspace::workspace_cover,
+            session::workspace::workspace_page_ready,
             session::ipc::native_bridge_attach,
             session::ipc::native_bridge_detach,
             session::ipc::native_bridge_next,
@@ -1730,6 +1739,17 @@ pub fn run() {
             motion_groups::motion_groups_save,
             positions::positions_save
         ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>()
+                .set_changed(std::sync::Arc::new(move || {
+                    let _ = handle.emit("native-session-changed", ());
+                }));
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            session::workspace::Workspace::window_event(window.app_handle(), window, event)
+        })
         .run(tauri::generate_context!())
         .expect("failed to run Robot Console");
 }

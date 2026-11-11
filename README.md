@@ -36,7 +36,7 @@ Robot View 支持可选的桌面物体几何检测与同帧三维框显示。确
 
 数据流概要：Topics / HardwareStatus / JointState **入站** → App；`joint_command` / `trajectory_command` **出站** → ROS（含 ACK）；断开时若电机命令流在运行，先请求 **DISABLE**。
 
-安装版由 Rust 原生会话持有 Bridge WebSocket；WebView 通过有界二进制拉取接收预览，并通过独立请求通道取得 ACK。连接与消费者代次会阻止旧会话数据进入新连接。多窗口页面拆出仍在开发，当前界面尚未提供拆窗入口。
+安装版由 Rust 原生会话持有 Bridge WebSocket；WebView 通过有界二进制拉取接收预览，并通过独立请求通道取得 ACK。连接与消费者代次会阻止旧会话数据进入新连接。页面拆出入口已进入开发分支的隔离验证，尚未发布到安装包；完整范围与验证记录见 [多窗口实现记录](docs/multiwindow-implementation.md)。
 
 交互式分层图与标注数据流见用户文档 **[架构](https://phamstered.github.io/rebotarm-debug-desk/architecture)**（HTML 图，非 Mermaid）。源文件：[docs/architecture.md](docs/architecture.md)。
 

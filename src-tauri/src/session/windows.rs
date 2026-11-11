@@ -16,6 +16,19 @@ pub enum Page {
 }
 
 impl Page {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Status => "Status",
+            Self::Dashboard => "Topics",
+            Self::Motion => "Motion",
+            Self::Monitor => "Monitor",
+            Self::Collection => "数据采集",
+            Self::Handeye => "手眼标定",
+            Self::Motor => "Motor",
+            Self::Calibration => "Calibration",
+            Self::Gravity => "重力辨识",
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Status => "page-status",

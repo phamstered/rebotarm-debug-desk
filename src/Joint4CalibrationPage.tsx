@@ -60,11 +60,15 @@ export function Joint4CalibrationPage({
   bridge,
   controllerState,
   onRefreshControllers,
+  connected = true,
+  onBusyChange,
 }: {
   profile: ConnectionProfile;
   bridge: BridgeClient;
   controllerState?: string;
   onRefreshControllers(): void;
+  connected?: boolean;
+  onBusyChange?(reason: string): void;
 }) {
   const [status, setStatus] = useState<Joint4CalibrationStatus | null>(null);
   const [samples, setSamples] = useState<Joint4CalibrationSample[]>([]);
@@ -77,7 +81,9 @@ export function Joint4CalibrationPage({
   const [supportConfirmed, setSupportConfirmed] = useState(false);
   const [handsClear, setHandsClear] = useState(false);
   const [clock, setClock] = useState(Date.now());
-  const controllerActive = controllerState === "active";
+  const controllerActive = connected && controllerState === "active";
+  const migrationBusy = busy ? "Joint4 标定操作中，请等待完成" : status?.poseActive ? "Joint4 姿态保持中，请先安全 Release" : "";
+  useEffect(() => { onBusyChange?.(migrationBusy); }, [migrationBusy, onBusyChange]);
   const availability = useMemo(
     () => calibrationAvailability(status, controllerActive, clock),
     [clock, controllerActive, status],
@@ -93,6 +99,8 @@ export function Joint4CalibrationPage({
   }, []);
 
   useEffect(() => {
+    setStatus(null); setSupportConfirmed(false); setHandsClear(false);
+    if (!connected) return;
     let disposed = false;
     bridge.request({
       op: "subscribe",
@@ -115,9 +123,10 @@ export function Joint4CalibrationPage({
       }
     });
     return () => { disposed = true; unsubscribe(); };
-  }, [bridge]);
+  }, [bridge, connected]);
 
   async function callService(action: CalibrationAction) {
+    if (!connected) { setError("机器人未连接"); return; }
     setBusy(action);
     setError("");
     setNotice("");

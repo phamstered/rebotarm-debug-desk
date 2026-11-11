@@ -38,6 +38,7 @@ struct Core {
     error: Option<String>,
     latest_topics: BTreeMap<String, (WireFrame, u64)>,
     cached_bytes: usize,
+    profile: Value,
 }
 
 impl Core {
@@ -69,6 +70,7 @@ pub struct Runtime {
     connect_gate: AsyncMutex<()>,
     subscriptions_gate: AsyncMutex<()>,
     origin: Instant,
+    changed: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
 
 impl Default for Runtime {
@@ -84,15 +86,27 @@ impl Default for Runtime {
                 error: Some("Bridge 尚未连接".into()),
                 latest_topics: BTreeMap::new(),
                 cached_bytes: 0,
+                profile: Value::Null,
             })),
             connect_gate: AsyncMutex::new(()),
             subscriptions_gate: AsyncMutex::new(()),
             origin: Instant::now(),
+            changed: Arc::new(Mutex::new(None)),
         }
     }
 }
 
 impl Runtime {
+    pub fn set_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        *self.changed.lock().unwrap() = Some(callback);
+    }
+    pub fn set_profile(&self, profile: Value) {
+        self.core.lock().unwrap().profile = profile;
+    }
+    pub fn context(&self) -> Value {
+        let core = self.core.lock().unwrap();
+        json!({ "epoch":core.epoch, "connected":core.transport.is_some() && core.error.is_none(), "profile":core.profile, "error":core.error })
+    }
     pub fn close(&self) {
         let transport = {
             let mut core = self.core.lock().unwrap();
@@ -112,6 +126,9 @@ impl Runtime {
         if let Some(transport) = transport {
             transport.close();
         }
+        if let Some(changed) = self.changed.lock().unwrap().clone() {
+            changed();
+        }
     }
 
     /// Only the main window can initiate a connection. The port must come from
@@ -129,6 +146,7 @@ impl Runtime {
         };
         let events_core = self.core.clone();
         let errors_core = self.core.clone();
+        let errors_changed = self.changed.clone();
         let origin = self.origin;
         let transport = Transport::connect(
             port,
@@ -149,6 +167,10 @@ impl Runtime {
                 core.transport = None;
                 for client in core.clients.values() {
                     client.notify.notify_one();
+                }
+                drop(core);
+                if let Some(changed) = errors_changed.lock().unwrap().clone() {
+                    changed();
                 }
             }),
         )
@@ -173,6 +195,10 @@ impl Runtime {
             return Err(error.clone());
         }
         core.transport = Some(Arc::new(transport));
+        drop(core);
+        if let Some(changed) = self.changed.lock().unwrap().clone() {
+            changed();
+        }
         Ok(())
     }
 

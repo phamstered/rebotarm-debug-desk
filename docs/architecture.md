@@ -225,3 +225,10 @@ The hand-eye page keeps RViz's Target / Context / Calibrate organization but exe
 Continuous raw RGB uses the existing binary WebSocket path. A user-requested sample is a separate, bounded SSH operation from Tauri, running a fixed Python script with a 12-second remote deadline and an 18-second local deadline. This script only subscribes to RGB, CameraInfo, measured JointState and TF, and encodes one PNG with Python's standard library. It avoids Jetson OpenCV/NumPy ABI dependencies. Sampling requires measured stop and capture-time TF, and never uses the old base-to-camera extrinsic to infer end-effector pose. No camera transform, joint command, action goal or controller mutation is published.
 
 Local vision calls have a single-operation semaphore, size limits and a deadline. Detector output and the original synchronized sample are committed together; failed detection cannot append a partial record. Connection/profile/page changes invalidate pending results. Sample data stays in page memory across navigation and can be explicitly saved/imported; application restart does not silently restore large images. Calibration configuration changes are locked once samples exist. Exported results are reviewable files only, not a production configuration change.
+
+
+## 原生页面承载（开发中）
+
+桌面主 WebView 负责连接和导航。功能页按白名单 URL 懒创建独立的子 WebView，在主窗口区域和独立 macOS Window 之间 reparent。页面 JS 堆与图像、模型视图不会因拆收被复制；每个页面只有一个实例。IPC 以原生调用 WebView label 和 incarnation 鉴权，重新挂到另一 Window 不改变页面身份。页面在共享 Rust 会话中独立附着消费者，主窗口不转发其数据。
+
+主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。

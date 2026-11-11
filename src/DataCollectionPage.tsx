@@ -11,8 +11,10 @@ import { formatFaultCode, formatHardwareMode } from "./statusLogic";
 import type { ConnectionProfile, HardwareStatus, TopicInfo } from "./types";
 
 export function DataCollectionPage({
-  profile, topics, rosReady, hardwareStatus = null, topicSamples = {},
+  profile, topics, rosReady, hardwareStatus = null, topicSamples = {}, connected = true, onBusyChange,
 }: {
+  connected?: boolean;
+  onBusyChange?(reason: string): void;
   profile: ConnectionProfile;
   topics: TopicInfo[];
   rosReady: boolean;
@@ -57,13 +59,14 @@ export function DataCollectionPage({
   }, [profile]);
 
   useEffect(() => {
-    const session = { alive: true, busy: false };
+    const session = { alive: connected, busy: false };
     sessionRef.current = session;
     setStatus(null); setFresh(false); setError(""); setPollError(""); setNotice(""); setBusy("");
+    if (!connected) return () => { session.alive = false; };
     void run("status");
     const timer = window.setInterval(() => void run("status"), 5000);
     return () => { session.alive = false; window.clearInterval(timer); };
-  }, [run]);
+  }, [run, connected]);
 
   useEffect(() => {
     try { localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(config)); } catch { /* storage unavailable */ }
@@ -88,6 +91,8 @@ export function DataCollectionPage({
   const can = collectionActions(status, fresh, rosReady, armReady, stampOk, hardwareStatus?.fault_code);
   const fault11Blocked = hardwareStatus?.fault_code === 11;
   const running = Boolean(status && status.state !== "stopped");
+  const migrationBusy = busy && busy !== "status" ? "数据采集操作中，请等待完成" : status?.recording || status?.state === "starting" || status?.state === "finalizing" ? "正在采集或保存，请完成 Episode 后移动页面" : "";
+  useEffect(() => { onBusyChange?.(migrationBusy); }, [migrationBusy, onBusyChange]);
   const update = <K extends keyof CollectionConfig>(key: K, value: CollectionConfig[K]) => setConfig((current) => ({ ...current, [key]: value }));
   const textField = (key: Exclude<keyof CollectionConfig, "fps" | "resume">, label: string, placeholder?: string, list?: string) => (
     <label>{label}<input value={config[key]} placeholder={placeholder} list={list} onChange={(event) => update(key, event.target.value)} /></label>

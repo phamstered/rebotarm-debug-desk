@@ -11,6 +11,7 @@ export function MotorPage({
   commandTopic,
   onStreamingChange,
   controlLocked = false,
+  active = true,
   controlLockedReason = "",
 }: {
   bridge: BridgeClient;
@@ -19,6 +20,7 @@ export function MotorPage({
   commandTopic: string;
   onStreamingChange(streaming: boolean): void;
   controlLocked?: boolean;
+  active?: boolean;
   controlLockedReason?: string;
 }) {
   return (
@@ -49,6 +51,7 @@ export function MotorPage({
         status={status}
         onStreamingChange={onStreamingChange}
         controlLocked={controlLocked}
+        active={active}
       />
     </main>
   );

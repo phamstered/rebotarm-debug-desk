@@ -1671,3 +1671,19 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 .motion-error-monitor-sources { display: flex; flex-wrap: wrap; gap: 4px 18px; }
 .motion-error-monitor-sources code { overflow-wrap: anywhere; }
 .visual-pick-panel input[type="checkbox"] { flex:0 0 auto; width:14px; height:14px; margin:0; }
+
+/* A feature keeps its WebView while docking; its root has no global navigation column. */
+body.native-page-body { min-width: 0; min-height: 0; }
+.app-shell.native-hosted-page { display: flex; flex-direction: column; }
+.native-hosted-page > .app-main-column { flex: 1 1 0; min-width: 0; min-height: 0; }
+.native-page-toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: #0a1721; font-size: 12px; }
+.native-page-toolbar > button { margin-left: auto; }
+.native-page-connected { color: #83d9c8; }
+.native-page-offline { color: #b8c7cf; }
+.native-workspace-host { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
+.native-workspace-placeholder { display: grid; align-content: center; justify-items: center; height: 100%; padding: 24px; text-align: center; }
+.native-workspace-placeholder > div { display: flex; gap: 12px; flex-wrap: wrap; }
+.native-workspace-error { display: flex; align-items: center; gap: 12px; padding: 8px 14px; color: #f4c4a0; background: #32271e; }
+.native-workspace-error button { margin-left: auto; }
+.native-offline-workspace { display: flex; flex-direction: column; height: 100vh; }
+.native-offline-workspace > header { padding: 10px 16px; }

@@ -107,7 +107,7 @@ export class BridgeClient {
     for (let attempt = 0; attempt < 12; attempt += 1) {
       if (generation !== this.generation) throw new Error("Bridge 连接已取消");
       try {
-        const hello = this.native ? await this.native.connect(profile.localPort) : await this.connectOnce(profile);
+        const hello = this.native ? await this.native.connect(profile.localPort, profile) : await this.connectOnce(profile);
         if (generation !== this.generation) throw new Error("Bridge 连接已取消");
         return hello;
       } catch (error) {
@@ -127,6 +127,12 @@ export class BridgeClient {
     this.socket = null;
     this.rejectPending(new Error("Bridge 连接已关闭"));
     socket?.close();
+  }
+
+  async attach(): Promise<BridgeHello> {
+    if (!this.native) throw new Error("独立页面需要桌面运行环境");
+    this.close();
+    return this.native.connect();
   }
 
   onMessage(listener: Listener) {

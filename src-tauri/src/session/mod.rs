@@ -8,3 +8,4 @@ pub mod subscriptions;
 pub mod transport;
 pub mod windows;
 pub mod wire;
+pub mod workspace;

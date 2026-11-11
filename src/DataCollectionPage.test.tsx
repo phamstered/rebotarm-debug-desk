@@ -218,3 +218,19 @@ describe("DataCollectionPage", () => {
     expect(screen.getByLabelText("机械臂与时间戳")).toHaveTextContent("时间戳可用");
   });
 });
+
+it("does not start SSH polling while its persistent window is disconnected, and preserves drafts on reconnect", async () => {
+  invoke.mockResolvedValue(stopped);
+  const { rerender, props } = renderPage({ connected: false });
+  fireEvent.change(screen.getByLabelText("任务描述"), { target: { value: "unsaved draft" } });
+  expect(invoke).not.toHaveBeenCalled();
+  rerender(<DataCollectionPage {...props} connected />);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("data_collection_action", expect.objectContaining({ action: "status" })));
+  expect(screen.getByLabelText("任务描述")).toHaveValue("unsaved draft");
+});
+
+it("reports an active episode as blocking window migration", async () => {
+  invoke.mockResolvedValue(recording); const onBusyChange = vi.fn();
+  renderPage({ onBusyChange });
+  await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith("正在采集或保存，请完成 Episode 后移动页面"));
+});

@@ -198,3 +198,49 @@ describe("MotorControl", () => {
       position: [0, 0, 0, 0, 0, 0, 0],
     }));
   });
+
+it("stops and disarms a persistent page when hidden, retaining its edited motor draft", async () => {
+  vi.useFakeTimers(); const bridge = bridgeDouble(); const onStreamingChange = vi.fn();
+  const props = { bridge: bridge as unknown as BridgeClient, jointState: { name: ["joint1"], position: [0] }, status: null, onStreamingChange };
+  const { rerender } = render(<MotorControl {...props} active />);
+  fireEvent.click(screen.getByLabelText("joint1 使能"));
+  fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "0.2" } });
+  fireEvent.click(screen.getByLabelText("安全确认"));
+  fireEvent.click(screen.getByRole("button", { name: "开始 20 Hz 发送" }));
+  await act(async () => {}); await act(async () => vi.advanceTimersByTimeAsync(100));
+  expect(bridge.send).toHaveBeenCalledTimes(2);
+  rerender(<MotorControl {...props} active={false} />);
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+  expect(bridge.send).toHaveBeenCalledTimes(2);
+  expect(bridge.request).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
+  expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+  rerender(<MotorControl {...props} active />);
+  expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.2");
+  expect(screen.getByRole("button", { name: "开始 20 Hz 发送" })).toBeDisabled();
+});
+
+it("a hidden page's late preflight cannot resume streaming when it is shown again", async () => {
+  vi.useFakeTimers(); const bridge = bridgeDouble(); let complete!: (value: unknown) => void;
+  bridge.request.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  const props = { bridge: bridge as unknown as BridgeClient, jointState: { name: ["joint1"], position: [0] }, status: null, onStreamingChange: vi.fn() };
+  const { rerender } = render(<MotorControl {...props} active />);
+  fireEvent.click(screen.getByLabelText("joint1 使能")); fireEvent.click(screen.getByLabelText("安全确认"));
+  fireEvent.click(screen.getByRole("button", { name: "开始 20 Hz 发送" }));
+  expect(props.onStreamingChange).toHaveBeenLastCalledWith(true);
+  rerender(<MotorControl {...props} active={false} />); rerender(<MotorControl {...props} active />);
+  await act(async () => complete({ op: "joint_command_ack", sequence: 43 }));
+  await act(async () => vi.advanceTimersByTimeAsync(200));
+  expect(bridge.send).not.toHaveBeenCalled(); expect(bridge.request).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
+});
+
+it("a control lock cancels the timer itself, not only the streaming indicator", async () => {
+  vi.useFakeTimers(); const bridge = bridgeDouble();
+  const props = { bridge: bridge as unknown as BridgeClient, jointState: { name: ["joint1"], position: [0] }, status: null, onStreamingChange: vi.fn() };
+  const { rerender } = render(<MotorControl {...props} />);
+  fireEvent.click(screen.getByLabelText("joint1 使能")); fireEvent.click(screen.getByLabelText("安全确认"));
+  fireEvent.click(screen.getByRole("button", { name: "开始 20 Hz 发送" }));
+  await act(async () => {}); await act(async () => vi.advanceTimersByTimeAsync(100));
+  expect(bridge.send).toHaveBeenCalledTimes(2);
+  rerender(<MotorControl {...props} controlLocked />); await act(async () => vi.advanceTimersByTimeAsync(200));
+  expect(bridge.send).toHaveBeenCalledTimes(2); expect(props.onStreamingChange).toHaveBeenLastCalledWith(false);
+});

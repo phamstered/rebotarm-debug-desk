@@ -52,8 +52,10 @@ export function GravityIdentificationPage({
   bridge,
   onNavigateCalibration,
   onSessionActiveChange,
+  connected = true,
 }: {
   bridge: BridgeClient;
+  connected?: boolean;
   onNavigateCalibration(): void;
   onSessionActiveChange?(active: boolean): void;
 }) {
@@ -71,13 +73,14 @@ export function GravityIdentificationPage({
   const phase = feedback?.phase;
   const running = session === "running" || session === "canceling" ||
     (phase !== undefined && isSessionRunningPhase(phase));
-  const startAllowed = canSendGravityIdGoal(armed ? "ARMED" : "", session) && !busy;
+  useEffect(() => { if (!connected) setArmed(false); }, [connected]);
+  const startAllowed = connected && canSendGravityIdGoal(armed ? "ARMED" : "", session) && !busy;
   const abortAllowed = canAbortGravityId(session) || running;
 
   useEffect(() => {
-    onSessionActiveChange?.(running);
+    onSessionActiveChange?.(running || Boolean(busy));
     return () => onSessionActiveChange?.(false);
-  }, [running, onSessionActiveChange]);
+  }, [running, busy, onSessionActiveChange]);
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message: BridgeEnvelope) => {

@@ -568,3 +568,10 @@ These IPC commands do not alter Bridge motion capabilities or remove any executi
 - `native_bridge_detach {attachment}` releases that window's interests. Other windows' subscriptions and the connection remain active. `stop_session` invalidates the native epoch before stopping the SSH tunnel.
 
 These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.
+
+
+### 原生页面附着（多窗口开发分支）
+
+桌面原生 IPC 与 Jetson Bridge 操作分开。主 WebView 调用 `native_bridge_attach` 时传入当前 SSH 会话实际分配的端口及 Profile；Rust 核验端口归属、Profile 格式和 16 KiB 大小上限。功能 WebView 通过 `native_bridge_context` 读取连接代次/连接状态/Profile，再不带端口地附着当前会话，不能据此新建第二个上游连接。原生调用者身份取 WebView label，不取可变的父 Window label。取消中的附着完成清理后才能进行替代附着，旧 token 不允许覆盖新消费者。
+
+窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。

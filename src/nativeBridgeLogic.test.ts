@@ -116,3 +116,24 @@ describe("native Bridge window adapter", () => {
     expect(() => h.native.send({ op: "topics" })).toThrow("尚未连接");
   });
 });
+
+it("serializes replacement attachment behind cancellation cleanup of an in-flight attach", async () => {
+  const first = deferred<unknown>(); const detached = deferred<unknown>();
+  const calls: string[] = []; let attaches = 0;
+  const ipc = async (op: string) => {
+    calls.push(op);
+    if (op === "native_bridge_attach") { if (++attaches === 1) return first.promise; return { attachment: { epoch: 2, window: { label: "page-handeye", incarnation: 2 } }, hello: { op: "hello" } }; }
+    if (op === "native_bridge_detach") return detached.promise;
+    if (op === "native_bridge_next") return new Promise(() => {});
+  };
+  const native = new NativeBridgeTransport(() => {}, ipc as <T>(op: string) => Promise<T>);
+  const old = native.connect(); const oldFailure = expect(old).rejects.toThrow("取消");
+  await vi.waitFor(() => expect(attaches).toBe(1));
+  const next = native.connect();
+  first.resolve({ attachment: { epoch: 1, window: { label: "page-handeye", incarnation: 1 } }, hello: { op: "hello" } });
+  await vi.waitFor(() => expect(calls).toContain("native_bridge_detach"));
+  expect(attaches).toBe(1);
+  detached.resolve(undefined); await oldFailure; await next;
+  expect(calls.slice(0, 3)).toEqual(["native_bridge_attach", "native_bridge_detach", "native_bridge_attach"]);
+  native.close();
+});

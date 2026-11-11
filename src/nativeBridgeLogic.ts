@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BridgeEnvelope } from "./types";
+import type { BridgeEnvelope, ConnectionProfile } from "./types";
 import { decodeBridgeEnvelope } from "./bridgeWireLogic";
 import { loadAborted } from "./resourceCacheLogic";
 
@@ -34,23 +34,33 @@ export class NativeBridgeTransport {
   private attachment: NativeAttachment | null = null;
   private generation = 0;
   private closing: Promise<unknown> = Promise.resolve();
+  private connecting: Promise<unknown> = Promise.resolve();
   private pending = new Set<(error: Error) => void>();
   constructor(private emit: (message: BridgeEnvelope) => void, private ipc: Invoke = invoke) {}
 
-  async connect(port?: number): Promise<BridgeEnvelope> {
+  connect(port?: number, profile?: ConnectionProfile): Promise<BridgeEnvelope> {
     this.close();
     const generation = this.generation;
-    await this.closing;
-    if (generation !== this.generation) throw new Error("连接已被取消");
-    const result = await this.ipc<Attached>("native_bridge_attach", { port });
-    if (generation !== this.generation) {
-      await this.ipc("native_bridge_detach", { attachment: result.attachment });
-      throw new Error("连接已被取消");
-    }
-    this.attachment = result.attachment;
-    this.emit(result.hello);
-    void this.pump(result.attachment, generation);
-    return result.hello;
+    const previous = this.connecting;
+    const connect = async () => {
+      // A cancelled in-flight attach still owns a native token until its reply
+      // can be detached. Serialize replacements so they cannot collide with it.
+      await previous;
+      await this.closing;
+      if (generation !== this.generation) throw new Error("连接已被取消");
+      const result = await this.ipc<Attached>("native_bridge_attach", { port, profile });
+      if (generation !== this.generation) {
+        await this.ipc("native_bridge_detach", { attachment: result.attachment });
+        throw new Error("连接已被取消");
+      }
+      this.attachment = result.attachment;
+      this.emit(result.hello);
+      void this.pump(result.attachment, generation);
+      return result.hello;
+    };
+    const result = connect();
+    this.connecting = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private async pump(attachment: NativeAttachment, generation: number) {

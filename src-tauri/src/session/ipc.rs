@@ -2,7 +2,7 @@ use super::runtime::{pack, Attachment, Runtime};
 use serde::Serialize;
 use serde_json::Value;
 use std::time::{Duration, Instant};
-use tauri::{ipc::Response, State, WebviewWindow};
+use tauri::{ipc::Response, State, Webview};
 
 #[derive(Serialize)]
 pub struct Attached {
@@ -12,10 +12,11 @@ pub struct Attached {
 
 #[tauri::command]
 pub async fn native_bridge_attach(
-    window: WebviewWindow,
+    window: Webview,
     hub: State<'_, Runtime>,
     tunnel: State<'_, crate::SessionState>,
     port: Option<u16>,
+    profile: Option<Value>,
 ) -> Result<Attached, String> {
     if let Some(port) = port {
         if window.label() != "main" {
@@ -24,6 +25,17 @@ pub async fn native_bridge_attach(
         if *tunnel.local_port.lock().map_err(|_| "隧道状态锁异常")? != Some(port) {
             return Err("本地端口不属于当前 SSH 会话".into());
         }
+        let profile = profile.ok_or("连接缺少 Profile")?;
+        if serde_json::to_vec(&profile)
+            .map_err(|e| e.to_string())?
+            .len()
+            > 16 * 1024
+        {
+            return Err("Profile 超出大小限制".into());
+        }
+        serde_json::from_value::<crate::ConnectionProfile>(profile.clone())
+            .map_err(|_| "Profile 格式无效")?;
+        hub.set_profile(profile);
         hub.connect(port).await?;
     }
     let (attachment, hello) = hub.attach(window.label())?;
@@ -31,8 +43,16 @@ pub async fn native_bridge_attach(
 }
 
 #[tauri::command]
+pub fn native_bridge_context(window: Webview, hub: State<'_, Runtime>) -> Result<Value, String> {
+    if window.label() != "main" && super::windows::Page::from_label(window.label()).is_none() {
+        return Err("未授权的功能页面".into());
+    }
+    Ok(hub.context())
+}
+
+#[tauri::command]
 pub async fn native_bridge_detach(
-    window: WebviewWindow,
+    window: Webview,
     hub: State<'_, Runtime>,
     attachment: Attachment,
 ) -> Result<(), String> {
@@ -41,7 +61,7 @@ pub async fn native_bridge_detach(
 
 #[tauri::command]
 pub async fn native_bridge_next(
-    window: WebviewWindow,
+    window: Webview,
     hub: State<'_, Runtime>,
     attachment: Attachment,
 ) -> Result<Response, String> {
@@ -52,7 +72,7 @@ pub async fn native_bridge_next(
 
 #[tauri::command]
 pub async fn native_bridge_request(
-    window: WebviewWindow,
+    window: Webview,
     hub: State<'_, Runtime>,
     attachment: Attachment,
     consumer: String,
