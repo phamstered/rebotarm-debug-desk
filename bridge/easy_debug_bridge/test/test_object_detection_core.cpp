@@ -88,7 +88,7 @@ int main() {
   pair[1].center[0] = .09;
   for (int i = 0; i < 3; ++i) {
     boxes = pair;
-    global.assign(boxes, 1000000000 + i * 100000000);
+    global.assign(boxes, 1000000000 + i * 100000000LL);
   }
   auto id0 = boxes[0].id, id1 = boxes[1].id;
   auto ambiguous = pair;
@@ -101,11 +101,11 @@ int main() {
   for (int i = 0; i < 100; ++i) {
     boxes = scene;
     boxes[0].center[0] = i % 2 ? 1. : -1.;
-    global.assign(boxes, 2000000000LL + i * 100000000);
+    global.assign(boxes, 2000000000LL + i * 100000000LL);
   }
   for (int i = 0; i < 3; ++i) {
     boxes = scene;
-    global.assign(boxes, 20000000000LL + i * 100000000);
+    global.assign(boxes, 20000000000LL + i * 100000000LL);
   }
   assert(boxes.size() == 2);
   std::cout << "Object projection/tracking tests passed\n";

@@ -186,3 +186,7 @@ Status 控制模式支持「拖动示教」：六轴重力补偿/阻尼下手动
 Navigation → **手眼标定**：Target / Context / Calibrate 对应 RViz 操作习惯，支持手动停稳采样、Mac 本地 OpenCV 求解、独立姿态复验及完整样本/外参导出；不依赖 RViz、MoveGroup 或深度图。详见 [已实现功能](docs/basic-features.md#上位机手眼标定)。
 
 构建手眼计算模块需 OpenCV、pkg-config 与 nlohmann-json 开发头文件，macOS 可用 `brew install opencv pkg-config nlohmann-json`。`npm run prepare:handeye` 会生成并打包本地计算模块，`npm run tauri build` 自动执行该步骤；已安装应用无需这些开发工具。`npm run test:handeye` 覆盖检测、坐标变换方向、五种求解器、独立复验及采样时间/停稳边界，并纳入 `npm test`。
+
+## Jetson Docker runtime
+
+ROS 2 Humble 的独立容器构建、启动与 host/Docker 双路径验证入口见 [Docker 运行说明](docs/docker.md)。
