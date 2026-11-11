@@ -9,6 +9,19 @@ ROS_DOMAIN_ID=222 npm run docker:bridge -- run verify-bridge-runtime
 BRIDGE_DOCKER_PORT=8766 npm run docker:bridge -- run
 ```
 
+Jetson only needs Docker Engine for this path; Node.js/npm are optional helpers.
+The equivalent Docker CLI commands are:
+
+```bash
+docker build -f docker/jetson/Dockerfile \
+  --build-arg STACK_IMAGE=rebotarm-stack:humble -t rebotarm-bridge:humble .
+docker run --rm --init --network host -e ROS_DOMAIN_ID=222 \
+  rebotarm-bridge:humble verify-bridge-runtime
+docker run --rm --init --network host -e ROS_DOMAIN_ID=0 \
+  rebotarm-bridge:humble ros2 run easy_debug_bridge bridge_node \
+  --ros-args -p port:=8766
+```
+
 The Bridge image includes the stack install and its resources, custom messages,
 Boost, OpenCV and PCL. It builds a separate `/opt/easy_debug_bridge` workspace;
 no host build/install directories are overwritten. `STACK_DOCKER_IMAGE` selects
@@ -56,3 +69,17 @@ and restart the container explicitly. Existing profiles retain host auto-start.
 
 Release images keep C++ test assertions enabled and enforce bounded CTest
 timeouts. `assertions_enabled` fails if a test build removes assertions.
+
+## Verification scope
+
+CI builds and tests the same Humble runtime on Linux amd64 and ARM64, alongside
+the existing host CI. The automatic merge gate requires all three checks on the
+same commit. Bridge CTest exercises real ROS and WebSocket paths with mock
+feedback; stack smokes exercise the real JTC and hardware plugin against a mock
+MCU. These checks do not certify physical motor motion or camera calibration.
+
+For on-device comparison, build from the same source revisions in a separate
+host workspace and in Docker, reserve independent loopback Bridge ports, and
+publish only an isolated test Topic. Compare `hello.bridge_build_id`, actual DDS
+samples, binary `package://` mesh bytes, and traversal/missing-resource rejection.
+Leave production services and domain 0 untouched during verification.
