@@ -127,6 +127,27 @@ pub async fn native_bridge_next(
 }
 
 #[tauri::command]
+pub async fn native_monitor_configure(
+    window: Webview,
+    hub: State<'_, Runtime>,
+    attachment: Attachment,
+    config: super::monitor::Config,
+) -> Result<(), String> {
+    hub.monitor_configure(window.label(), &attachment, config)
+        .await
+}
+
+#[tauri::command]
+pub fn native_monitor_history(
+    window: Webview,
+    hub: State<'_, Runtime>,
+    attachment: Attachment,
+    after: u64,
+) -> Result<super::monitor::Page, String> {
+    hub.monitor_history(window.label(), &attachment, after)
+}
+
+#[tauri::command]
 pub async fn native_bridge_request(
     window: Webview,
     hub: State<'_, Runtime>,

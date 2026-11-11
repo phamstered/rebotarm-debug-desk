@@ -17,7 +17,7 @@ pub struct Transition {
     pub subscribe: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Topic {
     message_type: String,
     consumers: BTreeSet<Consumer>,
@@ -29,6 +29,7 @@ struct Topic {
 /// Serializes subscribe/unsubscribe changes per upstream topic. Desired ownership
 /// is separate from acknowledged state, including when a window closes while a
 /// subscription request is in flight. No consumer can remove another's interest.
+#[derive(Clone)]
 pub struct SubscriptionRegistry {
     epoch: u64,
     sequence: u64,
@@ -169,7 +170,7 @@ impl SubscriptionRegistry {
     }
 }
 
-fn valid_topic(value: &str) -> bool {
+pub(crate) fn valid_topic(value: &str) -> bool {
     value.starts_with('/')
         && value.len() > 1
         && value.len() <= 256

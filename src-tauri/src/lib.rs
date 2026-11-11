@@ -1723,6 +1723,8 @@ pub fn run() {
             session::ipc::native_bridge_detach,
             session::ipc::native_bridge_next,
             session::ipc::native_bridge_request,
+            session::ipc::native_monitor_configure,
+            session::ipc::native_monitor_history,
             check_ssh,
             control_logs::read_control_log,
             control_logs::download_control_log,

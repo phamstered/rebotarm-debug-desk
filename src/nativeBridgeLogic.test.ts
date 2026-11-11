@@ -137,3 +137,39 @@ it("serializes replacement attachment behind cancellation cleanup of an in-fligh
   expect(calls.slice(0, 3)).toEqual(["native_bridge_attach", "native_bridge_detach", "native_bridge_attach"]);
   native.close();
 });
+
+it("serializes Monitor config, coalesces history pulls and never emits historical telemetry", async()=>{
+  const configured=deferred<unknown>(), reading=deferred<unknown>();let configs=0;
+  const emit=vi.fn(), calls:string[]=[];
+  const ipc=async(command:string)=>{
+    calls.push(command);
+    if(command==='native_bridge_attach')return {attachment:{epoch:3,window:{label:'page-monitor',incarnation:1}},hello:{op:'hello'}};
+    if(command==='native_bridge_next')return new Promise(()=>{});
+    if(command==='native_monitor_configure'){if(++configs===1)return configured.promise;return;}
+    if(command==='native_monitor_history')return reading.promise;
+  };
+  const native=new NativeBridgeTransport(emit,ipc as <T>(c:string)=>Promise<T>);await native.connect();
+  const config={topics:{'/js':'sensor_msgs/msg/JointState'},paused:false,bag_playing:false};
+  const first=native.configureMonitor(config), second=native.configureMonitor({...config,paused:true});
+  const a=native.monitorHistory(0), b=native.monitorHistory(0);expect(a).toBe(b);
+  await vi.waitFor(()=>expect(configs).toBe(1));expect(calls).not.toContain('native_monitor_history');
+  configured.resolve(undefined);await first;await second;
+  await vi.waitFor(()=>expect(calls.filter(c=>c==='native_monitor_history')).toHaveLength(1));
+  reading.resolve({epoch:3,reset:0,now_ms:1000,cursor:1,tail:1,lost:0,skipped:0,config,rows:[{sequence:1,received_ms:100,segment:1,topic:'/js',data:{effort:[1]}}]});
+  const page=await a;expect(performance.now()-(page.localOffset+page.rows[0]!.received_ms)).toBeGreaterThanOrEqual(900);
+  expect(emit).toHaveBeenCalledTimes(1);expect(emit).toHaveBeenCalledWith({op:'hello'});
+  native.close();
+});
+
+it("rejects a late Monitor history response after attachment replacement",async()=>{
+  const reading=deferred<unknown>();let incarnation=0;
+  const ipc=async(command:string)=>{
+    if(command==='native_bridge_attach')return {attachment:{epoch:++incarnation,window:{label:'page-monitor',incarnation}},hello:{op:'hello'}};
+    if(command==='native_bridge_next')return new Promise(()=>{});
+    if(command==='native_monitor_history')return reading.promise;
+  };
+  const native=new NativeBridgeTransport(()=>{},ipc as <T>(c:string)=>Promise<T>);await native.connect();
+  const pending=native.monitorHistory(0);await Promise.resolve();native.close();
+  const failed=expect(pending).rejects.toThrow('旧会话');await native.connect();
+  reading.resolve({epoch:1});await failed;native.close();
+});

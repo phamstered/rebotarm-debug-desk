@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复已接入 Rust；其他控制任务、Monitor 历史和共享编辑状态仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务和共享编辑状态仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -22,7 +22,7 @@
 
 ## 待接入和验收
 
-1. 原生会话与前端适配器已接通并有跨窗口模拟测试。后续必须补全窗口异常退出时的任务所有权/安全停止，Monitor 采集历史；原生共享资源缓存已接入；单纯最新帧合并不能替代 Monitor 的独立采样历史。
+1. 原生会话与前端适配器已接通并有跨窗口模拟测试。后续必须补全窗口异常退出时的任务所有权/安全停止；原生共享资源缓存与 Monitor 独立历史已接入，Monitor 在最新帧合并前保存有界采样历史。
 2. Agent、USB、arm mode、Controller、Topics、clock、Motion、Pick 八项公共状态/轮询已移到原生会话。rosbag 状态、其他任务生命周期和共享编辑数据仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
 3. 页面路由、拆出、收回、关闭拦截已接入。采用同一个原生 WebView reparent，迁移时不复制/重建 React、样本或 GPU 场景；原生调用者鉴权也改为稳定 WebView 身份。布局持久化、工作区变化后的窗口约束及主窗口隐藏/恢复已接入；迁移失败回滚已接入并进行原生故障验证；实际拔屏、多屏仍待验证。
 4. 窗口菜单与全部九页面接入；执行/采样中禁止迁移；全局任务状态一致；主窗口关闭不终止其他窗口会话。

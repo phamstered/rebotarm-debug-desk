@@ -4,6 +4,8 @@ import {
   createSeries,
   seriesId,
   updateSeriesFromMessage,
+  updateSeriesFromMessages,
+  type SeriesMessage,
   type DataSeries,
 } from "./dataGraphLogic";
 
@@ -725,6 +727,22 @@ export function updateMonitorFromMessage(
     return { ...dashboard, panels };
   });
   return changed ? { ...workspace, dashboards } : workspace;
+}
+
+export function updateMonitorFromMessages(workspace: MonitorWorkspace, frames: SeriesMessage[]): MonitorWorkspace {
+  if(!frames.length)return workspace;
+  let changed=false;
+  const dashboards=workspace.dashboards.map(d=>{
+    let dashboardChanged=false;
+    const panels=d.panels.map(p=>{
+      const original=panelSeries(p), next=updateSeriesFromMessages(original,frames);
+      if(next===original)return p;
+      changed=true;dashboardChanged=true;
+      return {...p,series:next[0]!,additionalSeries:next.slice(1)};
+    });
+    return dashboardChanged?{...d,panels}:d;
+  });
+  return changed?{...workspace,dashboards}:workspace;
 }
 
 export function dashboardHasSeries(

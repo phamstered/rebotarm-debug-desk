@@ -69,6 +69,8 @@ Native deployment resolves Node before launching the fixed repository script: an
 
 ## Current limits
 
+多窗口开发分支的 Monitor 有独立原生采集路径：`runtime::route → monitor::History → native_monitor_history → MonitorReplay → Monitor charts`。采集在每窗口预览最新帧覆盖前完成，订阅归原生会话所有；隐藏 WebView 不读取或绘制历史，但不会停止采集。历史按单调接收时间保留有界原始 JSON 字节，每次 IPC 分批解码；历史回放不会重新进入实时消息监听器。断线、截断和 Live/bag 时间域切换明确重置，诊断配对在暂停/配置边界清除。具体预算与游标字段见[协议](./protocol#原生-monitor-历史多窗口开发分支)。
+
 - One desktop session profile at a time.
 - Non-image Bridge subscriptions are shared by all connected WebSocket clients; Image delivery is scoped to interested clients.
 - Message decoding uses an explicit standard-type registry.

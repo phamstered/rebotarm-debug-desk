@@ -16,3 +16,4 @@ pub mod wire;
 pub mod workspace;
 pub mod layout;
 pub mod migration;
+pub mod monitor;

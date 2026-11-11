@@ -1,4 +1,4 @@
-import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo } from "./types";
+import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo, NativeMonitorConfig, MonitorHistoryPage } from "./types";
 
 export type BridgeHello = {
   controllers_info_supported?: boolean;
@@ -142,6 +142,16 @@ export class BridgeClient {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  configureMonitor(config: NativeMonitorConfig): Promise<void> {
+    if (!this.native) return Promise.reject(new Error("原生 Monitor 历史需要桌面环境"));
+    return this.native.configureMonitor(config);
+  }
+
+  monitorHistory(after: number): Promise<MonitorHistoryPage> {
+    if (!this.native) return Promise.reject(new Error("原生 Monitor 历史需要桌面环境"));
+    return this.native.monitorHistory(after);
   }
 
   send(message: BridgeEnvelope) {

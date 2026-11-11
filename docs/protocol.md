@@ -597,4 +597,12 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 Motion/Pick 分别每 1 秒 / 500 ms 调用无续租的 observe，生成快照后通过有界最新通知 `native_position_info_changed` / `native_visual_pick_changed` 提醒页面读取。回复保留查询及缓存帧龄，不能把读取旧缓存的时间当新反馈时间；旧空闲快照也不能解除未知任务占用。Motion 日志在 Rust 保存至多 5000 项 / 2 MiB，各窗口使用独立 session/cursor 分页读取（每页最多 256 项）；共享状态快照不复制整份日志。上游截断、缓存淘汰会向落后窗口报告 truncated；断线清空日志，旧响应不能重新填充。
 
+### 原生 Monitor 历史（多窗口开发分支）
+
+此通道只经过 Tauri IPC，不新增 Bridge WebSocket 操作。`native_monitor_configure(attachment, config)` 仅允许实际 `page-monitor` WebView 调用，`config={topics: {topic: message_type}, paused, bag_playing}`。最多 64 个数值消息 Topic，拒绝图像与点云类型，订阅与其他页面按 Topic 合并；原生消费者独立于页面附着。全部参数先校验，再提交期望配置；上游某项订阅拒绝时仍结算其余 ACK 并返回错误，传输结果未知则使对应会话失效。
+
+`native_monitor_history(attachment, after)` 返回 `{epoch, reset, now_ms, cursor, tail, lost, skipped, config, rows}`，每行 `{sequence, received_ms, segment, topic, data}`。`received_ms/now_ms` 同属原生会话管理器单调时钟，前端以固定偏移映射到自身时钟，重复读取不刷新帧龄。独立游标只能属于当前附着和连接代次，未来游标拒绝。每页最多 256 帧或 512 KiB 原始消息；历史最多 8192 帧 / 8 MiB，新帧到达时淘汰距其超过 30 秒的数据。`lost` 表示游标到保留下界间的缺失帧；超出 64 KiB 的消息增加 `skipped` 并建立明确缺口，图表重建且提示。
+
+配置或暂停变化增加 `segment`，诊断不得跨段配对；Live/bag 变化清空历史并增加 `reset`。隐藏页面只停止拉取与绘制，显式暂停才停止原生采集。连接断开清空历史，迟到响应丢弃。历史适配器不向普通 Bridge 消息监听器广播补回数据，因此不能续鲜控制反馈。
+
 原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。

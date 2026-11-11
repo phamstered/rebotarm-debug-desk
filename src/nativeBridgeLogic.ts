@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BridgeEnvelope, ConnectionProfile } from "./types";
+import type { BridgeEnvelope, ConnectionProfile, NativeMonitorConfig, NativeMonitorPage, MonitorHistoryPage } from "./types";
 import { decodeBridgeEnvelope } from "./bridgeWireLogic";
 import { loadAborted } from "./resourceCacheLogic";
 
@@ -36,6 +36,9 @@ export class NativeBridgeTransport {
   private closing: Promise<unknown> = Promise.resolve();
   private connecting: Promise<unknown> = Promise.resolve();
   private pending = new Set<(error: Error) => void>();
+  private monitorConfiguration: Promise<unknown> = Promise.resolve();
+  private monitorOffset: number | null = null;
+  private monitorReading: Promise<MonitorHistoryPage> | null = null;
   constructor(private emit: (message: BridgeEnvelope) => void, private ipc: Invoke = invoke) {}
 
   connect(port?: number, profile?: ConnectionProfile): Promise<BridgeEnvelope> {
@@ -81,11 +84,50 @@ export class NativeBridgeTransport {
 
   close() {
     this.generation++;
+    this.monitorOffset = null;
+    this.monitorReading = null;
     for (const reject of this.pending) reject(new Error("Bridge 会话已关闭"));
     this.pending.clear();
     const attachment = this.attachment;
     this.attachment = null;
     if (attachment) this.closing = this.closing.then(() => this.ipc("native_bridge_detach", { attachment })).catch(() => undefined);
+  }
+
+  configureMonitor(config: NativeMonitorConfig): Promise<void> {
+    const attachment = this.attachment, generation = this.generation;
+    const result = this.monitorConfiguration.then(async () => {
+      if (!attachment || generation !== this.generation) throw new Error("Monitor 会话已改变");
+      await this.ipc("native_monitor_configure", { attachment, config });
+      if (generation !== this.generation) throw new Error("Monitor 会话已改变");
+    });
+    this.monitorConfiguration = result.catch(() => undefined);
+    return result;
+  }
+
+  monitorHistory(after: number): Promise<MonitorHistoryPage> {
+    if(this.monitorReading)return this.monitorReading;
+    const pending=this.readMonitorHistory(after);
+    this.monitorReading=pending;
+    void pending.finally(()=>{if(this.monitorReading===pending)this.monitorReading=null;}).catch(()=>{});
+    return pending;
+  }
+
+  private async readMonitorHistory(after: number): Promise<MonitorHistoryPage> {
+    const attachment = this.attachment, generation = this.generation;
+    await this.monitorConfiguration;
+    if (!attachment || generation !== this.generation) throw new Error("Monitor 会话已改变");
+    const started = performance.now();
+    const page = await this.ipc<NativeMonitorPage>("native_monitor_history", { attachment, after });
+    if (generation !== this.generation || page.epoch !== attachment.epoch) throw new Error("Monitor 历史属于旧会话");
+    if (![page.now_ms, page.cursor, page.tail, page.reset, page.lost, page.skipped].every(n => Number.isSafeInteger(n) && n >= 0)
+      || page.cursor > page.tail || !Array.isArray(page.rows) || page.rows.length > 256
+      || page.rows.some((row,i) => !Number.isSafeInteger(row.received_ms) || row.received_ms < 0 || row.received_ms > page.now_ms
+        || !Number.isSafeInteger(row.sequence) || row.sequence <= (i ? page.rows[i-1]!.sequence : after) || row.sequence > page.cursor
+        || !Number.isSafeInteger(row.segment) || row.segment < 0 || typeof row.topic !== "string")) throw new Error("Monitor 历史响应无效");
+    // Fixed monotonic-domain offset for this attachment. Re-reading a delayed
+    // sample must not turn it into a new control/diagnostic observation.
+    this.monitorOffset ??= started - page.now_ms;
+    return { ...page, localOffset: this.monitorOffset };
   }
 
   send(message: BridgeEnvelope, consumer = "default") {

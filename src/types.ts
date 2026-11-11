@@ -48,6 +48,15 @@ export type TopicInfo = {
   types: string[];
 };
 
+/** Desktop IPC only; Monitor history never feeds control freshness checks. */
+export type NativeMonitorConfig = { topics: Record<string, string>; paused: boolean; bag_playing: boolean };
+export type NativeMonitorPage = {
+  epoch: number; reset: number; now_ms: number; cursor: number; tail: number; lost: number; skipped: number;
+  config: NativeMonitorConfig;
+  rows: Array<{ sequence: number; received_ms: number; segment: number; topic: string; data: unknown }>;
+};
+export type MonitorHistoryPage = NativeMonitorPage & { localOffset: number };
+
 export type RosGraphNode = {
   id: string;
   label: string;

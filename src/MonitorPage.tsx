@@ -38,6 +38,8 @@ export type MonitorSourceMode = "live" | "bag";
 
 export function MonitorPage({
   workspace,
+  historyNotice,
+  active = true,
   jointStateTopic,
   liveUpdates,
   bagStatus,
@@ -66,6 +68,8 @@ export function MonitorPage({
   onStopBagPlay,
 }: {
   workspace: MonitorWorkspace;
+  historyNotice?: string;
+  active?: boolean;
   jointStateTopic: string;
   liveUpdates: boolean;
   bagStatus: RosbagPlayStatus | null;
@@ -141,10 +145,10 @@ export function MonitorPage({
   const playing = Boolean(bagStatus?.playing);
 
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !active) return;
     const id = window.setInterval(() => setWallTick(performance.now()), 250);
     return () => window.clearInterval(id);
-  }, [playing]);
+  }, [playing, active]);
 
   const onCrosshairChange = useCallback((t: number | null) => {
     setCrosshairT(t);
@@ -276,7 +280,7 @@ export function MonitorPage({
   };
 
   const renderPanelChart = (panel: (typeof dashboard.panels)[number]) => <MonitorChart
-    panel={panel} liveUpdates={chartsLive} crosshairT={crosshairT}
+    panel={panel} liveUpdates={chartsLive} active={active} crosshairT={crosshairT}
     onCrosshairChange={onCrosshairChange} viewNow={viewNow}
     onChartChange={(chart) => onUpdatePanelChart(dashboard.id, panel.id, chart)}
   />;
@@ -295,6 +299,7 @@ export function MonitorPage({
 
   return (
     <main className="monitor-page">
+      {historyNotice && <p role="status" className="notice">{historyNotice}</p>}
       <header className="monitor-page-header">
         <div>
           <h1>Monitor</h1>

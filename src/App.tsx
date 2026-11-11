@@ -36,6 +36,8 @@ import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
+import { useNativeMonitor } from "./useNativeMonitor";
+import { monitorCaptureConfig, MonitorReplay, applyMonitorReplay } from "./nativeMonitorLogic";
 import { PositionPage } from "./PositionPage";
 import { useWorkspacePreference } from "./workspacePreferences";
 import { SavePoseDialog } from "./SavePoseDialog";
@@ -488,6 +490,19 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [focusController, setFocusController] = useState("");
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
   const [liveUpdates, setLiveUpdates] = useState(true);
+  const nativeMonitor = nativeDesktop() && monitorOwner;
+  const monitorReplay = useRef(new MonitorReplay());
+  const [monitorHistoryNotice,setMonitorHistoryNotice] = useState("");
+  const monitorCapture = monitorCaptureConfig(monitorWorkspace,topics,profile.jointStateTopic,!liveUpdates,Boolean(rosbagPlayStatus?.playing));
+  const monitorHistoryError = useNativeMonitor({bridge,enabled:nativeMonitor,connected:stage==="connected",visible:windowVisible,config:monitorCapture.config,
+    onPage:page=>{
+      const batch=monitorReplay.current.accept(page,profile.jointStateTopic,motionErrorsEnabled);
+      setMonitorWorkspace(current=>applyMonitorReplay(current,batch));
+      setMotionErrorStatus(batch.status);
+      if(batch.notice)setMonitorHistoryNotice(batch.notice);
+      if(page.config.bag_playing){setBagClockMs(batch.bagClockMs);setBagOriginMs(origin=>origin??batch.bagClockMs);}
+    }});
+  useEffect(()=>{if(stage!=="connected"){monitorReplay.current=new MonitorReplay();setMonitorHistoryNotice("");}},[stage]);
   const [rosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
   const [toolbarBusy, setToolbarBusy] = useState<"record" | "diagnostics" | "">("");
   const [toolbarNotice, setToolbarNotice] = useState("");
@@ -584,13 +599,13 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   useEffect(() => {
     setMotionErrorSubscriptionError("");
-    if (stage !== "connected" || !motionErrorsEnabled) return;
+    if (stage !== "connected" || !motionErrorsEnabled || nativeMonitor) return;
     let disposed = false;
     void bridge.request({ op: "subscribe", topic: ARM_ERROR_CONTROLLER_TOPIC, type: "control_msgs/msg/JointTrajectoryControllerState" })
       .catch((reason: unknown) => { if (!disposed) setMotionErrorSubscriptionError(`控制器反馈订阅失败：${String(reason)}`); });
     // The subscription is shared with Robot View / Inspector until disconnect.
     return () => { disposed = true; };
-  }, [bridge, stage, motionErrorsEnabled]);
+  }, [bridge, stage, motionErrorsEnabled, nativeMonitor]);
 
   const sendTrajectory = useCallback(async (request: TrajectorySendRequest) => {
     if (controllers.action) throw new Error("Controller 切换进行中，请等待完成");
@@ -848,7 +863,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           wallNowMs: wallNow,
           bagClockMs: bagClockMsRef.current,
         });
-        if (bagPlayingRef.current) {
+        if (bagPlayingRef.current && !nativeMonitor) {
           bagClockMsRef.current = resolved.bagClockMs;
           if (resolved.bagClockMs != null) {
             setBagClockMs(resolved.bagClockMs);
@@ -863,11 +878,11 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             [message.topic!]: nextTopicSample(previous, message.data, wallNow),
           };
         });
-        const diagnostic = motionErrorsEnabledRef.current
+        const diagnostic = motionErrorsEnabledRef.current && !nativeMonitor
           ? motionErrorSampler.current.accept(message.topic, message.data, wallNow, profile.jointStateTopic, bagPlayingRef.current) : null;
         if (diagnostic) setMotionErrorStatus(diagnostic.status);
         const diagnosticBagPlaying = bagPlayingRef.current;
-        if (monitorOwner) setMonitorWorkspace((current) => {
+        if (monitorOwner && !nativeMonitor) setMonitorWorkspace((current) => {
           let next = updateMonitorFromMessage(diagnostic?.reset ? clearMotionErrorPoints(current) : current, message.topic!, message.data, now);
           for (const frame of diagnostic?.frames ?? []) next = updateMonitorFromMessage(next, frame.topic, frame.data, diagnosticBagPlaying ? frame.sourceTimeMs ?? now : now);
           return next;
@@ -898,7 +913,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         setStage("failed");
       }
     });
-  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic, monitorOwner]);
+  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic, monitorOwner, nativeMonitor]);
 
   useEffect(() => {
     if (stage !== "connected" || nativeDesktop()) return;
@@ -2006,6 +2021,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       ) : appPage === "monitor" ? (
         <MonitorPage
           workspace={monitorWorkspace}
+          historyNotice={nativeMonitor ? [monitorCapture.notice,monitorHistoryError,monitorHistoryNotice].filter(Boolean).join("；") : ""}
+          active={windowVisible}
           motionErrorStatus={motionErrorStatus}
           motionErrorSubscriptionError={motionErrorSubscriptionError}
           jointStateTopic={profile.jointStateTopic}

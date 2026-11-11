@@ -49,6 +49,7 @@ struct Core {
     latest_topics: BTreeMap<String, (WireFrame, u64)>,
     cached_bytes: usize,
     profile: Value,
+    monitor: super::monitor::History,
 }
 
 impl Core {
@@ -106,6 +107,7 @@ impl Default for Runtime {
                 latest_topics: BTreeMap::new(),
                 cached_bytes: 0,
                 profile: Value::Null,
+                monitor: super::monitor::History::default(),
             })),
             connect_gate: AsyncMutex::new(()),
             subscriptions_gate: AsyncMutex::new(()),
@@ -173,8 +175,14 @@ impl Runtime {
         json!({ "epoch":core.epoch, "connected":core.transport.is_some() && core.error.is_none(), "profile":core.profile, "error":core.error })
     }
     pub fn close(&self) {
+        self.close_matching(None);
+    }
+    fn close_matching(&self, expected_epoch: Option<u64>) {
         let (transport, epoch) = {
             let mut core = self.core.lock().unwrap();
+            if expected_epoch.is_some_and(|epoch| core.epoch != epoch) {
+                return;
+            }
             self.tasks
                 .lost(None, "连接已断开；重连后需核验 Bridge 任务已停止");
             core.epoch += 1;
@@ -185,6 +193,7 @@ impl Runtime {
             core.rgbd_owner = None;
             core.latest_topics.clear();
             core.cached_bytes = 0;
+            core.monitor = super::monitor::History::default();
             for client in core.clients.values() {
                 client.notify.notify_one();
             }
@@ -247,6 +256,7 @@ impl Runtime {
                 core.error = Some(error);
                 error_tasks.lost(None, "Bridge 连接中断；停止结果尚未确认");
                 core.transport = None;
+                core.monitor = super::monitor::History::default();
                 resources.reset(epoch);
                 for client in core.clients.values() {
                     client.notify.notify_one();
@@ -481,6 +491,7 @@ impl Runtime {
         transport: &Transport,
         mut changes: Vec<Transition>,
     ) -> Result<(), String> {
+        let mut errors = Vec::new();
         while let Some(change) = changes.pop() {
             let reply = transport
                 .request(
@@ -494,7 +505,7 @@ impl Runtime {
                 Err(error) => {
                     // A timed-out unsubscribe may already have executed. Do not
                     // grant future consumers a guessed upstream subscription.
-                    self.close();
+                    self.close_matching(Some(change.epoch));
                     return Err(format!("订阅状态未确认，会话已失效：{error}"));
                 }
             };
@@ -518,9 +529,83 @@ impl Runtime {
                     .acknowledge(&change, result.is_ok())
                     .map_err(String::from)?,
             );
-            result?;
+            if let Err(error) = result {
+                errors.push(format!(
+                    "{}: {}",
+                    change.topic,
+                    error.chars().take(512).collect::<String>()
+                ));
+            }
         }
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("；"))
+        }
+    }
+
+    pub async fn monitor_configure(
+        &self,
+        native_label: &str,
+        attachment: &Attachment,
+        config: super::monitor::Config,
+    ) -> Result<(), String> {
+        if native_label != "page-monitor" {
+            return Err("只有 Monitor 页面可以配置历史采集".into());
+        }
+        config.validate()?;
+        let _gate = self.subscriptions_gate.lock().await;
+        let (transport, changes) = {
+            let mut core = self.core.lock().unwrap();
+            core.validate(native_label, attachment)?;
+            let transport = core.transport.clone().ok_or("Bridge 尚未连接")?;
+            let consumer = Consumer {
+                window: WindowToken {
+                    label: "native-monitor-history".into(),
+                    incarnation: core.epoch,
+                },
+                name: "history".into(),
+            };
+            // Validate the whole replacement before changing capture or ownership.
+            let mut registry = core.subscriptions.clone();
+            let mut changes = Vec::new();
+            for topic in core
+                .monitor
+                .config()
+                .topics
+                .keys()
+                .filter(|topic| !config.topics.contains_key(*topic))
+            {
+                changes.extend(registry.release(topic, &consumer));
+            }
+            for (topic, kind) in &config.topics {
+                changes.extend(
+                    registry
+                        .acquire(topic, kind, consumer.clone())
+                        .map_err(String::from)?,
+                );
+            }
+            core.subscriptions = registry;
+            core.monitor.configure(config);
+            (transport, changes)
+        };
+        self.apply_transitions(&transport, changes).await?;
+        self.core.lock().unwrap().validate(native_label, attachment)
+    }
+
+    pub fn monitor_history(
+        &self,
+        native_label: &str,
+        attachment: &Attachment,
+        after: u64,
+    ) -> Result<super::monitor::Page, String> {
+        if native_label != "page-monitor" {
+            return Err("此页面不能读取 Monitor 历史".into());
+        }
+        let core = self.core.lock().unwrap();
+        core.validate(native_label, attachment)?;
+        core.monitor
+            .page(core.epoch, after, self.origin.elapsed().as_millis() as u64)
     }
 
     pub async fn request(
@@ -788,6 +873,7 @@ pub fn pack(binary: bool, age_ms: u64, elapsed_ms: u64, bytes: &[u8]) -> Vec<u8>
 }
 
 fn route(core: &mut Core, frame: WireFrame, at: u64) {
+    core.monitor.accept(&frame, at);
     let topic = frame.metadata["topic"].as_str();
     let static_topic = frame.op() == "topic_message"
         && core.subscriptions.message_type(topic.unwrap_or("")) == Some("std_msgs/msg/String");
@@ -903,6 +989,7 @@ mod tests {
                                 socket.send(Message::Binary(binary.into())).await.unwrap();
                                 continue;
                             },
+                            "subscribe" if message["topic"] == "/z_rejected" => json!({"op":"error", "message":"fixture subscription rejected", "request_id":message["request_id"]}),
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "position_move" | "position_group_start" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
@@ -929,6 +1016,159 @@ mod tests {
             }
         });
         (port, tx, received, task)
+    }
+
+    #[tokio::test]
+    async fn monitor_history_survives_slow_and_absent_windows_without_reusing_telemetry_queue() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect(port).await.unwrap();
+        let (monitor, _) = hub.attach("page-monitor").unwrap();
+        let (main, _) = hub.attach("main").unwrap();
+        let cfg = super::super::monitor::Config {
+            topics: BTreeMap::from([("/joints".into(), "sensor_msgs/msg/JointState".into())]),
+            ..Default::default()
+        };
+        assert!(hub
+            .monitor_configure("main", &main, cfg.clone())
+            .await
+            .is_err());
+        hub.monitor_configure("page-monitor", &monitor, cfg.clone())
+            .await
+            .unwrap();
+        hub.request(
+            "page-monitor",
+            &monitor,
+            "preview",
+            json!({"op":"subscribe","topic":"/joints","type":"sensor_msgs/msg/JointState"}),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        for n in 0..600 {
+            events
+                .send(json!({"op":"topic_message","topic":"/joints","data":{"position":[n]}}))
+                .unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub
+                .monitor_history("page-monitor", &monitor, 0)
+                .unwrap()
+                .tail
+                < 600
+            {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let first = hub.monitor_history("page-monitor", &monitor, 0).unwrap();
+        let second = hub
+            .monitor_history("page-monitor", &monitor, first.cursor)
+            .unwrap();
+        let last = hub
+            .monitor_history("page-monitor", &monitor, second.cursor)
+            .unwrap();
+        assert_eq!(first.rows.len() + second.rows.len() + last.rows.len(), 600);
+        assert_eq!(first.rows[0].data["position"][0], 0);
+        assert_eq!(last.rows.last().unwrap().data["position"][0], 599);
+        let preview = hub.next("page-monitor", &monitor).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&preview[17..]).unwrap()["data"]["position"][0],
+            599
+        );
+        hub.detach("page-monitor", &monitor).await.unwrap();
+        events
+            .send(json!({"op":"topic_message","topic":"/joints","data":{"position":[600]}}))
+            .unwrap();
+        let (reopened, _) = hub.attach("page-monitor").unwrap();
+        hub.monitor_configure("page-monitor", &reopened, cfg)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub
+                .monitor_history("page-monitor", &reopened, 600)
+                .unwrap()
+                .tail
+                < 601
+            {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(hub.monitor_history("page-monitor", &monitor, 0).is_err());
+        assert_eq!(
+            hub.monitor_history("page-monitor", &reopened, 0)
+                .unwrap()
+                .rows[0]
+                .data["position"][0],
+            0
+        );
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m["op"] == "subscribe" && m["topic"] == "/joints")
+                .count(),
+            1
+        );
+        let old_epoch = reopened.epoch;
+        hub.close();
+        server.abort();
+        let (port, _next_events, _next_seen, next_server) = fake_bridge().await;
+        hub.connect(port).await.unwrap();
+        let (fresh, _) = hub.attach("page-monitor").unwrap();
+        hub.close_matching(Some(old_epoch));
+        assert!(hub
+            .monitor_history("page-monitor", &fresh, 0)
+            .unwrap()
+            .rows
+            .is_empty());
+        assert!(hub.monitor_history("page-monitor", &reopened, 0).is_err());
+        hub.close();
+        next_server.abort();
+    }
+
+    #[tokio::test]
+    async fn monitor_batch_subscription_failure_settles_other_topics_and_can_retry() {
+        let (port, _events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect(port).await.unwrap();
+        let (monitor, _) = hub.attach("page-monitor").unwrap();
+        let mut cfg = super::super::monitor::Config {
+            topics: BTreeMap::from([
+                ("/a_good".into(), "std_msgs/msg/Float64".into()),
+                ("/z_rejected".into(), "std_msgs/msg/Float64".into()),
+            ]),
+            ..Default::default()
+        };
+        assert!(hub
+            .monitor_configure("page-monitor", &monitor, cfg.clone())
+            .await
+            .unwrap_err()
+            .contains("rejected"));
+        cfg.topics.remove("/z_rejected");
+        hub.monitor_configure("page-monitor", &monitor, cfg)
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m["op"] == "subscribe" && m["topic"] == "/a_good")
+                .count(),
+            1
+        );
+        assert!(!hub
+            .core
+            .lock()
+            .unwrap()
+            .subscriptions
+            .recipients("/a_good")
+            .is_empty());
+        hub.close();
+        server.abort();
     }
 
     #[tokio::test]

@@ -151,6 +151,7 @@ export function DataGraph({
   onCrosshairChange,
   viewNow = null,
   renderStyle = "line",
+  active = true,
 }: {
   seriesList: DataSeries[];
   liveUpdates: boolean;
@@ -168,6 +169,7 @@ export function DataGraph({
    */
   viewNow?: number | null;
   renderStyle?: "line" | "points" | "bars";
+  active?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const seriesRef = useRef(seriesList);
@@ -188,7 +190,7 @@ export function DataGraph({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !active) return;
     let frame = 0;
     const paint = () => {
       drawChart(canvas, seriesRef.current, resolveNow(), crosshairRef.current, renderStyleRef.current);
@@ -202,16 +204,16 @@ export function DataGraph({
       window.removeEventListener("resize", onResize);
       window.clearInterval(frame);
     };
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) drawChart(canvas, seriesList, resolveNow(), crosshairT, renderStyle);
-  }, [seriesList, crosshairT, liveUpdates, viewNow, renderStyle]);
+    if (canvas && active) drawChart(canvas, seriesList, resolveNow(), crosshairT, renderStyle);
+  }, [seriesList, crosshairT, liveUpdates, viewNow, renderStyle, active]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !onCrosshairChange) return;
+    if (!canvas || !onCrosshairChange || !active) return;
 
     const toLocalX = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -240,7 +242,7 @@ export function DataGraph({
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
     };
-  }, [onCrosshairChange]);
+  }, [onCrosshairChange, active]);
 
   const topic = seriesList[0]?.topic;
 
