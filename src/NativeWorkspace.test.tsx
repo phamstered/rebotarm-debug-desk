@@ -1,11 +1,29 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NativePageToolbar, NativeWorkspaceHost } from "./NativeWorkspace";
+import { NativePageToolbar, NativeWorkspaceHost, NativeOfflineWorkspace } from "./NativeWorkspace";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn().mockResolvedValue({}) }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 beforeEach(() => { mocks.invoke.mockReset().mockResolvedValue({}); vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it("reopens retained offline pages through the same native host without starting a connection", async () => {
+  const user = userEvent.setup();
+  const onSelect = vi.fn(), onConnection = vi.fn(), onDismissError = vi.fn();
+  const ready = { ready: true, detached: false, visible: true, busy_reason: "" };
+  render(<NativeOfflineWorkspace page="monitor" snapshot={{ selected: "monitor", pages: {
+    monitor: ready, handeye: { ...ready, detached: true }, motor: { ...ready, ready: false },
+  } }} onSelect={onSelect} onConnection={onConnection} onError={vi.fn()} error="窗口错误" onDismissError={onDismissError} />);
+  expect(screen.getByRole("combobox", { name: "已打开页面" })).toHaveValue("monitor");
+  expect(screen.getAllByRole("option")).toHaveLength(2);
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("workspace_select", { page: "monitor" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "已打开页面" }), "handeye");
+  expect(onSelect).toHaveBeenCalledWith("handeye");
+  await user.click(screen.getByRole("button", { name: "关闭提示" }));
+  expect(onDismissError).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole("button", { name: "返回连接" }));
+  expect(onConnection).toHaveBeenCalledOnce();
+  expect(mocks.invoke.mock.calls.every(([command]) => command.startsWith("workspace_"))).toBe(true);
+});
 it("shows the matching window operation and blocks migration during sampling", async () => {
   const user = userEvent.setup(); const onAction = vi.fn();
   const props = { page: "handeye" as const, connected: true, onAction, busyReason: "", state: { detached: false, visible: true, ready: true, busy_reason: "" } };

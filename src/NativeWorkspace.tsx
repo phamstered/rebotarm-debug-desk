@@ -78,3 +78,29 @@ export function NativePageToolbar({ page, state, connected, busyReason, onAction
     {blocked && state?.ready && <span role="status">{blocked}</span>}
   </header>;
 }
+
+/** Reopen retained pages without creating a second offline editor in main. */
+export function NativeOfflineWorkspace({ page, snapshot, onSelect, onConnection, onError, error, onDismissError }: {
+  page: AppPage;
+  snapshot: NativeWorkspaceSnapshot;
+  onSelect(page: AppPage): void;
+  onConnection(): void;
+  onError(error: string): void;
+  error?: string;
+  onDismissError?(): void;
+}) {
+  const retained = (Object.keys(PAGE_TITLES) as AppPage[]).filter(key => snapshot.pages[key]?.ready);
+  return <main className="native-offline-workspace">
+    <header className="native-offline-toolbar">
+      <label>已打开页面
+        <select aria-label="已打开页面" value={page} onChange={event => onSelect(event.target.value as AppPage)}>
+          {retained.map(key => <option key={key} value={key}>{PAGE_TITLES[key]}{snapshot.pages[key]?.detached ? " · 独立窗口" : ""}</option>)}
+        </select>
+      </label>
+      <span>未连接 · 页面内容已保留</span>
+      <button onClick={onConnection}>返回连接</button>
+    </header>
+    {error && <div className="native-workspace-error" role="alert">{error}<button onClick={onDismissError}>关闭提示</button></div>}
+    <NativeWorkspaceHost page={page} snapshot={snapshot} covered={false} onError={onError} />
+  </main>;
+}

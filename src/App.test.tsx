@@ -187,6 +187,38 @@ describe("App workflow", () => {
     });
   });
 
+  it("returns from the disconnected form to an existing native Monitor without connecting", async () => {
+    const user = userEvent.setup();
+    const originalInvoke = doubles.invoke.getMockImplementation()!;
+    const previousResizeObserver = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    doubles.invoke.mockImplementation((command: string, args: unknown) => {
+      if (command === "workspace_snapshot") return Promise.resolve({ selected: "monitor", pages: {
+        monitor: { detached: false, ready: true, visible: false, busy_reason: "" },
+      } });
+      if (command === "native_observation_snapshot") return Promise.resolve({ epoch: 0, revision: 0, connected: false, entries: {} });
+      if (command === "native_task_snapshot") return Promise.resolve(null);
+      return originalInvoke(command, args);
+    });
+    const view = render(<App />);
+    try {
+      await user.click(await screen.findByRole("button", { name: "返回已打开页面" }));
+      expect(screen.getByRole("combobox", { name: "已打开页面" })).toHaveValue("monitor");
+      await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("workspace_select", { page: "monitor" }));
+      expect(doubles.connect).not.toHaveBeenCalled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("start_session", expect.anything());
+      await user.click(screen.getByRole("button", { name: "返回连接" }));
+      expect(screen.getByRole("button", { name: "连接 Jetson" })).toBeVisible();
+      expect(doubles.invoke).toHaveBeenCalledWith("workspace_cover", { covered: true });
+    } finally {
+      view.unmount();
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver = previousResizeObserver;
+      doubles.invoke.mockImplementation(originalInvoke);
+    }
+  });
+
   it("provides a keyboard-focusable hand-eye content region only on its connected page", async () => {
     const user = userEvent.setup();
     render(<App />);

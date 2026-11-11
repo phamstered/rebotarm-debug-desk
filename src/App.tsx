@@ -1,4 +1,4 @@
-import { NativeWorkspaceHost, NativePageToolbar } from "./NativeWorkspace";
+import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
 import { nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
@@ -397,6 +397,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [profile, setProfile] = useState(loadProfile);
   const handeyeSession = useHandeyeSession(profile);
   const [manageHandeye, setManageHandeye] = useState(false);
+  const [offlineWorkspace, setOfflineWorkspace] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [failedStep, setFailedStep] = useState<ConnectStepId | null>(null);
   const [sshOk, setSshOk] = useState(false);
@@ -1760,6 +1761,11 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     onBack={offline ? () => setManageMotionGroups(false) : undefined}
     onOpenPoseLibrary={(id,intent) => { if(id)setPositionEditRequest({id,intent}); if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
+  if (nativeMain && stage !== "connected" && offlineWorkspace) {
+    return <NativeOfflineWorkspace page={appPage} snapshot={workspace.snapshot} onSelect={setAppPage}
+      onConnection={() => setOfflineWorkspace(false)} onError={setError} error={workspace.error || error}
+      onDismissError={() => { workspace.dismissError(); setError(""); }} />;
+  }
   if (nativeMain && stage !== "connected" && manageHandeye) {
     return <main className="native-offline-workspace"><header><button onClick={() => setManageHandeye(false)}>返回连接</button></header>
       <NativeWorkspaceHost page="handeye" snapshot={workspace.snapshot} covered={false} onError={setError} />
@@ -1833,6 +1839,11 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
                 </button>
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
+              {nativeMain && Object.values(workspace.snapshot.pages).some(page => page?.ready) && <button type="button" className="ghost" onClick={() => {
+                const retained = (Object.keys(workspace.snapshot.pages) as AppPage[]).find(page => workspace.snapshot.pages[page]?.ready);
+                if (retained && !workspace.snapshot.pages[appPage]?.ready) setAppPage(retained);
+                setOfflineWorkspace(true);
+              }}>返回已打开页面</button>}
               <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理姿态库</button>
               <button type="button" className="ghost" onClick={() => setManageHandeye(true)}>手眼标定 / 离线样本</button>
               <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
