@@ -1,3 +1,4 @@
+import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
 import { ownsPagePreference, usePagePreference } from "./pagePreferences";
 import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
@@ -1730,6 +1731,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }
   if (nativeMain && stage !== "connected" && manageHandeye) {
     return <main className="native-offline-workspace"><header><button onClick={() => setManageHandeye(false)}>返回连接</button></header>
+      <NativeLocalTaskStatus />
       <NativeWorkspaceHost page="handeye" snapshot={workspace.snapshot} covered={false} onError={setError} />
       {(workspace.error || error) && <p role="alert">{workspace.error || error}</p>}
     </main>;
@@ -1765,6 +1767,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     return (
       <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
         <section className="connect-card">
+          {nativeMain && <NativeLocalTaskStatus />}
           <div className="brand"><img className="brand-mark" src={robotConsoleIcon} alt="" /><div><h1>Robot Console</h1><p>ROS 2 机器人调试工作台</p></div></div>
           {historyLine && (
             <p className="connect-history" aria-label="上次连接记录" title={historyLine}>{historyLine}</p>
@@ -1933,7 +1936,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
       {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
-      {nativeDesktop() && <NativeTaskStatus />}
+      {nativeDesktop() && <><NativeTaskStatus /><NativeLocalTaskStatus /></>}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>

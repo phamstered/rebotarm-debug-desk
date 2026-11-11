@@ -68,6 +68,20 @@ pub fn native_task_snapshot(
 }
 
 #[tauri::command]
+pub fn native_local_task_snapshot(window: Webview, hub: State<'_, Runtime>) -> Result<Option<super::local_tasks::Snapshot>, String> {
+    observation_caller(&window)?;
+    Ok(hub.local_tasks.snapshot())
+}
+#[tauri::command]
+pub fn native_local_task_touch(window: Webview, hub: State<'_, Runtime>, operation_id: String) -> Result<(), String> {
+    hub.local_tasks.touch(window.label(), &operation_id)
+}
+#[tauri::command]
+pub fn native_local_task_cancel(window: Webview, hub: State<'_, Runtime>, operation_id: String) -> Result<(), String> {
+    hub.local_tasks.cancel(window.label(), &operation_id)
+}
+
+#[tauri::command]
 pub fn native_observation_snapshot(
     window: Webview,
     hub: State<'_, Runtime>,

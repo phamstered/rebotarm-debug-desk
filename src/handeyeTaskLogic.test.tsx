@@ -1,0 +1,41 @@
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useHandeyeInvoke } from "./handeyeTaskLogic";
+const mock=vi.hoisted(()=>({invoke:vi.fn()}));
+vi.mock("@tauri-apps/api/core",()=>({invoke:mock.invoke}));
+beforeEach(()=>{vi.useFakeTimers();mock.invoke.mockReset();Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});});
+afterEach(()=>{vi.useRealTimers();delete(window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;});
+it("renews only its own active request, with at most one heartbeat pending",async()=>{
+  let resolve!:(value:unknown)=>void,renew!:()=>void;
+  mock.invoke.mockImplementation(command=>command==="handeye_local"?new Promise(r=>resolve=r):new Promise<void>(r=>renew=r));
+  const hook=renderHook(()=>useHandeyeInvoke("robot"));
+  const pending=hook.result.current<{ok:boolean}>("handeye_local",{request:{op:"board"}});
+  const id=mock.invoke.mock.calls[0][1].operationId;
+  await act(()=>vi.advanceTimersByTimeAsync(5000));
+  expect(mock.invoke.mock.calls.filter(([command])=>command==="native_local_task_touch")).toEqual([["native_local_task_touch",{operationId:id}]]);
+  await act(async()=>{renew();resolve({ok:true});await pending;});
+  await act(()=>vi.advanceTimersByTimeAsync(10000));
+  expect(mock.invoke).toHaveBeenCalledTimes(2);hook.unmount();
+  expect(mock.invoke).not.toHaveBeenCalledWith("native_local_task_cancel",expect.anything());
+});
+it("source changes and unmount cancel the owner; late results cannot feed another step",async()=>{
+  let resolve!:(value:unknown)=>void;
+  mock.invoke.mockImplementation(command=>command==="handeye_capture"?new Promise(r=>resolve=r):Promise.resolve());
+  const hook=renderHook(({source})=>useHandeyeInvoke(source),{initialProps:{source:"first"}});
+  const result=hook.result.current("handeye_capture",{config:{mode:"capture"}}).catch(e=>e.message);
+  const id=mock.invoke.mock.calls[0][1].operationId;
+  hook.rerender({source:"second"});
+  expect(mock.invoke).toHaveBeenCalledWith("native_local_task_cancel",{operationId:id});
+  await act(async()=>{resolve({});expect(await result).toContain("忽略迟到结果");});
+  await act(()=>vi.advanceTimersByTimeAsync(5000));
+  expect(mock.invoke).not.toHaveBeenCalledWith("native_local_task_touch",expect.anything());
+  const next=hook.result.current("handeye_capture",{}).catch(e=>e.message);
+  hook.unmount();resolve({});await next;
+  expect(mock.invoke.mock.calls.filter(([command])=>command==="native_local_task_cancel")).toHaveLength(2);
+});
+it("a rejected request leaves no heartbeat timer or cancellation for a successor",async()=>{
+  mock.invoke.mockRejectedValue(new Error("busy"));
+  const hook=renderHook(()=>useHandeyeInvoke("robot"));
+  await expect(hook.result.current("handeye_local",{})).rejects.toThrow("busy");
+  await act(()=>vi.advanceTimersByTimeAsync(5000));hook.unmount();expect(mock.invoke).toHaveBeenCalledTimes(1);
+});

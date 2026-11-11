@@ -78,6 +78,7 @@ impl Core {
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
     pub tasks: Arc<Tasks>,
+    pub local_tasks: Arc<super::local_tasks::LocalTasks>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
     motion_logs: Arc<super::motion_observations::MotionLogs>,
@@ -93,6 +94,7 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             tasks: Arc::new(Tasks::default()),
+            local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
             observations: Arc::new(super::observations::Observations::default()),
             resources: Arc::new(super::resources::Resources::default()),
             motion_logs: Arc::new(super::motion_observations::MotionLogs::default()),

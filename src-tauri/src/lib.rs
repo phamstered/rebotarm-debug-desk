@@ -1710,6 +1710,9 @@ pub fn run() {
             session::documents::editor_document_commit,
             session::ipc::native_bridge_context,
             session::ipc::native_task_snapshot,
+            session::ipc::native_local_task_snapshot,
+            session::ipc::native_local_task_touch,
+            session::ipc::native_local_task_cancel,
             session::ipc::native_observation_snapshot,
             session::ipc::native_observation_refresh,
             session::ipc::native_observation_interval,
@@ -1759,6 +1762,10 @@ pub fn run() {
             deploy_bridge
         ])
         .setup(|app| {
+            let local_task_handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>().local_tasks.set_changed(std::sync::Arc::new(move || {
+                let _ = local_task_handle.emit("native-local-tasks-changed", ());
+            }));
             let task_handle = app.handle().clone();
             app.state::<session::runtime::Runtime>().set_task_changed(std::sync::Arc::new(move || {
                 let _ = task_handle.emit("native-tasks-changed", ());

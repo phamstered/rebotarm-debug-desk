@@ -2,7 +2,8 @@ use super::{is_safe_setup_script, ssh_base, ssh_target, ConnectionProfile};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
-use tauri::Manager;
+use tauri::{Manager, State, Webview};
+use crate::session::runtime::Runtime;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
@@ -68,7 +69,10 @@ fn capture_command(profile: &ConnectionProfile, config: &Value) -> Result<String
 }
 
 #[tauri::command]
-pub async fn handeye_capture(profile: ConnectionProfile, config: Value) -> Result<Value, String> {
+pub async fn handeye_capture(window: Webview, hub: State<'_, Runtime>, operation_id: String, profile: ConnectionProfile, config: Value) -> Result<Value, String> {
+    hub.local_tasks.run(&hub.tasks, window.label(), &operation_id, "capture", capture_work(profile, config)).await
+}
+async fn capture_work(profile: ConnectionProfile, config: Value) -> Result<Value, String> {
     let _permit = CAPTURE_WORK
         .try_acquire()
         .map_err(|_| "已有手眼采集正在进行")?;
@@ -115,7 +119,10 @@ fn executable(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Err("未安装手眼计算模块；请重新构建完整应用（prepare:handeye）".into())
 }
 #[tauri::command]
-pub async fn handeye_local(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
+pub async fn handeye_local(app: tauri::AppHandle, window: Webview, hub: State<'_, Runtime>, operation_id: String, request: Value) -> Result<Value, String> {
+    hub.local_tasks.run(&hub.tasks, window.label(), &operation_id, "compute", local_work(app, request)).await
+}
+async fn local_work(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
     let _permit = LOCAL_WORK.try_acquire().map_err(|_| "手眼计算正在进行")?;
     let data = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
     if data.len() > 32 * 1024 * 1024 {

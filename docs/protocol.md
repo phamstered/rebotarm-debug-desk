@@ -614,3 +614,10 @@ Monitor 使用 key `monitor`，仅实际 `page-monitor` / `page-dashboard` WebVi
 原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。
 
 `workspace_open_motion(tab, profileKey)` 仅主 WebView 可调用；tab 白名单为 positions / groups，连接键非空、最多 512 字节且不含控制字符。原生快照携带递增的 `motion_navigation={revision,tab,profile_key}`，首次懒加载也能读取。Motion 对每个版本只应用一次，连接不匹配时报错，不修改编辑数据。此请求不连接机器人、不发起运动、不保留运动授权。
+
+
+### 原生手眼任务（多窗口开发分支）
+
+`handeye_capture` 和 `handeye_local` 新增必填 `operationId`（1–128 个 ASCII 字母、数字或连字符）。实际调用 WebView 必须为 `page-handeye`；主窗口或其他页面不能冒充提交。原生层先登记任务并占用页面迁移锁，才运行只读 SSH 采集或本地求解子进程。所属页面每秒调用 `native_local_task_touch({operationId})`，最多一个在途心跳；其他页面的快照查询不续租。取消使用 `native_local_task_cancel({operationId})`。取消或超过 5 秒无有效心跳后，原生看门狗停止等待并销毁工作 future，子进程设置 `kill_on_drop`；SSH 远端只读采集仍保留自身 12 秒超时。已过期、旧编号和其他页面心跳不能恢复任务。
+
+`native_local_task_snapshot` 返回 null 或 `{id,window,kind,phase,message}`，变化事件 `native-local-tasks-changed` 只通知重读。kind 为 capture/compute，phase 为 running/stopping/succeeded/failed/cancelled；仅保留最近一项，message 最多 512 字符。图像、样本、结果及 operationId 不广播。事件回调在状态锁外执行。任务取消/失败终态保留供其他窗口及重建页面读取；成功后全局状态条隐藏。断开/更换采集来源或页面卸载时前端请求取消并拒绝迟到结果。文件选择对话框、文件导出仍沿用既有前端忙状态，本阶段不宣称这些操作已经有同等原生任务生命周期。

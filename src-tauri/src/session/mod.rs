@@ -18,3 +18,5 @@ pub mod layout;
 pub mod migration;
 pub mod monitor;
 pub mod documents;
+
+pub mod local_tasks;

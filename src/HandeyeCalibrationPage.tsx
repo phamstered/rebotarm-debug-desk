@@ -1,3 +1,4 @@
+import { useHandeyeInvoke } from "./handeyeTaskLogic";
 import { useEffect, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { invoke } from "@tauri-apps/api/core";
@@ -112,6 +113,7 @@ export function HandeyeCalibrationPage({
     inflight = useRef(false),
     mounted = useRef(true);
   const currentSource = handeyeSource(profile);
+  const invokeTask = useHandeyeInvoke(`${currentSource}:${connected}`);
   useEffect(() => {
     generation.current++;
     setImage(null);
@@ -245,7 +247,7 @@ export function HandeyeCalibrationPage({
       record ? "采样中（等待停稳与同步帧）" : "检测标定板",
       async (valid) => {
         setSelected("");
-        const capture = await invoke<HandeyeCapture>("handeye_capture", {
+        const capture = await invokeTask<HandeyeCapture>("handeye_capture", {
           profile,
           config: { ...context, mode: record ? "capture" : "preview" },
         });
@@ -256,7 +258,7 @@ export function HandeyeCalibrationPage({
         setImageView("observation");
         setOverlay(true);
         setQuality(null);
-        const detection = await invoke<HandeyeDetection>("handeye_local", {
+        const detection = await invokeTask<HandeyeDetection>("handeye_local", {
           request: {
             op: "detect",
             board,
@@ -303,7 +305,7 @@ export function HandeyeCalibrationPage({
   }
   function solve() {
     void run("Mac 本地求解", async (valid) => {
-      const next = await invoke<HandeyeResult>("handeye_local", {
+      const next = await invokeTask<HandeyeResult>("handeye_local", {
         request: solverRequest(dataset, method),
       });
       if (valid()) {
@@ -477,7 +479,7 @@ export function HandeyeCalibrationPage({
                   disabled={Boolean(busy) || Boolean(configError)}
                   onClick={() =>
                     void run("生成标定板", async (valid) => {
-                      const r = await invoke<{ image_png: string }>(
+                      const r = await invokeTask<{ image_png: string }>(
                         "handeye_local",
                         { request: { op: "board", board } },
                       );
@@ -577,7 +579,7 @@ export function HandeyeCalibrationPage({
                 disabled={!connected || Boolean(busy) || Boolean(configError)}
                 onClick={() =>
                   void run("读取 TF Frames", async (valid) => {
-                    const r = await invoke<{ frames: string[] }>(
+                    const r = await invokeTask<{ frames: string[] }>(
                       "handeye_capture",
                       { profile, config: { ...context, mode: "frames" } },
                     );

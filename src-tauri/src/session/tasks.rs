@@ -60,6 +60,7 @@ struct Inner {
     sequence: u64,
     task: Option<Task>,
     migrations: BTreeSet<String>,
+    local_operations: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -83,6 +84,16 @@ pub struct Migration {
     tasks: Arc<Tasks>,
     label: String,
 }
+pub struct LocalOperation {
+    tasks: Arc<Tasks>,
+    label: String,
+}
+impl Drop for LocalOperation {
+    fn drop(&mut self) {
+        self.tasks.inner.lock().unwrap().local_operations.remove(&self.label);
+    }
+}
+
 impl Drop for Migration {
     fn drop(&mut self) {
         self.tasks
@@ -136,8 +147,16 @@ impl Tasks {
             .map(|task| task.snapshot.clone())
     }
 
+    pub fn local_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.migrations.contains(label) { return Err("页面正在迁移，不能开始本地任务".into()); }
+        if !inner.local_operations.insert(label.into()) { return Err("此页面已有本地任务正在进行".into()); }
+        Ok(LocalOperation { tasks: self.clone(), label: label.into() })
+    }
+
     pub fn migration(self: &Arc<Self>, label: &str) -> Result<Migration, String> {
         let mut inner = self.inner.lock().unwrap();
+        if inner.local_operations.contains(label) { return Err("此页面的本地任务尚未结束，不能迁移窗口".into()); }
         if inner
             .task
             .as_ref()
