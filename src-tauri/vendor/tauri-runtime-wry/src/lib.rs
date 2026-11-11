@@ -1525,7 +1525,7 @@ pub enum WebviewMessage {
   SetSize(Size),
   SetBounds(tauri_runtime::dpi::Rect),
   SetFocus,
-  Reparent(WindowId, Sender<Result<()>>),
+  Reparent(WindowId, Arc<Mutex<WindowId>>, Sender<Result<()>>),
   SetAutoResize(bool),
   SetZoom(f64),
   SetBackgroundColor(Option<Color>),
@@ -1766,21 +1766,13 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
   }
 
   fn reparent(&self, window_id: WindowId) -> Result<()> {
-    let mut current_window_id = self.window_id.lock().unwrap();
-    let (tx, rx) = channel();
-    send_user_message(
-      &self.context,
-      Message::Webview(
-        *current_window_id,
-        self.webview_id,
-        WebviewMessage::Reparent(window_id, tx),
-      ),
-    )?;
-
-    rx.recv().map_err(|_| Error::FailedToReceiveMessage)??;
-
-    *current_window_id = window_id;
-    Ok(())
+    reparent::request(&self.window_id, |source, tx| {
+      send_user_message(
+        &self.context,
+        Message::Webview(source, self.webview_id,
+          WebviewMessage::Reparent(window_id, self.window_id.clone(), tx)),
+      )
+    }, Error::FailedToReceiveMessage)
   }
 
   fn cookies_for_url(&self, url: Url) -> Result<Vec<Cookie<'static>>> {
@@ -3695,7 +3687,7 @@ fn handle_user_message<T: UserEvent>(
         target_os = "netbsd",
         target_os = "openbsd"
       ))]
-      if let WebviewMessage::Reparent(new_parent_window_id, tx) = webview_message {
+      if let WebviewMessage::Reparent(new_parent_window_id, parent, tx) = webview_message {
         let result = reparent::relocate(
           &mut windows.0.borrow_mut(), window_id, new_parent_window_id,
           |view| view.id == webview_id,
@@ -3718,6 +3710,11 @@ fn handle_user_message<T: UserEvent>(
             })
           }, Error::FailedToSendMessage,
         );
+        // Commit routing on the GUI thread, before acknowledging or processing
+        // another message. A caller waiting on the GUI never holds this lock.
+        if result.is_ok() {
+          *parent.lock().unwrap() = new_parent_window_id;
+        }
         let _ = tx.send(result);
 
         return;
@@ -3733,7 +3730,7 @@ fn handle_user_message<T: UserEvent>(
         match webview_message {
           WebviewMessage::WebviewEvent(_) => { /* already handled */ }
           WebviewMessage::SynthesizedWindowEvent(_) => { /* already handled */ }
-          WebviewMessage::Reparent(_window_id, _tx) => { /* already handled */ }
+          WebviewMessage::Reparent(..) => { /* already handled */ }
           WebviewMessage::AddEventListener(id, listener) => {
             webview
               .webview_event_listeners

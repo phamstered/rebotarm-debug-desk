@@ -4,6 +4,20 @@
 //! Keep ownership in the source registry until the native operation succeeds.
 //! The caller runs on the GUI thread, with both windows protected from removal.
 use std::collections::BTreeMap;
+use std::sync::{mpsc::{channel, Sender}, Mutex};
+
+/// GUI callbacks (including event delivery) read the parent while a worker
+/// waits for relocation. Never retain its lock across dispatch or the reply.
+pub(crate) fn request<K: Copy, E>(
+  parent: &Mutex<K>,
+  dispatch: impl FnOnce(K, Sender<Result<(), E>>) -> Result<(), E>,
+  disconnected: E,
+) -> Result<(), E> {
+  let source = *parent.lock().unwrap();
+  let (tx, rx) = channel();
+  dispatch(source, tx)?;
+  rx.recv().map_err(|_| disconnected)?
+}
 
 pub(crate) trait Container {
   type View;
@@ -47,6 +61,30 @@ pub(crate) fn relocate<K: Copy + Ord, C: Container, E>(
 mod tests {
   use super::*;
   use std::{cell::Cell, rc::Rc};
+  #[test]
+  fn waiting_for_reparent_does_not_block_gui_events_reading_parent() {
+    let parent = Mutex::new(1);
+    request(&parent, |source, tx| {
+      assert_eq!(source, 1);
+      // The real main thread can deliver workspace_page_ready before handling
+      // the queued reparent. It must acquire this same routing lock freely.
+      let mut gui_parent = parent.try_lock().expect("GUI event blocked by waiting caller");
+      assert_eq!(*gui_parent, 1);
+      *gui_parent = 2;
+      drop(gui_parent);
+      tx.send(Ok(())).unwrap();
+      Ok(())
+    }, "disconnected").unwrap();
+    assert_eq!(*parent.lock().unwrap(), 2);
+    assert_eq!(request(&parent, |source, tx| {
+      assert_eq!(source, 2);
+      assert!(parent.try_lock().is_ok());
+      tx.send(Err("native failure")).unwrap();
+      Ok(())
+    }, "disconnected"), Err("native failure"));
+    assert_eq!(*parent.lock().unwrap(), 2);
+    assert_eq!(request(&parent, |_, _tx| Ok(()), "disconnected"), Err("disconnected"));
+  }
   struct View { id: u32, payload: String, drops: Rc<Cell<u32>> }
   impl Drop for View { fn drop(&mut self) { self.drops.set(self.drops.get()+1); } }
   struct Parent { available: bool, children: bool, views: Vec<View> }

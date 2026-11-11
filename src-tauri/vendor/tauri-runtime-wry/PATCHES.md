@@ -13,12 +13,18 @@ Issue: phamstered/rebotarm-debug-desk#260.
   eager parent metadata after a rejected move.
 - The destination is marked as a child-WebView window. macOS inner-size queries
   then use the native window size instead of the incoming WebView's old bounds.
+- Reparent copies the source routing ID and releases its mutex before posting
+  the GUI request or waiting for its reply. The GUI commits the new routing ID
+  after native success, before acknowledging. This prevents startup deadlock
+  when a worker restores a page while the GUI emits workspace readiness events.
 - A vanished response receiver does not panic the GUI thread; a vanished sender
   produces a runtime error instead of panicking the caller.
 
 `src/reparent.rs` contains the actual registry transaction used by the runtime;
 its tests cover failed/missing/same-parent requests, retained page payload and
-exactly-once drop/transfer. `npm run test:rust` runs these dependency tests too.
+exactly-once drop/transfer. A routing-lock regression also proves GUI event
+reads remain possible while relocation is pending, with failure retaining the
+old parent. `npm run test:rust` runs these dependency tests too.
 Application-level bounds/visibility recovery is tested separately. Native fatal
 process termination cannot be rolled back and is not claimed to be recoverable.
 
