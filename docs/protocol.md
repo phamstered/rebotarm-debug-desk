@@ -575,3 +575,9 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 桌面原生 IPC 与 Jetson Bridge 操作分开。主 WebView 调用 `native_bridge_attach` 时传入当前 SSH 会话实际分配的端口及 Profile；Rust 核验端口归属、Profile 格式和 16 KiB 大小上限。功能 WebView 通过 `native_bridge_context` 读取连接代次/连接状态/Profile，再不带端口地附着当前会话，不能据此新建第二个上游连接。原生调用者身份取 WebView label，不取可变的父 Window label。取消中的附着完成清理后才能进行替代附着，旧 token 不允许覆盖新消费者。
 
 窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。
+
+### 原生共享只读状态（多窗口开发分支）
+
+`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。六个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
+
+`native_observation_refresh {epoch, source, afterPending}` 通过每 source 的串行锁查询；普通同时刷新可共用同一结果，`afterPending:true` 强制在此前工作完成后重新发起，用于控制器操作后的实态核验。刷新响应额外携带 `handler_elapsed_ms`，前端从 IPC 往返耗时中扣除原生等待时间，剩余传输时间计入 age；Controller 的服务器等待也只扣除一次。`native_observation_interval {seconds}` 仅主 WebView 可调用，Topics 间隔为 5–300 秒。原有 Bridge `topics` 请求在桌面原生层复用该源，显式 `refresh:true` 触发共享刷新；浏览器回退仍直接查询 Bridge。

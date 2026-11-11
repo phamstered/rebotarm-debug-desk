@@ -179,8 +179,8 @@ export class BridgeClient {
     }, signal);
   }
 
-  async listTopics(): Promise<TopicInfo[]> {
-    const response = await this.request({ op: "topics" });
+  async listTopics(refresh = false): Promise<TopicInfo[]> {
+    const response = await this.request({ op: "topics", ...(refresh ? { refresh: true } : {}) });
     return response.topics ?? [];
   }
 

@@ -50,6 +50,53 @@ pub fn native_bridge_context(window: Webview, hub: State<'_, Runtime>) -> Result
     Ok(hub.context())
 }
 
+fn observation_caller(window: &Webview) -> Result<(), String> {
+    if window.label() == "main" || super::windows::Page::from_label(window.label()).is_some() {
+        Ok(())
+    } else {
+        Err("未授权的功能页面".into())
+    }
+}
+
+#[tauri::command]
+pub fn native_observation_snapshot(
+    window: Webview,
+    hub: State<'_, Runtime>,
+) -> Result<super::observations::Snapshot, String> {
+    observation_caller(&window)?;
+    Ok(hub.observations.snapshot())
+}
+
+#[tauri::command]
+pub async fn native_observation_refresh(
+    window: Webview,
+    hub: State<'_, Runtime>,
+    epoch: u64,
+    source: super::observations::Source,
+    after_pending: bool,
+) -> Result<super::observations::Snapshot, String> {
+    observation_caller(&window)?;
+    let started = Instant::now();
+    let mut snapshot = hub
+        .observations
+        .refresh(epoch, source, after_pending)
+        .await?;
+    snapshot.handler_elapsed_ms = started.elapsed().as_millis() as u64;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn native_observation_interval(
+    window: Webview,
+    hub: State<'_, Runtime>,
+    seconds: u64,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("只有主窗口可以修改全局刷新间隔".into());
+    }
+    hub.observations.set_topics_interval(seconds)
+}
+
 #[tauri::command]
 pub async fn native_bridge_detach(
     window: Webview,

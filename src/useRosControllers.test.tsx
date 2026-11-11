@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { defaultProfile, type BridgeEnvelope } from "./types";
 import { useRosControllers } from "./useRosControllers";
+import type { SharedObservations } from "./nativeObservationsLogic";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const native = vi.mocked(invoke),
   request = vi.fn();
@@ -391,4 +392,23 @@ it("preserves the server's timeout and raw reason for an old ten-second snapshot
   expect(hook.result.current.error).toContain(
     "ListControllers query 2 timed out",
   );
+});
+
+it("uses shared native observations without polling the Bridge and forces post-action checks through the native gate", async () => {
+  vi.useFakeTimers();
+  const entry = { sequence: 1, value: wire("inactive"), error: null, age_ms: 20, ttl_ms: 3100, receivedAt: 0, expired: false };
+  const refresh = vi.fn().mockResolvedValue({ ...entry, sequence: 2, value: wire("active") });
+  const shared = { enabled: true, connected: true, epoch: 1, revision: 1, entries: { controllers: entry }, refresh } as SharedObservations;
+  const hook = renderHook((shared: SharedObservations) => useRosControllers({ ...options, shared }), { initialProps: shared });
+  await flush();
+  expect(hook.result.current.status?.controllers[0].state).toBe("inactive");
+  expect(request).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(request).not.toHaveBeenCalled();
+  await act(async () => { await hook.result.current.fetchStatus(true, true); });
+  expect(refresh).toHaveBeenCalledExactlyOnceWith("controllers", true);
+  expect(hook.result.current.status?.controllers[0].state).toBe("active");
+  hook.rerender({ ...shared, revision: 3, entries: { controllers: { ...entry, sequence: 3, error: "shared query failed", value: null } } });
+  await flush();
+  expect(hook.result.current.status).toMatchObject({ fresh: false, message: "shared query failed", controllers: [{ ...controller, state: "active" }] });
 });

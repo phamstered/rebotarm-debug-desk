@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import type { ClockSyncInfo } from "./types";
+import { observationAge, observationValue, type SharedObservations } from "./nativeObservationsLogic";
 
 export type ClockSyncStatus = Omit<ClockSyncInfo, "state"> & {
   state: ClockSyncInfo["state"] | "unsupported" | "disconnected";
@@ -27,12 +28,12 @@ export function parseClockSyncInfo(value: unknown): ClockSyncStatus {
   return { supported: true, state: value.state as ClockSyncInfo["state"], message: value.message, source_topic: value.source_topic, generation: Number(value.generation), source_offset_ms: value.source_offset_ms as number | undefined, feedback_age_ms: value.feedback_age_ms as number | undefined, firmware: value.firmware as ClockSyncInfo["firmware"] };
 }
 
-export function useClockSync(bridge: Pick<BridgeClient, "request">, connected: boolean, sessionKey: string): ClockSyncStatus {
+export function useClockSync(bridge: Pick<BridgeClient, "request">, connected: boolean, sessionKey: string, shared?: SharedObservations): ClockSyncStatus {
   const context = useMemo(() => ({ valid: connected }), [bridge, connected, sessionKey]);
   const [snapshot, setSnapshot] = useState<{ context: typeof context; value: ClockSyncStatus } | null>(null);
   useEffect(() => {
     context.valid = connected;
-    if (!connected) return () => { context.valid = false; };
+    if (!connected || shared) return () => { context.valid = false; };
     const abort = new AbortController();
     let alive = true, pending = false, unsupported = false, receivedAt = -Infinity;
     const update = (value: ClockSyncStatus) => { if (alive && context.valid) setSnapshot({ context, value }); };
@@ -64,7 +65,18 @@ export function useClockSync(bridge: Pick<BridgeClient, "request">, connected: b
       });
     }, 250);
     return () => { alive = false; context.valid = false; abort.abort(); window.clearInterval(polling); window.clearInterval(expiry); };
-  }, [context, bridge, connected]);
+  }, [context, bridge, connected, Boolean(shared)]);
   if (!connected) return { ...waiting(), state: "disconnected", message: "连接 Jetson 后检查时钟同步" };
+  if (shared) {
+    const entry = shared.entries.clock;
+    try {
+      const parsed = parseClockSyncInfo(observationValue(entry));
+      return { ...parsed, feedback_age_ms: parsed.feedback_age_ms === undefined ? undefined : parsed.feedback_age_ms + observationAge(entry!) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const unsupported = /未知操作|unknown (?:op|operation)|unsupported/i.test(message);
+      return { ...waiting(), supported: !unsupported, state: unsupported ? "unsupported" : entry ? "stale" : "waiting", message };
+    }
+  }
   return snapshot?.context === context ? snapshot.value : waiting();
 }

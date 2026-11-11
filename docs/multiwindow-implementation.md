@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。公共轮询、共享编辑状态和原生任务租约等仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。六项公共查询已接入 Rust，运动日志轮询、共享编辑状态和原生任务租约等仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -23,7 +23,7 @@
 ## 待接入和验收
 
 1. 原生会话与前端适配器已接通并有跨窗口模拟测试。后续必须补全窗口异常退出时的任务所有权/安全停止，原生共享资源缓存，以及 Monitor 采集历史；单纯最新帧合并不能替代 Monitor 的独立采样历史。
-2. 公共状态/轮询/任务生命周期与各页面数据从 App 独立出来；手眼原始样本不随窗口复制，页面编辑有明确单写者和版本。
+2. Agent、USB、arm mode、Controller、Topics、clock 六项公共状态/轮询已从页面定时器移到原生会话。运动状态/日志及 rosbag 状态、任务生命周期和共享编辑数据仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
 3. 页面路由、拆出、收回、关闭拦截已接入。采用同一个原生 WebView reparent，迁移时不复制/重建 React、样本或 GPU 场景；原生调用者鉴权也改为稳定 WebView 身份。布局持久化、拔屏恢复、主窗口关闭、完整迁移失败回滚仍待补齐。
 4. 窗口菜单与全部九页面接入；执行/采样中禁止迁移；全局任务状态一致；主窗口关闭不终止其他窗口会话。
 5. 图像/点云和 Monitor 展示按窗口兴趣驱动；共享资源缓存、刷新限流、源数据新鲜度门禁。
@@ -47,3 +47,10 @@
 本机 `tauri-runtime-wry 2.11.4` 的空 Window 在 reparent 后尚无 `has_children` 标志，`inner_size()` 会返回首个 WebView 的旧 frame。因此须在移入前读取空窗口大小，后续使用 `Resized/ScaleFactorChanged` 事件的真实尺寸。诊断曾记录新 1200 px 窗口内查询得到旧 1440 px 页面宽度，修复后已视觉复验。主窗口嵌入区域还需把 CSS viewport 换算到 WebView 原生 frame，保留 WebKit 的标题栏 inset，避免上移遮挡主窗口按钮；不硬编码标题栏高度。
 
 最新一轮全量测试：828 前端、81 Rust 和其余全量脚本通过（`/tmp/260-workspace-verified-tests.log`）；`npm run build` 日志为 `/tmp/260-workspace-verified-build.log`。原生隔离构建为 `/tmp/260-native-window-build-5.log`，正式应用尚未安装。
+
+## 共享查询接入记录
+
+- `observations.rs` 在应用会话中统一调度六个固定只读来源，查询不依赖任何 WebView；每源串行执行，快照和错误限制大小。普通并发刷新合并，操作后复查强制排在旧查询后重新发起。
+- 页面只订阅状态变更并读取快照；不同窗口的显示状态保留同一连接代次、递增版本和原始帧龄。过期处理本地执行，不发起远端请求。Controller 缓存/服务器等待与原生 IPC 等待分别计时，不能重复扣除或延长有效期。
+- 断线取消在途只读查询，三个 SSH 探测进程启用 drop 时终止，旧会话结果不能写入新连接。原生 Topics 请求也复用公共来源，避免页面初次附着重复发现。
+- 隔离测试覆盖九个消费者只产生一次查询、普通刷新合并、操作后新查询、无 WebView 时继续调度、断线取消、过期/错误、超大响应和前端旧响应隔离。全量测试日志 `/tmp/260-shared-polling-tests.log`，前端构建日志 `/tmp/260-shared-polling-build.log`。本阶段没有启动真实机械臂动作，也未更新正式安装包。

@@ -1,5 +1,6 @@
 import { NativeWorkspaceHost, NativePageToolbar } from "./NativeWorkspace";
 import { nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
+import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
 import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady } from "./teachingLogic";
@@ -432,11 +433,13 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
   const [statusActionNotice, setStatusActionNotice] = useState("");
   const bridge = useMemo(() => new BridgeClient(), []);
+  const sharedObservations = useNativeObservations(nativeDesktop() && stage === "connected",
+    JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]));
   const controllerBlockRef = useRef("");
   const getControllerBlockReason = useCallback(() => controllerBlockRef.current, []);
   const controllers = useRosControllers({ profile, bridge, supported: bridgeHello?.controllersInfoSupported, connected: stage === "connected",
     connectionKey: JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]),
-    getBlockReason: getControllerBlockReason });
+    getBlockReason: getControllerBlockReason, shared: nativeDesktop() ? sharedObservations : undefined });
   const { status: rosControl, refreshing: rosControlRefreshing, action: controllerAction,
     message: controllerActionMessage, error: controllerActionError,
     refresh: refreshRosControllers, fetchStatus: fetchRosControllers, switchController } = controllers;
@@ -652,7 +655,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   const positionProfileKey = profileKeyFor(profile);
   const motionGroups = useMotionGroups(positionProfileKey);
-  const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]));
+  const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]), nativeDesktop() ? sharedObservations : undefined);
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
     controllerAction ? "Controller 切换进行中，请等待完成" : statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
       activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先激活 arm_trajectory_controller 轨迹控制" : "");
@@ -813,7 +816,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     topicRefreshInFlightRef.current = true;
     if (manual) setTopicRefreshing(true);
     try {
-      const discovered = await bridge.listTopics();
+      const discovered = await bridge.listTopics(manual);
       if (generation !== connectionGenerationRef.current) return;
       setTopics(discovered);
       setTopicRefreshError("");
@@ -895,7 +898,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic, monitorOwner]);
 
   useEffect(() => {
-    if (stage !== "connected") return;
+    if (stage !== "connected" || nativeDesktop()) return;
     let disposed = false;
     const refresh = async () => {
       try {
@@ -923,6 +926,10 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   const refreshUsbAndArm = useCallback(async () => {
     if (stage !== "connected" && !sshOk) return;
+    if (nativeDesktop() && stage === "connected") {
+      await Promise.allSettled([sharedObservations.refresh("usb", true), sharedObservations.refresh("arm", true)]);
+      return;
+    }
     try {
       const usb = await invoke<UsbProbeStatus>("probe_jetson_usb", { profile });
       setUsbProbe(usb);
@@ -943,10 +950,10 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     } catch {
       // keep previous arm mode on transient probe failure
     }
-  }, [profile, stage, sshOk]);
+  }, [profile, stage, sshOk, sharedObservations.refresh]);
 
   useEffect(() => {
-    if (stage !== "connected") return;
+    if (stage !== "connected" || nativeDesktop()) return;
     let disposed = false;
     const refresh = async () => {
       if (disposed) return;
@@ -959,6 +966,38 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       window.clearInterval(timer);
     };
   }, [refreshUsbAndArm, stage]);
+
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    const entry = sharedObservations.entries.agent;
+    if (!entry) { setAgentStatus(null); setAgentChecked(false); return; }
+    try { setAgentStatus(observationValue<AgentServiceStatus>(entry)); setAgentError(""); }
+    catch (reason) { setAgentStatus(null); setAgentError(String(reason)); }
+    setAgentChecked(true);
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.agent?.sequence, sharedObservations.entries.agent?.expired, sharedObservations.connected]);
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    const entry = sharedObservations.entries.usb;
+    if (!entry) { setUsbProbe(null); setUsbChecked(false); return; }
+    try { setUsbProbe(observationValue<UsbProbeStatus>(entry)); }
+    catch (reason) { setUsbProbe({ mcuPresent: false, mcuVidPid: "", realsensePresent: false, realsenseLines: [], rawLsusb: "", error: String(reason) }); }
+    setUsbChecked(true);
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.usb?.sequence, sharedObservations.entries.usb?.expired, sharedObservations.connected]);
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    try { setArmMode(observationValue<ArmModeStatus>(sharedObservations.entries.arm)); }
+    catch { setArmMode(null); }
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.arm?.sequence, sharedObservations.entries.arm?.expired, sharedObservations.connected]);
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    const entry = sharedObservations.entries.topics;
+    if (!entry) return;
+    try { setTopics(observationValue<BridgeEnvelope>(entry).topics ?? []); setTopicRefreshError(""); }
+    catch (reason) { setTopicRefreshError(String(reason)); }
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.topics?.sequence, sharedObservations.entries.topics?.expired]);
+  useEffect(() => {
+    if (nativeMain) void invoke("native_observation_interval", { seconds: settings.refreshIntervalSeconds }).catch(reason => setTopicRefreshError(String(reason)));
+  }, [nativeMain, settings.refreshIntervalSeconds]);
 
   async function switchVlaControllers(activate: string[], deactivate: string[]) {
     const message = await invoke<string>("switch_ros_controllers", {
@@ -1093,7 +1132,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         if (actionGeneration !== connectionGenerationRef.current) return;
         setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
         try {
-          const agent = await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile });
+          const agent = nativeDesktop() ? observationValue<AgentServiceStatus>(await sharedObservations.refresh("agent", true)) : await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile });
           if (actionGeneration !== connectionGenerationRef.current) return;
           setAgentStatus(agent);
           setAgentError("");
@@ -1174,7 +1213,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }
 
   useEffect(() => {
-    if (stage !== "connected") return;
+    if (stage !== "connected" || nativeDesktop()) return;
     const timer = window.setInterval(() => void refreshTopics(false), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [refreshTopics, settings.refreshIntervalSeconds, stage]);
@@ -1319,6 +1358,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
       setStage("connected");
       activeStep = "agent";
+      if (!nativeDesktop()) {
       try {
         setAgentStatus(await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile }));
         setAgentError("");
@@ -1344,6 +1384,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       void invoke<ArmModeStatus>("probe_arm_mode", { profile })
         .then(setArmMode)
         .catch(() => undefined);
+      }
       rememberLastKnownDomainId(profile.rosDomainId);
       setLastKnownDomainId(profile.rosDomainId);
       const successHistory = rememberConnectHistory({

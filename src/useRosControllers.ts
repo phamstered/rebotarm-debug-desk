@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { observationEnvelope, type SharedObservations } from "./nativeObservationsLogic";
 import type { BridgeClient } from "./bridge";
 import type {
   ConnectionProfile,
@@ -47,6 +48,7 @@ export function useRosControllers({
   connected,
   connectionKey,
   getBlockReason,
+  shared,
 }: {
   profile: ConnectionProfile;
   bridge: Pick<BridgeClient, "request">;
@@ -54,7 +56,10 @@ export function useRosControllers({
   connected: boolean;
   connectionKey: string | number;
   getBlockReason(): string;
+  shared?: SharedObservations;
 }) {
+  const sharedRef = useRef(shared);
+  sharedRef.current = shared;
   const blockRef = useRef(getBlockReason);
   blockRef.current = getBlockReason;
   const signature = JSON.stringify(profile);
@@ -214,7 +219,12 @@ export function useRosControllers({
           if (!context.valid || context.revision !== revision)
             throw new Error("连接已改变，忽略旧控制器查询");
           const sentAt = performance.now();
-          const response = await bridge.request(
+          const native = sharedRef.current;
+          const response = native ? observationEnvelope(refresh ? await native.refresh("controllers", afterPending) : (() => {
+            const entry = native.entries.controllers;
+            if (!entry) throw new Error("等待共享 Controller 查询");
+            return entry;
+          })()) : await bridge.request(
             { op: "controllers_info", refresh },
             5500,
             context.abort.signal,
@@ -304,13 +314,17 @@ export function useRosControllers({
   }, [fetchStatus]);
   useEffect(() => {
     if (!connected) return;
+    if (shared) return;
     void fetchStatus(false).catch(() => {});
     const timer = window.setInterval(
       () => void fetchStatus(false).catch(() => {}),
       CONTROLLER_CACHE_POLL_MS,
     );
     return () => window.clearInterval(timer);
-  }, [connected, fetchStatus, aged, update]);
+  }, [connected, fetchStatus, aged, update, Boolean(shared)]);
+  useEffect(() => {
+    if (connected && shared) void fetchStatus(false).catch(() => {});
+  }, [connected, fetchStatus, shared?.epoch, shared?.entries.controllers?.sequence, shared?.entries.controllers?.expired, shared?.connected]);
   const switchController = useCallback(
     async (controller: ControllerInfo, action: ControllerSwitchAction) => {
       if (context.switching) return;

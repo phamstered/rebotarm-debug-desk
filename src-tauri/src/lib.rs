@@ -962,6 +962,7 @@ async fn check_ssh(profile: ConnectionProfile) -> Result<String, String> {
 async fn check_micro_ros_agent(profile: ConnectionProfile) -> Result<AgentServiceStatus, String> {
     const SERVICE: &str = "micro-ros-agent-stm32h723.service";
     let output = ssh_base(&profile)
+        .kill_on_drop(true)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1554,6 +1555,7 @@ async fn deploy_bridge(
 async fn probe_jetson_usb(profile: ConnectionProfile) -> Result<UsbProbeStatus, String> {
     let remote = usb_probe_remote_command();
     let output = ssh_base(&profile)
+        .kill_on_drop(true)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1614,6 +1616,7 @@ async fn restart_micro_ros_agent(profile: ConnectionProfile) -> Result<RemoteAct
 async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, String> {
     let remote = arm_mode_remote_command(&profile, "status")?;
     let output = ssh_base(&profile)
+        .kill_on_drop(true)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1695,6 +1698,9 @@ pub fn run() {
         .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
             session::ipc::native_bridge_context,
+            session::ipc::native_observation_snapshot,
+            session::ipc::native_observation_refresh,
+            session::ipc::native_observation_interval,
             session::workspace::workspace_snapshot,
             session::workspace::workspace_select,
             session::workspace::workspace_detach,
@@ -1740,6 +1746,10 @@ pub fn run() {
             positions::positions_save
         ])
         .setup(|app| {
+            let observations_handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>().observations.set_changed(std::sync::Arc::new(move || {
+                let _ = observations_handle.emit("native-observations-changed", ());
+            }));
             let handle = app.handle().clone();
             app.state::<session::runtime::Runtime>()
                 .set_changed(std::sync::Arc::new(move || {

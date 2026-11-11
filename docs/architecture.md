@@ -232,3 +232,7 @@ Local vision calls have a single-operation semaphore, size limits and a deadline
 桌面主 WebView 负责连接和导航。功能页按白名单 URL 懒创建独立的子 WebView，在主窗口区域和独立 macOS Window 之间 reparent。页面 JS 堆与图像、模型视图不会因拆收被复制；每个页面只有一个实例。IPC 以原生调用 WebView label 和 incarnation 鉴权，重新挂到另一 Window 不改变页面身份。页面在共享 Rust 会话中独立附着消费者，主窗口不转发其数据。
 
 主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。
+
+### 多窗口公共状态查询（开发分支）
+
+Rust 会话以固定来源调度 Agent、USB、arm mode、Controller、Topics 与时钟诊断，各来源只有一个在途查询。主窗口和功能窗口通过事件失效通知读取有界快照，主 WebView 不负责中转或定时驱动。手动刷新与自动查询共用串行锁；用于操作后核验的请求在已有请求完成后重新发起。窗口接收端保留源帧龄并独立过期，连接代次和递增快照版本隔离旧响应。运动状态/日志、rosbag 与共享编辑状态仍待迁移；完整范围见多窗口实现记录。

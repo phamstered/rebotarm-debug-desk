@@ -66,6 +66,7 @@ impl Core {
 /// Application lifetime, independent of all visible WebViews. It is deliberately
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
+    pub observations: Arc<super::observations::Observations>,
     core: Arc<Mutex<Core>>,
     connect_gate: AsyncMutex<()>,
     subscriptions_gate: AsyncMutex<()>,
@@ -76,6 +77,7 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            observations: Arc::new(super::observations::Observations::default()),
             core: Arc::new(Mutex::new(Core {
                 epoch: 0,
                 windows: WindowRegistry::default(),
@@ -111,6 +113,7 @@ impl Runtime {
         let transport = {
             let mut core = self.core.lock().unwrap();
             core.epoch += 1;
+            self.observations.stop(core.epoch);
             core.error = Some("Bridge 会话已关闭".into());
             core.subscriptions = SubscriptionRegistry::new(core.epoch, 256);
             core.rgbd_owner = None;
@@ -147,6 +150,7 @@ impl Runtime {
         let events_core = self.core.clone();
         let errors_core = self.core.clone();
         let errors_changed = self.changed.clone();
+        let observations = self.observations.clone();
         let origin = self.origin;
         let transport = Transport::connect(
             port,
@@ -165,6 +169,7 @@ impl Runtime {
                 }
                 core.error = Some(error);
                 core.transport = None;
+                observations.stop(epoch);
                 for client in core.clients.values() {
                     client.notify.notify_one();
                 }
@@ -194,7 +199,11 @@ impl Runtime {
             transport.close();
             return Err(error.clone());
         }
-        core.transport = Some(Arc::new(transport));
+        let transport = Arc::new(transport);
+        core.transport = Some(transport.clone());
+        if core.profile.is_object() {
+            self.observations.start(epoch, super::observations::reader(transport, core.profile.clone()));
+        }
         drop(core);
         if let Some(changed) = self.changed.lock().unwrap().clone() {
             changed();
@@ -328,6 +337,15 @@ impl Runtime {
             core.transport.clone().ok_or("Bridge 尚未连接")?
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
+        if op == "topics" && self.observations.snapshot().connected {
+            let snapshot = if message["refresh"] == true {
+                self.observations.refresh(attachment.epoch, super::observations::Source::Topics, false).await?
+            } else { self.observations.read(attachment.epoch, super::observations::Source::Topics).await? };
+            self.core.lock().unwrap().validate(native_label, attachment)?;
+            let entry = snapshot.entries.get(&super::observations::Source::Topics).ok_or("Topics 查询未返回")?;
+            if let Some(error) = &entry.error { return Err(error.clone()); }
+            return WireFrame::parse(serde_json::to_vec(&entry.value).map_err(|e| e.to_string())?.into(), false);
+        }
         if matches!(op, "subscribe" | "unsubscribe") {
             let _gate = self.subscriptions_gate.lock().await;
             let topic = message["topic"].as_str().ok_or("订阅缺少 topic")?;
