@@ -1,6 +1,6 @@
 import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
-import { pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
+import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
@@ -660,6 +660,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   const positionProfileKey = profileKeyFor(profile);
   const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status");
+  useMotionNavigation(hostedPage, workspace.snapshot.motion_navigation, positionProfileKey, setMotionTab, setError);
   const positionStore = positionsEditor.store;
   const createPosition = positionsEditor.create, editPosition = positionsEditor.update, removePosition = positionsEditor.remove;
   const motionGroups = useMotionGroups(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion");
@@ -1722,6 +1723,14 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     void connect();
   }
 
+  async function openOfflineMotion(tab: "positions" | "groups") {
+    if (!nativeMain) { if (tab === "positions") setManagePositions(true); else setManageMotionGroups(true); return; }
+    try {
+      await invoke("workspace_open_motion", {tab, profileKey: positionProfileKey});
+      setLocalAppPage("motion"); setOfflineWorkspace(true);
+    } catch (reason) { setError(String(reason)); }
+  }
+
   const renderGroupEditor = (offline = false) => <MotionGroupsPage active={offline || appPage === "motion" && motionTab === "groups" && windowVisible} profileKey={positionProfileKey} groups={motionGroups.groups}
     positions={positionStore.profiles[positionProfileKey]?.positions ?? []}
     ready={motionGroups.ready} saving={motionGroups.saving} error={motionGroups.error}
@@ -1813,9 +1822,9 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
                 if (retained && !workspace.snapshot.pages[appPage]?.ready) setAppPage(retained);
                 setOfflineWorkspace(true);
               }}>返回已打开页面</button>}
-              <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理姿态库</button>
+              <button type="button" className="ghost" onClick={() => void openOfflineMotion("positions")}>管理姿态库</button>
               <button type="button" className="ghost" onClick={() => setManageHandeye(true)}>手眼标定 / 离线样本</button>
-              <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
+              <button type="button" className="ghost" onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
             </div>
           </div>
           {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
@@ -2222,7 +2231,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           )}
 </>}
         urdf={<UrdfInspectorPage active={appPage === "motion" && motionTab === "urdf" && windowVisible} xml={urdf} bridge={bridge} jointState={jointState} receivedAt={messages[profile.jointStateTopic]?.lastAt} topic={profile.urdfTopic} liveUpdates={liveUpdates} />}
-        positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
+        positions={<>          <PositionPage
             profileKey={positionProfileKey}
             editRequest={positionEditRequest}
             store={positionStore} ready={positionsEditor.ready} saving={positionsEditor.saving} error={positionsEditor.error}
@@ -2231,7 +2240,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             onDelete={removePosition}
             motion={positionMotion}
           />
-</> : null}
+</>}
         groups={renderGroupEditor()}
         log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
           plannerLog={(outputActive) => <ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible && outputActive} connected={stage === "connected"} preferredSource="moveit" />} />}

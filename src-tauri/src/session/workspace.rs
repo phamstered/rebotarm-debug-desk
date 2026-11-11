@@ -45,7 +45,25 @@ impl PageState {
 #[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     pub selected: Page,
+    pub motion_navigation: Option<MotionNavigation>,
     pub pages: BTreeMap<Page, PageState>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionTab { Positions, Groups }
+#[derive(Clone, Debug, Serialize)]
+pub struct MotionNavigation { pub revision: u64, pub tab: MotionTab, pub profile_key: String }
+impl Snapshot {
+    fn navigate_motion(&mut self, tab: MotionTab, profile_key: String) -> Result<(), String> {
+        if profile_key.trim().is_empty() || profile_key.len() > 512 || profile_key.chars().any(|c| c.is_control()) {
+            return Err("连接标识无效".into());
+        }
+        let revision = self.motion_navigation.as_ref().map_or(0, |n| n.revision).checked_add(1).ok_or("导航版本已耗尽")?;
+        self.selected = Page::Motion;
+        self.motion_navigation = Some(MotionNavigation { revision, tab, profile_key });
+        Ok(())
+    }
 }
 
 pub struct Workspace {
@@ -74,6 +92,7 @@ impl Default for Workspace {
             recoveries: Mutex::new(BTreeMap::new()),
             state: Mutex::new(Snapshot {
                 selected: Page::Status,
+                motion_navigation: None,
                 pages: BTreeMap::new(),
             }),
             bounds: Mutex::new(Rect {
@@ -909,6 +928,18 @@ pub async fn workspace_select(
 }
 
 #[tauri::command]
+pub async fn workspace_open_motion(
+    app: AppHandle, view: Webview, workspace: State<'_, Workspace>, tab: MotionTab, profile_key: String,
+) -> Result<(), String> {
+    authorize(&view, None)?;
+    workspace.state.lock().unwrap().navigate_motion(tab, profile_key)?;
+    // Retain intent in the snapshot: a lazily created page may not be listening yet.
+    workspace.emit(&app);
+    workspace.select(&app, Page::Motion).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn workspace_detach(
     app: AppHandle,
     view: Webview,
@@ -1127,5 +1158,22 @@ mod tests {
         assert!(Workspace::default()
             .migration_allowed(Page::Handeye)
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+    #[test]
+    fn motion_intent_is_retained_versioned_and_rejects_bad_profiles() {
+        let workspace = Workspace::default();
+        let mut snapshot = workspace.snapshot();
+        snapshot.navigate_motion(MotionTab::Positions, "jetson||22".into()).unwrap();
+        snapshot.navigate_motion(MotionTab::Groups, "jetson||22".into()).unwrap();
+        assert_eq!(snapshot.motion_navigation.as_ref().unwrap().revision, 2);
+        assert!(snapshot.navigate_motion(MotionTab::Groups, "".into()).is_err());
+        assert!(snapshot.navigate_motion(MotionTab::Groups, "bad\nkey".into()).is_err());
+        assert_eq!(snapshot.motion_navigation.unwrap().revision, 2);
+        assert!(serde_json::from_str::<MotionTab>("\"execute\"").is_err());
     }
 }

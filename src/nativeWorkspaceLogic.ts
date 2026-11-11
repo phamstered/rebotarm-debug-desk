@@ -16,7 +16,8 @@ export const PAGE_TITLES: Record<AppPage, string> = {
   handeye: "手眼标定", motor: "Motor", calibration: "Joint4 标定", gravity: "重力辨识",
 };
 export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string; recovery_required?: boolean };
-export type NativeWorkspaceSnapshot = { selected: AppPage; pages: Partial<Record<AppPage, NativePageState>> };
+export type MotionNavigation = {revision:number;tab:"positions"|"groups";profile_key:string};
+export type NativeWorkspaceSnapshot = { motion_navigation?: MotionNavigation | null; selected: AppPage; pages: Partial<Record<AppPage, NativePageState>> };
 /** Reparented WKWebViews can report a stale document.hidden; native window state owns visibility. */
 export function pageWindowVisible(documentVisible: boolean, page: AppPage | undefined, snapshot: NativeWorkspaceSnapshot) {
   return page ? snapshot.pages[page]?.visible === true : documentVisible;
@@ -112,4 +113,16 @@ export function useNativePageSession(options: {
     }).catch(reason => { if (!disposed) callbacks.current.disconnected(String(reason)); });
     return () => { disposed = true; sequence++; unlisten?.(); bridge.close(); };
   }, [options.page, options.bridge]);
+}
+
+/** Navigation applies once after lazy mount; it never replaces a page's editor. */
+export function useMotionNavigation(page: AppPage | undefined, intent: MotionNavigation | null | undefined,
+  profileKey: string, select: (tab: "positions" | "groups") => void, error: (message: string) => void) {
+  const applied = useRef(0);
+  useEffect(() => {
+    if (page !== "motion" || !intent || intent.revision <= applied.current) return;
+    applied.current = intent.revision;
+    if (intent.profile_key !== profileKey) { error("Motion 保留的是另一连接的编辑内容，请先连接所选机器人以同步配置，再重新打开编辑入口"); return; }
+    select(intent.tab);
+  }, [page, intent, profileKey, select, error]);
 }

@@ -612,3 +612,5 @@ Motion/Pick 分别每 1 秒 / 500 ms 调用无续租的 observe，生成快照�
 Monitor 使用 key `monitor`，仅实际 `page-monitor` / `page-dashboard` WebView 可写；主窗口和其他功能页只能读。数据为既有 version 2 布局格式，拒绝未知字段（包括 `series.points`），单文件 512 KiB，上限 32 仪表盘、128 面板/仪表盘、64 曲线/面板、2048 曲线总数。各窗口串行提交编辑操作，队列最多 32 项，重复读取按版本丢弃迟到数据。`positions` / `motion_groups` 已接入同一版本化读写入口，沿用 `positions.v1.json` / `motion-groups.v1.json` 路径，均限制 4 MiB。Positions 仅实际 main / page-motion / page-status 可写，Groups 仅 main / page-motion 可写；旧 `positions_load/save`、`motion_groups_load/save` IPC 已移除。前端按最新文件修改指定连接下的记录，保留其他记录与连接；修改及删除还比较编辑开始时的记录内容，拒绝用旧草稿覆盖已修改或删除的记录。版本冲突不自动重试，窗口保留草稿并展示失败原因。读失败禁止写入，保存成功才关闭姿态表单或开始后续执行检查。
 
 原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。
+
+`workspace_open_motion(tab, profileKey)` 仅主 WebView 可调用；tab 白名单为 positions / groups，连接键非空、最多 512 字节且不含控制字符。原生快照携带递增的 `motion_navigation={revision,tab,profile_key}`，首次懒加载也能读取。Motion 对每个版本只应用一次，连接不匹配时报错，不修改编辑数据。此请求不连接机器人、不发起运动、不保留运动授权。

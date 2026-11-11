@@ -486,6 +486,7 @@ mod tests {
         };
         let mut current = Snapshot {
             selected: Page::Motion,
+            motion_navigation: None,
             pages: BTreeMap::from([
                 (Page::Handeye, state.clone()),
                 (

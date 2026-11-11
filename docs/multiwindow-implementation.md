@@ -161,3 +161,13 @@
 最终验证：`npm test` 全部通过（876 前端 / 133 Rust / 3 运行库测试与全部其余脚本，`/tmp/260-position-group-final-tests.log`）。`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 和 `codesign --verify --deep --strict` 均通过；日志 `/tmp/260-position-group-{build,docs-build,bundle}.log`。还原旧锁顺序的临时负例按预期失败，记录于 `/tmp/260-reparent-old-lock-test.log`，不影响上述最终全量结果。
 
 离线原生实测：主窗口、Motion、Monitor、手眼四窗口连续三次恢复启动成功；姿态与动作组的外部修改会拒绝旧草稿提交并保留输入，重新载入后均保存成功，且核对了实际文件；主窗口保存的姿态名称同步出现在独立 Motion。修复后切换 Motion Tab 不再丢失可见内容。未保存姿态草稿完成 12 轮收回＋拆出（24 次迁移）均保留。自动化过程中的焦点切换和 ScreenCaptureKit 中断没有计入通过次数；本轮未完成新的 50 轮连续批次，不代替此前手眼页的 50 轮记录或整体性能验收。测试数据仅位于 `dev.easydebug.multiwindowtest`，正式应用与 Jetson 未替换，未连接真实机械臂。
+
+
+## 离线 Motion 单实例入口
+
+离线姿态库及动作组按钮改用原生 Motion Host；带版本的 Tab 导航保存在 Rust 快照，覆盖懒创建和已拆出页面。姿态编辑在切换 Tab 时保持挂载。连接配置不匹配时保留原编辑并提示先同步连接；完整离线配置切换、偏好单写者和其他任务生命周期仍待实现。
+
+
+本阶段验证：`npm test` 全部通过（879 前端 / 134 Rust / 3 运行库测试及全部其余脚本），随后 `npm run build`、`npm run docs:build` 通过；日志 `/tmp/260-offline-motion-final-{tests,build}.log`、`/tmp/260-offline-motion-docs-build.log`。独立 Debug Tauri bundle 构建和签名核验通过（`/tmp/260-offline-motion-bundle.log`）。
+
+实际离线原生窗口验证了两个管理入口聚焦同一 Motion 并选中对应 Tab；未保存姿态名称跨 Tab、返回主窗口、重新进入管理入口及收回后重新进入均保留。测试草稿随后取消，未写入正式姿态库。同一隔离应用还复验了手眼页 1200×900 标定板的放大查看、完整工具栏、原始尺寸及 Esc 返回，返回后保留 100% 缩放。未连接机器人、未替换正式应用；本轮不重复声称此前故障注入和 50 轮迁移是新增验证。全量九窗口、多屏及持续运行验收仍未完成。

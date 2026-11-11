@@ -1715,6 +1715,7 @@ pub fn run() {
             session::ipc::native_observation_interval,
             session::workspace::workspace_snapshot,
             session::workspace::workspace_select,
+            session::workspace::workspace_open_motion,
             session::workspace::workspace_detach,
             session::workspace::workspace_dock,
             session::workspace::workspace_bounds,

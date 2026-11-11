@@ -71,7 +71,7 @@ Native deployment resolves Node before launching the fixed repository script: an
 
 多窗口开发分支的 Monitor 有独立原生采集路径：`runtime::route → monitor::History → native_monitor_history → MonitorReplay → Monitor charts`。采集在每窗口预览最新帧覆盖前完成，订阅归原生会话所有；隐藏 WebView 不读取或绘制历史，但不会停止采集。历史按单调接收时间保留有界原始 JSON 字节，每次 IPC 分批解码；历史回放不会重新进入实时消息监听器。断线、截断和 Live/bag 时间域切换明确重置，诊断配对在暂停/配置边界清除。具体预算与游标字段见[协议](./protocol#原生-monitor-历史多窗口开发分支)。
 
-Monitor 编辑配置使用独立 `documents::Documents` 原生写入器，以应用数据目录文件为准，互斥内比较 revision 并原子替换。Topics 和 Monitor 持有只含布局/曲线定义的配置副本，用小型失效通知按需重新读取；采样点保留在 Monitor 展示状态中，原始消息历史保留在 Rust 连接中，二者都不进入配置文件。旧 localStorage 只作为首次迁移来源，所有原生 App 实例不再持续写回该键。版本不符和文件错误不会转为默认空配置并覆盖原文件。姿态库与动作组的旧写入路径仍待迁移。
+Monitor 编辑配置使用独立 `documents::Documents` 原生写入器，以应用数据目录文件为准，互斥内比较 revision 并原子替换。Topics 和 Monitor 持有只含布局/曲线定义的配置副本，用小型失效通知按需重新读取；采样点保留在 Monitor 展示状态中，原始消息历史保留在 Rust 连接中，二者都不进入配置文件。旧 localStorage 只作为首次迁移来源，所有原生 App 实例不再持续写回该键。版本不符和文件错误不会转为默认空配置并覆盖原文件。姿态库与动作组同样使用版本化原生写入器，保留旧文件路径，并以记录基线防止陈旧草稿覆盖。离线管理入口复用唯一 Motion WebView；带版本的标签导航保存在原生快照中，供懒创建或独立窗口接收。连接配置不匹配时拒绝切换编辑上下文，完整离线配置切换仍待实现。
 
 - One desktop session profile at a time.
 - Non-image Bridge subscriptions are shared by all connected WebSocket clients; Image delivery is scoped to interested clients.

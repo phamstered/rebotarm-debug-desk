@@ -227,6 +227,48 @@ describe("App workflow", () => {
     }
   });
 
+  it("opens offline pose and group management in the single native Motion host", async () => {
+    const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
+    const resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{},configurable:true});
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    doubles.invoke.mockImplementation((command, args) => {
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command === "native_task_snapshot") return Promise.resolve(null);
+      return base(command,args);
+    });
+    const view = render(<App />);
+    try {
+      for (const [label,tab] of [["管理姿态库","positions"],["管理动作组","groups"]]) {
+        await user.click(screen.getByRole("button", {name:label}));
+        await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("workspace_open_motion",{tab,profileKey:"jetson||22"}));
+        expect(screen.getByLabelText("Motion 页面区域")).toBeVisible();
+        expect(screen.queryByRole("region",{name:"姿态库"})).not.toBeInTheDocument();
+        expect(screen.queryByRole("region",{name:"动作组编辑器"})).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button",{name:"返回连接"}));
+      }
+      expect(doubles.connect).not.toHaveBeenCalled();
+    } finally {view.unmount(); delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__; globalThis.ResizeObserver=resize; doubles.invoke.mockImplementation(base);}
+  });
+
+  it("keeps an unsaved pose draft while switching Motion tabs", async () => {
+    const base=doubles.invoke.getMockImplementation()!;
+    doubles.invoke.mockImplementation((command,args)=>command === "editor_document_read" && args?.key === "positions"
+      ? Promise.resolve({revision:1,content:JSON.stringify({schemaVersion:2,profiles:{"jetson||22":{positions:[{id:"p",name:"Keep pose",positions:[0,0,0,0,0,0]}]}}})}) : base(command,args));
+    const user=userEvent.setup(); render(<App />);
+    await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
+    await user.click(await screen.findByRole("button",{name:"Motion"}));
+    await user.click(screen.getByRole("tab",{name:"姿态库"}));
+    await user.click(screen.getByRole("button",{name:"Keep pose更多操作"}));
+    await user.click(screen.getByRole("menuitem",{name:"编辑姿态"}));
+    await user.clear(screen.getByLabelText("点位名称")); await user.type(screen.getByLabelText("点位名称"),"Unsaved pose");
+    await user.click(screen.getByRole("tab",{name:"动作组"}));
+    await user.click(screen.getByRole("tab",{name:"姿态库"}));
+    expect(screen.getByLabelText("点位名称")).toHaveValue("Unsaved pose");
+    expect(doubles.invoke.mock.calls.some(([op])=>op === "editor_document_commit")).toBe(false);
+  });
+
   it("provides a keyboard-focusable hand-eye content region only on its connected page", async () => {
     const user = userEvent.setup();
     render(<App />);

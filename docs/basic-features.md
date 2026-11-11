@@ -525,3 +525,5 @@ Monitor 仪表盘、曲线字段与布局现由 Rust 统一保存到当前应用
 新增 `npm run docker:bridge -- build|run`，支持 Humble 镜像、独立端口和 ROS domain、只读外部 overlay；无效端口/domain 在执行 Docker 前拒绝。启动、验证及桌面管理边界见 [Docker 运行说明](docker.md)。
 
 连接高级配置可关闭“连接时启动 host Bridge”，直接连接已运行的 Docker Bridge；该模式拒绝 host 升级入口，旧配置默认保留 host 自动启动。
+
+多窗口开发分支的离线“管理姿态库／管理动作组”入口现在选择同一个原生 Motion 页面及相应 Tab，主窗口不再创建第二份编辑器。姿态编辑在 Tab 切换时保留草稿。若已打开 Motion 使用的是另一连接配置，会提示先同步连接再重试，避免误改另一机器人的记录；跨离线配置切换的完整草稿管理仍待接入。

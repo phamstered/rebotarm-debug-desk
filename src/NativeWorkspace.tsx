@@ -89,7 +89,7 @@ export function NativeOfflineWorkspace({ page, snapshot, onSelect, onConnection,
   error?: string;
   onDismissError?(): void;
 }) {
-  const retained = (Object.keys(PAGE_TITLES) as AppPage[]).filter(key => snapshot.pages[key]?.ready);
+  const retained = (Object.keys(PAGE_TITLES) as AppPage[]).filter(key => key === page || snapshot.pages[key]?.ready);
   return <main className="native-offline-workspace">
     <header className="native-offline-toolbar">
       <label>已打开页面

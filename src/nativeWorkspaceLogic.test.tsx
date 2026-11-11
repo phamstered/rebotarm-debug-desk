@@ -1,4 +1,4 @@
-import { pageWindowVisible } from "./nativeWorkspaceLogic";
+import { useMotionNavigation, pageWindowVisible } from "./nativeWorkspaceLogic";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient } from "./bridge";
@@ -85,4 +85,15 @@ it("uses native visibility for reparented pages even when WebKit reports hidden"
   expect(pageWindowVisible(true, "monitor", snapshot)).toBe(false);
   expect(pageWindowVisible(false, undefined, snapshot)).toBe(false);
   expect(pageWindowVisible(true, undefined, snapshot)).toBe(true);
+});
+
+it("applies retained Motion navigation once and never changes a different robot editor", () => {
+  const select = vi.fn(), error = vi.fn();
+  const first = {revision:1,tab:"positions" as const,profile_key:"robot"};
+  const hook = renderHook(({intent}) => useMotionNavigation("motion", intent, "robot", select, error), {initialProps:{intent:first}});
+  expect(select).toHaveBeenCalledExactlyOnceWith("positions");
+  hook.rerender({intent:{...first}}); expect(select).toHaveBeenCalledOnce();
+  hook.rerender({intent:{...first,revision:2,profile_key:"other"}});
+  expect(select).toHaveBeenCalledOnce(); expect(error).toHaveBeenCalledWith(expect.stringContaining("另一连接"));
+  hook.rerender({intent:{...first,revision:1}}); expect(select).toHaveBeenCalledOnce();
 });
