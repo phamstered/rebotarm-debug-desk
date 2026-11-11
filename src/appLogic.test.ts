@@ -35,6 +35,10 @@ import { defaultProfile } from "./types";
 const storage = (value: string | null) => ({ getItem: () => value });
 
 describe("connection profile", () => {
+  it("preserves externally managed Bridge choice and keeps legacy auto-start", () => {
+    expect(loadProfile(storage(JSON.stringify({ bridgeAutoStart: false }))).bridgeAutoStart).toBe(false);
+    expect(loadProfile(storage(JSON.stringify({ host: "jetson" }))).bridgeAutoStart).not.toBe(false);
+  });
   it("uses defaults when there is no saved profile or malformed JSON", () => {
     expect(loadProfile(storage(null))).toEqual(defaultProfile);
     expect(loadProfile(storage("{"))).toEqual(defaultProfile);

@@ -24,6 +24,8 @@ export type ConnectionProfile = {
   remotePort: number;
   rosDomainId: number;
   rosSetupScript: string;
+  /** False connects to an already managed Bridge (for example Docker). */
+  bridgeAutoStart?: boolean;
   urdfTopic: string;
   jointStateTopic: string;
   commandTopic: string;

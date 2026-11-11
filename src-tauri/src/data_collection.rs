@@ -298,6 +298,7 @@ mod tests {
             local_port: 18765,
             remote_port: 8765,
             ros_domain_id: 7,
+            bridge_auto_start: None,
             ros_setup_script: "Project/rebotarm-ros2-stack/install/setup.bash".into(),
             joint_state_topic: "/stm32/joint_states".into(),
             command_topic: "/stm32/joint_commands".into(),

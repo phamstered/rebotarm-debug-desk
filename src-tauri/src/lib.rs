@@ -26,6 +26,8 @@ struct ConnectionProfile {
     remote_port: u16,
     ros_domain_id: u16,
     ros_setup_script: String,
+    #[serde(default)]
+    bridge_auto_start: Option<bool>,
     joint_state_topic: String,
     command_topic: String,
     status_topic: String,
@@ -1282,19 +1284,22 @@ async fn start_session(
         profile.command_topic,
         profile.status_topic
     );
-    let started = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法启动远端 Bridge：{error}"))?;
-    if !started.status.success() {
-        return Err(format!(
-            "Bridge 启动失败：{}",
-            String::from_utf8_lossy(&started.stderr).trim()
-        ));
+    if profile.bridge_auto_start != Some(false) {
+        let started = ssh_base(&profile)
+            .arg("-o")
+            .arg("BatchMode=yes")
+            .arg(ssh_target(&profile))
+            .arg(remote)
+            .output()
+            .await
+            .map_err(|error| format!("无法启动远端 Bridge：{error}"))?;
+        if !started.status.success() {
+            return Err(format!(
+                "Bridge 启动失败：{}",
+                String::from_utf8_lossy(&started.stderr).trim()
+            ));
+        }
+
     }
 
     let local_port = choose_local_port(profile.local_port)?;
@@ -1400,6 +1405,9 @@ fn looks_like_project_root(path: &Path) -> bool {
 }
 
 fn deploy_bridge_args(profile: &ConnectionProfile) -> Result<Vec<String>, String> {
+    if profile.bridge_auto_start == Some(false) {
+        return Err("当前 Bridge 由外部管理，请通过 Docker 构建和重启入口升级".into());
+    }
     if !valid_topic(&profile.joint_state_topic) || !valid_topic(&profile.command_topic) || !valid_topic(&profile.status_topic) {
         return Err("Bridge Topic 配置无效".into());
     }
@@ -1735,11 +1743,22 @@ mod tests {
             local_port: 18765,
             remote_port: 8765,
             ros_domain_id: 0,
+            bridge_auto_start: None,
             ros_setup_script: "/opt/robot/install/setup.bash".into(),
             joint_state_topic: "/stm32/joint_states".into(),
             command_topic: "/stm32/joint_commands".into(),
             status_topic: "/stm32/status".into(),
         }
+    }
+
+    #[test]
+    fn externally_managed_bridge_cannot_use_host_upgrade() {
+        let mut selected = profile("");
+        assert!(deploy_bridge_args(&selected).is_ok());
+        selected.bridge_auto_start = Some(false);
+        assert!(deploy_bridge_args(&selected).unwrap_err().contains("Docker"));
+        selected.bridge_auto_start = Some(true);
+        assert!(deploy_bridge_args(&selected).is_ok());
     }
 
     #[test]
@@ -2144,6 +2163,7 @@ __BYID_SEP__\n\
         assert!(teleop.find("arm_clean_environment || exit 1;").unwrap()
             < teleop.find("setsid nohup bash").unwrap());
         let custom = ConnectionProfile {
+            bridge_auto_start: None,
             ros_setup_script: "/home/jialiang/Project/custom_stack/install/setup.bash".into(),
             ..profile("")
         };
@@ -2161,6 +2181,7 @@ __BYID_SEP__\n\
         assert!(stop.contains("stop_pg"));
         assert!(arm_mode_remote_command(&profile(""), "delete").is_err());
         let bad = ConnectionProfile {
+            bridge_auto_start: None,
             ros_setup_script: "bad;rm".into(),
             ..profile("")
         };
@@ -2222,6 +2243,7 @@ __BYID_SEP__\n\
         ));
         let run_status = |setup_path: &str| {
             let selected = ConnectionProfile {
+                bridge_auto_start: None,
                 ros_setup_script: setup_path.into(),
                 ..profile("")
             };
