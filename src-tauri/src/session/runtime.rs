@@ -1,6 +1,7 @@
 use super::{
     delivery::{Frame, Limits, Mailbox},
     subscriptions::{Consumer, SubscriptionRegistry, Transition},
+    tasks::{Owner, Tasks},
     transport::Transport,
     windows::{WindowRegistry, WindowToken},
     wire::WireFrame,
@@ -19,6 +20,15 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 pub struct Attachment {
     pub epoch: u64,
     pub window: WindowToken,
+}
+
+impl Attachment {
+    fn owner(&self) -> Owner {
+        Owner {
+            epoch: self.epoch,
+            window: self.window.clone(),
+        }
+    }
 }
 
 struct Client {
@@ -66,6 +76,7 @@ impl Core {
 /// Application lifetime, independent of all visible WebViews. It is deliberately
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
+    pub tasks: Arc<Tasks>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
     core: Arc<Mutex<Core>>,
@@ -73,11 +84,13 @@ pub struct Runtime {
     subscriptions_gate: AsyncMutex<()>,
     origin: Instant,
     changed: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    task_changed: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            tasks: Arc::new(Tasks::default()),
             observations: Arc::new(super::observations::Observations::default()),
             resources: Arc::new(super::resources::Resources::default()),
             core: Arc::new(Mutex::new(Core {
@@ -96,11 +109,15 @@ impl Default for Runtime {
             subscriptions_gate: AsyncMutex::new(()),
             origin: Instant::now(),
             changed: Arc::new(Mutex::new(None)),
+            task_changed: Arc::new(Mutex::new(None)),
         }
     }
 }
 
 impl Runtime {
+    pub fn set_task_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        *self.task_changed.lock().unwrap() = Some(callback);
+    }
     pub fn set_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
         *self.changed.lock().unwrap() = Some(callback);
     }
@@ -114,6 +131,8 @@ impl Runtime {
     pub fn close(&self) {
         let transport = {
             let mut core = self.core.lock().unwrap();
+            self.tasks
+                .lost(None, "连接已断开；重连后需核验 Bridge 任务已停止");
             core.epoch += 1;
             self.observations.stop(core.epoch);
             self.resources.reset(core.epoch);
@@ -133,6 +152,9 @@ impl Runtime {
             transport.close();
         }
         if let Some(changed) = self.changed.lock().unwrap().clone() {
+            changed();
+        }
+        if let Some(changed) = self.task_changed.lock().unwrap().clone() {
             changed();
         }
     }
@@ -155,6 +177,9 @@ impl Runtime {
         let errors_changed = self.changed.clone();
         let observations = self.observations.clone();
         let resources = self.resources.clone();
+        let event_tasks = self.tasks.clone();
+        let error_tasks = self.tasks.clone();
+        let error_task_changed = self.task_changed.clone();
         let origin = self.origin;
         let transport = Transport::connect(
             port,
@@ -164,6 +189,7 @@ impl Runtime {
                 if core.epoch != epoch || core.error.is_some() {
                     return;
                 }
+                event_tasks.observe(epoch, &frame.metadata);
                 route(&mut core, frame, origin.elapsed().as_millis() as u64);
             }),
             Arc::new(move |error| {
@@ -172,6 +198,7 @@ impl Runtime {
                     return;
                 }
                 core.error = Some(error);
+                error_tasks.lost(None, "Bridge 连接中断；停止结果尚未确认");
                 core.transport = None;
                 observations.stop(epoch);
                 resources.reset(epoch);
@@ -180,6 +207,9 @@ impl Runtime {
                 }
                 drop(core);
                 if let Some(changed) = errors_changed.lock().unwrap().clone() {
+                    changed();
+                }
+                if let Some(changed) = error_task_changed.lock().unwrap().clone() {
                     changed();
                 }
             }),
@@ -207,13 +237,90 @@ impl Runtime {
         let transport = Arc::new(transport);
         core.transport = Some(transport.clone());
         if core.profile.is_object() {
-            self.observations.start(epoch, super::observations::reader(transport, core.profile.clone()));
+            self.observations.start(
+                epoch,
+                super::observations::reader(transport, core.profile.clone()),
+            );
         }
         drop(core);
+        self.watch_tasks(epoch);
         if let Some(changed) = self.changed.lock().unwrap().clone() {
             changed();
         }
         Ok(())
+    }
+
+    fn watch_tasks(&self, epoch: u64) {
+        let core = Arc::downgrade(&self.core);
+        let tasks = self.tasks.clone();
+        let changed = self.task_changed.clone();
+        tokio::spawn(async move {
+            let mut previous = None;
+            loop {
+                let Some(core) = core.upgrade() else {
+                    break;
+                };
+                let transport = {
+                    let core = core.lock().unwrap();
+                    if core.epoch != epoch {
+                        break;
+                    }
+                    if let Some(task) = tasks.snapshot().filter(|task| task.epoch == epoch) {
+                        if !core.clients.iter().any(|(token, client)| {
+                            token.label == task.window && client.error.is_none()
+                        }) {
+                            tasks.lost(None, "任务所属窗口已关闭或数据队列失效，已请求取消");
+                        }
+                    }
+                    core.transport.clone()
+                };
+                let snapshot = tasks.snapshot();
+                if snapshot != previous {
+                    previous = snapshot;
+                    if let Some(changed) = changed.lock().unwrap().clone() {
+                        changed();
+                    }
+                }
+                let Some(transport) = transport else {
+                    break;
+                };
+                if let Some(action) = tasks.poll(epoch, Instant::now()) {
+                    let result = transport
+                        .request_guarded(
+                            action.message.clone(),
+                            Duration::from_secs(3),
+                            Some(action.permit),
+                        )
+                        .await;
+                    if core.lock().unwrap().epoch != epoch {
+                        break;
+                    }
+                    if action.recovery {
+                        tasks.reply(
+                            None,
+                            epoch,
+                            &action.message,
+                            result
+                                .as_ref()
+                                .map(|frame| &frame.metadata)
+                                .map_err(String::as_str),
+                        );
+                    } else {
+                        match &result {
+                            Ok(frame) if frame.op() != "error" => {
+                                tasks.observe(epoch, &frame.metadata)
+                            }
+                            Ok(frame) => tasks.stop_error(
+                                action.ticket,
+                                frame.metadata["message"].as_str().unwrap_or("取消被拒绝"),
+                            ),
+                            Err(error) => tasks.stop_error(action.ticket, error),
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        });
     }
 
     pub fn attach(&self, native_label: &str) -> Result<(Attachment, Value), String> {
@@ -259,6 +366,8 @@ impl Runtime {
             core.windows
                 .validate(native_label, &attachment.window)
                 .map_err(String::from)?;
+            self.tasks
+                .lost(Some(&attachment.owner()), "任务所属窗口已关闭，已请求取消");
             if let Some(client) = core.clients.remove(&attachment.window) {
                 client.notify.notify_one();
             }
@@ -343,19 +452,49 @@ impl Runtime {
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
         if op == "resource" {
-            let key = super::resources::Key::new(message["uri"].as_str().ok_or("资源缺少 URI")?, message["encoding"].as_str().unwrap_or("base64"))?;
-            let reply = self.resources.get(attachment.epoch, key, async move { transport.request(message, timeout).await }).await?;
-            self.core.lock().unwrap().validate(native_label, attachment)?;
+            let key = super::resources::Key::new(
+                message["uri"].as_str().ok_or("资源缺少 URI")?,
+                message["encoding"].as_str().unwrap_or("base64"),
+            )?;
+            let reply = self
+                .resources
+                .get(attachment.epoch, key, async move {
+                    transport.request(message, timeout).await
+                })
+                .await?;
+            self.core
+                .lock()
+                .unwrap()
+                .validate(native_label, attachment)?;
             return Ok(reply);
         }
         if op == "topics" && self.observations.snapshot().connected {
             let snapshot = if message["refresh"] == true {
-                self.observations.refresh(attachment.epoch, super::observations::Source::Topics, false).await?
-            } else { self.observations.read(attachment.epoch, super::observations::Source::Topics).await? };
-            self.core.lock().unwrap().validate(native_label, attachment)?;
-            let entry = snapshot.entries.get(&super::observations::Source::Topics).ok_or("Topics 查询未返回")?;
-            if let Some(error) = &entry.error { return Err(error.clone()); }
-            return WireFrame::parse(serde_json::to_vec(&entry.value).map_err(|e| e.to_string())?.into(), false);
+                self.observations
+                    .refresh(attachment.epoch, super::observations::Source::Topics, false)
+                    .await?
+            } else {
+                self.observations
+                    .read(attachment.epoch, super::observations::Source::Topics)
+                    .await?
+            };
+            self.core
+                .lock()
+                .unwrap()
+                .validate(native_label, attachment)?;
+            let entry = snapshot
+                .entries
+                .get(&super::observations::Source::Topics)
+                .ok_or("Topics 查询未返回")?;
+            if let Some(error) = &entry.error {
+                return Err(error.clone());
+            }
+            return WireFrame::parse(
+                serde_json::to_vec(&entry.value)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+                false,
+            );
         }
         if matches!(op, "subscribe" | "unsubscribe") {
             let _gate = self.subscriptions_gate.lock().await;
@@ -421,7 +560,34 @@ impl Runtime {
             }
             return Ok(result);
         }
-        let reply = transport.request(message, timeout).await?;
+        let admission = {
+            let core = self.core.lock().unwrap();
+            core.validate(native_label, attachment)?;
+            self.tasks.touch(&attachment.owner(), Instant::now());
+            self.tasks
+                .admit(attachment.owner(), &message, Instant::now())?
+        };
+        let result = transport
+            .request_guarded(message.clone(), timeout, admission.permit)
+            .await;
+        {
+            let core = self.core.lock().unwrap();
+            if core.epoch == attachment.epoch {
+                self.tasks.reply(
+                    admission.ticket,
+                    attachment.epoch,
+                    &message,
+                    result
+                        .as_ref()
+                        .map(|frame| &frame.metadata)
+                        .map_err(String::as_str),
+                );
+                if let Ok(reply) = &result {
+                    self.tasks.observe(attachment.epoch, &reply.metadata);
+                }
+            }
+        }
+        let reply = result?;
         self.core
             .lock()
             .unwrap()
@@ -439,6 +605,7 @@ impl Runtime {
         let (notify, pulling) = {
             let core = self.core.lock().unwrap();
             core.validate(native_label, attachment)?;
+            self.tasks.touch(&attachment.owner(), Instant::now());
             let client = &core.clients[&attachment.window];
             (client.notify.clone(), client.pulling.clone())
         };
@@ -605,6 +772,9 @@ mod tests {
                             },
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
+                            "position_move" | "position_group_start" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
+                            "position_cancel" => json!({"op":"position_cancel_ack", "request_id":message["request_id"]}),
+                            "position_motion_info" => json!({"op":"position_motion_info", "busy":false, "request_id":message["request_id"]}),
                             _ => json!({"op":"error", "request_id":message["request_id"], "message":"isolated bridge: unsupported"}),
                         }
                     },
@@ -620,6 +790,100 @@ mod tests {
             }
         });
         (port, tx, received, task)
+    }
+
+    #[tokio::test]
+    async fn native_task_owner_controls_heartbeats_and_detach_waits_for_real_terminal() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect(port).await.unwrap();
+        let (motion, _) = hub.attach("page-motion").unwrap();
+        let (main, _) = hub.attach("main").unwrap();
+        let timeout = Duration::from_secs(1);
+        hub.request(
+            "page-motion",
+            &motion,
+            "test",
+            json!({"op":"position_move","command_id":"motion-1"}),
+            timeout,
+        )
+        .await
+        .unwrap();
+        assert!(hub.tasks.migration("page-motion").is_err());
+        assert!(hub
+            .request(
+                "main",
+                &main,
+                "test",
+                json!({"op":"position_motion_info"}),
+                timeout
+            )
+            .await
+            .is_err());
+        assert!(hub
+            .request(
+                "main",
+                &main,
+                "test",
+                json!({"op":"joint_command","mode":1}),
+                timeout
+            )
+            .await
+            .is_err());
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| message["op"] == "position_motion_info"
+                || message["op"] == "joint_command"));
+        hub.request(
+            "page-motion",
+            &motion,
+            "test",
+            json!({"op":"position_motion_info"}),
+            timeout,
+        )
+        .await
+        .unwrap();
+        hub.detach("page-motion", &motion).await.unwrap();
+        tokio::time::timeout(timeout, async {
+            loop {
+                if seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|message| message["op"] == "position_cancel")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // ACK only means cancellation was requested, not that the arm stopped.
+        assert!(hub.tasks.snapshot().is_some());
+        events
+            .send(json!({"op":"position_motion","command_id":"motion-1","motion_phase":"canceled"}))
+            .unwrap();
+        tokio::time::timeout(timeout, async {
+            while hub.tasks.snapshot().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        hub.request(
+            "main",
+            &main,
+            "test",
+            json!({"op":"position_move","command_id":"motion-2"}),
+            timeout,
+        )
+        .await
+        .unwrap();
+        hub.close();
+        server.abort();
     }
 
     #[tokio::test]
@@ -713,23 +977,56 @@ mod tests {
     #[tokio::test]
     async fn resource_reads_across_native_pages_use_one_upstream_binary_response() {
         let (port, _events, requests, server) = fake_bridge().await;
-        let hub = Runtime::default(); hub.connect(port).await.unwrap();
+        let hub = Runtime::default();
+        hub.connect(port).await.unwrap();
         let (motion, _) = hub.attach("page-motion").unwrap();
         let (topics, _) = hub.attach("page-dashboard").unwrap();
-        let message = json!({"op":"resource", "uri":"package://robot/link.stl", "encoding":"binary"});
+        let message =
+            json!({"op":"resource", "uri":"package://robot/link.stl", "encoding":"binary"});
         let (first, second) = tokio::join!(
-            hub.request("page-motion", &motion, "model", message.clone(), Duration::from_secs(1)),
-            hub.request("page-dashboard", &topics, "model", message.clone(), Duration::from_secs(1)),
+            hub.request(
+                "page-motion",
+                &motion,
+                "model",
+                message.clone(),
+                Duration::from_secs(1)
+            ),
+            hub.request(
+                "page-dashboard",
+                &topics,
+                "model",
+                message.clone(),
+                Duration::from_secs(1)
+            ),
         );
-        let first = first.unwrap(); let second = second.unwrap();
+        let first = first.unwrap();
+        let second = second.unwrap();
         assert!(first.binary);
         assert!(Arc::ptr_eq(&first.bytes, &second.bytes));
-        assert_eq!(&first.bytes[first.bytes.len()-3..], &[7,8,9]);
+        assert_eq!(&first.bytes[first.bytes.len() - 3..], &[7, 8, 9]);
         hub.detach("page-motion", &motion).await.unwrap();
-        let later = hub.request("page-dashboard", &topics, "model", message, Duration::from_secs(1)).await.unwrap();
+        let later = hub
+            .request(
+                "page-dashboard",
+                &topics,
+                "model",
+                message,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
         assert!(Arc::ptr_eq(&later.bytes, &first.bytes));
-        assert_eq!(requests.lock().unwrap().iter().filter(|message| message["op"] == "resource").count(), 1);
-        hub.close(); server.await.unwrap();
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|message| message["op"] == "resource")
+                .count(),
+            1
+        );
+        hub.close();
+        server.await.unwrap();
     }
 
     #[tokio::test]

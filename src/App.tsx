@@ -1,4 +1,5 @@
 import { NativeWorkspaceHost, NativePageToolbar } from "./NativeWorkspace";
+import { NativeTaskStatus } from "./NativeTaskStatus";
 import { nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
@@ -1941,6 +1942,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {hostedPage && <NativePageToolbar page={hostedPage} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
+      {nativeDesktop() && <NativeTaskStatus />}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>

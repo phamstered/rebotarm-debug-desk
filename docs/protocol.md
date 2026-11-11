@@ -569,6 +569,16 @@ These IPC commands do not alter Bridge motion capabilities or remove any executi
 
 These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.
 
+### 原生任务状态（多窗口开发分支，覆盖 Position / Pick）
+
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+
+原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
+
+现有 `position_motion_info` / `visual_pick_status` 会在 Bridge 续租，因此同一连接的非所属窗口查询在写入前拒绝，不允许代续租。窗口数据拉取/请求入口维护本窗口存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台等待循环本身不会续租窗口存活。重连后 Pick 只接受同一 command_id 的明确终态；Position 当前 info 响应不能跨 owner 提供原任务终态，因此仍保留不确定占用，恢复协议待补齐。单独 `busy=false` 不会解锁。
+
+原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。Motor 连续流、直接轨迹、重力辨识和 SSH 控制操作的完整原生生命周期仍待接入。
+
 
 ### 原生页面附着（多窗口开发分支）
 

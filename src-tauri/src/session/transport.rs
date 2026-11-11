@@ -1,4 +1,5 @@
 //! One native upstream WebSocket; no WebView timers or broadcasts on this path.
+use super::command_queue::{CommandQueue, SendPermit};
 use super::wire::{WireFrame, MAX_FRAME_BYTES};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
@@ -22,6 +23,7 @@ pub type CloseSink = Arc<dyn Fn(String) + Send + Sync>;
 struct Outbound {
     id: String,
     text: String,
+    permit: Option<SendPermit>,
 }
 
 pub struct Transport {
@@ -32,6 +34,7 @@ pub struct Transport {
     normal: mpsc::Sender<Outbound>,
     urgent: mpsc::Sender<Outbound>,
     stop: watch::Sender<bool>,
+    commands: Arc<CommandQueue>,
 }
 
 struct PendingGuard {
@@ -53,7 +56,7 @@ fn fail_pending(pending: &Pending, error: &str) {
 fn urgent_command(message: &Value) -> bool {
     matches!(
         message["op"].as_str(),
-        Some("position_cancel" | "visual_pick_cancel")
+        Some("position_cancel" | "visual_pick_cancel" | "gravity_id_cancel")
     ) || (message["op"] == "joint_command" && message["mode"].as_i64() == Some(3))
 }
 
@@ -135,6 +138,12 @@ impl Transport {
                 if !writer_pending.lock().unwrap().contains_key(&outbound.id) {
                     continue;
                 }
+                if outbound.permit.as_ref().is_some_and(|permit| !permit()) {
+                    if let Some(sender) = writer_pending.lock().unwrap().remove(&outbound.id) {
+                        let _ = sender.send(Err("指令在发送前已失效；未下发到 Bridge".into()));
+                    }
+                    continue;
+                }
                 let result = tokio::select! {
                     _ = writer_stop.changed() => break "Bridge 会话已关闭".to_string(),
                     result = tokio::time::timeout(Duration::from_secs(3), write.send(Message::Text(outbound.text.into()))) => result,
@@ -190,12 +199,38 @@ impl Transport {
             normal: normal_tx,
             urgent: urgent_tx,
             stop,
+            commands: Arc::new(CommandQueue::default()),
         })
     }
 
     /// All command admission remains above the transport and at the Bridge. This
     /// layer never retries a command whose execution status may be unknown.
-    pub async fn request(&self, mut message: Value, timeout: Duration) -> Response {
+    pub fn request(
+        &self,
+        message: Value,
+        timeout: Duration,
+    ) -> impl std::future::Future<Output = Response> + Send + '_ {
+        self.request_guarded(message, timeout, None)
+    }
+
+    pub fn request_guarded(
+        &self,
+        message: Value,
+        timeout: Duration,
+        permit: Option<SendPermit>,
+    ) -> impl std::future::Future<Output = Response> + Send + '_ {
+        // Synchronous capture: a future held by a caller before cancellation
+        // must not acquire the post-stop generation when it is finally polled.
+        let permit = self.commands.prepare(&message, permit);
+        self.dispatch(message, timeout, permit)
+    }
+
+    async fn dispatch(
+        &self,
+        mut message: Value,
+        timeout: Duration,
+        permit: Option<SendPermit>,
+    ) -> Response {
         if *self.stop.borrow() {
             return Err("Bridge 会话已关闭".into());
         }
@@ -234,7 +269,7 @@ impl Transport {
         };
         let target = if urgent { &self.urgent } else { &self.normal };
         target
-            .try_send(Outbound { id, text })
+            .try_send(Outbound { id, text, permit })
             .map_err(|_| "Bridge 发送队列已满或已关闭".to_string())?;
         tokio::time::timeout(timeout, receiver)
             .await
@@ -266,6 +301,7 @@ mod tests {
         assert!(urgent_command(&json!({"op":"joint_command","mode":3})));
         assert!(urgent_command(&json!({"op":"position_cancel"})));
         assert!(urgent_command(&json!({"op":"visual_pick_cancel"})));
+        assert!(urgent_command(&json!({"op":"gravity_id_cancel"})));
         for mode in [0, 1, 2, 4, 5] {
             assert!(!urgent_command(
                 &json!({"op":"joint_command","mode":mode,"urgent":true})
@@ -274,6 +310,69 @@ mod tests {
         assert!(!urgent_command(
             &json!({"op":"position_move","urgent":true})
         ));
+    }
+
+    #[tokio::test]
+    async fn disable_cannot_be_followed_by_older_queued_or_unpolled_motion() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let received = seen.clone();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                received.lock().unwrap().push(value.clone());
+                socket
+                    .send(Message::Text(value.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let transport = Transport::connect(port, 1, Arc::new(|_| {}), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        let unscheduled = transport.request(
+            json!({"op":"position_move","command_id":"not-polled"}),
+            Duration::from_secs(1),
+        );
+        let mut queued = Box::pin(transport.request(
+            json!({"op":"joint_command","mode":1}),
+            Duration::from_secs(1),
+        ));
+        // Deterministically enqueue before the single-threaded writer can run.
+        assert!(futures_util::poll!(queued.as_mut()).is_pending());
+        transport
+            .request(
+                json!({"op":"joint_command","mode":3}),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert!(queued.await.unwrap_err().contains("未下发"));
+        assert!(unscheduled.await.unwrap_err().contains("未下发"));
+        transport
+            .request(json!({"op":"topics"}), Duration::from_secs(1))
+            .await
+            .unwrap();
+        transport
+            .request(
+                json!({"op":"joint_command","mode":1}),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        let values = seen.lock().unwrap().clone();
+        assert_eq!(values.len(), 4);
+        assert_eq!(values[1]["mode"], 3);
+        assert_eq!(values[2]["op"], "topics");
+        assert_eq!(values[3]["mode"], 1);
+        transport.close();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

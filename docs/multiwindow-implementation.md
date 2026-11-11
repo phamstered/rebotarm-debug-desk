@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。六项公共查询已接入 Rust，运动日志轮询、共享编辑状态和原生任务租约等仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。六项公共查询、Position/Pick 的原生任务归属已接入 Rust；其他控制任务、运动日志轮询、共享编辑状态及布局等仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -63,3 +63,15 @@
 - 下一步任务所有权须先于运动轮询迁移：`position_motion_info` 在 Bridge 内续租运动，不能让应用级无条件轮询在操作页面崩溃后继续替它续租。需结合原生租约、取消/停止确认、页面失联处理一起接入。
 
 本阶段最终全量结果：837 前端 / 90 Rust 与其余全部测试通过，`npm run build` 通过（`/tmp/260-resource-sharing-build.log`）。缓存验证使用本机隔离 WebSocket，不连接生产 Jetson。
+
+## 原生任务第一阶段：Position / Pick
+
+- `tasks.rs` 在提交时登记占用，原生窗口身份、incarnation、连接代次及 command_id 关联；与拆收迁移共用互斥，消除仅依赖页面 busy 上报的竞态。尚未受理也阻止其他窗口提交执行命令；取消/DISABLE 不被占用挡住。
+- 任务来源页面的 IPC 入口维护存活时间。5 秒未继续请求/拉取、页面会话退出或队列错误后，Rust 看门狗请求取消；其他窗口的 info/status 不能替它续租。取消 ACK 不释放占用，stop_failed/未知结果保留；任务终态按编号匹配，忽略 Pick 子步骤终态和旧代次响应。
+- `command_queue.rs` 与发送器在写入前检查停止代次及任务许可。取消/DISABLE 可越过普通队列；停止之前已经排队、甚至尚未开始 poll 的旧执行请求不能在停止之后发送。迟到的原生取消不会撤销后继任务的排队许可。已发送的指令仍由 Bridge 取消和确认终态。
+- `native_task_snapshot` / `native-tasks-changed` 提供所有窗口的状态提示，不依赖主 WebView 转发。查询快照不产生远端心跳。
+- 隔离测试使用本机随机回环 WebSocket：两窗口实际验证单任务占用、拒绝代续租、所属页面退出触发取消，以及取消 ACK 后仍保持占用直到匹配终态。另覆盖未发送失败、未知受理、迁移竞争、旧响应、Pick 子任务和队列撤销。
+
+必须继续完成：Position 的跨连接按 command_id 查询终态（当前 Bridge info 会隐藏旧 owner 的 ID，重连时继续保留不确定占用）；共享 info/日志查询需拆开只读观察与续租。Motor/直接 JTC 轨迹/重力辨识、Controller/arm mode/Joint4/采集/手眼本地操作的完整原生生命周期尚未接入，不能据此声称全局运动互斥及崩溃安全完成。九页面布局恢复、多屏与性能验收仍按上文完整范围推进。
+
+本阶段验证：`npm test` 全部通过（840 前端、102 Rust 与其余脚本；`/tmp/260-native-task-verified-tests.log`），`npm run build` 通过（`/tmp/260-native-task-build.log`）；独立标识的 Debug Tauri bundle 构建及 `codesign --verify --deep --strict` 通过（`/tmp/260-native-task-bundle.log`）。尚未在原生窗口实际执行任务或验证新增状态提示的多窗口布局；正式应用与 Jetson 都未替换。

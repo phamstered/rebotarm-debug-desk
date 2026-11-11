@@ -59,6 +59,15 @@ fn observation_caller(window: &Webview) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn native_task_snapshot(
+    window: Webview,
+    hub: State<'_, Runtime>,
+) -> Result<Option<super::tasks::Snapshot>, String> {
+    observation_caller(&window)?;
+    Ok(hub.tasks.snapshot())
+}
+
+#[tauri::command]
 pub fn native_observation_snapshot(
     window: Webview,
     hub: State<'_, Runtime>,

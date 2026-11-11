@@ -250,6 +250,7 @@ impl Workspace {
 
     pub async fn detach(&self, app: &AppHandle, page: Page) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().await;
+        let _migration = app.state::<super::runtime::Runtime>().tasks.migration(page.label())?;
         self.migration_allowed(page)?;
         let view = self.ensure(app, page).await?;
         if self
@@ -316,6 +317,7 @@ impl Workspace {
         reveal: bool,
     ) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().await;
+        let _migration = app.state::<super::runtime::Runtime>().tasks.migration(page.label())?;
         self.migration_allowed(page)?;
         let view = app.get_webview(page.label()).ok_or("页面不存在")?;
         let window = view.window();

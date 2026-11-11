@@ -1698,6 +1698,7 @@ pub fn run() {
         .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
             session::ipc::native_bridge_context,
+            session::ipc::native_task_snapshot,
             session::ipc::native_observation_snapshot,
             session::ipc::native_observation_refresh,
             session::ipc::native_observation_interval,
@@ -1746,6 +1747,10 @@ pub fn run() {
             positions::positions_save
         ])
         .setup(|app| {
+            let task_handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>().set_task_changed(std::sync::Arc::new(move || {
+                let _ = task_handle.emit("native-tasks-changed", ());
+            }));
             let observations_handle = app.handle().clone();
             app.state::<session::runtime::Runtime>().observations.set_changed(std::sync::Arc::new(move || {
                 let _ = observations_handle.emit("native-observations-changed", ());
