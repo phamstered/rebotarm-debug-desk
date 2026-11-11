@@ -227,6 +227,35 @@ describe("App workflow", () => {
     }
   });
 
+  it("keeps another page's preferences unchanged when native main and handeye mount", async () => {
+    const base = doubles.invoke.getMockImplementation()!;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{},configurable:true});
+    doubles.invoke.mockImplementation((command, args) => {
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command === "native_task_snapshot") return Promise.resolve(null);
+      if(command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
+      return base(command,args);
+    });
+    localStorage.setItem("robot-console-page", "status");
+    const writes = vi.spyOn(localStorage, "setItem");
+    const main = render(<App />);
+    const handeye = render(<App hostedPage="handeye" />);
+    try {
+      await screen.findByRole("region", {name:"手眼标定内容"});
+      for (const key of ["robot-console-motion-tab", "robot-console-motion-controllers", "easy-debug-panels", "easy-debug-sidebars", "easy-debug-layout"]) {
+        expect(writes.mock.calls.filter(([written]) => written === key)).toHaveLength(0);
+      }
+      for (const key of ["robot-console-page", "robot-console-nav-expanded", "robot-console-workspace-motion-nav", "easy-debug-navigate-status-on-connect"]) {
+        expect(writes.mock.calls.filter(([written]) => written === key)).toHaveLength(1);
+      }
+    } finally {
+      main.unmount(); handeye.unmount(); writes.mockRestore();
+      delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+      doubles.invoke.mockImplementation(base);
+    }
+  });
+
   it("opens offline pose and group management in the single native Motion host", async () => {
     const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
     const resize = globalThis.ResizeObserver;

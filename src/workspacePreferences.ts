@@ -20,11 +20,13 @@ export function useWorkspacePreference<T extends string | boolean>(
   key: string,
   fallback: T,
   allowed?: readonly T[],
+  persist = true,
 ) {
   const [value, setValue] = useState<T>(() =>
     readWorkspacePreference(key, fallback, allowed),
   );
   useEffect(() => {
+    if (!persist) return;
     try {
       localStorage.setItem(
         `robot-console-workspace-${key}`,
@@ -33,6 +35,6 @@ export function useWorkspacePreference<T extends string | boolean>(
     } catch {
       /* Retain preference in memory. */
     }
-  }, [key, value]);
+  }, [key, value, persist]);
   return [value, setValue] as const;
 }

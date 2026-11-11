@@ -1,3 +1,4 @@
+import { ownsPagePreference, usePagePreference } from "./pagePreferences";
 import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
 import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
@@ -105,7 +106,6 @@ import {
   rememberConnectHistory,
   rememberLastKnownDomainId,
   rememberSuccessfulHost,
-  saveNavigateStatusOnConnect,
 } from "./appLogic";
 import type { BridgeVersionCheck, CollapsiblePanel, ConnectHistory, ConnectStepId, PanelState, RecentHost, TopicSample } from "./appLogic";
 import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
@@ -455,7 +455,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [motionFocus, setMotionFocus] = useState(false);
-  const [motionNav, setMotionNav] = useWorkspacePreference<boolean>("motion-nav", false);
+  const [motionNav, setMotionNav] = useWorkspacePreference<boolean>("motion-nav", false, undefined, ownsPagePreference("robot-console-workspace-motion-nav", hostedPage));
   const [motionTab, setMotionTab] = useState<MotionTab>(loadMotionTab);
   const [motionControllersOpen, setMotionControllersOpen] = useState(loadMotionSidebar);
   const [motionLayoutReset, setMotionLayoutReset] = useState(0);
@@ -538,8 +538,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     if (appPage === "dashboard") setTopicsVisited(true);
     if (appPage === "motion" && motionTab === "robot") setRobotVisited(true);
   }, [stage, appPage, motionTab]);
-  useEffect(() => { localStorage.setItem("robot-console-motion-tab", motionTab); }, [motionTab]);
-  useEffect(() => { localStorage.setItem("robot-console-motion-controllers", String(motionControllersOpen)); }, [motionControllersOpen]);
+  usePagePreference("robot-console-motion-tab", motionTab, hostedPage);
+  usePagePreference("robot-console-motion-controllers", String(motionControllersOpen), hostedPage);
   useEffect(() => {
     const changed = () => setDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", changed);
@@ -638,25 +638,11 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     if (saved) setAppPage("monitor");
   };
 
-  useEffect(() => {
-    localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
-  }, [panels]);
-
-  useEffect(() => {
-    localStorage.setItem("easy-debug-sidebars", JSON.stringify(sidebars));
-  }, [sidebars]);
-
-  useEffect(() => {
-    localStorage.setItem("easy-debug-layout", JSON.stringify(layout));
-  }, [layout]);
-
-  useEffect(() => {
-    if (!hostedPage) localStorage.setItem("robot-console-page", appPage);
-  }, [appPage, hostedPage]);
-
-  useEffect(() => {
-    localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
-  }, [navExpanded]);
+  usePagePreference("easy-debug-panels", JSON.stringify(panels), hostedPage);
+  usePagePreference("easy-debug-sidebars", JSON.stringify(sidebars), hostedPage);
+  usePagePreference("easy-debug-layout", JSON.stringify(layout), hostedPage);
+  usePagePreference("robot-console-page", appPage, hostedPage);
+  usePagePreference("robot-console-nav-expanded", String(navExpanded), hostedPage);
 
   const positionProfileKey = profileKeyFor(profile);
   const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status");
@@ -720,9 +706,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       gripperPosition: gripper?.fresh ? gripper.position : undefined });
   }
 
-  useEffect(() => {
-    saveNavigateStatusOnConnect(navigateStatusOnConnect);
-  }, [navigateStatusOnConnect]);
+  usePagePreference("easy-debug-navigate-status-on-connect", String(navigateStatusOnConnect), hostedPage);
 
   useEffect(() => {
     if (!statusHighlightCardId) return;

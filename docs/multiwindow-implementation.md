@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务、偏好单写者归属和离线编辑入口仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务与完整离线配置切换仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -165,9 +165,16 @@
 
 ## 离线 Motion 单实例入口
 
-离线姿态库及动作组按钮改用原生 Motion Host；带版本的 Tab 导航保存在 Rust 快照，覆盖懒创建和已拆出页面。姿态编辑在切换 Tab 时保持挂载。连接配置不匹配时保留原编辑并提示先同步连接；完整离线配置切换、偏好单写者和其他任务生命周期仍待实现。
+离线姿态库及动作组按钮改用原生 Motion Host；带版本的 Tab 导航保存在 Rust 快照，覆盖懒创建和已拆出页面。姿态编辑在切换 Tab 时保持挂载。连接配置不匹配时保留原编辑并提示先同步连接；完整离线配置切换和其他任务生命周期仍待实现。
 
 
 本阶段验证：`npm test` 全部通过（879 前端 / 134 Rust / 3 运行库测试及全部其余脚本），随后 `npm run build`、`npm run docs:build` 通过；日志 `/tmp/260-offline-motion-final-{tests,build}.log`、`/tmp/260-offline-motion-docs-build.log`。独立 Debug Tauri bundle 构建和签名核验通过（`/tmp/260-offline-motion-bundle.log`）。
 
 实际离线原生窗口验证了两个管理入口聚焦同一 Motion 并选中对应 Tab；未保存姿态名称跨 Tab、返回主窗口、重新进入管理入口及收回后重新进入均保留。测试草稿随后取消，未写入正式姿态库。同一隔离应用还复验了手眼页 1200×900 标定板的放大查看、完整工具栏、原始尺寸及 Esc 返回，返回后保留 100% 缩放。未连接机器人、未替换正式应用；本轮不重复声称此前故障注入和 50 轮迁移是新增验证。全量九窗口、多屏及持续运行验收仍未完成。
+
+
+## 页面偏好写入归属（验证中）
+
+App 在每个原生 WebView 中运行，因此原来各页面初始化时都会保存 Motion 标签、Topics 分栏等偏好，存在旧状态覆盖。现在 `pagePreferences.ts` 明确分配唯一写入者：Motion 保存自身标签/Controller 侧栏，Topics 保存面板/侧栏/尺寸，主窗口保存全局导航、Motion 下主导航显示及连接后跳转。主窗口即使当前选择 Motion 也不写 Motion 页的标签；页面隐藏或拆收不改变归属。浏览器单窗口保留原行为。
+
+页面内部的 MotionLayout/URDF/动作组/浮动面板和数据采集设置已经只在对应唯一页面组件挂载，继续由本页写入。此处是 UI 偏好归属，不把 localStorage 当作任务锁或控制授权。姿态/动作组/Monitor 共享文档继续使用 Rust 版本校验。完整任务生命周期和多屏验收仍未完成。
