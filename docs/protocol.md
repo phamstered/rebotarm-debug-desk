@@ -605,4 +605,10 @@ Motion/Pick 分别每 1 秒 / 500 ms 调用无续租的 observe，生成快照�
 
 配置或暂停变化增加 `segment`，诊断不得跨段配对；Live/bag 变化清空历史并增加 `reset`。隐藏页面只停止拉取与绘制，显式暂停才停止原生采集。连接断开清空历史，迟到响应丢弃。历史适配器不向普通 Bridge 消息监听器广播补回数据，因此不能续鲜控制反馈。
 
+### 原生编辑配置（多窗口开发分支）
+
+`editor_document_read(key)` 返回 `{revision, content}`，`content=null` 表示文件不存在。`editor_document_commit(key, expected, content)` 在 Rust 互斥内读取并校验当前文件、比较版本、原子保存，返回 `{accepted, snapshot}`。版本不符返回 `accepted=false` 及最新快照，不覆盖文件、不自动重试旧内容；校验、读写失败明确报错。写入成功后才递增版本，原生 `editor-document-changed` 只通知 `{key, revision}`，页面按需读取，不广播整份配置。断开机器人不清除编辑配置。
+
+Monitor 使用 key `monitor`，仅实际 `page-monitor` / `page-dashboard` WebView 可写；主窗口和其他功能页只能读。数据为既有 version 2 布局格式，拒绝未知字段（包括 `series.points`），单文件 512 KiB，上限 32 仪表盘、128 面板/仪表盘、64 曲线/面板、2048 曲线总数。各窗口串行提交编辑操作，队列最多 32 项，重复读取按版本丢弃迟到数据。`positions` / `motion_groups` 的存储适配及既有文件校验已准备，但旧页面仍待迁移，尚不能据此声称所有编辑数据都已统一写入。
+
 原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。

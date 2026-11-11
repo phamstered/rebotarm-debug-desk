@@ -17,3 +17,4 @@ pub mod workspace;
 pub mod layout;
 pub mod migration;
 pub mod monitor;
+pub mod documents;

@@ -37,6 +37,7 @@ import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
 import { useNativeMonitor } from "./useNativeMonitor";
+import { useMonitorWorkspace, clearMonitorSamples } from "./useMonitorWorkspace";
 import { monitorCaptureConfig, MonitorReplay, applyMonitorReplay } from "./nativeMonitorLogic";
 import { PositionPage } from "./PositionPage";
 import { useWorkspacePreference } from "./workspacePreferences";
@@ -63,7 +64,6 @@ import {
   removePanelFromDashboard,
   renameMonitorDashboard,
   resetDashboardPanelLayouts,
-  saveMonitorWorkspace,
   selectMonitorDashboard,
   setMonitorCompactType,
   setMonitorLayoutLocked,
@@ -468,9 +468,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const windowVisible = documentVisible && (!hostedPage || workspace.snapshot.pages[hostedPage]?.visible === true);
   const [inspectorDataVisible, setInspectorDataVisible] = useState(true);
   const [imageSubscriptionRevision, setImageSubscriptionRevision] = useState(0);
-  const [monitorWorkspace, setMonitorWorkspace] = useState<MonitorWorkspace>(() =>
-    loadMonitorWorkspace(loadProfile().jointStateTopic),
-  );
+  const monitorEditor = useMonitorWorkspace(profile.jointStateTopic, nativeDesktop(), hostedPage === "monitor" || hostedPage === "dashboard");
+  const { workspace: monitorWorkspace, change: setMonitorWorkspace, setData: setMonitorData } = monitorEditor;
   const motionErrorSampler = useRef(new MotionErrorSampler());
   const [motionErrorStatus, setMotionErrorStatus] = useState<MotionErrorStatus>(EMPTY_MOTION_ERROR_STATUS);
   const [motionErrorSubscriptionError, setMotionErrorSubscriptionError] = useState("");
@@ -498,7 +497,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const monitorHistoryError = useNativeMonitor({bridge,enabled:nativeMonitor,connected:stage==="connected",visible:windowVisible,config:monitorCapture.config,
     onPage:page=>{
       const batch=monitorReplay.current.accept(page,profile.jointStateTopic,motionErrorsEnabled);
-      setMonitorWorkspace(current=>applyMonitorReplay(current,batch));
+      setMonitorData(current=>applyMonitorReplay(current,batch));
       setMotionErrorStatus(batch.status);
       if(batch.notice)setMonitorHistoryNotice(batch.notice);
       if(page.config.bag_playing){setBagClockMs(batch.bagClockMs);setBagOriginMs(origin=>origin??batch.bagClockMs);}
@@ -627,18 +626,18 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     }, 30_000);
   }, [bridge, activeTrajectoryController, controllerStateSample, messages, profile.jointStateTopic, controllers.action]);
 
-  const addToMonitor = useCallback((fieldPath: string, dashboardId: string, panelId: string | null) => {
+  const addToMonitor = async (fieldPath: string, dashboardId: string, panelId: string | null) => {
     if (!selected) return;
     const sample = messages[selected];
     if (!sample) return;
-    setMonitorWorkspace((current) => {
+    const saved = await setMonitorWorkspace((current) => {
       const dashboard = current.dashboards.find((entry) => entry.id === dashboardId);
       if (!dashboard) return current;
       const series = addFieldsToSeries([], selected, fieldPath, sample.data);
       return addSeriesToDashboardPanel(current, dashboard.id, panelId, series);
     });
-    setAppPage("monitor");
-  }, [messages, selected]);
+    if (saved) setAppPage("monitor");
+  };
 
   useEffect(() => {
     localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
@@ -655,10 +654,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   useEffect(() => {
     if (!hostedPage) localStorage.setItem("robot-console-page", appPage);
   }, [appPage, hostedPage]);
-
-  useEffect(() => {
-    saveMonitorWorkspace(monitorWorkspace);
-  }, [monitorWorkspace]);
 
   useEffect(() => {
     localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
@@ -883,7 +878,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           ? motionErrorSampler.current.accept(message.topic, message.data, wallNow, profile.jointStateTopic, bagPlayingRef.current) : null;
         if (diagnostic) setMotionErrorStatus(diagnostic.status);
         const diagnosticBagPlaying = bagPlayingRef.current;
-        if (monitorOwner && !nativeMonitor) setMonitorWorkspace((current) => {
+        if (monitorOwner && !nativeMonitor) setMonitorData((current) => {
           let next = updateMonitorFromMessage(diagnostic?.reset ? clearMotionErrorPoints(current) : current, message.topic!, message.data, now);
           for (const frame of diagnostic?.frames ?? []) next = updateMonitorFromMessage(next, frame.topic, frame.data, diagnosticBagPlaying ? frame.sourceTimeMs ?? now : now);
           return next;
@@ -1296,7 +1291,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     setToolbarBusy("");
     setToolbarNotice("");
     // Keep Monitor panel config; clear live points by reloading persisted configs without points.
-    setMonitorWorkspace(loadMonitorWorkspace(profile.jointStateTopic));
+    setMonitorData(current => nativeDesktop() ? clearMonitorSamples(current) : loadMonitorWorkspace(profile.jointStateTopic));
   }
 
   useNativePageSession({
@@ -1969,6 +1964,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {!hostedPage && (nativeMain || appPage !== "motion") && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
       {hostedPage && <NativePageToolbar page={hostedPage} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
+      {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
       {nativeDesktop() && <NativeTaskStatus />}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
