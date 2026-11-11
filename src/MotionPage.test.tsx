@@ -133,3 +133,13 @@ it("opens URDF alongside Robot View without exposing the robot controls", async 
   expect(screen.getByText("Model inspection")).toBeVisible();
   expect(screen.getByText("Robot control view")).not.toBeVisible();
 });
+
+it("retains visible editing controls when only drawing is suspended", async () => {
+  const change = vi.fn(), user = userEvent.setup();
+  const props = {active:false, visible:true, tab:"positions" as const, onTabChange:change, controllersOpen:false,
+    onToggleControllers:vi.fn(), controllers:null, readiness:null, robot:null, positions:<input aria-label="Draft" defaultValue="retained" />, groups:null, log:null};
+  const view = render(<MotionPage {...props} />);
+  expect(screen.getByLabelText("Draft")).toBeVisible();
+  await user.click(screen.getByRole("tab", {name:"动作组"})); expect(change).toHaveBeenCalledWith("groups");
+  view.rerender(<MotionPage {...props} visible={false} />); expect(screen.getByLabelText("Draft")).not.toBeVisible();
+});

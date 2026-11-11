@@ -150,7 +150,15 @@ describe("App workflow", () => {
         ],
         message: "",
       });});
-    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
+    const documents = new Map<string, {revision: number; content: string | null}>();
+    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string; key?: string; expected?: number; content?: string }) => {
+      if (command === "editor_document_read" || command === "editor_document_commit") {
+        const key = args!.key!, before = documents.get(key) ?? {revision: 0, content: null};
+        if (command === "editor_document_read") return Promise.resolve(before);
+        if (args!.expected !== before.revision) return Promise.resolve({accepted: false, snapshot: before});
+        const snapshot = {revision: before.revision + 1, content: args!.content!}; documents.set(key, snapshot);
+        return Promise.resolve({accepted: true, snapshot});
+      }
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "data_collection_action") return Promise.resolve({
         state: "stopped", managed: false, pid: 0, recording: false, pendingFrames: 0, savedEpisodes: 0,
@@ -1476,7 +1484,7 @@ describe("App workflow", () => {
     doubles.controllers.mockImplementation(() => {return Promise.resolve({ manager: "/controller_manager", fresh: true, available: true,
         controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });});
     doubles.invoke.mockImplementation((command, args) => {
-      if (command === "motion_groups_load") return Promise.resolve(JSON.stringify({ schemaVersion: 1, profiles: { "group-robot|operator|22": { groups: [group] } } }));
+      if (command === "editor_document_read" && args?.key === "motion_groups") return Promise.resolve({revision: 0, content: JSON.stringify({ schemaVersion: 1, profiles: { "group-robot|operator|22": { groups: [group] } } })});
 
       return baseInvoke(command, args);
     });

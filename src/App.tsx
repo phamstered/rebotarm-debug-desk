@@ -1,6 +1,6 @@
 import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
-import { nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
+import { pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
@@ -44,8 +44,8 @@ import { useWorkspacePreference } from "./workspacePreferences";
 import { SavePoseDialog } from "./SavePoseDialog";
 import { useClockSync } from "./clockSyncLogic";
 import { positionMotionBusy, usePositionMotion } from "./positionMotionLogic";
-import { addPosition, captureCurrentArmPose, nextCapturedPoseName, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
-import { loadStoredPositions, saveStoredPositions } from "./positionStore";
+import { captureCurrentArmPose, nextCapturedPoseName, profileKeyFor, type PositionDraft } from "./positionLogic";
+import { usePositions } from "./usePositions";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
 import { useArmModeWorkflow } from "./armModeWorkflowLogic";
@@ -422,7 +422,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [positionEditRequest,setPositionEditRequest] = useState<{id:string;intent?:"edit"|"delete"}|undefined>();
   const [poseToSave, setPoseToSave] = useState<PositionDraft | null>(null);
   const [poseSaveError, setPoseSaveError] = useState("");
-  const [positionStore, setPositionStore] = useState<PositionStore>(() => emptyPositionStore());
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
   const [rgbdColorMode, setRgbdColorMode] = useState<RgbdColorMode>("rgb");
@@ -465,7 +464,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
   const [documentVisible, setDocumentVisible] = useState(!document.hidden);
-  const windowVisible = documentVisible && (!hostedPage || workspace.snapshot.pages[hostedPage]?.visible === true);
+  const windowVisible = pageWindowVisible(documentVisible, hostedPage, workspace.snapshot);
   const [inspectorDataVisible, setInspectorDataVisible] = useState(true);
   const [imageSubscriptionRevision, setImageSubscriptionRevision] = useState(0);
   const monitorEditor = useMonitorWorkspace(profile.jointStateTopic, nativeDesktop(), hostedPage === "monitor" || hostedPage === "dashboard");
@@ -659,16 +658,12 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
   }, [navExpanded]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void loadStoredPositions().then((store) => {
-      if (!cancelled) setPositionStore(store);
-    });
-    return () => { cancelled = true; };
-  }, []);
-
   const positionProfileKey = profileKeyFor(profile);
-  const motionGroups = useMotionGroups(positionProfileKey);
+  const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status");
+  const positionStore = positionsEditor.store;
+  const createPosition = positionsEditor.create, editPosition = positionsEditor.update, removePosition = positionsEditor.remove;
+  const motionGroups = useMotionGroups(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion");
+  useEffect(() => { setPoseToSave(null); }, [positionProfileKey]);
   const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]), nativeDesktop() ? sharedObservations : undefined);
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
     controllerAction ? "Controller 切换进行中，请等待完成" : statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
@@ -722,28 +717,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     setPoseToSave({ name: nextCapturedPoseName(positionStore.profiles[positionProfileKey]?.positions ?? []),
       positions: [...captured.positions], source: "feedback", note: "",
       gripperPosition: gripper?.fresh ? gripper.position : undefined });
-  }
-
-  function persistPositions(next: PositionStore) {
-    setPositionStore(next);
-    void saveStoredPositions(next).catch(() => undefined);
-  }
-
-  function createPosition(draft: PositionDraft) {
-    const result = addPosition(positionStore, positionProfileKey, draft, Date.now(), crypto.randomUUID());
-    if (!result.error) persistPositions(result.store);
-    return result.error;
-  }
-
-  function editPosition(id: string, draft: PositionDraft) {
-    const result = updatePosition(positionStore, positionProfileKey, id, draft, Date.now());
-    if (!result.error) persistPositions(result.store);
-    return result.error;
-  }
-
-  function removePosition(id: string) {
-    const result = deletePosition(positionStore, positionProfileKey, id);
-    if (!result.error) persistPositions(result.store);
   }
 
   useEffect(() => {
@@ -1316,6 +1289,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     disconnected: message => { setStage("idle"); setError(message); },
   });
   const migrationBusyReason = handeyeBusy ? `标定${handeyeBusy}中，请完成后移动页面` :
+    positionsEditor.saving || motionGroups.saving ? "正在保存编辑内容，请稍后移动页面" :
     statusActionBusy ? "控制模式操作中，请完成后移动页面" : controllerAction ? "Controller 切换中，请完成后移动页面" :
     controlStreaming ? "电机指令发送中，请先停止" : gravitySessionActive ? "重力辨识中，请结束后移动页面" :
     hostedPage === "motion" && positionMotion.busy ? "运动任务尚未结束，请确认停止后移动页面" : pageBusy ? pageBusy : bagBusy ? "录制或回放操作中，请稍后移动页面" : "";
@@ -1783,7 +1757,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         <PositionPage
           profileKey={positionProfileKey}
           editRequest={positionEditRequest}
-          store={positionStore}
+          store={positionStore} ready={positionsEditor.ready} saving={positionsEditor.saving} error={positionsEditor.error}
           urdfXml={urdf || previewUrdf}
           onUpdate={editPosition}
           onDelete={removePosition}
@@ -2189,7 +2163,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {(!hostedPage || hostedPage === "motion") && <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
         connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
         tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <button className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</button>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
-        resetVersion={motionLayoutReset} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
+        resetVersion={motionLayoutReset} visible={appPage === "motion"} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
           onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}
@@ -2251,7 +2225,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
             profileKey={positionProfileKey}
             editRequest={positionEditRequest}
-            store={positionStore}
+            store={positionStore} ready={positionsEditor.ready} saving={positionsEditor.saving} error={positionsEditor.error}
             urdfXml={urdf || previewUrdf}
             onUpdate={editPosition}
             onDelete={removePosition}

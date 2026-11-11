@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { SavePoseDialog } from "./SavePoseDialog";
@@ -37,4 +37,21 @@ it("explains unavailable gripper feedback and cancels without writing", async ()
   await user.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalledOnce();
   expect(onSave).not.toHaveBeenCalled();
+});
+
+it("waits for durable save, blocks repeated submission and retains the draft on disk failure", async () => {
+  let finish!: (failure: string) => void;
+  const user = userEvent.setup(), onClose = vi.fn(), onSave = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
+  render(<SavePoseDialog initial={initial} urdfXml="" onSave={onSave} onClose={onClose} />);
+  await user.type(screen.getByLabelText("姿态备注"), "保留草稿");
+  await user.click(screen.getByRole("button", {name:"保存点位"}));
+  expect(screen.getByRole("button", {name:"保存中…"})).toBeDisabled();
+  expect(screen.getByLabelText("点位名称")).toBeDisabled();
+  await user.keyboard("{Escape}");
+  fireEvent.submit(document.getElementById("save-current-pose")!);
+  expect(onClose).not.toHaveBeenCalled(); expect(onSave).toHaveBeenCalledOnce();
+  await act(async () => finish("磁盘已满"));
+  expect(screen.getByRole("alert")).toHaveTextContent("磁盘已满");
+  expect(screen.getByLabelText("姿态备注")).toHaveValue("保留草稿");
+  expect(screen.getByRole("button", {name:"保存点位"})).toBeEnabled(); expect(onClose).not.toHaveBeenCalled();
 });

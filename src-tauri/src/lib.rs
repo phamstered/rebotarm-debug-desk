@@ -1755,11 +1755,7 @@ pub fn run() {
             stop_rosbag_playback,
             start_session,
             stop_session,
-            deploy_bridge,
-            positions::positions_load,
-            motion_groups::motion_groups_load,
-            motion_groups::motion_groups_save,
-            positions::positions_save
+            deploy_bridge
         ])
         .setup(|app| {
             let task_handle = app.handle().clone();

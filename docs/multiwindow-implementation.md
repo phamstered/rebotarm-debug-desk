@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务和共享编辑状态仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务、偏好单写者归属和离线编辑入口仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -143,3 +143,21 @@
 - 原生离线验收：七面板配置成功迁移为 2943 字节的文件且不含 points；通过真实 Monitor 窗口改名，退出并重启后名称保留，主窗口/手眼启动不覆盖它。备份隔离配置后放入无效测试内容，真实 UI 拒绝保存、保留当前仪表盘和未保存名称；确认文件未被覆盖，恢复备份后再次保存成功，错误消失。配置测试仅触及 `dev.easydebug.multiwindowtest`，生产应用与 Bridge 未修改。Topics 到 Monitor 同步的证据为两消费者测试，本阶段没有连接机器人进行原生实时字段选择。
 
 共享编辑仍需完成：姿态库与动作组页面接入版本化写入和变更通知、脏草稿冲突提示、异步保存状态；移除旧无版本写入入口；主窗口离线 Motion 编辑入口须复用已有 Motion 页，避免第二个编辑器；其他布局偏好按所属页面写入。存储层已为 `positions` / `motion_groups` 保留旧文件路径与校验适配，但这不代表对应前端已迁移。随后继续其余原生任务生命周期、九窗口及持续运行/多屏验收，完整 Issue #260 尚未达到交付条件。
+
+
+## 姿态库与动作组共享编辑
+
+两类页面已接入 `editor_document_read/commit`，沿用原文件路径；移除无版本校验的旧读写 IPC。保存基于最新文档，仅修改指定连接的目标记录，保留其他配置。编辑和删除带记录基线，防止整份文档版本更新后仍把旧草稿覆盖回去。Status 新保存的姿态通过轻量失效通知同步到 Motion；草稿独立保留。姿态保存对话框和编辑页等待写入结果，失败展示原因，阻止重复提交和保存中的页面迁移。
+
+本阶段已完成下述全量测试和隔离原生验证。离线主窗口的重复 Motion 编辑入口及其他偏好单写者仍待后续接入；完整目标保持进行中。
+
+
+本阶段原生复验发现 Motion 拆出后可出现仅剩窗口工具栏、内容消失，重新选择页面可短暂恢复。已将原生页的可见性以 Rust 快照为准（避免 reparent 后 WebKit `document.hidden` 影响独立窗口），并把 Motion 内容的路由显示与绘制/查询活跃状态分离。真实窗口仍显示时不会因绘制暂停隐藏编辑表单；隐藏或最小化仍暂停绘制。
+
+
+四窗口启动时还捕获到一次真实原生死锁：主线程处理 `workspace_page_ready` 的事件广播，在 `WryWebviewDispatcher::eval_script` 等待父窗口 ID 锁；恢复窗口的后台线程持有同一锁，在 `reparent` 等待主线程 ACK。栈保存于 `/tmp/260-window-startup-sample.txt`。运行库修复改为先复制并释放源 ID 锁，再发送/等待迁移；主线程在迁移成功后、ACK 前提交新 ID。回归测试在临时还原旧持锁顺序时失败（`GUI event blocked by waiting caller`），修复后三项运行库测试通过；失败仍保留原父窗口，断开的响应通道返回错误。
+
+
+最终验证：`npm test` 全部通过（876 前端 / 133 Rust / 3 运行库测试与全部其余脚本，`/tmp/260-position-group-final-tests.log`）。`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 和 `codesign --verify --deep --strict` 均通过；日志 `/tmp/260-position-group-{build,docs-build,bundle}.log`。还原旧锁顺序的临时负例按预期失败，记录于 `/tmp/260-reparent-old-lock-test.log`，不影响上述最终全量结果。
+
+离线原生实测：主窗口、Motion、Monitor、手眼四窗口连续三次恢复启动成功；姿态与动作组的外部修改会拒绝旧草稿提交并保留输入，重新载入后均保存成功，且核对了实际文件；主窗口保存的姿态名称同步出现在独立 Motion。修复后切换 Motion Tab 不再丢失可见内容。未保存姿态草稿完成 12 轮收回＋拆出（24 次迁移）均保留。自动化过程中的焦点切换和 ScreenCaptureKit 中断没有计入通过次数；本轮未完成新的 50 轮连续批次，不代替此前手眼页的 50 轮记录或整体性能验收。测试数据仅位于 `dev.easydebug.multiwindowtest`，正式应用与 Jetson 未替换，未连接真实机械臂。

@@ -1,3 +1,4 @@
+import { pageWindowVisible } from "./nativeWorkspaceLogic";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient } from "./bridge";
@@ -75,4 +76,13 @@ describe("page session attachment", () => {
     expect(handlers.connected).not.toHaveBeenCalled(); expect(client.listTopics).not.toHaveBeenCalled();
     expect(mocks.events.size).toBe(0); expect(client.close).toHaveBeenCalled();
   });
+});
+
+it("uses native visibility for reparented pages even when WebKit reports hidden", () => {
+  const snapshot = {selected:"motion" as const, pages:{motion:{detached:true,visible:true,ready:true,busy_reason:""}}};
+  expect(pageWindowVisible(false, "motion", snapshot)).toBe(true);
+  expect(pageWindowVisible(true, "motion", {...snapshot, pages:{motion:{...snapshot.pages.motion,visible:false}}})).toBe(false);
+  expect(pageWindowVisible(true, "monitor", snapshot)).toBe(false);
+  expect(pageWindowVisible(false, undefined, snapshot)).toBe(false);
+  expect(pageWindowVisible(true, undefined, snapshot)).toBe(true);
 });

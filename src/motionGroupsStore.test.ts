@@ -1,42 +1,15 @@
-import { expect, it, vi } from "vitest";
-const doubles = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: doubles.invoke }));
-import {
-  loadStoredMotionGroups,
-  updateStoredMotionGroups,
-} from "./motionGroupsStore";
-it("preserves errors and never writes after a bad read", async () => {
-  doubles.invoke.mockReset().mockResolvedValue("broken");
-  await expect(loadStoredMotionGroups()).rejects.toThrow();
-  await expect(updateStoredMotionGroups((s) => s)).rejects.toThrow();
-  expect(
-    doubles.invoke.mock.calls.every(([op]) => op === "motion_groups_load"),
-  ).toBe(true);
+import { expect, it } from "vitest";
+import { decodeMotionGroupStore, assertMotionGroupUnchanged } from "./motionGroupsStore";
+import { decodePositionStore, assertPositionUnchanged } from "./positionStore";
+it("preserves invalid documents instead of silently replacing them with empty data", () => {
+  for (const raw of ["broken", "null", "{}", '{"schemaVersion":9,"profiles":{}}']) {
+    expect(() => decodeMotionGroupStore(raw)).toThrow(); expect(() => decodePositionStore(raw)).toThrow();
+  }
+  expect(() => decodePositionStore('{"schemaVersion":2,"profiles":{"p":{"positions":[{}]}}}')).toThrow(/无效记录/);
+  expect(decodeMotionGroupStore(null).profiles).toEqual({}); expect(decodePositionStore(null).profiles).toEqual({});
 });
-it("serializes read-modify-write transactions without losing different profiles", async () => {
-  let raw = '{"schemaVersion":1,"profiles":{}}';
-  let active = 0,
-    max = 0;
-  doubles.invoke
-    .mockReset()
-    .mockImplementation(async (op: string, args: any) => {
-      active++;
-      max = Math.max(max, active);
-      await new Promise((r) => setTimeout(r, 5));
-      if (op === "motion_groups_save") raw = args.content;
-      active--;
-      return op === "motion_groups_load" ? raw : undefined;
-    });
-  await Promise.all([
-    updateStoredMotionGroups((s) => ({
-      ...s,
-      profiles: { ...s.profiles, a: { groups: [] } },
-    })),
-    updateStoredMotionGroups((s) => ({
-      ...s,
-      profiles: { ...s.profiles, b: { groups: [] } },
-    })),
-  ]);
-  expect(Object.keys(JSON.parse(raw).profiles)).toEqual(["a", "b"]);
-  expect(max).toBe(1);
+it("accepts absent records only for creation and refuses resurrecting deleted drafts", () => {
+  expect(() => assertMotionGroupUnchanged(undefined, "")).not.toThrow();
+  expect(() => assertMotionGroupUnchanged(undefined, "old")).toThrow(/删除/);
+  expect(() => assertPositionUnchanged(undefined, "old")).toThrow(/删除/);
 });

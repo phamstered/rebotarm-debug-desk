@@ -3,7 +3,7 @@ import { boundedMotionSize, defaultMotionLayout, loadMotionLayout, MOTION_LAYOUT
 
 const Context = createContext<{ sizes: MotionLayout; active: boolean; compact: boolean; focusMode: boolean; exitFocus?(): void; resetVersion: number; setSize(key: MotionSize, value: number): void } | null>(null);
 export function useMotionLayout() { return useContext(Context); }
-export function MotionLayoutProvider({ active, compact = false, focusMode = false, exitFocus, resetVersion = 0, children }: { active: boolean; compact?: boolean; focusMode?: boolean; exitFocus?(): void; resetVersion?: number; children: ReactNode }) {
+export function MotionLayoutProvider({ active, visible = active, compact = false, focusMode = false, exitFocus, resetVersion = 0, children }: { active: boolean; visible?: boolean; compact?: boolean; focusMode?: boolean; exitFocus?(): void; resetVersion?: number; children: ReactNode }) {
   const [sizes, setSizes] = useState(loadMotionLayout);
   const previousReset = useRef(resetVersion);
   useEffect(() => {
@@ -12,7 +12,7 @@ export function MotionLayoutProvider({ active, compact = false, focusMode = fals
   useEffect(() => { try { localStorage.setItem(MOTION_LAYOUT_KEY, JSON.stringify(sizes)); } catch { /* Layout remains usable when storage is unavailable. */ } }, [sizes]);
   const style = Object.fromEntries(Object.entries(sizes).map(([key, value]) => [`--motion-${key}`, `${value}px`])) as CSSProperties;
   return <Context.Provider value={{ sizes, active, compact, focusMode, exitFocus, resetVersion, setSize: (key, value) => setSizes((old) => ({ ...old, [key]: boundedMotionSize(key, value) })) }}>
-    <div className="motion-layout-root" hidden={!active} style={style}>{children}</div>
+    <div className="motion-layout-root" hidden={!visible} style={style}>{children}</div>
   </Context.Provider>;
 }
 

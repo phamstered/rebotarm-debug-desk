@@ -17,6 +17,10 @@ export const PAGE_TITLES: Record<AppPage, string> = {
 };
 export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string; recovery_required?: boolean };
 export type NativeWorkspaceSnapshot = { selected: AppPage; pages: Partial<Record<AppPage, NativePageState>> };
+/** Reparented WKWebViews can report a stale document.hidden; native window state owns visibility. */
+export function pageWindowVisible(documentVisible: boolean, page: AppPage | undefined, snapshot: NativeWorkspaceSnapshot) {
+  return page ? snapshot.pages[page]?.visible === true : documentVisible;
+}
 export type NativeSessionContext = { epoch: number; connected: boolean; profile: ConnectionProfile | null; error: string | null };
 
 /** Snapshots are authoritative; do not infer visibility from focus on a multi-monitor desktop. */

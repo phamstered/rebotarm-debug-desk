@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import rebotarmUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
@@ -47,7 +47,7 @@ describe("PositionPage", () => {
     expect(onUpdate).toHaveBeenCalledWith("existing", expect.objectContaining({
       name: "取料位",
       positions: [0, 0.1, 0.2, 0.3, 0.4, 0.5],
-    }));
+    }), JSON.stringify(store.profiles[key].positions[0]));
   });
 
   it("asks before deleting a custom point", async () => {
@@ -80,7 +80,7 @@ describe("PositionPage", () => {
     await user.click(screen.getByRole("button", { name: "删除 取料位" }));
     expect(onDelete).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认删除 取料位" }));
-    expect(onDelete).toHaveBeenCalledWith("id-1");
+    expect(onDelete).toHaveBeenCalledWith("id-1", JSON.stringify(store.profiles[key].positions[0]));
   });
 
   it("shows a different URDF pose thumbnail for each saved position", () => {
@@ -163,7 +163,7 @@ it("double-clicks compact thumbnails to move without a preview pane, with contex
   await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'编辑姿态'}));expect(screen.getByLabelText('点位名称')).toHaveValue('pick');expect(execute).toHaveBeenCalledOnce();
   await user.click(screen.getByRole('button',{name:'取消'}));
   await user.click(screen.getByRole('button',{name:'pick更多操作'}));await user.click(screen.getByRole('menuitem',{name:'删除姿态'}));expect(onDelete).not.toHaveBeenCalled();
-  await user.click(screen.getByRole('button',{name:'确认删除 pick'}));expect(onDelete).toHaveBeenCalledExactlyOnceWith('pick');
+  await user.click(screen.getByRole('button',{name:'确认删除 pick'}));expect(onDelete).toHaveBeenCalledExactlyOnceWith('pick', JSON.stringify(store.profiles[key].positions[0]));
 });
 
 
@@ -195,4 +195,41 @@ it("blocks compact thumbnail execution during editing and allows it after cancel
   await user.click(screen.getByRole('button',{name:'取消'}));
   expect(screen.getByLabelText('点位编辑')).not.toBeVisible();
   await user.dblClick(screen.getByRole('button',{name:'移动到 pick'}));expect(execute).toHaveBeenCalledOnce();
+});
+
+it("keeps edit and delete baselines across external updates, retaining failed drafts", async () => {
+  const user = userEvent.setup(), original = point("p", [0,0,0,0,0,0]);
+  const store = emptyPositionStore(); store.profiles[key] = {positions:[original]};
+  const onUpdate = vi.fn(async () => "其他窗口已修改，草稿已保留"), onDelete = vi.fn(async () => "其他窗口已修改");
+  const props = {profileKey:key, store, urdfXml:"", onUpdate, onDelete};
+  const view = render(<PositionPage {...props} />);
+  await user.click(screen.getByRole("button", {name:"编辑"}));
+  fireEvent.change(screen.getByLabelText("点位名称"), {target:{value:"本地草稿"}});
+  await user.click(screen.getByRole("button", {name:"删除 p"}));
+  view.rerender(<PositionPage {...props} store={{...store, profiles:{[key]:{positions:[{...original,note:"其他窗口写入"}]}}}} />);
+  await user.click(screen.getByRole("button", {name:"保存点位"}));
+  expect(onUpdate).toHaveBeenCalledWith("p", expect.objectContaining({name:"本地草稿"}), JSON.stringify(original));
+  expect(screen.getByLabelText("点位名称")).toHaveValue("本地草稿");
+  expect(screen.getByRole("alert")).toHaveTextContent("草稿已保留");
+  await user.click(screen.getByRole("button", {name:"确认删除 p"}));
+  expect(onDelete).toHaveBeenCalledWith("p", JSON.stringify(original));
+  expect(screen.getByRole("alert")).toHaveTextContent("其他窗口已修改");
+});
+it("waits for save and ignores an old completion after changing profiles", async () => {
+  const user = userEvent.setup(), store = emptyPositionStore();
+  store.profiles[key] = {positions:[point("p", [0,0,0,0,0,0])]};
+  let finish!: (error: string) => void;
+  const onUpdate = vi.fn(() => new Promise<string>(resolve => {finish = resolve;}));
+  const props = {profileKey:key, store, urdfXml:"", onUpdate, onDelete:vi.fn()};
+  const view = render(<PositionPage {...props} />);
+  await user.click(screen.getByRole("button", {name:"编辑"}));
+  await user.click(screen.getByRole("button", {name:"保存点位"}));
+  expect(screen.getByRole("button", {name:"保存中…"})).toBeDisabled();
+  expect(screen.getByLabelText("点位名称")).toBeDisabled();
+  fireEvent.submit(document.querySelector("form.position-editor")!);
+  expect(onUpdate).toHaveBeenCalledOnce();
+  view.rerender(<PositionPage {...props} profileKey="other" />);
+  await act(async () => finish("旧错误"));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("点位名称")).not.toBeInTheDocument();
 });

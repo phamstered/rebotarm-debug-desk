@@ -4,11 +4,12 @@ import { MotionDivider, MotionLayoutProvider } from "./MotionLayout";
 import { MotionOutputPanel, MotionOutputProvider } from "./MotionOutput";
 import type { MotionTab } from "./appNavigationLogic";
 
-export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggleControllers,
+export function MotionPage({ active, visible = active, tab, onTabChange, controllersOpen, onToggleControllers,
   controllers, readiness, robot, urdf, positions, groups, log, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators }: {
   compact?: boolean; focusMode?: boolean; onToggleFocus?(): void; connection?: ReactNode; connectionLabel?: ReactNode; tools?: ReactNode; indicators?: ReactNode;
   resetVersion?: number;
   active: boolean;
+  visible?: boolean;
   tab: MotionTab;
   onTabChange(tab: MotionTab): void;
   controllersOpen: boolean;
@@ -21,7 +22,7 @@ export function MotionPage({ active, tab, onTabChange, controllersOpen, onToggle
   groups?: ReactNode;
   log: ReactNode;
 }) {
-  return <MotionLayoutProvider active={active} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!active} aria-label="Motion">
+  return <MotionLayoutProvider active={active} visible={visible} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!visible} aria-label="Motion">
     <header className="motion-workspace-header">
       <div className="motion-workspace-navigation">
         {!compact && <strong>Motion</strong>}
