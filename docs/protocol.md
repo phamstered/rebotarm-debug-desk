@@ -572,16 +572,20 @@ These IPC commands do not alter Bridge motion capabilities or remove any executi
 
 These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.
 
-### 原生任务状态（多窗口开发分支，覆盖 Position / Pick）
+### 原生任务状态（多窗口开发分支，覆盖 Position / Pick / Motor）
 
-`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
 桌面原生层把页面的 `position_motion_info` / `visual_pick_status` 映射为共享只读缓存，各窗口均可观察，不直接发送续租请求。只有已受理且所属 WebView 仍存活的任务由 Rust 每 500 ms 续租：Position 使用 `position_motion_heartbeat`，Pick 使用原 `visual_pick_status`。页面不能直接请求 Position 心跳。窗口数据拉取/请求入口维护存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台查询与心跳不刷新窗口存活。取消可越过慢心跳；迟到回复按原生任务编号隔离。停止或重连后每秒查询终态：Position 必须有匹配 command_id、明确 terminal 及一致的完整 motion_state，Pick 必须有匹配编号且 busy=false 的 holding/failed/canceled。未知、单独 idle/busy=false 或 stop_failed 不解锁。恢复取得的完整终态会发给页面以释放同一动作组锁。缺少新能力的 Bridge 会阻止原生多窗口执行，并提示更新。
 
-原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。Motor 连续流、直接轨迹、重力辨识和 SSH 控制操作的完整原生生命周期仍待接入。
+原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹、重力辨识和 SSH 控制操作的完整原生生命周期仍待接入。
 
+
+Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
+
+Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 不小于该次 DISABLE ACK、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
 
 ### 原生页面附着（多窗口开发分支）
 

@@ -40,3 +40,15 @@ it("reports native read failures rather than displaying a false idle state", asy
   render(<NativeTaskStatus />);
   expect(await screen.findByRole("status")).toHaveTextContent("原生任务状态查询失败");
 });
+
+
+it("keeps Motor output confirmation visible after a publish ACK without renewing the stream", async () => {
+  mocks.invoke.mockResolvedValue({ ...task, window: "page-motor", kind: "motor", message: "DISABLE 已发布，等待新鲜 HardwareStatus 确认输出关闭" });
+  render(<NativeTaskStatus />);
+  expect(await screen.findByRole("status")).toHaveTextContent("Motor 连续发送 · 等待停止确认");
+  expect(screen.getByRole("status")).toHaveTextContent("等待新鲜 HardwareStatus");
+  mocks.invoke.mockResolvedValue(null);
+  await act(async () => changed());
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(mocks.invoke.mock.calls.every(([command]) => command === "native_task_snapshot")).toBe(true);
+});

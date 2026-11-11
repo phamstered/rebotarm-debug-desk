@@ -250,3 +250,6 @@ Rust 会话以固定来源调度 Agent、USB、arm mode、Controller、Topics、
 ## Docker runtime
 
 Humble 容器使用 host 网络及独立 PID 命名空间，构建目录与 host 分离。部署与权限边界见 [Docker 运行说明](docker.md)。
+
+
+多窗口开发分支的 Motor 指令流由原生 Tasks 登记所属 WebView，HardwareStatus 使用与页面共享的原生常驻订阅；在 UI 预览合并前验证停止反馈。其他窗口读取任务状态，不代替控制窗口续发指令。任务与停止结果限定在同一机器人连接身份，发布 ACK 和固件输出关闭确认分开处理。此路径未改变 Bridge 的安全校验或 Mac 不加入 DDS 的边界。

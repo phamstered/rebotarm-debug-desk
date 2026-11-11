@@ -228,6 +228,7 @@ impl Runtime {
         let epoch = {
             let mut core = self.core.lock().unwrap();
             core.error = None;
+            self.tasks.configure_motor(core.epoch, &core.profile);
             core.epoch
         };
         let events_core = self.core.clone();
@@ -284,27 +285,61 @@ impl Runtime {
                 return Err(error);
             }
         };
-        let mut core = self.core.lock().unwrap();
-        if core.epoch != epoch {
-            transport.close();
-            return Err("连接已被取消".into());
-        }
-        if let Some(error) = &core.error {
-            transport.close();
-            return Err(error.clone());
-        }
-        let transport = Arc::new(transport);
-        core.transport = Some(transport.clone());
-        self.observations.start(
-            epoch,
-            super::motion_observations::reader(
-                super::observations::reader(transport.clone(), core.profile.clone()),
-                transport,
-                self.motion_logs.clone(),
+        {
+            let mut core = self.core.lock().unwrap();
+            if core.epoch != epoch {
+                transport.close();
+                return Err("连接已被取消".into());
+            }
+            if let Some(error) = &core.error {
+                transport.close();
+                return Err(error.clone());
+            }
+            let transport = Arc::new(transport);
+            core.transport = Some(transport.clone());
+            self.observations.start(
                 epoch,
-            ),
-        );
-        drop(core);
+                super::motion_observations::reader(
+                    super::observations::reader(transport.clone(), core.profile.clone()),
+                    transport,
+                    self.motion_logs.clone(),
+                    epoch,
+                ),
+            );
+        }
+        // Firmware stop confirmation must survive the last observing WebView.
+        // This native consumer is released with the connection, not with a page.
+        let subscription_result = async {
+            let _gate = self.subscriptions_gate.lock().await;
+            let (transport, changes) = {
+                let mut core = self.core.lock().unwrap();
+                let context = super::motor_task::Context::new(epoch, &core.profile);
+                let changes = if let Some(context) = context {
+                    core.subscriptions
+                        .acquire(
+                            &context.topic,
+                            "microros_stm32h723_bridge/msg/HardwareStatus",
+                            Consumer {
+                                window: WindowToken {
+                                    label: "native-motor-feedback".into(),
+                                    incarnation: epoch,
+                                },
+                                name: "firmware-stop".into(),
+                            },
+                        )
+                        .map_err(String::from)?
+                } else {
+                    Vec::new()
+                };
+                (core.transport.clone().ok_or("Bridge 尚未连接")?, changes)
+            };
+            self.apply_transitions(&transport, changes).await
+        }
+        .await;
+        if let Err(error) = subscription_result {
+            self.close_matching(Some(epoch));
+            return Err(format!("Motor 硬件反馈订阅失败：{error}"));
+        }
         self.watch_tasks(epoch);
         if let Some(changed) = self.changed.lock().unwrap().clone() {
             changed();
@@ -366,6 +401,17 @@ impl Runtime {
                         if core.epoch != epoch {
                             tasks.finish_action(action.ticket, action.action);
                             return;
+                        }
+                        if action.message["op"] == "joint_command" && action.message["mode"] == 3 {
+                            tasks.reply(
+                                Some(action.ticket),
+                                epoch,
+                                &action.message,
+                                result
+                                    .as_ref()
+                                    .map(|frame| &frame.metadata)
+                                    .map_err(String::as_str),
+                            );
                         }
                         if action.heartbeat {
                             tasks.heartbeat_reply(
@@ -995,6 +1041,7 @@ mod tests {
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "position_move" | "position_group_start" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
+                            "joint_command" => json!({"op":"joint_command_ack", "mode":message["mode"], "sequence":123, "request_id":message["request_id"]}),
                             "position_cancel" => json!({"op":"position_cancel_ack", "request_id":message["request_id"]}),
                             "position_motion_info" => json!({"op":"position_motion_info", "busy":false, "request_id":message["request_id"]}),
                             "position_motion_observe" => json!({"op":"position_motion_info", "busy":false, "motion_log_session":"fixture", "motion_log_cursor":0, "motion_logs":[], "request_id":message["request_id"]}),
@@ -1169,6 +1216,126 @@ mod tests {
             .subscriptions
             .recipients("/a_good")
             .is_empty());
+        hub.close();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn motor_owner_loss_disables_but_only_fresh_firmware_feedback_releases_task() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        // Deliberately incomplete ConnectionProfile: SSH readers cannot run.
+        hub.set_profile(
+            json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}),
+        );
+        hub.connect(port).await.unwrap();
+        let (motor, _) = hub.attach("page-motor").unwrap();
+        let (main, _) = hub.attach("main").unwrap();
+        let timeout = Duration::from_secs(2);
+        let status = |sequence, mode, stamp| {
+            json!({"op":"topic_message","topic":"/status",
+            "data":{"last_command_sequence":sequence,"mode":mode,"header":{"stamp":{"sec":stamp,"nanosec":0}}}})
+        };
+        // Observe delivery without adding a page subscription: the native owner
+        // retains this source even after all pages close.
+        events.send(status(1, 3, 1)).unwrap();
+        tokio::time::timeout(timeout, async {
+            while !hub
+                .core
+                .lock()
+                .unwrap()
+                .latest_topics
+                .contains_key("/status")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        hub.request(
+            "page-motor",
+            &motor,
+            "control",
+            json!({"op":"joint_command","mode":1}),
+            timeout,
+        )
+        .await
+        .unwrap();
+        assert!(hub.tasks.migration("page-motor").is_err());
+        assert!(hub
+            .request(
+                "main",
+                &main,
+                "control",
+                json!({"op":"position_move","command_id":"conflict"}),
+                timeout
+            )
+            .await
+            .is_err());
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m["op"] == "position_move"));
+        hub.detach("page-motor", &motor).await.unwrap();
+        hub.detach("main", &main).await.unwrap();
+        tokio::time::timeout(timeout, async {
+            while !seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m["op"] == "joint_command" && m["mode"] == 3)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(hub.tasks.snapshot().is_some());
+        // Deliver wrong sequence/mode after the publish ACK; no WebView polling.
+        for frame in [status(122, 3, 2), status(123, 1, 3)] {
+            events.send(frame.clone()).unwrap();
+            tokio::time::timeout(timeout, async {
+                loop {
+                    let delivered = hub
+                        .core
+                        .lock()
+                        .unwrap()
+                        .latest_topics
+                        .get("/status")
+                        .is_some_and(|(f, _)| f.metadata == frame);
+                    if delivered {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(hub.tasks.snapshot().is_some());
+        }
+        events.send(status(123, 3, 4)).unwrap();
+        tokio::time::timeout(timeout, async {
+            while hub.tasks.snapshot().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(hub.tasks.migration("page-motor").is_ok());
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m["op"] == "subscribe" && m["topic"] == "/status")
+                .count(),
+            1
+        );
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m["op"] == "unsubscribe" && m["topic"] == "/status"));
         hub.close();
         server.abort();
     }

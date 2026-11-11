@@ -20,3 +20,5 @@ pub mod monitor;
 pub mod documents;
 
 pub mod local_tasks;
+
+pub mod motor_task;

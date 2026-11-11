@@ -197,3 +197,13 @@ App 在每个原生 WebView 中运行，因此原来各页面初始化时都会�
 本阶段全量 `npm test` 通过（888 前端 / 140 Rust / 3 运行库测试及全部其余脚本）；前端、文档及独立 Debug Tauri bundle 构建、严格 codesign 核验通过。日志 `/tmp/260-handeye-native-{all-tests,build,docs-build,bundle}.log`。新增测试覆盖实际本地 sleep 子进程取消后退出、原生 future 丢弃、过期/旧编号/他页面心跳拒绝、取消终态、锁释放、两线程迁移与任务提交的唯一赢家，以及前端来源切换/卸载取消、迟到结果拒绝、单个在途续租和只读观察者不续租。
 
 原生离线验收：独立手眼页面通过新增 operationId 和真实 WebView 鉴权成功生成 1200×900 标定板；完成后收回成功且图片保留，在嵌入页再次生成成功，再拆出仍正常。快速标定板任务没有用来宣称真实窗口失联/忙态竞态验收；这些路径的证据是上述原生和 React 回归测试。本轮未连接生产 Jetson、未实测远端 SSH 采集取消、未覆盖正式应用，Bridge 无变更。
+
+## 原生 Motor 连续发送任务
+
+Motor 首帧在原生写入前占用全局运动任务及本页迁移锁，发布 ACK 后仅同一 WebView 实例可续发。Rust 监视真实写入的指令流；250 ms 无新指令时在下一轮 250 ms 检查中请求 DISABLE，查询/绘制不延长指令流。窗口关闭、未知发布结果和连接丢失保留任务占用，原生层不重放运动指令。已有 Bridge 负责 DISABLE 清零及每帧新 sequence，未改机器人安全门。
+
+停止完成需要新的 HardwareStatus 同时满足 DISABLE、对应 ACK 序列、源时间推进和原生接收新鲜度。ACK 只表明发布，不是硬件关闭输出证明。Rust 为当前 statusTopic 保留原生订阅，不依赖最后一个 WebView。身份由主机、用户/SSH 端口、Bridge 远端端口、ROS domain 及命令/反馈 Topic 确定；本地转发端口变化可重连核验，另一机器人不能解锁旧任务，也不会自动向它发送 DISABLE。这里核验的是输出关闭，不宣称机械静止。
+
+本阶段全量 `npm test` 通过（889 前端 / 147 Rust / 3 运行库测试及全部其余脚本）；`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 和严格 codesign 核验通过，日志 `/tmp/260-motor-native-{all-tests,build,docs-build,bundle}.log`。实际 loopback WebSocket 集成测试验证所有页面退出后自动 DISABLE、错误序列/模式保持占用、新鲜匹配反馈释放占用，硬件订阅只建立一次且不随页面退出释放。单元测试覆盖首次拒绝、未知发布、旧响应/队列许可、流中断、重连不同机器人及新连接停止证明；前端状态读取不续发控制。
+
+本轮 CUA 仍返回 Mac 锁屏错误，已再次请求解锁；本轮构建没有完成新的真实窗口复验，不能将前序迁移验证算作本轮结果。未连接生产机械臂，未覆盖 `/Applications/Robot Console.app` 或部署 Jetson；Bridge 源码无变化。完整目标仍需直接 JTC/重力/Controller/arm mode/Joint4/采集等任务归属、离线配置切换、显式跨页导航、多屏及持续运行验证、最终发布与 PR/CI 合并。

@@ -1,6 +1,6 @@
-//! Native ownership for Bridge's leased Position/Pick tasks. Request admission,
+//! Native ownership for Bridge's leased Position/Pick and Motor tasks. Request admission,
 //! the writer's final permission check, and page migration share one lock.
-//! Motor/trajectory/gravity and SSH task lifetimes are not yet managed here.
+//! Direct trajectory/gravity and SSH task lifetimes are not yet managed here.
 use super::{command_queue::SendPermit, windows::WindowToken};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -21,6 +21,7 @@ pub struct Owner {
 pub enum Kind {
     Position,
     Pick,
+    Motor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -54,6 +55,7 @@ struct Task {
     heartbeat_at: Option<Instant>,
     action_next: u64,
     inflight: Option<u64>,
+    motor: Option<super::motor_task::Motor>,
 }
 #[derive(Default)]
 struct Inner {
@@ -61,6 +63,7 @@ struct Inner {
     task: Option<Task>,
     migrations: BTreeSet<String>,
     local_operations: BTreeSet<String>,
+    motor_context: Option<super::motor_task::Context>,
 }
 
 #[derive(Default)]
@@ -138,6 +141,10 @@ fn stop(task: &mut Task, reason: &str) {
 }
 
 impl Tasks {
+    pub fn configure_motor(&self, epoch: u64, profile: &Value) {
+        self.inner.lock().unwrap().motor_context = super::motor_task::Context::new(epoch, profile);
+    }
+
     pub fn snapshot(&self) -> Option<Snapshot> {
         self.inner
             .lock()
@@ -216,6 +223,11 @@ impl Tasks {
         if actuation(op, message) && inner.migrations.contains(&owner.window.label) {
             return Err("页面正在迁移，不能提交运动".into());
         }
+        let motor_context = inner.motor_context.clone();
+        let is_motor = op == "joint_command" && message["mode"].as_i64() != Some(3);
+        if is_motor && owner.window.label != "page-motor" {
+            return Err("只有 Motor 页面可以发送连续关节指令".into());
+        }
         if let Some(task) = &mut inner.task {
             let cancel = (op == "joint_command" && message["mode"].as_i64() == Some(3))
                 || (op == "visual_pick_cancel" && task.snapshot.kind == Kind::Pick)
@@ -225,8 +237,16 @@ impl Tasks {
             if cancel {
                 stop(task, "已请求停止，等待 Bridge 确认任务终态");
                 task.stop_pending = false;
+                if let Some(motor) = &mut task.motor {
+                    motor.stopping(motor_context.as_ref(), owner.epoch, now);
+                }
             }
             if actuation(op, message)
+                && !(is_motor
+                    && task.snapshot.kind == Kind::Motor
+                    && task.owner == owner
+                    && task.admitted
+                    && !stopped(task))
                 && !(matches!(op, "position_group_pause" | "position_group_resume")
                     && task.snapshot.kind == Kind::Position
                     && task.owner == owner
@@ -239,11 +259,36 @@ impl Tasks {
                 ));
             }
         }
-        let ticket = if let Some(kind) = start_kind(op) {
-            let command = message["command_id"]
-                .as_str()
-                .filter(|id| !id.is_empty() && id.len() <= 128)
-                .ok_or("运动 command_id 无效")?;
+        let existing_motor = inner
+            .task
+            .as_ref()
+            .filter(|task| task.snapshot.kind == Kind::Motor)
+            .map(|task| task.snapshot.id);
+        let ticket = if existing_motor.is_some() && op == "joint_command" {
+            existing_motor
+        } else if let Some(kind) =
+            start_kind(op).or(if is_motor { Some(Kind::Motor) } else { None })
+        {
+            let generated = format!(
+                "motor-{}",
+                inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?
+            );
+            let command = if is_motor {
+                Some(generated.as_str())
+            } else {
+                message["command_id"].as_str()
+            }
+            .filter(|id| !id.is_empty() && id.len() <= 128)
+            .ok_or("运动 command_id 无效")?;
+            let motor = if is_motor {
+                Some(super::motor_task::Motor::start(
+                    motor_context.as_ref(),
+                    owner.epoch,
+                    now,
+                )?)
+            } else {
+                None
+            };
             inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
             let id = inner.sequence;
             inner.task = Some(Task {
@@ -265,6 +310,7 @@ impl Tasks {
                 heartbeat_at: None,
                 action_next: 0,
                 inflight: None,
+                motor,
             });
             Some(id)
         } else {
@@ -276,7 +322,8 @@ impl Tasks {
         // before another window acquired a task. Never renew for a dead owner.
         let is_heartbeat = heartbeat(op);
         let is_continuation = matches!(op, "position_group_pause" | "position_group_resume");
-        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel");
+        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel")
+            || (op == "joint_command" && message["mode"].as_i64() == Some(3));
         let tasks = self.clone();
         let permit =
             (ticket.is_some() || is_heartbeat || is_continuation || is_cancel).then(|| {
@@ -299,6 +346,9 @@ impl Tasks {
                     }
                     if ticket.is_some() {
                         task.sent = true;
+                        if let Some(motor) = &mut task.motor {
+                            motor.last_command = Instant::now();
+                        }
                     }
                     true
                 }) as SendPermit
@@ -320,6 +370,59 @@ impl Tasks {
         let Some(task) = inner.task.as_mut() else {
             return;
         };
+        if task.snapshot.kind == Kind::Motor && ticket == Some(task.snapshot.id) {
+            if request["op"] == "joint_command" && request["mode"] == 3 {
+                if let Ok(value) = response {
+                    task.motor
+                        .as_mut()
+                        .unwrap()
+                        .acknowledge_disable(epoch, value);
+                    if value["op"] == "joint_command_ack" && value["mode"] == 3 {
+                        task.snapshot.message =
+                            "DISABLE 已发布，等待新鲜 HardwareStatus 确认输出关闭".into();
+                    }
+                }
+                let confirmed = inner
+                    .task
+                    .as_ref()
+                    .unwrap()
+                    .motor
+                    .as_ref()
+                    .unwrap()
+                    .stopped(inner.motor_context.as_ref(), Instant::now());
+                if confirmed {
+                    inner.task = None;
+                }
+                return;
+            }
+            if task.owner.epoch != epoch {
+                return;
+            }
+            match response {
+                Ok(value)
+                    if value["op"] == "joint_command_ack"
+                        && value["mode"] == request["mode"]
+                        && value["sequence"]
+                            .as_u64()
+                            .and_then(|v| u32::try_from(v).ok())
+                            .is_some() =>
+                {
+                    task.admitted = true;
+                    if !stopped(task) {
+                        task.snapshot.phase = Phase::Running;
+                        task.snapshot.message = "Motor 连续发送中".into();
+                    }
+                }
+                Ok(value) if value["op"] == "error" && !task.admitted => {
+                    inner.task = None;
+                }
+                Err(_) if !task.sent => {
+                    inner.task = None;
+                }
+                _ => stop(task, "Motor 发布结果未确认，已请求 DISABLE"),
+            }
+            return;
+        }
         if task.owner.epoch != epoch {
             return;
         }
@@ -368,6 +471,7 @@ impl Tasks {
             return false;
         };
         let terminal = match task.snapshot.kind {
+            Kind::Motor => false,
             Kind::Position => {
                 value["op"] == "position_task_status"
                     && value["known"] == true
@@ -419,6 +523,7 @@ impl Tasks {
         let renewed = response.is_ok_and(|value| {
             value["command_id"] == task.snapshot.command_id
                 && match task.snapshot.kind {
+                    Kind::Motor => false,
                     Kind::Position => {
                         value["op"] == "position_motion_heartbeat_ack" && value["renewed"] == true
                     }
@@ -432,6 +537,18 @@ impl Tasks {
 
     pub fn observe(&self, epoch: u64, message: &Value) {
         let mut inner = self.inner.lock().unwrap();
+        if let Some(context) = &mut inner.motor_context {
+            context.observe(epoch, message, Instant::now());
+        }
+        if inner
+            .task
+            .as_ref()
+            .and_then(|task| task.motor.as_ref())
+            .is_some_and(|motor| motor.stopped(inner.motor_context.as_ref(), Instant::now()))
+        {
+            inner.task = None;
+            return;
+        }
         let Some(task) = inner.task.as_mut().filter(|task| {
             task.owner.epoch == epoch
                 && task.sent
@@ -474,7 +591,72 @@ impl Tasks {
 
     pub fn poll(self: &Arc<Self>, epoch: u64, now: Instant) -> Option<StopAction> {
         let mut inner = self.inner.lock().unwrap();
+        let context = inner.motor_context.clone();
         let task = inner.task.as_mut()?;
+        if task.snapshot.kind == Kind::Motor {
+            if !task
+                .motor
+                .as_ref()
+                .unwrap()
+                .matches(context.as_ref(), epoch)
+            {
+                task.snapshot.phase = Phase::Uncertain;
+                task.snapshot.message =
+                    "Motor 停止未确认，请重新连接原机器人核验；未向另一连接发送 DISABLE".into();
+                return None;
+            }
+            if !stopped(task)
+                && (task.owner.epoch != epoch
+                    || now.saturating_duration_since(task.motor.as_ref().unwrap().last_command)
+                        >= Duration::from_millis(250))
+            {
+                stop(task, "Motor 指令流已中断，已请求 DISABLE");
+            }
+            if !stopped(task) {
+                return None;
+            }
+            if task.inflight.is_some()
+                || task
+                    .probed
+                    .is_some_and(|at| now.saturating_duration_since(at) < Duration::from_secs(1))
+            {
+                return None;
+            }
+            if !task.sent {
+                inner.task = None;
+                return None;
+            }
+            task.probed = Some(now);
+            task.stop_pending = false;
+            task.action_next = task
+                .action_next
+                .checked_add(1)
+                .expect("task action exhausted");
+            let action = task.action_next;
+            task.inflight = Some(action);
+            task.motor
+                .as_mut()
+                .unwrap()
+                .stopping(context.as_ref(), epoch, now);
+            let ticket = task.snapshot.id;
+            let tasks = self.clone();
+            return Some(StopAction {
+                ticket,
+                action,
+                message: json!({"op":"joint_command","mode":3}),
+                recovery: false,
+                heartbeat: false,
+                permit: Arc::new(move || {
+                    tasks
+                        .inner
+                        .lock()
+                        .unwrap()
+                        .task
+                        .as_ref()
+                        .is_some_and(|task| task.snapshot.id == ticket)
+                }),
+            });
+        }
         let new_session = task.owner.epoch != epoch;
         if new_session {
             task.stop_pending = false;
@@ -527,6 +709,7 @@ impl Tasks {
         let action = task.action_next;
         task.inflight = Some(action);
         let message = match (task.snapshot.kind, recovery, heartbeat) {
+            (Kind::Motor, _, _) => unreachable!("Motor handled above"),
             (Kind::Position, false, true) => {
                 json!({"op":"position_motion_heartbeat", "command_id":task.snapshot.command_id})
             }
@@ -910,5 +1093,183 @@ mod tests {
         assert!(successor.permit.unwrap()());
         assert!(!tasks.recover(admission.ticket.unwrap(), 2, &proof));
         assert_eq!(tasks.snapshot().unwrap().id, successor.ticket.unwrap());
+    }
+}
+
+#[cfg(test)]
+mod motor_tests {
+    use super::*;
+    fn owner(label: &str, epoch: u64) -> Owner {
+        Owner {
+            epoch,
+            window: WindowToken {
+                label: label.into(),
+                incarnation: 1,
+            },
+        }
+    }
+    fn profile(host: &str) -> Value {
+        json!({"host":host,"username":"bot","sshPort":22,"remotePort":8765,"rosDomainId":0,"statusTopic":"/status","commandTopic":"/command"})
+    }
+    fn feedback(sequence: u32, mode: u8, stamp: u64) -> Value {
+        json!({"op":"topic_message","topic":"/status","data":{"mode":mode,"last_command_sequence":sequence,"header":{"stamp":{"sec":stamp,"nanosec":0}}}})
+    }
+    fn started() -> Arc<Tasks> {
+        let tasks = Arc::new(Tasks::default());
+        tasks.configure_motor(1, &profile("first"));
+        tasks.observe(1, &feedback(1, 3, 1));
+        let request = json!({"op":"joint_command","mode":1});
+        let admission = tasks
+            .admit(owner("page-motor", 1), &request, Instant::now())
+            .unwrap();
+        assert!(admission.permit.unwrap()());
+        tasks.reply(
+            admission.ticket,
+            1,
+            &request,
+            Ok(&json!({"op":"joint_command_ack","mode":1,"sequence":2})),
+        );
+        tasks
+    }
+    #[test]
+    fn motor_preflight_rejection_releases_but_unknown_publish_keeps_task_locked() {
+        let tasks = Arc::new(Tasks::default());
+        tasks.configure_motor(1, &profile("first"));
+        let request = json!({"op":"joint_command","mode":1});
+        assert!(tasks
+            .admit(owner("page-motor", 1), &request, Instant::now())
+            .is_err());
+        tasks.observe(1, &feedback(1, 3, 1));
+        let first = tasks
+            .admit(owner("page-motor", 1), &request, Instant::now())
+            .unwrap();
+        assert!(first.permit.unwrap()());
+        assert!(tasks
+            .admit(owner("page-motor", 1), &request, Instant::now())
+            .is_err());
+        tasks.reply(
+            first.ticket,
+            1,
+            &request,
+            Ok(&json!({"op":"error","message":"not armed"})),
+        );
+        assert!(tasks.snapshot().is_none());
+        let next = tasks
+            .admit(owner("page-motor", 1), &request, Instant::now())
+            .unwrap();
+        assert!(next.permit.unwrap()());
+        tasks.reply(next.ticket, 1, &request, Err("timeout"));
+        assert_eq!(tasks.snapshot().unwrap().phase, Phase::Stopping);
+        tasks.reply(
+            first.ticket,
+            1,
+            &request,
+            Ok(&json!({"op":"error","message":"old reply"})),
+        );
+        assert_eq!(tasks.snapshot().unwrap().id, next.ticket.unwrap());
+        assert_eq!(tasks.poll(1, Instant::now()).unwrap().message["mode"], 3);
+    }
+    #[test]
+    fn motor_owns_global_motion_and_disable_ack_does_not_unlock() {
+        let tasks = started();
+        assert!(tasks.migration("page-motor").is_err());
+        assert!(tasks
+            .admit(
+                owner("page-motion", 1),
+                &json!({"op":"position_move","command_id":"p"}),
+                Instant::now()
+            )
+            .is_err());
+        assert!(tasks
+            .admit(
+                owner("page-main", 1),
+                &json!({"op":"joint_command","mode":1}),
+                Instant::now()
+            )
+            .is_err());
+        let next = tasks
+            .admit(
+                owner("page-motor", 1),
+                &json!({"op":"joint_command","mode":1}),
+                Instant::now(),
+            )
+            .unwrap();
+        let disable = json!({"op":"joint_command","mode":3});
+        let stop = tasks
+            .admit(owner("page-status", 1), &disable, Instant::now())
+            .unwrap();
+        assert!(stop.permit.unwrap()());
+        assert!(!next.permit.unwrap()());
+        tasks.reply(
+            stop.ticket,
+            1,
+            &disable,
+            Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":5})),
+        );
+        assert!(tasks.snapshot().is_some());
+        assert!(tasks.migration("page-motor").is_err());
+        tasks.observe(1, &feedback(4, 3, 2));
+        assert!(tasks.snapshot().is_some());
+        tasks.observe(1, &feedback(5, 3, 3));
+        assert!(tasks.snapshot().is_none());
+        assert!(tasks.migration("page-motor").is_ok());
+    }
+    #[test]
+    fn live_page_cannot_keep_a_dead_command_stream_running_and_stale_stop_cannot_hit_successor() {
+        let tasks = started();
+        let future = Instant::now() + Duration::from_secs(1);
+        tasks.touch(&owner("page-motor", 1), future);
+        let stop = tasks.poll(1, future).unwrap();
+        assert_eq!(stop.message, json!({"op":"joint_command","mode":3}));
+        assert!((stop.permit)());
+        tasks.reply(
+            Some(stop.ticket),
+            1,
+            &stop.message,
+            Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":5})),
+        );
+        // Simulated poll time is future, so use a real-time stop admission for feedback receipt.
+        let manual = tasks
+            .admit(owner("page-motor", 1), &stop.message, Instant::now())
+            .unwrap();
+        tasks.reply(
+            manual.ticket,
+            1,
+            &stop.message,
+            Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":8})),
+        );
+        tasks.observe(1, &feedback(8, 3, 3));
+        assert!(tasks.snapshot().is_none());
+        let successor = tasks
+            .admit(
+                owner("page-motor", 1),
+                &json!({"op":"joint_command","mode":1}),
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(successor.permit.unwrap()());
+        assert!(!(stop.permit)());
+    }
+    #[test]
+    fn reconnect_to_other_robot_never_automatically_disables_it_and_same_robot_can_confirm() {
+        let tasks = started();
+        tasks.lost(None, "lost");
+        tasks.configure_motor(2, &profile("other"));
+        assert!(tasks.poll(2, Instant::now()).is_none());
+        assert_eq!(tasks.snapshot().unwrap().phase, Phase::Uncertain);
+        tasks.observe(2, &feedback(100, 3, 4));
+        assert!(tasks.snapshot().is_some());
+        tasks.configure_motor(3, &profile("first"));
+        tasks.observe(3, &feedback(7, 1, 1));
+        let stop = tasks.poll(3, Instant::now()).unwrap();
+        assert!((stop.permit)());
+        tasks.reply(
+            Some(stop.ticket),
+            3,
+            &stop.message,
+            Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":10})),
+        );
+        tasks.observe(3, &feedback(10, 3, 2));
+        assert!(tasks.snapshot().is_none());
     }
 }
