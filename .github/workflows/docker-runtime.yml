@@ -6,14 +6,18 @@ on:
     branches: [main]
 jobs:
   runtime:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: phamstered/rebotarm-ros2-stack
-          ref: 3ec3071275f89b7ec20cdc291ef1f1226565a597
+          ref: 241f3e8915e7e830c1dd00f7e705640375fb9966
           path: stack-runtime
       - name: Build paired stack runtime
         run: stack-runtime/scripts/docker-runtime.sh build
