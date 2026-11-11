@@ -1,9 +1,14 @@
 //! Each page owns one persistent WebView. Detach/dock reparent that view; React,
 //! image samples, editor drafts and GPU state are not cloned or reconstructed.
-use super::windows::{Page, Rect};
+use super::{
+    layout::{Display, Geometry, LayoutStore, PageLayout},
+    windows::{Page, Rect},
+};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Webview, WebviewBuilder,
     WebviewUrl, Window, WindowBuilder, WindowEvent,
@@ -41,6 +46,10 @@ pub struct Workspace {
     state: Mutex<Snapshot>,
     bounds: Mutex<Rect>,
     covered: Mutex<bool>,
+    main_hidden: AtomicBool,
+    layout: LayoutStore,
+    restoring: Mutex<BTreeSet<Page>>,
+    restore_started: Mutex<BTreeSet<Page>>,
 }
 
 impl Default for Workspace {
@@ -48,6 +57,10 @@ impl Default for Workspace {
         Self {
             gate: AsyncMutex::new(()),
             covered: Mutex::new(true),
+            main_hidden: AtomicBool::new(false),
+            layout: LayoutStore::default(),
+            restoring: Mutex::new(BTreeSet::new()),
+            restore_started: Mutex::new(BTreeSet::new()),
             state: Mutex::new(Snapshot {
                 selected: Page::Status,
                 pages: BTreeMap::new(),
@@ -121,7 +134,321 @@ fn detached_label(page: Page) -> String {
     format!("detached-{}", page.label())
 }
 
+fn display(monitor: &tauri::Monitor) -> Display {
+    let area = monitor.work_area();
+    let position = area.position.to_logical::<f64>(monitor.scale_factor());
+    let size = area.size.to_logical::<f64>(monitor.scale_factor());
+    Display {
+        name: monitor.name().cloned(),
+        area: Rect {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        },
+    }
+}
+
+fn displays(app: &AppHandle) -> Result<Vec<Display>, String> {
+    let primary = app
+        .primary_monitor()
+        .map_err(|e| e.to_string())?
+        .map(|m| display(&m));
+    let mut displays: Vec<_> = app
+        .available_monitors()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .map(display)
+        .collect();
+    displays.sort_by_key(|m| Some(m) != primary.as_ref());
+    Ok(displays)
+}
+
+fn geometry(window: &Window) -> Result<Geometry, String> {
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let position = window
+        .outer_position()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+    let outer = window
+        .outer_size()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+    let inner = window
+        .inner_size()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+    Ok(Geometry {
+        outer: Rect {
+            x: position.x,
+            y: position.y,
+            width: outer.width,
+            height: outer.height,
+        },
+        decoration: (
+            (outer.width - inner.width).max(0.0),
+            (outer.height - inner.height).max(0.0),
+        ),
+        monitor: window
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .and_then(|m| m.name().cloned()),
+    })
+}
+
+fn normal_window(window: &Window) -> bool {
+    !window.is_minimized().unwrap_or(true)
+        && !window.is_maximized().unwrap_or(true)
+        && !window.is_fullscreen().unwrap_or(true)
+}
+
+fn apply_geometry(window: &Window, geometry: &Geometry, minimum: (f64, f64)) -> Result<(), String> {
+    let (width, height) = geometry.inner_size();
+    // Small displays must still be able to show the titlebar and controls.
+    window
+        .set_min_size(Some(LogicalSize::new(
+            minimum.0.min(width),
+            minimum.1.min(height),
+        )))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(LogicalPosition::new(geometry.outer.x, geometry.outer.y))
+        .map_err(|e| e.to_string())
+}
+
 impl Workspace {
+    pub fn initialize(app: &AppHandle) {
+        let workspace = app.state::<Self>();
+        let loaded = app
+            .path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())
+            .and_then(|path| workspace.layout.load(path.join("window-layout-v1.json")));
+        if let Err(error) = loaded {
+            eprintln!("{error}");
+        }
+        let saved = workspace.layout.snapshot();
+        workspace.state.lock().unwrap().selected = saved.selected;
+        *workspace.restoring.lock().unwrap() = saved
+            .pages
+            .iter()
+            .filter_map(|(page, state)| state.detached.then_some(*page))
+            .collect();
+        if let (Some(main), Ok(areas), Some(saved)) =
+            (app.get_window("main"), displays(app), saved.main)
+        {
+            if let Some(geometry) = saved.restore(&areas, (900., 620.)) {
+                if let Err(error) = apply_geometry(&main, &geometry, (900., 620.)) {
+                    eprintln!("恢复主窗口失败：{error}");
+                }
+            }
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let workspace = app.state::<Self>();
+            let pages: Vec<_> = workspace
+                .restoring
+                .lock()
+                .unwrap()
+                .iter()
+                .copied()
+                .collect();
+            for page in pages {
+                let _gate = workspace.gate.lock().await;
+                if let Err(error) = workspace.ensure(&app, page).await {
+                    workspace.restoring.lock().unwrap().remove(&page);
+                    let _ = app.emit(
+                        "workspace-error",
+                        format!("恢复 {} 窗口失败：{error}", page.title()),
+                    );
+                }
+            }
+            let mut previous_displays = displays(&app).unwrap_or_default();
+            let mut last_error = String::new();
+            loop {
+                tokio::time::sleep(Duration::from_millis(750)).await;
+                if let Ok(current) = displays(&app) {
+                    if !current.is_empty() && current != previous_displays {
+                        let _gate = workspace.gate.lock().await;
+                        for window in app.windows().values() {
+                            if normal_window(window) {
+                                let minimum = if window.label() == "main" {
+                                    (900., 620.)
+                                } else {
+                                    (640., 480.)
+                                };
+                                if let Ok(g) = geometry(window) {
+                                    if let Some(restored) = g.restore(&current, minimum) {
+                                        if let Err(error) =
+                                            apply_geometry(window, &restored, minimum)
+                                        {
+                                            let _ = app.emit(
+                                                "workspace-error",
+                                                format!("恢复可见窗口失败：{error}"),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        previous_displays = current;
+                    }
+                }
+                let result = workspace.layout.flush();
+                match result {
+                    Err(error) if last_error != error => {
+                        let _ = app.emit("workspace-error", &error);
+                        last_error = error;
+                    }
+                    Ok(()) => last_error.clear(),
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    pub fn flush(&self) {
+        if let Err(error) = self.layout.flush() {
+            eprintln!("{error}");
+        }
+    }
+
+    fn save_layout(&self, app: &AppHandle) {
+        let snapshot = self.snapshot();
+        let restoring = self.restoring.lock().unwrap().clone();
+        // Native queries can invoke window callbacks. Never hold the store lock
+        // while calling them, or a resize callback could deadlock the UI thread.
+        let geometries: BTreeMap<_, _> = snapshot
+            .pages
+            .iter()
+            .filter_map(|(page, state)| {
+                if !state.detached {
+                    return None;
+                }
+                let window = app
+                    .get_window(&detached_label(*page))
+                    .filter(normal_window)?;
+                geometry(&window).ok().map(|g| (*page, g))
+            })
+            .collect();
+        self.layout.update(|saved| {
+            saved.selected = snapshot.selected;
+            for (page, state) in &snapshot.pages {
+                // Startup creates hidden views before their first ready event.
+                // Do not erase the intended detached layout during that interval.
+                if restoring.contains(page) {
+                    continue;
+                }
+                let entry = saved.pages.entry(*page).or_insert(PageLayout {
+                    detached: state.detached,
+                    geometry: None,
+                });
+                entry.detached = state.detached;
+                if let Some(value) = geometries.get(page) {
+                    entry.geometry = Some(value.clone());
+                }
+            }
+        });
+    }
+
+    fn remember_geometry(&self, window: &Window) {
+        if !normal_window(window) {
+            return;
+        }
+        let Ok(value) = geometry(window) else {
+            return;
+        };
+        if window.label() == "main" {
+            self.layout.update(|layout| layout.main = Some(value));
+        } else if let Some(page) = window
+            .label()
+            .strip_prefix("detached-")
+            .and_then(Page::from_label)
+        {
+            if !self
+                .snapshot()
+                .pages
+                .get(&page)
+                .is_some_and(|state| state.detached)
+            {
+                return;
+            }
+            self.layout.update(|layout| {
+                layout
+                    .pages
+                    .entry(page)
+                    .or_insert(PageLayout {
+                        detached: true,
+                        geometry: None,
+                    })
+                    .geometry = Some(value);
+            });
+        }
+    }
+
+    fn main_shown(&self, app: &AppHandle) -> bool {
+        !self.main_hidden.load(Ordering::Acquire)
+            && app.get_window("main").is_some_and(|w| {
+                w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(true)
+            })
+    }
+
+    fn refresh_main_visibility(&self, app: &AppHandle) -> Result<(), String> {
+        let shown = self.main_shown(app) && !*self.covered.lock().unwrap();
+        let mut snapshot = self.snapshot();
+        let selected = snapshot.selected;
+        for (page, state) in &mut snapshot.pages {
+            if state.detached {
+                continue;
+            }
+            state.visible = shown && *page == selected;
+            if let Some(view) = app.get_webview(page.label()) {
+                if state.visible {
+                    view.show()
+                } else {
+                    view.hide()
+                }
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        self.commit_layout(&snapshot);
+        self.emit(app);
+        Ok(())
+    }
+
+    fn reveal_main(&self, app: &AppHandle) -> Result<(), String> {
+        let main = app.get_window("main").ok_or("主窗口不可用")?;
+        if normal_window(&main) {
+            if let (Ok(g), Ok(areas)) = (geometry(&main), displays(app)) {
+                if let Some(restored) = g.restore(&areas, (900., 620.)) {
+                    apply_geometry(&main, &restored, (900., 620.))?;
+                }
+            }
+        }
+        main.unminimize().map_err(|e| e.to_string())?;
+        main.show().map_err(|e| e.to_string())?;
+        self.main_hidden.store(false, Ordering::Release);
+        self.refresh_main_visibility(app)?;
+        main.set_focus().map_err(|e| e.to_string())
+    }
+
+    pub async fn show_main(&self, app: &AppHandle) -> Result<(), String> {
+        let _gate = self.gate.lock().await;
+        self.reveal_main(app)
+    }
+
+    async fn hide_main(&self, app: &AppHandle) -> Result<(), String> {
+        let _gate = self.gate.lock().await;
+        let main = app.get_window("main").ok_or("主窗口不可用")?;
+        self.remember_geometry(&main);
+        main.hide().map_err(|e| e.to_string())?;
+        self.main_hidden.store(true, Ordering::Release);
+        self.refresh_main_visibility(app)
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         self.state.lock().unwrap().clone()
     }
@@ -222,6 +549,9 @@ impl Workspace {
             window.show().map_err(|e| e.to_string())?;
             window.set_focus().map_err(|e| e.to_string())?;
         } else {
+            if !self.main_shown(app) {
+                self.reveal_main(app)?;
+            }
             let mut snapshot = self.snapshot();
             snapshot.selected = page;
             for (other, state) in &mut snapshot.pages {
@@ -244,13 +574,17 @@ impl Workspace {
                 view.set_focus().map_err(|e| e.to_string())?;
             }
         }
+        self.save_layout(app);
         self.emit(app);
         Ok(self.snapshot())
     }
 
     pub async fn detach(&self, app: &AppHandle, page: Page) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().await;
-        let _migration = app.state::<super::runtime::Runtime>().tasks.migration(page.label())?;
+        let _migration = app
+            .state::<super::runtime::Runtime>()
+            .tasks
+            .migration(page.label())?;
         self.migration_allowed(page)?;
         let view = self.ensure(app, page).await?;
         if self
@@ -264,13 +598,27 @@ impl Workspace {
             return Ok(self.snapshot());
         }
         let label = detached_label(page);
-        let window = WindowBuilder::new(app, &label)
+        let saved = self
+            .layout
+            .snapshot()
+            .pages
+            .get(&page)
+            .and_then(|state| state.geometry.clone());
+        let restored =
+            saved.and_then(|g| g.restore(&displays(app).unwrap_or_default(), (640., 480.)));
+        let (width, height) = restored
+            .as_ref()
+            .map(Geometry::inner_size)
+            .unwrap_or((1200., 800.));
+        let mut builder = WindowBuilder::new(app, &label)
             .title(format!("{} · Robot Console", page.title()))
-            .inner_size(1200.0, 800.0)
-            .min_inner_size(640.0, 480.0)
-            .visible(false)
-            .build()
-            .map_err(|e| e.to_string())?;
+            .inner_size(width, height)
+            .min_inner_size(640.0_f64.min(width), 480.0_f64.min(height))
+            .visible(false);
+        if let Some(geometry) = restored {
+            builder = builder.position(geometry.outer.x, geometry.outer.y);
+        }
+        let window = builder.build().map_err(|e| e.to_string())?;
         // tauri-runtime-wry 2.11 on macOS reports the first WebView frame as
         // inner_size after reparenting into an otherwise empty Window. Capture
         // the actual empty Window size before the view can influence that query.
@@ -306,6 +654,8 @@ impl Workspace {
             state.detached = true;
             state.visible = true;
         }
+        self.restoring.lock().unwrap().remove(&page);
+        self.save_layout(app);
         self.emit(app);
         Ok(self.snapshot())
     }
@@ -317,11 +667,15 @@ impl Workspace {
         reveal: bool,
     ) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().await;
-        let _migration = app.state::<super::runtime::Runtime>().tasks.migration(page.label())?;
+        let _migration = app
+            .state::<super::runtime::Runtime>()
+            .tasks
+            .migration(page.label())?;
         self.migration_allowed(page)?;
         let view = app.get_webview(page.label()).ok_or("页面不存在")?;
         let window = view.window();
         let main = app.get_window("main").ok_or("主窗口不可用")?;
+        self.remember_geometry(&window);
         if window.label() != "main" {
             view.set_auto_resize(false).map_err(|e| e.to_string())?;
             view.reparent(&main).map_err(|e| e.to_string())?;
@@ -338,7 +692,8 @@ impl Workspace {
                 state.detached = false;
             }
             if !state.detached {
-                state.visible = !*self.covered.lock().unwrap()
+                state.visible = (reveal || self.main_shown(app))
+                    && !*self.covered.lock().unwrap()
                     && (reveal && *other == page || !reveal && *other == selected);
                 if let Some(view) = app.get_webview(other.label()) {
                     if state.visible {
@@ -354,10 +709,9 @@ impl Workspace {
             window.destroy().map_err(|e| e.to_string())?;
         }
         if reveal {
-            main.show().map_err(|e| e.to_string())?;
-            main.unminimize().map_err(|e| e.to_string())?;
-            main.set_focus().map_err(|e| e.to_string())?;
+            self.reveal_main(app)?;
         }
+        self.save_layout(app);
         self.emit(app);
         Ok(self.snapshot())
     }
@@ -394,7 +748,7 @@ impl Workspace {
             if state.detached {
                 continue;
             }
-            state.visible = !covered && *page == selected;
+            state.visible = self.main_shown(app) && !covered && *page == selected;
             if let Some(view) = app.get_webview(page.label()) {
                 if state.visible {
                     view.show()
@@ -411,6 +765,15 @@ impl Workspace {
 
     pub fn window_event(app: &AppHandle, window: &Window, event: &WindowEvent) {
         if let WindowEvent::CloseRequested { api, .. } = event {
+            if window.label() == "main" {
+                api.prevent_close();
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = app.state::<Workspace>().hide_main(&app).await {
+                        let _ = app.emit("workspace-error", error);
+                    }
+                });
+            }
             if let Some(page) = window
                 .label()
                 .strip_prefix("detached-")
@@ -449,6 +812,9 @@ impl Workspace {
                 };
                 if let (Some(view), Some((size, scale))) = (app.get_webview(page.label()), geometry)
                 {
+                    if view.window().label() != window.label() {
+                        return;
+                    }
                     let size = size.to_logical::<f64>(scale);
                     let _ = view.set_bounds(native_bounds(Rect {
                         x: 0.0,
@@ -475,7 +841,25 @@ impl Workspace {
             }
             workspace.emit(app);
         }
+        if matches!(
+            event,
+            WindowEvent::Moved(_)
+                | WindowEvent::Resized(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            app.state::<Workspace>().remember_geometry(window);
+        }
     }
+}
+
+#[tauri::command]
+pub async fn workspace_show_main(
+    app: AppHandle,
+    view: Webview,
+    workspace: State<'_, Workspace>,
+) -> Result<(), String> {
+    authorize(&view, Page::from_label(view.label()))?;
+    workspace.show_main(&app).await
 }
 
 #[tauri::command]
@@ -562,6 +946,24 @@ pub fn workspace_page_ready(
         state.busy_reason = busy_reason;
     }
     workspace.emit(&app);
+    let restore = workspace.restoring.lock().unwrap().contains(&page)
+        && workspace.restore_started.lock().unwrap().insert(page);
+    if restore {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = app.state::<Workspace>().detach(&app, page).await {
+                app.state::<Workspace>()
+                    .restoring
+                    .lock()
+                    .unwrap()
+                    .remove(&page);
+                let _ = app.emit(
+                    "workspace-error",
+                    format!("恢复 {} 窗口失败：{error}", page.title()),
+                );
+            }
+        });
+    }
     Ok(())
 }
 

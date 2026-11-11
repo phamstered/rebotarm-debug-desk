@@ -1717,6 +1717,7 @@ pub fn run() {
             session::workspace::workspace_bounds,
             session::workspace::workspace_cover,
             session::workspace::workspace_page_ready,
+            session::workspace::workspace_show_main,
             session::ipc::native_bridge_attach,
             session::ipc::native_bridge_detach,
             session::ipc::native_bridge_next,
@@ -1768,13 +1769,28 @@ pub fn run() {
                 .set_changed(std::sync::Arc::new(move || {
                     let _ = handle.emit("native-session-changed", ());
                 }));
+            session::workspace::Workspace::initialize(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
             session::workspace::Workspace::window_event(window.app_handle(), window, event)
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run Robot Console");
+        .build(tauri::generate_context!())
+        .expect("failed to build Robot Console")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = app.state::<session::workspace::Workspace>().show_main(&app).await {
+                        let _ = app.emit("workspace-error", error);
+                    }
+                });
+            }
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<session::workspace::Workspace>().flush();
+            }
+        });
 }
 
 #[cfg(test)]

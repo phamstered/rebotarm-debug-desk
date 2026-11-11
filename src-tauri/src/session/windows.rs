@@ -120,7 +120,7 @@ pub struct Rect {
 }
 
 impl Rect {
-    fn valid(self) -> bool {
+    pub(crate) fn valid(self) -> bool {
         [self.x, self.y, self.width, self.height]
             .iter()
             .all(|v| v.is_finite())

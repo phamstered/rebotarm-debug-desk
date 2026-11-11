@@ -231,7 +231,7 @@ Local vision calls have a single-operation semaphore, size limits and a deadline
 
 桌面主 WebView 负责连接和导航。功能页按白名单 URL 懒创建独立的子 WebView，在主窗口区域和独立 macOS Window 之间 reparent。页面 JS 堆与图像、模型视图不会因拆收被复制；每个页面只有一个实例。IPC 以原生调用 WebView label 和 incarnation 鉴权，重新挂到另一 Window 不改变页面身份。页面在共享 Rust 会话中独立附着消费者，主窗口不转发其数据。
 
-主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。
+主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。关闭主窗口保留其 WebView 与原生会话，只隐藏嵌入页；独立页和 Dock 可恢复主窗口。`layout.rs` 以最多 32 KiB 的版本化配置保存窗口偏好，临时文件写入后原子替换；不序列化连接、任务或授权。后台检查显示器工作区变化，恢复普通窗口到可见范围。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。
 
 Position/动作组/Pick 的任务占用已进入 Rust 原生会话。实际 WebView 身份、连接代次和任务编号在提交、发送前许可、迁移和终态处理间保持关联；窗口存活只由新的 IPC 入口调用刷新。Rust 看门狗处理所属窗口失联，其他窗口不能通过 Bridge 查询代为续租。传输队列另外维护停止代次，撤销停止之前尚未发送的执行指令。Position 已接入 Bridge 进程内有界终态记录与按编号恢复；未知记录不解锁。完整的非 Position/Pick 生命周期仍未接齐，不能将此机制视作完整多窗口控制安全验收。
 

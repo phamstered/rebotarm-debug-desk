@@ -42,7 +42,7 @@ export function useNativeWorkspace(enabled: boolean) {
     })().catch(reason => { if (!disposed) setError(String(reason)); });
     return () => { disposed = true; unsubscribes.forEach(unlisten => unlisten()); };
   }, [enabled]);
-  async function action(command: "workspace_select" | "workspace_detach" | "workspace_dock", page: AppPage) {
+  async function action(command: "workspace_select" | "workspace_detach" | "workspace_dock" | "workspace_show_main", page: AppPage) {
     setError("");
     try { await invoke(command, { page }); } catch (reason) { setError(String(reason)); }
   }

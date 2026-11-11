@@ -14,6 +14,8 @@ it("shows the matching window operation and blocks migration during sampling", a
   expect(onAction).toHaveBeenCalledWith("workspace_detach", "handeye");
   rerender(<NativePageToolbar {...props} busyReason="正在采样" state={{ ...props.state, detached: true }} />);
   expect(screen.getByRole("button", { name: "收回主窗口" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "主窗口" }));
+  expect(onAction).toHaveBeenLastCalledWith("workspace_show_main", "handeye");
   rerender(<NativePageToolbar {...props} state={{ ...props.state, detached: true }} />);
   await user.click(screen.getByRole("button", { name: "收回主窗口" }));
   expect(onAction).toHaveBeenLastCalledWith("workspace_dock", "handeye");
