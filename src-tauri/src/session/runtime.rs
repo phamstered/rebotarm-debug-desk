@@ -79,6 +79,7 @@ pub struct Runtime {
     pub tasks: Arc<Tasks>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
+    motion_logs: Arc<super::motion_observations::MotionLogs>,
     core: Arc<Mutex<Core>>,
     connect_gate: AsyncMutex<()>,
     subscriptions_gate: AsyncMutex<()>,
@@ -93,6 +94,7 @@ impl Default for Runtime {
             tasks: Arc::new(Tasks::default()),
             observations: Arc::new(super::observations::Observations::default()),
             resources: Arc::new(super::resources::Resources::default()),
+            motion_logs: Arc::new(super::motion_observations::MotionLogs::default()),
             core: Arc::new(Mutex::new(Core {
                 epoch: 0,
                 windows: WindowRegistry::default(),
@@ -115,6 +117,48 @@ impl Default for Runtime {
 }
 
 impl Runtime {
+    pub fn set_observation_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        let observations = Arc::downgrade(&self.observations);
+        let core = Arc::downgrade(&self.core);
+        let previous = Mutex::new([0_u64; 2]);
+        let origin = self.origin;
+        self.observations.set_changed(Arc::new(move || {
+            if let (Some(observations), Some(core)) = (observations.upgrade(), core.upgrade()) {
+                let (epoch, versions) = observations.versions();
+                let mut core = core.lock().unwrap();
+                if core.epoch == epoch && core.error.is_none() {
+                    let mut previous = previous.lock().unwrap();
+                    for (index, (source, op)) in [
+                        (
+                            super::observations::Source::Motion,
+                            "native_position_info_changed",
+                        ),
+                        (
+                            super::observations::Source::Pick,
+                            "native_visual_pick_changed",
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        if let Some(sequence) = versions
+                            .get(&source)
+                            .filter(|sequence| **sequence > previous[index])
+                        {
+                            previous[index] = *sequence;
+                            let frame = WireFrame::parse(
+                                serde_json::to_vec(&json!({"op":op})).unwrap().into(),
+                                false,
+                            )
+                            .unwrap();
+                            route(&mut core, frame, origin.elapsed().as_millis() as u64);
+                        }
+                    }
+                }
+            }
+            callback();
+        }));
+    }
     pub fn set_task_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
         *self.task_changed.lock().unwrap() = Some(callback);
     }
@@ -129,12 +173,12 @@ impl Runtime {
         json!({ "epoch":core.epoch, "connected":core.transport.is_some() && core.error.is_none(), "profile":core.profile, "error":core.error })
     }
     pub fn close(&self) {
-        let transport = {
+        let (transport, epoch) = {
             let mut core = self.core.lock().unwrap();
             self.tasks
                 .lost(None, "连接已断开；重连后需核验 Bridge 任务已停止");
             core.epoch += 1;
-            self.observations.stop(core.epoch);
+            self.motion_logs.reset(core.epoch);
             self.resources.reset(core.epoch);
             core.error = Some("Bridge 会话已关闭".into());
             core.subscriptions = SubscriptionRegistry::new(core.epoch, 256);
@@ -146,8 +190,11 @@ impl Runtime {
             }
             core.clients.clear();
             core.windows = WindowRegistry::default();
-            core.transport.take()
+            (core.transport.take(), core.epoch)
         };
+        // Observations notify listeners synchronously; those listeners read Core.
+        // Stop after releasing Core, with an epoch fence against a newer session.
+        self.observations.stop(epoch);
         if let Some(transport) = transport {
             transport.close();
         }
@@ -200,12 +247,12 @@ impl Runtime {
                 core.error = Some(error);
                 error_tasks.lost(None, "Bridge 连接中断；停止结果尚未确认");
                 core.transport = None;
-                observations.stop(epoch);
                 resources.reset(epoch);
                 for client in core.clients.values() {
                     client.notify.notify_one();
                 }
                 drop(core);
+                observations.stop(epoch);
                 if let Some(changed) = errors_changed.lock().unwrap().clone() {
                     changed();
                 }
@@ -236,12 +283,15 @@ impl Runtime {
         }
         let transport = Arc::new(transport);
         core.transport = Some(transport.clone());
-        if core.profile.is_object() {
-            self.observations.start(
+        self.observations.start(
+            epoch,
+            super::motion_observations::reader(
+                super::observations::reader(transport.clone(), core.profile.clone()),
+                transport,
+                self.motion_logs.clone(),
                 epoch,
-                super::observations::reader(transport, core.profile.clone()),
-            );
-        }
+            ),
+        );
         drop(core);
         self.watch_tasks(epoch);
         if let Some(changed) = self.changed.lock().unwrap().clone() {
@@ -254,6 +304,7 @@ impl Runtime {
         let core = Arc::downgrade(&self.core);
         let tasks = self.tasks.clone();
         let changed = self.task_changed.clone();
+        let origin = self.origin;
         tokio::spawn(async move {
             let mut previous = None;
             loop {
@@ -285,38 +336,73 @@ impl Runtime {
                     break;
                 };
                 if let Some(action) = tasks.poll(epoch, Instant::now()) {
-                    let result = transport
-                        .request_guarded(
-                            action.message.clone(),
-                            Duration::from_secs(3),
-                            Some(action.permit),
-                        )
-                        .await;
-                    if core.lock().unwrap().epoch != epoch {
-                        break;
-                    }
-                    if action.recovery {
-                        tasks.reply(
-                            None,
-                            epoch,
-                            &action.message,
-                            result
-                                .as_ref()
-                                .map(|frame| &frame.metadata)
-                                .map_err(String::as_str),
-                        );
-                    } else {
-                        match &result {
-                            Ok(frame) if frame.op() != "error" => {
-                                tasks.observe(epoch, &frame.metadata)
-                            }
-                            Ok(frame) => tasks.stop_error(
-                                action.ticket,
-                                frame.metadata["message"].as_str().unwrap_or("取消被拒绝"),
-                            ),
-                            Err(error) => tasks.stop_error(action.ticket, error),
+                    let core = Arc::downgrade(&core);
+                    let tasks = tasks.clone();
+                    tokio::spawn(async move {
+                        let result = transport
+                            .request_guarded(
+                                action.message.clone(),
+                                Duration::from_secs(3),
+                                Some(action.permit),
+                            )
+                            .await;
+                        let Some(core) = core.upgrade() else {
+                            tasks.finish_action(action.ticket, action.action);
+                            return;
+                        };
+                        let mut core = core.lock().unwrap();
+                        if core.epoch != epoch {
+                            tasks.finish_action(action.ticket, action.action);
+                            return;
                         }
-                    }
+                        if action.heartbeat {
+                            tasks.heartbeat_reply(
+                                action.ticket,
+                                epoch,
+                                result
+                                    .as_ref()
+                                    .map(|frame| &frame.metadata)
+                                    .map_err(String::as_str),
+                            );
+                        } else if action.recovery {
+                            let recovered = result.as_ref().is_ok_and(|frame| {
+                                tasks.recover(action.ticket, epoch, &frame.metadata)
+                            });
+                            if recovered {
+                                if let Ok(frame) = &result {
+                                    let state = if frame.op() == "position_task_status" {
+                                        &frame.metadata["motion_state"]
+                                    } else {
+                                        &frame.metadata
+                                    };
+                                    if state.is_object() {
+                                        if let Ok(event) = WireFrame::parse(
+                                            serde_json::to_vec(state).unwrap().into(),
+                                            false,
+                                        ) {
+                                            route(
+                                                &mut core,
+                                                event,
+                                                origin.elapsed().as_millis() as u64,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            match &result {
+                                Ok(frame) if frame.op() != "error" => {
+                                    tasks.observe(epoch, &frame.metadata)
+                                }
+                                Ok(frame) => tasks.stop_error(
+                                    action.ticket,
+                                    frame.metadata["message"].as_str().unwrap_or("取消被拒绝"),
+                                ),
+                                Err(error) => tasks.stop_error(action.ticket, error),
+                            }
+                        }
+                        tasks.finish_action(action.ticket, action.action);
+                    });
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
@@ -448,9 +534,52 @@ impl Runtime {
         let transport = {
             let core = self.core.lock().unwrap();
             core.validate(native_label, attachment)?;
+            self.tasks.touch(&attachment.owner(), Instant::now());
             core.transport.clone().ok_or("Bridge 尚未连接")?
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
+        if op == "position_motion_heartbeat" {
+            return Err("任务续租由原生会话管理，页面不能直接调用".into());
+        }
+        if matches!(
+            op,
+            "position_move" | "position_group_start" | "visual_pick_start"
+        ) && transport.hello.metadata["motion_observation_supported"] != true
+        {
+            return Err("请更新 Bridge：多窗口执行需要只读运动观察与任务终态查询".into());
+        }
+        if matches!(op, "position_motion_info" | "visual_pick_status") {
+            let source = if op == "position_motion_info" {
+                super::observations::Source::Motion
+            } else {
+                super::observations::Source::Pick
+            };
+            let snapshot = self.observations.read(attachment.epoch, source).await?;
+            self.core
+                .lock()
+                .unwrap()
+                .validate(native_label, attachment)?;
+            let entry = snapshot.entries.get(&source).ok_or("等待共享运动观察")?;
+            if let Some(error) = &entry.error {
+                return Err(error.clone());
+            }
+            if entry.age_ms >= entry.ttl_ms {
+                return Err("共享运动观察已过期".into());
+            }
+            let mut value = entry.value.clone().ok_or("共享运动观察无数据")?;
+            if source == super::observations::Source::Motion {
+                self.motion_logs
+                    .page(attachment.epoch, &message, &mut value)?;
+            }
+            let mut frame = WireFrame::parse(
+                serde_json::to_vec(&value)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+                false,
+            )?;
+            frame.source_age_ms = entry.age_ms;
+            return Ok(frame);
+        }
         if op == "resource" {
             let key = super::resources::Key::new(
                 message["uri"].as_str().ok_or("资源缺少 URI")?,
@@ -707,7 +836,10 @@ fn enqueue(client: &mut Client, epoch: u64, frame: WireFrame, at: u64, static_to
             "topic:{}",
             frame.metadata["topic"].as_str().unwrap_or("")
         )),
-        "rgbd_frame" | "visual_target_frame" => Some(frame.op().to_string()),
+        "rgbd_frame"
+        | "visual_target_frame"
+        | "native_position_info_changed"
+        | "native_visual_pick_changed" => Some(frame.op().to_string()),
         _ => None,
     };
     if client.error.is_some() {
@@ -763,7 +895,8 @@ mod tests {
                             socket.send(Message::Text(json!({"op":"topic_message", "topic":message["topic"], "data":"<robot name='fixture'/>"}).to_string().into())).await.unwrap();
                         }
                         match message["op"].as_str().unwrap() {
-                            "hello" => json!({"op":"hello"}),
+                            "hello" => json!({"op":"hello", "motion_observation_supported":true}),
+                            "topics" => json!({"op":"topics", "topics":[], "request_id":message["request_id"]}),
                             "resource" => {
                                 let metadata = serde_json::to_vec(&json!({"op":"resource", "uri":message["uri"], "request_id":message["request_id"], "data_length":3})).unwrap();
                                 let mut binary = b"RCR1".to_vec(); binary.extend((metadata.len() as u32).to_be_bytes()); binary.extend(metadata); binary.extend([7, 8, 9]);
@@ -775,6 +908,12 @@ mod tests {
                             "position_move" | "position_group_start" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
                             "position_cancel" => json!({"op":"position_cancel_ack", "request_id":message["request_id"]}),
                             "position_motion_info" => json!({"op":"position_motion_info", "busy":false, "request_id":message["request_id"]}),
+                            "position_motion_observe" => json!({"op":"position_motion_info", "busy":false, "motion_log_session":"fixture", "motion_log_cursor":0, "motion_logs":[], "request_id":message["request_id"]}),
+                            "visual_pick_observe" => json!({"op":"visual_pick_state", "command_id":"", "pick_phase":"idle", "busy":false, "request_id":message["request_id"]}),
+                            "position_motion_heartbeat" => json!({"op":"position_motion_heartbeat_ack", "command_id":message["command_id"], "renewed":true, "request_id":message["request_id"]}),
+                            "position_task_status" if message["command_id"] == "retained-motion" => json!({"op":"position_task_status", "command_id":message["command_id"], "known":true, "terminal":true, "motion_phase":"canceled", "request_id":message["request_id"],
+                                "motion_state":{"op":"position_motion","command_id":message["command_id"],"motion_phase":"canceled","group_id":"retained-group","group_index":1,"group_count":2,"group_phase":"holding","group_elapsed_s":3.5}}),
+                            "position_task_status" => json!({"op":"position_task_status", "command_id":message["command_id"], "known":false, "terminal":false, "motion_phase":"unknown", "request_id":message["request_id"]}),
                             _ => json!({"op":"error", "request_id":message["request_id"], "message":"isolated bridge: unsupported"}),
                         }
                     },
@@ -819,7 +958,7 @@ mod tests {
                 timeout
             )
             .await
-            .is_err());
+            .is_ok());
         assert!(hub
             .request(
                 "main",
@@ -884,6 +1023,147 @@ mod tests {
         .unwrap();
         hub.close();
         server.abort();
+    }
+
+    #[test]
+    fn observation_callbacks_can_read_runtime_during_close_without_reentrant_core_lock() {
+        let hub = Arc::new(Runtime::default());
+        let weak = Arc::downgrade(&hub);
+        hub.set_observation_changed(Arc::new(move || {
+            assert_eq!(weak.upgrade().unwrap().context()["connected"], false);
+        }));
+        let (done, recv) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            hub.close();
+            done.send(()).unwrap();
+        });
+        recv.recv_timeout(Duration::from_secs(2))
+            .expect("close callback deadlocked");
+    }
+
+    #[tokio::test]
+    async fn reconnect_recovers_only_retained_task_proof_and_routes_full_group_terminal() {
+        let (port, _events, _seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect(port).await.unwrap();
+        let (motion, _) = hub.attach("page-motion").unwrap();
+        hub.request(
+            "page-motion",
+            &motion,
+            "test",
+            json!({"op":"position_group_start","command_id":"retained-motion"}),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        hub.close();
+        assert!(hub.tasks.snapshot().is_some());
+        let (port, _events, seen, next_server) = fake_bridge().await;
+        hub.connect(port).await.unwrap();
+        let (observer, _) = hub.attach("page-monitor").unwrap();
+        let packed = hub.next("page-monitor", &observer).await.unwrap();
+        let terminal = WireFrame::parse(Arc::from(&packed[17..]), false).unwrap();
+        assert_eq!(terminal.op(), "position_motion");
+        assert_eq!(terminal.metadata["command_id"], "retained-motion");
+        assert_eq!(terminal.metadata["group_id"], "retained-group");
+        assert_eq!(terminal.metadata["group_index"], 1);
+        assert!(hub.tasks.snapshot().is_none());
+        assert!(seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m["op"] == "position_task_status"));
+        assert!(!seen.lock().unwrap().iter().any(|m| matches!(
+            m["op"].as_str(),
+            Some("position_motion_heartbeat" | "position_cancel")
+        )));
+        hub.close();
+        server.await.unwrap();
+        next_server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn nine_pages_read_one_motion_observation_and_transport_failure_notifies_without_deadlock(
+    ) {
+        let (port, _events, seen, server) = fake_bridge().await;
+        let hub = Arc::new(Runtime::default());
+        hub.set_observation_changed(Arc::new(|| {}));
+        hub.connect(port).await.unwrap();
+        let labels = [
+            "page-motion",
+            "page-status",
+            "page-dashboard",
+            "page-monitor",
+            "page-collection",
+            "page-handeye",
+            "page-motor",
+            "page-calibration",
+            "page-gravity",
+        ];
+        let pages: Vec<_> = labels
+            .iter()
+            .map(|label| (*label, hub.attach(label).unwrap().0))
+            .collect();
+        // Wait for the application-owned query, without issuing a page refresh.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !hub
+                .observations
+                .snapshot()
+                .entries
+                .contains_key(&super::super::observations::Source::Motion)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        for (label, page) in &pages {
+            let reply = hub
+                .request(
+                    label,
+                    page,
+                    "test",
+                    json!({"op":"position_motion_info"}),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+            assert_eq!(reply.metadata["motion_log_session"], "fixture");
+            assert!(reply.source_age_ms >= 20);
+            let mut notified = false;
+            for _ in 0..2 {
+                let packed = hub.next(label, page).await.unwrap();
+                let event = WireFrame::parse(Arc::from(&packed[17..]), packed[0] == 1).unwrap();
+                if event.op() == "native_position_info_changed" {
+                    notified = true;
+                    break;
+                }
+            }
+            assert!(notified);
+        }
+        let requests = seen.lock().unwrap().clone();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|m| m["op"] == "position_motion_observe")
+                .count(),
+            1
+        );
+        assert!(!requests.iter().any(|m| matches!(
+            m["op"].as_str(),
+            Some("position_motion_info" | "position_motion_heartbeat" | "visual_pick_status")
+        )));
+        server.abort();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while hub.context()["connected"] == true {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!hub.observations.snapshot().connected);
+        hub.close();
     }
 
     #[tokio::test]

@@ -5,6 +5,7 @@ pub mod delivery;
 pub mod command_queue;
 pub mod ipc;
 pub mod observations;
+pub mod motion_observations;
 pub mod resources;
 pub mod runtime;
 pub mod subscriptions;

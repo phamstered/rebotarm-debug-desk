@@ -150,7 +150,7 @@ pub async fn native_bridge_request(
         .await?;
     Ok(Response::new(pack(
         reply.binary,
-        0,
+        reply.source_age_ms,
         started.elapsed().as_millis() as u64,
         &reply.bytes,
     )))

@@ -562,7 +562,7 @@ class BridgeNode : public rclcpp::Node {
       if (op == "hello") {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
-                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
+                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"motion_observation_supported\":true,\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
                      ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
@@ -587,10 +587,10 @@ class BridgeNode : public rclcpp::Node {
         if(tracking.target_id!=request.get<std::string>("target_id",""))throw std::runtime_error("目标身份代次不匹配");
         selected->target_tracker.release();visual_pick_->cancel(session->id());
         session->send("{\"op\":\"visual_target_released\",\"request_id\":"+json_quote(request_id)+"}");
-      } else if (op == "visual_pick_preview" || op == "visual_pick_start" || op == "visual_pick_status" || op == "visual_pick_cancel") {
+      } else if (op == "visual_pick_preview" || op == "visual_pick_start" || op == "visual_pick_status" || op == "visual_pick_observe" || op == "visual_pick_cancel") {
         const std::weak_ptr<WebSocketSession> weak=session;
         visual_pick_->request(session->id(),request,[weak](const std::string &reply){if(auto target=weak.lock())target->send(reply);});
-      } else if (op == "position_motion_info" || op == "position_move" || op == "position_cancel" ||
+      } else if (op == "position_motion_info" || op == "position_motion_observe" || op == "position_motion_heartbeat" || op == "position_task_status" || op == "position_move" || op == "position_cancel" ||
                  op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume") {
         if(visual_pick_->busy() && (op=="position_move"||op=="position_group_start"||op=="position_group_resume")) {
           session->send(error_message(request_id,"视觉抓取持有运动锁，请先取消"));return;

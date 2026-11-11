@@ -9,6 +9,7 @@ pub struct WireFrame {
     pub bytes: Arc<[u8]>,
     pub binary: bool,
     pub metadata: Value,
+    pub source_age_ms: u64,
 }
 
 impl WireFrame {
@@ -67,6 +68,7 @@ impl WireFrame {
             bytes,
             binary,
             metadata,
+            source_age_ms: 0,
         })
     }
     pub fn op(&self) -> &str {

@@ -51,6 +51,9 @@ struct Task {
     stop_pending: bool,
     seen: Instant,
     probed: Option<Instant>,
+    heartbeat_at: Option<Instant>,
+    action_next: u64,
+    inflight: Option<u64>,
 }
 #[derive(Default)]
 struct Inner {
@@ -70,9 +73,11 @@ pub struct Admission {
 }
 pub struct StopAction {
     pub ticket: u64,
+    pub action: u64,
     pub message: Value,
     pub permit: SendPermit,
     pub recovery: bool,
+    pub heartbeat: bool,
 }
 pub struct Migration {
     tasks: Arc<Tasks>,
@@ -238,6 +243,9 @@ impl Tasks {
                 stop_pending: false,
                 seen: now,
                 probed: None,
+                heartbeat_at: None,
+                action_next: 0,
+                inflight: None,
             });
             Some(id)
         } else {
@@ -286,30 +294,14 @@ impl Tasks {
         request: &Value,
         response: Result<&Value, &str>,
     ) {
+        if ticket.is_none() {
+            return;
+        }
         let mut inner = self.inner.lock().unwrap();
         let Some(task) = inner.task.as_mut() else {
             return;
         };
         if task.owner.epoch != epoch {
-            // Busy=false alone is not proof: a restarted Bridge has forgotten
-            // the previous goal. Pick retains a correlated terminal snapshot.
-            // Position's current info protocol hides the old owner's ID; keep
-            // that lock until a correlated recovery query is implemented.
-            if epoch > task.owner.epoch
-                && task.snapshot.kind == Kind::Pick
-                && request["op"] == "visual_pick_status"
-                && response.is_ok_and(|value| {
-                    value["op"] == "visual_pick_state"
-                        && value["command_id"] == task.snapshot.command_id
-                        && value["busy"] == false
-                        && matches!(
-                            value["pick_phase"].as_str(),
-                            Some("holding" | "failed" | "canceled")
-                        )
-                })
-            {
-                inner.task = None;
-            }
             return;
         }
         if ticket != Some(task.snapshot.id) {
@@ -343,6 +335,79 @@ impl Tasks {
             _ => {
                 stop(task, "受理结果未确认，已请求取消；不会自动重发运动");
             }
+        }
+    }
+
+    pub fn recover(&self, ticket: u64, epoch: u64, value: &Value) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(task) = inner.task.as_ref().filter(|task| {
+            task.snapshot.id == ticket
+                && task.sent
+                && epoch >= task.owner.epoch
+                && value["command_id"] == task.snapshot.command_id
+        }) else {
+            return false;
+        };
+        let terminal = match task.snapshot.kind {
+            Kind::Position => {
+                value["op"] == "position_task_status"
+                    && value["known"] == true
+                    && value["terminal"] == true
+                    && value["motion_state"]["op"] == "position_motion"
+                    && value["motion_state"]["command_id"] == task.snapshot.command_id
+                    && value["motion_state"]["motion_phase"] == value["motion_phase"]
+                    && matches!(
+                        value["motion_phase"].as_str(),
+                        Some("succeeded" | "failed" | "canceled")
+                    )
+            }
+            Kind::Pick => {
+                value["op"] == "visual_pick_state"
+                    && value["busy"] == false
+                    && matches!(
+                        value["pick_phase"].as_str(),
+                        Some("holding" | "failed" | "canceled")
+                    )
+            }
+        };
+        if terminal {
+            inner.task = None;
+        }
+        terminal
+    }
+
+    pub fn heartbeat_reply(&self, ticket: u64, epoch: u64, response: Result<&Value, &str>) {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(task) = inner.task.as_mut().filter(|task| {
+            task.snapshot.id == ticket && task.owner.epoch == epoch && !stopped(task)
+        }) else {
+            return;
+        };
+        if task.snapshot.kind == Kind::Pick
+            && response.is_ok_and(|value| {
+                value["op"] == "visual_pick_state"
+                    && value["command_id"] == task.snapshot.command_id
+                    && value["busy"] == false
+                    && matches!(
+                        value["pick_phase"].as_str(),
+                        Some("holding" | "failed" | "canceled")
+                    )
+            })
+        {
+            inner.task = None;
+            return;
+        }
+        let renewed = response.is_ok_and(|value| {
+            value["command_id"] == task.snapshot.command_id
+                && match task.snapshot.kind {
+                    Kind::Position => {
+                        value["op"] == "position_motion_heartbeat_ack" && value["renewed"] == true
+                    }
+                    Kind::Pick => value["op"] == "visual_pick_state" && value["busy"] == true,
+                }
+        });
+        if !renewed {
+            stop(task, "任务续租未确认，已请求取消");
         }
     }
 
@@ -391,14 +456,32 @@ impl Tasks {
     pub fn poll(self: &Arc<Self>, epoch: u64, now: Instant) -> Option<StopAction> {
         let mut inner = self.inner.lock().unwrap();
         let task = inner.task.as_mut()?;
-        let recovery = task.owner.epoch != epoch;
-        if !recovery
+        let new_session = task.owner.epoch != epoch;
+        if new_session {
+            task.stop_pending = false;
+        }
+        if !new_session
             && now.saturating_duration_since(task.seen) >= Duration::from_secs(5)
             && !stopped(task)
         {
             stop(task, "任务所属窗口失联，已请求取消");
         }
-        if recovery {
+        let recovery = new_session || (stopped(task) && !task.stop_pending);
+        if task.inflight.is_some() && !task.stop_pending {
+            return None;
+        }
+        let heartbeat = !recovery && !task.stop_pending;
+        if heartbeat {
+            if !task.admitted
+                || !task.sent
+                || task.heartbeat_at.is_some_and(|at| {
+                    now.saturating_duration_since(at) < Duration::from_millis(500)
+                })
+            {
+                return None;
+            }
+            task.heartbeat_at = Some(now);
+        } else if recovery {
             if task
                 .probed
                 .is_some_and(|at| now.saturating_duration_since(at) < Duration::from_secs(1))
@@ -411,25 +494,40 @@ impl Tasks {
                 return None;
             }
             task.stop_pending = false;
+            task.probed = Some(now);
             if !task.sent {
                 inner.task = None;
                 return None;
             }
         }
         let ticket = task.snapshot.id;
-        let message = match (task.snapshot.kind, recovery) {
-            (Kind::Position, false) => {
+        task.action_next = task
+            .action_next
+            .checked_add(1)
+            .expect("task action sequence exhausted");
+        let action = task.action_next;
+        task.inflight = Some(action);
+        let message = match (task.snapshot.kind, recovery, heartbeat) {
+            (Kind::Position, false, true) => {
+                json!({"op":"position_motion_heartbeat", "command_id":task.snapshot.command_id})
+            }
+            (Kind::Pick, false, true) => json!({"op":"visual_pick_status"}),
+            (Kind::Position, false, false) => {
                 json!({"op":"position_cancel", "command_id":task.snapshot.command_id})
             }
-            (Kind::Pick, false) => json!({"op":"visual_pick_cancel"}),
-            (Kind::Position, true) => json!({"op":"position_motion_info"}),
-            (Kind::Pick, true) => json!({"op":"visual_pick_status"}),
+            (Kind::Pick, false, false) => json!({"op":"visual_pick_cancel"}),
+            (Kind::Position, true, _) => {
+                json!({"op":"position_task_status", "command_id":task.snapshot.command_id})
+            }
+            (Kind::Pick, true, _) => json!({"op":"visual_pick_observe"}),
         };
         let tasks = self.clone();
         Some(StopAction {
             ticket,
+            action,
             message,
             recovery,
+            heartbeat,
             permit: Arc::new(move || {
                 tasks
                     .inner
@@ -437,9 +535,28 @@ impl Tasks {
                     .unwrap()
                     .task
                     .as_ref()
-                    .is_some_and(|task| task.snapshot.id == ticket)
+                    .is_some_and(|task| {
+                        task.snapshot.id == ticket
+                            && (!heartbeat
+                                || (!stopped(task)
+                                    && task.owner.epoch == epoch
+                                    && task.seen.elapsed() < Duration::from_secs(5)))
+                    })
             }),
         })
+    }
+
+    pub fn finish_action(&self, ticket: u64, action: u64) {
+        if let Some(task) = self
+            .inner
+            .lock()
+            .unwrap()
+            .task
+            .as_mut()
+            .filter(|task| task.snapshot.id == ticket && task.inflight == Some(action))
+        {
+            task.inflight = None;
+        }
     }
 
     pub fn stop_error(&self, ticket: u64, error: &str) {
@@ -625,14 +742,13 @@ mod tests {
             (2, json!({"op":"position_motion_info"})),
             (2, json!({"op":"visual_pick_state","busy":false})),
         ] {
-            tasks.reply(None, epoch, &probe.message, Ok(&value));
+            tasks.recover(admission.ticket.unwrap(), epoch, &value);
             assert!(tasks.snapshot().is_some());
         }
-        tasks.reply(
-            None,
+        tasks.recover(
+            admission.ticket.unwrap(),
             2,
-            &probe.message,
-            Ok(&json!({"op":"position_motion_info","busy":false})),
+            &json!({"op":"position_motion_info","busy":false}),
         );
         assert!(tasks.snapshot().is_some());
     }
@@ -643,16 +759,15 @@ mod tests {
         let admission = start(&tasks, "visual_pick_start", now);
         assert!(admission.permit.unwrap()());
         tasks.lost(None, "disconnected");
-        let request = json!({"op":"visual_pick_status"});
         for value in [
             json!({"op":"visual_pick_state","command_id":"","pick_phase":"idle","busy":false}),
             json!({"op":"visual_pick_state","command_id":"other","pick_phase":"canceled","busy":false}),
             json!({"op":"visual_pick_state","command_id":"command-1","pick_phase":"stop_failed","busy":false}),
         ] {
-            tasks.reply(None, 2, &request, Ok(&value));
+            tasks.recover(admission.ticket.unwrap(), 2, &value);
             assert!(tasks.snapshot().is_some());
         }
-        tasks.reply(None, 2, &request, Ok(&json!({"op":"visual_pick_state","command_id":"command-1","pick_phase":"canceled","busy":false})));
+        tasks.recover(admission.ticket.unwrap(), 2, &json!({"op":"visual_pick_state","command_id":"command-1","pick_phase":"canceled","busy":false}));
         assert!(tasks.snapshot().is_none());
     }
     #[test]
@@ -673,5 +788,108 @@ mod tests {
         assert!(tasks.poll(1, now).is_none());
         assert!(tasks.snapshot().is_none());
         assert!(!admission.permit.unwrap()());
+    }
+
+    #[test]
+    fn native_heartbeats_never_count_as_owner_liveness_and_cancel_overtakes_slow_heartbeat() {
+        let tasks = Arc::new(Tasks::default());
+        let now = Instant::now();
+        let admission = start(&tasks, "position_move", now);
+        assert!(admission.permit.unwrap()());
+        tasks.reply(
+            admission.ticket,
+            1,
+            &json!({"op":"position_move"}),
+            Ok(&json!({"op":"position_move_ack","accepted":true,"command_id":"command-1"})),
+        );
+        let heartbeat = tasks.poll(1, now).unwrap();
+        assert!(heartbeat.heartbeat && (heartbeat.permit)());
+        assert_eq!(heartbeat.message["op"], "position_motion_heartbeat");
+        assert!(tasks.poll(1, now + Duration::from_secs(1)).is_none());
+        tasks.touch(&owner("page-monitor"), now + Duration::from_secs(4));
+        let cancel = tasks.poll(1, now + Duration::from_secs(5)).unwrap();
+        assert_eq!(cancel.message["op"], "position_cancel");
+        assert!(!cancel.heartbeat && (cancel.permit)());
+        assert!(!(heartbeat.permit)());
+        tasks.heartbeat_reply(heartbeat.ticket, 1,
+            Ok(&json!({"op":"position_motion_heartbeat_ack","renewed":true,"command_id":"command-1"})));
+        assert_eq!(tasks.snapshot().unwrap().phase, Phase::Stopping);
+        tasks.finish_action(heartbeat.ticket, heartbeat.action);
+        // A late heartbeat must not remove the pending cancel's in-flight gate.
+        assert!(tasks.poll(1, now + Duration::from_secs(7)).is_none());
+        tasks.finish_action(cancel.ticket, cancel.action);
+        let recovery = tasks.poll(1, now + Duration::from_secs(7)).unwrap();
+        assert!(recovery.recovery);
+        assert_eq!(recovery.message["op"], "position_task_status");
+        tasks.observe(
+            1,
+            &json!({"op":"position_motion","command_id":"command-1","motion_phase":"canceled"}),
+        );
+        let next = start(&tasks, "position_move", now);
+        assert!(next.permit.unwrap()());
+        assert!(!(recovery.permit)());
+    }
+
+    #[test]
+    fn failed_renewal_requests_stop_and_late_pick_reply_cannot_release_successor() {
+        let tasks = Arc::new(Tasks::default());
+        let now = Instant::now();
+        let first = start(&tasks, "visual_pick_start", now);
+        assert!(first.permit.unwrap()());
+        tasks.observe(1, &json!({"op":"visual_pick_state","command_id":"command-1","busy":true,"pick_phase":"approaching"}));
+        let heartbeat = tasks.poll(1, now).unwrap();
+        assert_eq!(heartbeat.message["op"], "visual_pick_status");
+        tasks.heartbeat_reply(heartbeat.ticket, 1, Err("timeout"));
+        assert_eq!(tasks.snapshot().unwrap().phase, Phase::Stopping);
+        assert_eq!(
+            tasks.poll(1, now).unwrap().message["op"],
+            "visual_pick_cancel"
+        );
+        tasks.observe(1, &json!({"op":"visual_pick_state","command_id":"command-1","busy":false,"pick_phase":"canceled"}));
+        let second = start(&tasks, "visual_pick_start", now);
+        assert!(second.permit.unwrap()());
+        tasks.heartbeat_reply(heartbeat.ticket, 1, Ok(&json!({"op":"visual_pick_state","command_id":"command-1","busy":false,"pick_phase":"holding"})));
+        assert_eq!(tasks.snapshot().unwrap().id, second.ticket.unwrap());
+    }
+
+    #[test]
+    fn position_recovery_requires_matching_retained_terminal_evidence() {
+        let tasks = Arc::new(Tasks::default());
+        let now = Instant::now();
+        let admission = start(&tasks, "position_group_start", now);
+        assert!(admission.permit.unwrap()());
+        tasks.lost(None, "disconnected");
+        let probe = tasks.poll(2, now).unwrap();
+        assert_eq!(probe.message["op"], "position_task_status");
+        let proof = json!({"op":"position_task_status","command_id":"command-1","known":true,"terminal":true,"motion_phase":"canceled",
+            "motion_state":{"op":"position_motion","command_id":"command-1","motion_phase":"canceled","group_phase":"canceled","group_step_index":2}});
+        for (key, bad) in [
+            ("known", json!(false)),
+            ("terminal", json!(false)),
+            ("command_id", json!("other")),
+            ("motion_phase", json!("stop_failed")),
+            ("motion_state", Value::Null),
+            (
+                "motion_state",
+                json!({"op":"position_motion","command_id":"other","motion_phase":"canceled"}),
+            ),
+            (
+                "motion_state",
+                json!({"op":"position_motion","command_id":"command-1","motion_phase":"executing"}),
+            ),
+        ] {
+            let mut invalid = proof.clone();
+            invalid[key] = bad;
+            tasks.recover(admission.ticket.unwrap(), 2, &invalid);
+            assert!(tasks.snapshot().is_some());
+        }
+        tasks.recover(admission.ticket.unwrap(), 0, &proof);
+        assert!(tasks.snapshot().is_some());
+        tasks.recover(admission.ticket.unwrap(), 2, &proof);
+        assert!(tasks.snapshot().is_none());
+        let successor = start(&tasks, "position_move", now);
+        assert!(successor.permit.unwrap()());
+        assert!(!tasks.recover(admission.ticket.unwrap(), 2, &proof));
+        assert_eq!(tasks.snapshot().unwrap().id, successor.ticket.unwrap());
     }
 }

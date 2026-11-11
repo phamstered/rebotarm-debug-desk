@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
+import { nativeDesktop } from "./nativeWorkspaceLogic";
 import type { BridgeClient } from "./bridge";
 import type { BridgeEnvelope, MotionArrivalError, MotionHoldFailure, MotionLogEntry, TcpPose } from "./types";
 import { parseMotionArrivalErrors, parseMotionHoldFailure } from "./motionFeedbackLogic";
@@ -109,7 +110,8 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
         if (gripperExpiry !== undefined) window.clearTimeout(gripperExpiry);
         const age = reply.gripper_feedback_age_ms === undefined ? 0 : typeof reply.gripper_feedback_age_ms === "number" && Number.isFinite(reply.gripper_feedback_age_ms) && reply.gripper_feedback_age_ms >= 0 ? reply.gripper_feedback_age_ms : 1000;
         // Include request transit time conservatively; a slow info request cannot renew old feedback.
-        const remaining = Math.max(0, 1000 - age - (performance.now() - requestedAt));
+        const transitAge = Number.isFinite(reply.desktop_received_at_ms) ? performance.now() - bridgeReceivedAt(reply) : performance.now() - requestedAt;
+        const remaining = Math.max(0, 1000 - age - transitAge);
         const gripperFresh = remaining > 0 && reply.gripper_supported === true && reply.gripper_joint_name === GRIPPER_JOINT_NAME && reply.gripper_feedback_fresh === true;
         if (reply.gripper_supported !== true || reply.gripper_joint_name !== GRIPPER_JOINT_NAME ||
             !Number.isFinite(reply.gripper_lower) || !Number.isFinite(reply.gripper_upper) ||
@@ -139,7 +141,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
             lower: reply.gripper_lower ?? 0, upper: reply.gripper_upper ?? 0,
             position: liveFresh() ? livePosition : snapshotPosition,
             fresh: liveFresh() || gripperFresh } });
-        if (active.current && reply.command_id !== active.current && reply.busy === false) {
+        if (!nativeDesktop() && active.current && reply.command_id !== active.current && reply.busy === false) {
           setState((value) => {
             if (value.phase !== "stop_failed") return value;
             locked.current = false;
@@ -157,6 +159,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
     };
     const off = bridge.onMessage((message) => {
       if (generation.current !== current || abort.signal.aborted) return;
+      if (message.op === "native_position_info_changed") { void poll(); return; }
       if (message.op === "topic_message" && message.topic === "/robot_feedback/joint_states") {
         const g = context.current.info.gripper;
         if (!g.supported) return;
@@ -196,7 +199,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
       if (!locked.current) void poll();
     });
     void poll();
-    const timer = window.setInterval(() => void poll(), 1000);
+    const timer = nativeDesktop() ? undefined : window.setInterval(() => void poll(), 1000);
     return () => { generation.current++; abort.abort(); window.clearInterval(timer); if (gripperExpiry !== undefined) window.clearTimeout(gripperExpiry); if (liveExpiry !== undefined) window.clearTimeout(liveExpiry); off(); };
   }, [bridge, connected, profileKey]);
 

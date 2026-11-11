@@ -1752,7 +1752,7 @@ pub fn run() {
                 let _ = task_handle.emit("native-tasks-changed", ());
             }));
             let observations_handle = app.handle().clone();
-            app.state::<session::runtime::Runtime>().observations.set_changed(std::sync::Arc::new(move || {
+            app.state::<session::runtime::Runtime>().set_observation_changed(std::sync::Arc::new(move || {
                 let _ = observations_handle.emit("native-observations-changed", ());
             }));
             let handle = app.handle().clone();

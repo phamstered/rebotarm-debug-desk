@@ -322,6 +322,11 @@ export type BridgeEnvelope = {
   /** Present on Bridge `hello` replies. */
   bridge_version?: string;
   bridge_build_id?: string;
+  motion_observation_supported?: boolean;
+  known?: boolean;
+  terminal?: boolean;
+  renewed?: boolean;
+  motion_state?: BridgeEnvelope | null;
   ros_distro?: string;
   /** GravityIdentification Bridge ops (stack PR #23). */
   joint_mask?: number;

@@ -24,21 +24,26 @@ pub enum Source {
     Controllers,
     Topics,
     Clock,
+    Motion,
+    Pick,
 }
 impl Source {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 8] = [
         Self::Agent,
         Self::Usb,
         Self::Arm,
         Self::Controllers,
         Self::Topics,
         Self::Clock,
+        Self::Motion,
+        Self::Pick,
     ];
     fn period(self, topics_ms: u64) -> Duration {
         Duration::from_millis(match self {
             Self::Agent => 5000,
             Self::Usb | Self::Arm => 10000,
             Self::Topics => topics_ms,
+            Self::Pick => 500,
             _ => 1000,
         })
     }
@@ -46,6 +51,7 @@ impl Source {
         Duration::from_millis(match self {
             Self::Controllers => 5500,
             Self::Clock => 2000,
+            Self::Motion | Self::Pick => 3000,
             _ => 10000,
         })
     }
@@ -56,6 +62,8 @@ impl Source {
             Self::Topics => topics_ms + 10000,
             Self::Controllers => 3100,
             Self::Clock => 2500,
+            Self::Motion => 1500,
+            Self::Pick => 1000,
         }
     }
 }
@@ -188,7 +196,8 @@ impl Session {
                 },
             );
         }
-        if let Some(changed) = self.changed.lock().unwrap().clone() {
+        let changed = self.changed.lock().unwrap().clone();
+        if let Some(changed) = changed {
             changed();
         }
         Ok(self.snapshot())
@@ -236,7 +245,8 @@ impl Observations {
             session.cancel.send_replace(true);
         }
         drop(current);
-        if let Some(changed) = self.changed.lock().unwrap().clone() {
+        let changed = self.changed.lock().unwrap().clone();
+        if let Some(changed) = changed {
             changed();
         }
     }
@@ -273,7 +283,10 @@ impl Observations {
                     if session.refresh(source, false, false).await.is_err() {
                         break;
                     }
-                    if matches!(source, Source::Controllers | Source::Clock) {
+                    if matches!(
+                        source,
+                        Source::Controllers | Source::Clock | Source::Motion | Source::Pick
+                    ) {
                         let unsupported =
                             session
                                 .entries
@@ -308,6 +321,24 @@ impl Observations {
                 entries: BTreeMap::new(),
             },
             |session| session.snapshot(),
+        )
+    }
+    pub fn versions(&self) -> (u64, BTreeMap<Source, u64>) {
+        let current = self.session.lock().unwrap();
+        current.as_ref().map_or(
+            (self.epoch.load(Ordering::Acquire), BTreeMap::new()),
+            |session| {
+                (
+                    session.epoch,
+                    session
+                        .entries
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|(source, entry)| (*source, entry.sequence))
+                        .collect(),
+                )
+            },
         )
     }
     pub async fn refresh(
@@ -379,6 +410,9 @@ pub fn reader(transport: Arc<Transport>, profile: Value) -> Reader {
                         Source::Controllers => json!({"op":"controllers_info", "refresh":force}),
                         Source::Topics => json!({"op":"topics"}),
                         Source::Clock => json!({"op":"clock_sync_info"}),
+                        Source::Motion | Source::Pick => {
+                            return Err("unsupported: 运动观察未接入".into())
+                        }
                         _ => unreachable!(),
                     };
                     let response = transport.request(request.clone(), source.timeout()).await?;
@@ -547,7 +581,7 @@ mod tests {
         for _ in 0..9 {
             let _ = service.snapshot();
         }
-        assert_eq!(counts.lock().unwrap().values().sum::<usize>(), 6);
+        assert_eq!(counts.lock().unwrap().values().sum::<usize>(), 8);
         tokio::time::sleep(Duration::from_millis(1050)).await;
         assert_eq!(counts.lock().unwrap()[&Source::Controllers], 2);
         assert_eq!(counts.lock().unwrap()[&Source::Clock], 2);

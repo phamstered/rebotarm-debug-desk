@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
+import { nativeDesktop } from "./nativeWorkspaceLogic";
 import type { BridgeClient } from "./bridge";
-import type { ObjectBox, RgbTargetState, VisualPickPreview, VisualPickState } from "./types";
+import type { BridgeEnvelope, ObjectBox, RgbTargetState, VisualPickPreview, VisualPickState } from "./types";
 import type { PositionMotionControls } from "./positionMotionLogic";
 import {acceptRgbTarget,parseRgbTarget,parseVisualPickPreview,parseVisualPickState} from "./visualPickLogic";
 import {decodeRosImage} from "./imageTopicLogic";
@@ -12,6 +13,15 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
 }) {
   const [preview,setPreview]=useState<VisualPickPreview|null>(null),[state,setState]=useState(idle),[error,setError]=useState("");
   const owns=useRef("");
+  const stateAt=useRef(-Infinity),finished=useRef("");
+  function applyState(message:BridgeEnvelope){
+    const s=parseVisualPickState(message),at=bridgeReceivedAt(message);
+    // Native status may be a shared snapshot captured before this task began
+    // or before its terminal event. It must not unlock or resurrect that task.
+    if(nativeDesktop()&&(at<stateAt.current||(owns.current&&s.command_id!==owns.current)||(s.busy&&s.command_id===finished.current)))return;
+    stateAt.current=at;setState(s);onBusy(s.busy);
+    if(!s.busy){if(s.command_id)finished.current=s.command_id;owns.current="";}
+  }
   // Serialize selection/release with in-flight previews; remember their server
   // binding even when the selection changed while awaiting the response.
   const requests=useRef<Promise<unknown>>(Promise.resolve());
@@ -63,10 +73,9 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
   useEffect(()=>{
     if(!active)return;
     let valid=true,polling=false;
-    const apply=(s:VisualPickState)=>{if(!valid)return;setState(s);onBusy(s.busy);if(!s.busy)owns.current="";};
-    const off=bridge.onMessage(m=>{if(m.op==="visual_pick_state"&&m.command_id===owns.current)try{apply(parseVisualPickState(m));}catch(e){setError(String(e));}});
-    const poll=async()=>{if(polling)return;polling=true;try{const m=await bridge.request({op:"visual_pick_status"},2000);apply(parseVisualPickState(m));}catch(e){if(valid&&owns.current){setError(`抓取状态未确认：${String(e)}`);onBusy(true);}}finally{polling=false;}};
-    void poll();const timer=window.setInterval(()=>void poll(),500);
+    const poll=async()=>{if(polling)return;polling=true;try{const m=await bridge.request({op:"visual_pick_status"},2000);if(valid)applyState(m);}catch(e){if(valid&&owns.current){setError(`抓取状态未确认：${String(e)}`);onBusy(true);}}finally{polling=false;}};
+    const off=bridge.onMessage(m=>{if(m.op==="native_visual_pick_changed"){void poll();return;}if(m.op==="visual_pick_state"&&m.command_id===owns.current)try{if(valid)applyState(m);}catch(e){setError(String(e));}});
+    void poll();const timer=nativeDesktop()?undefined:window.setInterval(()=>void poll(),500);
     return()=>{valid=false;off();window.clearInterval(timer);if(owns.current){bridge.send({op:"visual_pick_cancel"});owns.current="";}onBusy(false);};
   },[bridge,active,onBusy]);
   useEffect(()=>{
@@ -102,9 +111,9 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
   },[bridge,active,token,selected?.id,selectionRevision,onPreview]);
   async function start(){
     if(releasing.current||(bound.current&&(!bound.current.identity_valid||!bound.current.metric_ready))||!selected||!preview?.execution_ready||!motion?.armed||!active||state.busy||motion.reason||motion.tcpPoseReason||!motion.gripper?.available||!motion.gripper?.fresh)return;
-    const id=crypto.randomUUID();owns.current=id;onBusy(true);setState({...idle,command_id:id,busy:true,phase:"validating"});
+    const id=crypto.randomUUID();owns.current=id;stateAt.current=performance.now();onBusy(true);setState({...idle,command_id:id,busy:true,phase:"validating"});
     try{const m=await bridge.request({op:"visual_pick_start",command_id:id,subscription_id:token,object_id:selected.id,preview_frame_seq:preview.frame_seq,...(preview.tracking?{target_id:preview.tracking.target_id}:{}),confirmation:"ARMED"},5000);
-      if(owns.current===id){const s=parseVisualPickState(m);setState(s);onBusy(s.busy);}}
+      if(owns.current===id)applyState(m);}
     catch(e){if(owns.current===id){setError(String(e));bridge.send({op:"visual_pick_cancel"});}}
   }
   async function clear(){

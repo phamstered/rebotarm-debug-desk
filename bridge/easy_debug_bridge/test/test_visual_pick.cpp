@@ -181,6 +181,10 @@ int main() {
         Tree r;
         r.put("op", "visual_pick_status");
         pick.request(1, r, [](const std::string &) {});
+      } else {
+        // Same-owner read-only observations cannot keep a lost owner alive.
+        Tree r; r.put("op", "visual_pick_observe");
+        pick.request(1, r, [](const std::string &) {});
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }

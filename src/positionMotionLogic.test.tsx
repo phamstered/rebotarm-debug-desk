@@ -1,13 +1,16 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BridgeEnvelope } from "./types";
 import { usePositionMotion } from "./positionMotionLogic";
 import type { CustomPosition } from "./positionLogic";
+const native = vi.hoisted(() => ({ enabled: false }));
+vi.mock("./nativeWorkspaceLogic", () => ({ nativeDesktop: () => native.enabled }));
+afterEach(() => { native.enabled = false; vi.useRealTimers(); vi.restoreAllMocks(); });
 const point: CustomPosition = { id: "p1", name: "取料", group: "arm", jointNames: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"], positions: [0, -.2, -.3, 0, 0, 0], source: "manual", note: "", capturedAt: null, createdAt: 0, updatedAt: 0 };
-function setup() {
+function setup(info: Partial<BridgeEnvelope> = {}) {
   let listener: (m: BridgeEnvelope) => void = () => {};
   const request = vi.fn(async (m: BridgeEnvelope): Promise<BridgeEnvelope> => {
-    if (m.op === "position_motion_info") return { op: m.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false, joint_rotation_supported: true, joint_targets_supported: true, motion_duration_supported: true };
+    if (m.op === "position_motion_info") return { op: m.op, available: true, home_positions: [0, -.01, -.01, 0, 0, 0], busy: false, joint_rotation_supported: true, joint_targets_supported: true, motion_duration_supported: true, ...info };
     return { op: `${m.op}_ack`, accepted: true, command_id: m.command_id };
   });
   const bridge = { request, onMessage: vi.fn((fn: typeof listener) => { listener = fn; return () => {}; }) };
@@ -15,6 +18,43 @@ function setup() {
   return { ...hook, request, emit: (m: BridgeEnvelope) => act(() => listener(m)) };
 }
 describe("saved MoveIt motion", () => {
+  it("reads native observations on notifications without a per-window remote timer", async () => {
+    native.enabled = true; vi.useFakeTimers();
+    const { request, emit, unmount } = setup();
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(request.mock.calls.filter(([m]) => m.op === "position_motion_info")).toHaveLength(1);
+    await act(async () => { for (let i = 0; i < 9; i++) emit({ op: "native_position_info_changed" }); });
+    expect(request.mock.calls.filter(([m]) => m.op === "position_motion_info")).toHaveLength(2);
+    unmount();
+  });
+  it("native cached idle cannot unlock an uncertain accepted command", async () => {
+    native.enabled = true;
+    const { result, request, emit, unmount } = setup();
+    await waitFor(() => expect(result.current.reason).toBe(""));
+    act(() => result.current.setArmed(true));
+    request.mockImplementation(async m => { if (m.op === "position_move") throw new Error("unknown acceptance"); return { op: m.op, busy: false, available: true }; });
+    await act(async () => result.current.execute(point));
+    await act(async () => emit({ op: "native_position_info_changed" }));
+    expect(result.current.state.phase).toBe("stop_failed");
+    expect(result.current.busy).toBe(true);
+    const id = request.mock.calls.find(([m]) => m.op === "position_move")![0].command_id;
+    emit({ op: "position_motion", command_id: id, motion_phase: "canceled" });
+    expect(result.current.busy).toBe(false);
+    unmount();
+  });
+  it("expires cached native gripper feedback using its source age", async () => {
+    native.enabled = true; vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockReturnValue(1000);
+    const { result, unmount } = setup({ gripper_supported: true, gripper_joint_name: "gripper_finger_left_joint", gripper_available: true,
+      gripper_lower: 0, gripper_upper: .05, gripper_position: .02, gripper_feedback_fresh: true, gripper_feedback_age_ms: 650, desktop_received_at_ms: 700 });
+    await act(async () => {});
+    expect(result.current.gripper?.fresh).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(51); });
+    expect(result.current.gripper?.fresh).toBe(false);
+    expect(result.current.gripper?.available).toBe(false);
+    unmount();
+  });
   it("submits six staged joints and duration once, with safety and shared locking", async () => {
     const { result, request, emit } = setup();
     await waitFor(() => expect(result.current.jointTargetsReason).toBe(""));

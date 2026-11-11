@@ -27,6 +27,7 @@
 #include <atomic>
 #include <optional>
 #include "easy_debug_bridge/motion_log.hpp"
+#include "easy_debug_bridge/task_observation_core.hpp"
 #include "easy_debug_bridge/controller_health.hpp"
 #include "easy_debug_bridge/clock_sync_core.hpp"
 #include <std_msgs/msg/u_int32_multi_array.hpp>
@@ -160,6 +161,7 @@ struct PositionMotion::Impl {
   std::string model_error{"等待 MoveIt 模型"}, model_signature, model_urdf;
   std::string controller_error{"arm_trajectory_controller 未激活或状态已过期"};
   MotionLog logs;
+  MotionTerminalHistory terminal_history;
   std::string health_reason;
   std::string controller_health_reason;
   const std::string log_session = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
@@ -237,6 +239,7 @@ struct PositionMotion::Impl {
       log(m->owner, m->id, phase, m->label + " · " + detail, phase == "failed" || phase == "stop_failed" ? "error" : phase == "canceling" ? "warn" : "info");
     m->phase = phase; m->message = detail; m->terminal = terminal;
     if (terminal && m->group) { m->group->timeline.advance(steady_seconds()); m->group->done = true; }
+    if (terminal) terminal_history.record(m->id, phase, event(*m));
     m->send(event(*m));
     if (terminal && current == m) in_motion.store(false);
   }
@@ -1033,8 +1036,39 @@ struct PositionMotion::Impl {
   void process(const Request &r) {
     if (r.disconnect) { if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
     const auto op = r.data.get<std::string>("op", "");
-    if (op == "position_motion_info") {
-      if (current && current->owner == r.owner && !current->terminal) current->lease_at = Clock::now();
+    if (op == "position_task_status" || op == "position_motion_heartbeat") {
+      std::set<std::string> fields;
+      for (const auto &field : r.data)
+        if ((field.first != "op" && field.first != "request_id" && field.first != "command_id") || !field.second.empty() || !fields.insert(field.first).second)
+          throw std::runtime_error("任务查询字段无效或重复");
+      const auto id = r.data.get<std::string>("command_id", "");
+      if (!valid_motion_command_id(id)) throw std::runtime_error("command_id 无效");
+      if (op == "position_motion_heartbeat") {
+        const bool renewed = current && current->id == id && current->owner == r.owner && !current->terminal;
+        if (renewed) current->lease_at = Clock::now();
+        r.send("{\"op\":\"position_motion_heartbeat_ack\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
+            ",\"command_id\":" + quote(id) + ",\"renewed\":" + (renewed ? "true" : "false") + "}");
+      } else {
+        const bool active_id = current && current->id == id;
+        const auto previous = terminal_history.find(id);
+        const bool known = active_id || previous.has_value();
+        const bool terminal = active_id ? current->terminal : previous.has_value();
+        const auto phase = active_id ? current->phase : previous.value_or("unknown");
+        r.send("{\"op\":\"position_task_status\",\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
+            ",\"command_id\":" + quote(id) + ",\"known\":" + (known ? "true" : "false") +
+            ",\"terminal\":" + (terminal ? "true" : "false") + ",\"motion_phase\":" + quote(phase) +
+            ",\"motion_state\":" + (active_id ? event(*current) : terminal_history.state(id)) +
+            ",\"motion_log_session\":" + quote(log_session) + "}");
+      }
+    } else if (op == "position_motion_info" || op == "position_motion_observe") {
+      const bool observing = op == "position_motion_observe";
+      if (observing) {
+        std::set<std::string> fields;
+        for (const auto &field : r.data)
+          if ((field.first != "op" && field.first != "request_id" && field.first != "motion_log_session" && field.first != "motion_log_after") || !field.second.empty() || !fields.insert(field.first).second)
+            throw std::runtime_error("只读运动查询字段无效或重复");
+      }
+      if (!observing && current && current->owner == r.owner && !current->terminal) current->lease_at = Clock::now();
       const auto reason = readiness();
       const bool home = fresh(model_at, 10) && model.home.size() == 6 && model_error.empty();
       const auto gripper_reason = reason.empty() ? gripper_readiness() : reason;

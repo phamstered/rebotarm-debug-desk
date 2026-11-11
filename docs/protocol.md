@@ -353,6 +353,9 @@ Jetson 侧从各最多三帧的队列按时间戳配对 RGB/Depth（默认容差
 固定组为 `arm`（joint1–joint6）、`gripper`（独立夹爪）或 `arm_with_gripper`（联合七自由度）。固定 MoveIt Action `/move_action`，执行仅允许真实 `arm_trajectory_controller` 和可选 `gripper_trajectory_controller`；客户端不能指定组名或任意 Action/Topic。
 
 - `{"op":"position_motion_info","request_id":"..."}` 返回 `available`、门禁失败 `message`、当前 SRDF `home_positions`（未同步为空）、全局 `busy` 和本会话拥有的 `command_id`。连接期间每秒轮询该操作续约会话心跳（5 秒超时取消）。若本会话有运动，随后发送其最新状态。
+- `hello.motion_observation_supported:true` 广告无续租观察及按编号查询能力。新增 `position_motion_observe {motion_log_session?, motion_log_after?}` 返回同样的 `position_motion_info`（以及本 owner 当前运动事件），但不会刷新任务租约；`visual_pick_observe` 返回 `visual_pick_state`，同样不续租。旧 info/status 仍保留原行为，供旧客户端使用。
+- `position_motion_heartbeat {command_id}` 仅在同一 WebSocket owner、相同当前 command_id、任务未结束时续租；返回 `position_motion_heartbeat_ack {command_id, renewed}`，不以普通观察代替心跳。
+- `position_task_status {command_id}` 是跨连接只读查询，返回 `{command_id, known, terminal, motion_phase, motion_log_session, motion_state}`；`motion_state` 为完整的 `position_motion` 事件（含动作组元数据）或 null。编号限定 1–80 位 ASCII 字母、数字及连字符，未知/重复/非标量字段拒绝。当前任务优先；最近 256 个明确终态保留在 Bridge 进程内，总状态文本至多 2 MiB、每项至多 256 KiB。进程重启、淘汰或未知编号返回 `known:false, terminal:false, motion_phase:"unknown"`，不能据此确认停机。`stop_failed` 不进入终态缓存。
 - `{"op":"position_move","request_id":"...","command_id":"UUID","label":"取料位","confirmation":"ARMED","home":false,"positions":[0,-0.2,-0.3,0,0,0]}`。positions 固定按 joint1–joint6，目标为点击时快照。`home:true` 时在 Bridge 读取当前 SRDF HOME，忽略客户端 positions。
 - `position_motion_info` 另返回 `joint_rotation_supported:true` 表示支持单关节目标。字段缺失时客户端必须禁用此功能，不能回退为普通点位请求。
 - 单关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","label":"joint2 旋转","confirmation":"ARMED","joint_name":"joint2","joint_position":-0.3}`，角度单位 rad。`joint_name` 支持 joint1–joint6（rad）及具备夹爪能力时的 `gripper_finger_left_joint`（m），`joint_position` 必须有限且在有效模型/标定限位内。不能与 `home:true` 或任何 `positions` 字段混用；缺少配对字段时拒绝。
@@ -575,7 +578,7 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
-现有 `position_motion_info` / `visual_pick_status` 会在 Bridge 续租，因此同一连接的非所属窗口查询在写入前拒绝，不允许代续租。窗口数据拉取/请求入口维护本窗口存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台等待循环本身不会续租窗口存活。重连后 Pick 只接受同一 command_id 的明确终态；Position 当前 info 响应不能跨 owner 提供原任务终态，因此仍保留不确定占用，恢复协议待补齐。单独 `busy=false` 不会解锁。
+桌面原生层把页面的 `position_motion_info` / `visual_pick_status` 映射为共享只读缓存，各窗口均可观察，不直接发送续租请求。只有已受理且所属 WebView 仍存活的任务由 Rust 每 500 ms 续租：Position 使用 `position_motion_heartbeat`，Pick 使用原 `visual_pick_status`。页面不能直接请求 Position 心跳。窗口数据拉取/请求入口维护存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台查询与心跳不刷新窗口存活。取消可越过慢心跳；迟到回复按原生任务编号隔离。停止或重连后每秒查询终态：Position 必须有匹配 command_id、明确 terminal 及一致的完整 motion_state，Pick 必须有匹配编号且 busy=false 的 holding/failed/canceled。未知、单独 idle/busy=false 或 stop_failed 不解锁。恢复取得的完整终态会发给页面以释放同一动作组锁。缺少新能力的 Bridge 会阻止原生多窗口执行，并提示更新。
 
 原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。Motor 连续流、直接轨迹、重力辨识和 SSH 控制操作的完整原生生命周期仍待接入。
 
@@ -588,8 +591,10 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 ### 原生共享只读状态（多窗口开发分支）
 
-`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。六个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
+`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。八个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
 
 `native_observation_refresh {epoch, source, afterPending}` 通过每 source 的串行锁查询；普通同时刷新可共用同一结果，`afterPending:true` 强制在此前工作完成后重新发起，用于控制器操作后的实态核验。刷新响应额外携带 `handler_elapsed_ms`，前端从 IPC 往返耗时中扣除原生等待时间，剩余传输时间计入 age；Controller 的服务器等待也只扣除一次。`native_observation_interval {seconds}` 仅主 WebView 可调用，Topics 间隔为 5–300 秒。原有 Bridge `topics` 请求在桌面原生层复用该源，显式 `refresh:true` 触发共享刷新；浏览器回退仍直接查询 Bridge。
+
+Motion/Pick 分别每 1 秒 / 500 ms 调用无续租的 observe，生成快照后通过有界最新通知 `native_position_info_changed` / `native_visual_pick_changed` 提醒页面读取。回复保留查询及缓存帧龄，不能把读取旧缓存的时间当新反馈时间；旧空闲快照也不能解除未知任务占用。Motion 日志在 Rust 保存至多 5000 项 / 2 MiB，各窗口使用独立 session/cursor 分页读取（每页最多 256 项）；共享状态快照不复制整份日志。上游截断、缓存淘汰会向落后窗口报告 truncated；断线清空日志，旧响应不能重新填充。
 
 原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。

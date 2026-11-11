@@ -1,9 +1,13 @@
 import {act,fireEvent,render,screen,waitFor} from '@testing-library/react';
-import {expect,it,vi} from 'vitest';
+import {afterEach,expect,it,vi} from 'vitest';
 import {VisualPickPanel} from './VisualPickPanel';
 import {parseVisualPickPreview,parseVisualPickState} from './visualPickLogic';
 import type {BridgeClient} from './bridge';
 import type {PositionMotionControls} from './positionMotionLogic';
+import type {BridgeEnvelope} from './types';
+const native=vi.hoisted(()=>({enabled:false}));
+vi.mock('./nativeWorkspaceLogic',()=>({nativeDesktop:()=>native.enabled}));
+afterEach(()=>{native.enabled=false;vi.useRealTimers();vi.restoreAllMocks();});
 const box={id:1,center:[.2,0,.05] as [number,number,number],size:[.05,.05,.05] as [number,number,number],point_count:40};
 const pose={position:[.2,0,.07],orientation:[0,0,0,1]};
 const preview={op:'visual_pick_preview',subscription_id:'a',object_id:1,frame_seq:3,calibrated:false,execution_ready:false,grasp:pose,pregrasp:pose,opening_m:.03,message:'尚未标定，仅预览'};
@@ -140,4 +144,38 @@ it('serializes a late previous preview before releasing and binding a newer sele
  await screen.findByText(/660e8400.*RGBD/);
  expect(bridge.request).toHaveBeenCalledWith({op:'visual_target_release',subscription_id:'a',target_id:tracked.target_id},2500);
  expect(p.onPreview).not.toHaveBeenCalledWith(expect.objectContaining({object_id:1}));view.unmount();
+});
+
+it('native status reads are notification driven and cached idle cannot overwrite an owned task',async()=>{
+ native.enabled=true;vi.useFakeTimers();
+ let now=1000;vi.spyOn(performance,'now').mockImplementation(()=>now);
+ const listeners=new Set<(m:BridgeEnvelope)=>void>();
+ let status:BridgeEnvelope={op:'visual_pick_state',command_id:'',pick_phase:'idle',busy:false,message:'',desktop_received_at_ms:900};
+ const request=vi.fn(async(m:BridgeEnvelope):Promise<BridgeEnvelope>=>{
+  if(m.op==='visual_pick_preview')return {...preview,calibrated:true,execution_ready:true} as BridgeEnvelope;
+  if(m.op==='visual_pick_start')return {op:'visual_pick_state',command_id:m.command_id,pick_phase:'approaching',busy:true,message:'接近中',desktop_received_at_ms:now};
+  return status;
+ });
+ const bridge={request,send:vi.fn(),onMessage:(listener:(m:BridgeEnvelope)=>void)=>{listeners.add(listener);return()=>listeners.delete(listener);}} as unknown as BridgeClient;
+ const motion={armed:true,setArmed:vi.fn(),reason:'',tcpPoseReason:'',gripper:{available:true,fresh:true}} as unknown as PositionMotionControls;
+ const onBusy=vi.fn();
+ const view=render(<VisualPickPanel bridge={bridge} token='a' selected={box} active motion={motion} onPreview={vi.fn()} onBusy={onBusy} onClear={vi.fn()}/>);
+ await act(async()=>{});
+ await act(async()=>{await vi.advanceTimersByTimeAsync(2000);});
+ expect(request.mock.calls.filter(([m])=>m.op==='visual_pick_status')).toHaveLength(1);
+ await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'接近、抓取并抬升'}));});
+ const command=request.mock.calls.find(([m])=>m.op==='visual_pick_start')![0].command_id;
+ expect(onBusy).toHaveBeenLastCalledWith(true);
+ await act(async()=>{for(const listener of listeners)listener({op:'native_visual_pick_changed'});});
+ expect(request.mock.calls.filter(([m])=>m.op==='visual_pick_status')).toHaveLength(2);
+ expect(onBusy).toHaveBeenLastCalledWith(true);
+ expect(screen.getByRole('button',{name:'接近、抓取并抬升'})).toBeDisabled();
+ now=1100;
+ await act(async()=>{for(const listener of listeners)listener({op:'visual_pick_state',command_id:command,pick_phase:'canceled',busy:false,message:'已停止',desktop_received_at_ms:now});});
+ expect(onBusy).toHaveBeenLastCalledWith(false);
+ status={op:'visual_pick_state',command_id:command,pick_phase:'approaching',busy:true,message:'旧缓存',desktop_received_at_ms:1050};
+ await act(async()=>{for(const listener of listeners)listener({op:'native_visual_pick_changed'});});
+ expect(onBusy).toHaveBeenLastCalledWith(false);
+ expect(screen.getByText(/已停止/)).toBeVisible();
+ view.unmount();
 });

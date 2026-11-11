@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。六项公共查询、Position/Pick 的原生任务归属已接入 Rust；其他控制任务、运动日志轮询、共享编辑状态及布局等仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。八项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复已接入 Rust；其他控制任务、共享编辑状态及布局等仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -23,13 +23,13 @@
 ## 待接入和验收
 
 1. 原生会话与前端适配器已接通并有跨窗口模拟测试。后续必须补全窗口异常退出时的任务所有权/安全停止，Monitor 采集历史；原生共享资源缓存已接入；单纯最新帧合并不能替代 Monitor 的独立采样历史。
-2. Agent、USB、arm mode、Controller、Topics、clock 六项公共状态/轮询已从页面定时器移到原生会话。运动状态/日志及 rosbag 状态、任务生命周期和共享编辑数据仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
+2. Agent、USB、arm mode、Controller、Topics、clock、Motion、Pick 八项公共状态/轮询已移到原生会话。rosbag 状态、其他任务生命周期和共享编辑数据仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
 3. 页面路由、拆出、收回、关闭拦截已接入。采用同一个原生 WebView reparent，迁移时不复制/重建 React、样本或 GPU 场景；原生调用者鉴权也改为稳定 WebView 身份。布局持久化、拔屏恢复、主窗口关闭、完整迁移失败回滚仍待补齐。
 4. 窗口菜单与全部九页面接入；执行/采样中禁止迁移；全局任务状态一致；主窗口关闭不终止其他窗口会话。
 5. 图像/点云和 Monitor 展示按窗口兴趣驱动；共享资源缓存已接入；刷新限流、源数据新鲜度门禁继续验收。
 6. 全量单元测试、构建、原生多窗口视觉验收；三窗口及九窗口、50 次拆收、30 分钟内存稳定性、断线/慢消费者/崩溃/外接屏验证。确认 CI 后按仓库流程合并、安装。
 
-尚未验证多窗口运行时性能，也未修改或部署 Jetson Bridge。隔离传输测试只监听本机随机回环端口，不发布真实机器人命令。
+尚未验证多窗口运行时性能；Bridge 新协议仅在独立工作区验证，未部署到正式运行进程。隔离传输测试只监听本机随机回环端口，不发布真实机器人命令。
 
 ## 页面窗口接入记录
 
@@ -72,6 +72,15 @@
 - `native_task_snapshot` / `native-tasks-changed` 提供所有窗口的状态提示，不依赖主 WebView 转发。查询快照不产生远端心跳。
 - 隔离测试使用本机随机回环 WebSocket：两窗口实际验证单任务占用、拒绝代续租、所属页面退出触发取消，以及取消 ACK 后仍保持占用直到匹配终态。另覆盖未发送失败、未知受理、迁移竞争、旧响应、Pick 子任务和队列撤销。
 
-必须继续完成：Position 的跨连接按 command_id 查询终态（当前 Bridge info 会隐藏旧 owner 的 ID，重连时继续保留不确定占用）；共享 info/日志查询需拆开只读观察与续租。Motor/直接 JTC 轨迹/重力辨识、Controller/arm mode/Joint4/采集/手眼本地操作的完整原生生命周期尚未接入，不能据此声称全局运动互斥及崩溃安全完成。九页面布局恢复、多屏与性能验收仍按上文完整范围推进。
+下一阶段继续完成其他任务的原生生命周期；Position 的跨连接按 command_id 查询终态及只读查询/续租分离已在下节接入。Motor/直接 JTC 轨迹/重力辨识、Controller/arm mode/Joint4/采集/手眼本地操作的完整原生生命周期尚未接入，不能据此声称全局运动互斥及崩溃安全完成。九页面布局恢复、多屏与性能验收仍按上文完整范围推进。
 
 本阶段验证：`npm test` 全部通过（840 前端、102 Rust 与其余脚本；`/tmp/260-native-task-verified-tests.log`），`npm run build` 通过（`/tmp/260-native-task-build.log`）；独立标识的 Debug Tauri bundle 构建及 `codesign --verify --deep --strict` 通过（`/tmp/260-native-task-bundle.log`）。尚未在原生窗口实际执行任务或验证新增状态提示的多窗口布局；正式应用与 Jetson 都未替换。
+
+
+## 共享运动观察、日志及任务恢复
+
+- `position_motion_observe` / `visual_pick_observe` 不刷新租约，由 Rust 分别每 1 秒 / 500 ms 统一调用。页面收到原生失效通知后读取缓存，不再各自远程轮询；离开主窗口不影响公共查询。
+- Position 用专用 command_id 心跳，Pick 用既有 status 续租；只为已受理、实际所属窗口仍存活的任务发送。慢心跳不阻塞取消，旧任务响应不能影响后继任务。断线状态通知移到 Core 锁外，避免重入死锁。
+- Bridge 保存至多 256 个 / 2 MiB 的完整 Position 终态（每项 256 KiB）；跨连接恢复必须匹配编号和状态，重启/淘汰导致未知时保留占用。恢复事件保留动作组元数据，不能以仅 busy=false 释放任务。
+- Rust 运动日志至多 5000 项 / 2 MiB，按每窗口独立游标分页；截断、跨会话、非法序号及迟到响应均覆盖测试。缓存回复计入源年龄；抓取 UI 拒绝旧缓存重置任务，夹爪旧反馈不被重新续鲜。
+- 验证环境：Mac loopback 假 Bridge；Jetson 独立 `~/easy_debug_bridge_260_motion_observe`，脚本同步、单线程 colcon 构建。ROS 测试使用测试文件明确限定的隔离域和模拟机器人，未向正式机械臂发送动作。构建保留 `-UNDEBUG`，确保 Release 测试中的 assert 生效。正式应用未更新。

@@ -489,10 +489,10 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
     if (!allowed.count(field.first) || !seen.insert(field.first).second || !field.second.empty())
       throw std::runtime_error("抓取请求字段未知、重复或不是标量");
   const auto op = r.get<std::string>("op"), rid = r.get<std::string>("request_id", "");
-  if (op == "visual_pick_status") {
+  if (op == "visual_pick_status" || op == "visual_pick_observe") {
     {
       std::lock_guard<std::mutex> lock(impl_->mutex);
-      if (owner == impl_->owner) impl_->heartbeat = Clock::now();
+      if (op == "visual_pick_status" && owner == impl_->owner) impl_->heartbeat = Clock::now();
     }
     send(impl_->state(rid));
     return;
