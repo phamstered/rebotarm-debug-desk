@@ -265,3 +265,27 @@ SSH 回复丢失可以通过只读记录查询恢复；CLI 本身失败/超时�
 解锁后退出旧包，重新构建并启动最新隔离应用，离线生成 1200×900 标定板并切换 100% 缩放。实际窗口验证了 detach:bounds + rollback:reparent 双重失败、recover:bounds 恢复中途失败、再次恢复成功，以及 dock:bounds 失败后回到原独立窗口、重试收回成功；每步读取原生无障碍树，图片与 12×9、15 / 11.25 mm 输入及缩放始终保留。截图确认大图工具栏和关闭按钮完整可见，Esc 返回后缩放保留。三个单次 fixture 均消费，最终停在主窗口嵌入的手眼页面。此离线窗口验收不等于实机 Controller 停止验收。
 
 未连接生产机械臂，未覆盖 /Applications/Robot Console.app，未部署或重启生产 Bridge。完整目标仍在进行中：直接 JTC、arm mode / Joint4 / 数据采集等生命周期、应用进程重启恢复、离线配置和跨页导航、多显示器与持续运行验证，以及最终安装部署、PR/CI/合并尚未完成。
+
+
+## 直接 JTC 终态验证器（接线前阶段）
+
+检查真实调用链确认：当前 UrdfViewer 已通过 MoveIt 执行，旧 onSendTrajectory 参数仅以 _onSendTrajectory 接收，App 和 Bridge 仍保留 trajectory_command。该 Topic 接口只有发布 ACK，没有 FollowJointTrajectory 的受理、取消或终态。因此不能把 ACK、名义时长经过、单个 mode=DISABLE、或普通 Controller 列表当作任务完成。
+
+现场只读 dpkg-query 得到 ros-humble-joint-trajectory-controller 2.53.1。核对 [同版本官方源码](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/joint_trajectory_controller.cpp)：validate_trajectory_msg 拒绝空 points；状态中的 time_from_start 会随内部成功保持轨迹重置，不能仅用该字段判断结束。没有向实机发送空轨迹或其他控制命令。
+
+新增 trajectory_task_core.hpp 是后续 ROS 适配器使用的纯状态机，尚未接入生产收发路径或声明 hello 能力。它在发送前预留任务；只允许尚未发送的失败直接释放；租约、反馈中断和到达超时请求关闭输出。正常完成必须在源时间和单调时间均越过末点之后，连续至少 200 ms 收到新的 JTC 末端参考、对应实际值、独立 JointState 和硬件状态。关节按名称匹配，测量 JointState 可包含额外关节，位置/速度阈值由后续适配器从受信任配置提供。发布 ACK 不输入终态判定。有限任务的输入末点必须为零速度，参考速度也必须接近零；不能将较小的持续运动参考误认作保持。
+
+取消路径保留占用，需要新 DISABLE 序列、实际低速反馈以及末点静止参考；仅输出关闭不能证明控制器已经消耗原轨迹，禁止因此解锁后重新使能。源时间重复/倒退、过期、超前、错误关节/数组、非有限值、错误模式及序列均不能证明终态。时钟代次变更保持 uncertain，不通过恢复旧代次自动解锁。保留最近 256 项结构化终态，未知编号不视为结束。
+
+该阶段仅完成确认逻辑及回归接入，未完成直接 JTC 的 ROS 订阅、发布串行化、控制器 active/限位预检、取消下发、断线租约和 Rust/前端协议接线。不能将本节的纯状态机测试称为直接轨迹已实现原生生命周期；这些仍是完整目标的待完成项。
+
+
+## 手眼到 Motion 的明确导航
+
+修复手眼页面只修改自身 Motion Tab、无法切换实际 Motion WebView 的问题。workspace_open_motion 新增 robot 意图，仅主窗口或实际 page-handeye 可发起该目标；目标 Motion 按原版本/连接键保护应用一次。手眼页面、图片和样本不重建。离线手眼入口也改用公共 NativeOfflineWorkspace，避免原固定 handeye 容器在导航后仍显示错误页面区域。测试覆盖调用者白名单、延迟/已打开目标的新旧版本、只改变 Motion、主窗口跟随选中页面和不自动连接。
+
+以上两项本轮最终验证：`npm test` 全部通过（895 前端 / 167 Rust / 3 运行库测试及全部其余脚本），日志 `/tmp/260-trajectory-nav-final-tests.log`。`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 及严格 codesign 核验通过，日志 `/tmp/260-trajectory-nav-{build,docs,bundle}.log`。Jetson 独立工作区通过完整单线程 `colcon build`、`colcon test` 和 `colcon test-result --verbose`：25 tests、0 errors、0 failures、0 skipped，日志 `/tmp/260-trajectory-core-verified-ros.log`，对应 Bridge build ID `a6e7b37e492e`。初次 GCC 构建发现新头文件依赖隐式 algorithm 引入，已补齐显式标准库头文件；以上结果来自修正及最终测试加强之后的完整重跑。
+
+退出旧隔离应用后启动最新包，实际验证离线手眼首次导航创建 Motion 并选中 Robot View；Motion 切到姿态库并拆出后，从手眼再次导航会聚焦原独立窗口并切回 Robot View。返回手眼时 1200×900 标定板、100% 缩放及 12×9、15 / 11.25 mm 输入保留。最终原生窗口状态确认未连接、Robot View 已选中、执行按钮禁用、运动确认未勾选。此次没有重新进行迁移故障注入，前一节的故障验收仍对应其注明的构建。
+
+没有连接生产机械臂，没有覆盖 `/Applications/Robot Console.app`，没有重启生产 Bridge。新增直接 JTC 验证器仍未接入运行路径；其测试不代表直接 JTC 运行生命周期已经完成。其余原生任务归属、进程重启恢复、离线配置交接、多屏持续运行验收及最终发布与 PR 合并仍在完整目标范围内。

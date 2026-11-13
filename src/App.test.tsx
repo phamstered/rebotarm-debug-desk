@@ -256,6 +256,55 @@ describe("App workflow", () => {
     }
   });
 
+  it("keeps offline handeye in the common host so a native Motion selection updates main", async () => {
+    const user=userEvent.setup(), base=doubles.invoke.getMockImplementation()!, baseListen=doubles.listen.getMockImplementation()!;
+    const resize=globalThis.ResizeObserver;
+    let workspaceEvent: ((message:{payload:unknown})=>void) | undefined;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    globalThis.ResizeObserver=class {observe(){} unobserve(){} disconnect(){}};
+    doubles.listen.mockImplementation((name,handler) => {
+      if(name==="workspace-state") workspaceEvent=handler;
+      return baseListen(name,handler);
+    });
+    doubles.invoke.mockImplementation((command,args) => {
+      if(command==="workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if(command==="native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command==="native_task_snapshot") return Promise.resolve(null);
+      return base(command,args);
+    });
+    const view=render(<App />);
+    try {
+      await user.click(screen.getByRole("button",{name:"手眼标定 / 离线样本"}));
+      expect(await screen.findByLabelText("手眼标定 页面区域")).toBeVisible();
+      expect(screen.getByRole("combobox",{name:"已打开页面"})).toHaveValue("handeye");
+      await waitFor(()=>expect(workspaceEvent).toBeDefined());
+      act(()=>workspaceEvent!({payload:{selected:"motion",pages:{handeye:{ready:true,visible:false},motion:{ready:true,visible:true}},motion_navigation:{revision:1,tab:"robot",profile_key:"jetson||22"}}}));
+      expect(await screen.findByLabelText("Motion 页面区域")).toBeVisible();
+      expect(screen.getByRole("combobox",{name:"已打开页面"})).toHaveValue("motion");
+      expect(screen.queryByLabelText("手眼标定 页面区域")).not.toBeInTheDocument();
+      expect(doubles.connect).not.toHaveBeenCalled();
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);doubles.listen.mockImplementation(baseListen);}
+  });
+
+  it("requests Robot View in the existing native Motion page from handeye", async () => {
+    const user=userEvent.setup(), base=doubles.invoke.getMockImplementation()!;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    doubles.invoke.mockImplementation((command,args) => {
+      if(command==="workspace_snapshot") return Promise.resolve({selected:"handeye",pages:{handeye:{ready:true,visible:true,detached:true,busy_reason:""}}});
+      if(command==="native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command==="native_task_snapshot") return Promise.resolve(null);
+      if(command==="native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
+      return base(command,args);
+    });
+    const view=render(<App hostedPage="handeye" />);
+    try {
+      await user.click(await screen.findByRole("button",{name:"前往 Motion 调整姿态"}));
+      await waitFor(()=>expect(doubles.invoke).toHaveBeenCalledWith("workspace_open_motion",{tab:"robot",profileKey:"jetson||22"}));
+      expect(screen.getByRole("region",{name:"手眼标定内容"})).toBeVisible();
+      expect(doubles.connect).not.toHaveBeenCalled();
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;doubles.invoke.mockImplementation(base);}
+  });
+
   it("opens offline pose and group management in the single native Motion host", async () => {
     const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
     const resize = globalThis.ResizeObserver;

@@ -97,3 +97,16 @@ it("applies retained Motion navigation once and never changes a different robot 
   expect(select).toHaveBeenCalledOnce(); expect(error).toHaveBeenCalledWith(expect.stringContaining("另一连接"));
   hook.rerender({intent:{...first,revision:1}}); expect(select).toHaveBeenCalledOnce();
 });
+
+it("navigates an existing Motion page to Robot View without replaying older editor intents", () => {
+  const select=vi.fn(), error=vi.fn();
+  const first: import("./nativeWorkspaceLogic").MotionNavigation = {revision:1,tab:"groups",profile_key:"robot"};
+  const hook=renderHook(({page,intent}) => useMotionNavigation(page,intent,"robot",select,error),
+    {initialProps:{page:"motion" as "motion"|"handeye",intent:first}});
+  expect(select).toHaveBeenLastCalledWith("groups");
+  hook.rerender({page:"motion",intent:{...first,revision:2,tab:"robot"}});
+  expect(select).toHaveBeenLastCalledWith("robot");expect(select).toHaveBeenCalledTimes(2);
+  hook.rerender({page:"motion",intent:first});expect(select).toHaveBeenCalledTimes(2);
+  hook.rerender({page:"handeye",intent:{...first,revision:3,tab:"robot"}});
+  expect(select).toHaveBeenCalledTimes(2);expect(error).not.toHaveBeenCalled();
+});

@@ -16,7 +16,7 @@ export const PAGE_TITLES: Record<AppPage, string> = {
   handeye: "手眼标定", motor: "Motor", calibration: "Joint4 标定", gravity: "重力辨识",
 };
 export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string; recovery_required?: boolean };
-export type MotionNavigation = {revision:number;tab:"positions"|"groups";profile_key:string};
+export type MotionNavigation = {revision:number;tab:"robot"|"positions"|"groups";profile_key:string};
 export type NativeWorkspaceSnapshot = { motion_navigation?: MotionNavigation | null; selected: AppPage; pages: Partial<Record<AppPage, NativePageState>> };
 /** Reparented WKWebViews can report a stale document.hidden; native window state owns visibility. */
 export function pageWindowVisible(documentVisible: boolean, page: AppPage | undefined, snapshot: NativeWorkspaceSnapshot) {
@@ -117,7 +117,7 @@ export function useNativePageSession(options: {
 
 /** Navigation applies once after lazy mount; it never replaces a page's editor. */
 export function useMotionNavigation(page: AppPage | undefined, intent: MotionNavigation | null | undefined,
-  profileKey: string, select: (tab: "positions" | "groups") => void, error: (message: string) => void) {
+  profileKey: string, select: (tab: "robot" | "positions" | "groups") => void, error: (message: string) => void) {
   const applied = useRef(0);
   useEffect(() => {
     if (page !== "motion" || !intent || intent.revision <= applied.current) return;

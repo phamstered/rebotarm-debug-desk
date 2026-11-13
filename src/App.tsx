@@ -1708,6 +1708,21 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     void connect();
   }
 
+  async function openOfflineHandeye() {
+    if (!nativeMain) { setManageHandeye(true); return; }
+    try {
+      await invoke("workspace_select", {page: "handeye"});
+      setLocalAppPage("handeye"); setOfflineWorkspace(true);
+    } catch (reason) { setError(String(reason)); }
+  }
+
+  async function openRobotMotion() {
+    if (!nativeDesktop()) { setMotionTab("robot"); setAppPage("motion"); return; }
+    try {
+      await invoke("workspace_open_motion", {tab: "robot", profileKey: positionProfileKey});
+    } catch (reason) { setError(String(reason)); }
+  }
+
   async function openOfflineMotion(tab: "positions" | "groups") {
     if (!nativeMain) { if (tab === "positions") setManagePositions(true); else setManageMotionGroups(true); return; }
     try {
@@ -1728,13 +1743,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     return <NativeOfflineWorkspace page={appPage} snapshot={workspace.snapshot} onSelect={setAppPage}
       onConnection={() => setOfflineWorkspace(false)} onError={setError} error={workspace.error || error}
       onDismissError={() => { workspace.dismissError(); setError(""); }} />;
-  }
-  if (nativeMain && stage !== "connected" && manageHandeye) {
-    return <main className="native-offline-workspace"><header><button onClick={() => setManageHandeye(false)}>返回连接</button></header>
-      <NativeLocalTaskStatus />
-      <NativeWorkspaceHost page="handeye" snapshot={workspace.snapshot} covered={false} onError={setError} />
-      {(workspace.error || error) && <p role="alert">{workspace.error || error}</p>}
-    </main>;
   }
   if (!hostedPage && stage !== "connected" && manageHandeye) {
     return <main className="handeye-offline"><button onClick={() => setManageHandeye(false)}>返回连接</button><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
@@ -1810,7 +1818,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
                 setOfflineWorkspace(true);
               }}>返回已打开页面</button>}
               <button type="button" className="ghost" onClick={() => void openOfflineMotion("positions")}>管理姿态库</button>
-              <button type="button" className="ghost" onClick={() => setManageHandeye(true)}>手眼标定 / 离线样本</button>
+              <button type="button" className="ghost" onClick={() => void openOfflineHandeye()}>手眼标定 / 离线样本</button>
               <button type="button" className="ghost" onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
             </div>
           </div>
@@ -1945,7 +1953,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       <div className="app-page-content">
       {nativeMain ? <NativeWorkspaceHost page={appPage} snapshot={workspace.snapshot}
         covered={connectionDialogOpen || settingsDialogOpen || versionDialogOpen || Boolean(poseToSave)} onError={setError} /> : <>
-      {(!hostedPage || hostedPage === "handeye") && <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onBusyChange={setHandeyeBusy} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>}
+      {(!hostedPage || hostedPage === "handeye") && <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onBusyChange={setHandeyeBusy} onMotion={() => void openRobotMotion()} /></div>}
       {appPage === "handeye" ? null : appPage === "status" ? (
         <StatusPage
           clockSync={clockSync}

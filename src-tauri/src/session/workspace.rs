@@ -51,7 +51,7 @@ pub struct Snapshot {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MotionTab { Positions, Groups }
+pub enum MotionTab { Robot, Positions, Groups }
 #[derive(Clone, Debug, Serialize)]
 pub struct MotionNavigation { pub revision: u64, pub tab: MotionTab, pub profile_key: String }
 impl Snapshot {
@@ -110,6 +110,14 @@ fn authorize(view: &Webview, page: Option<Page>) -> Result<(), String> {
         Ok(())
     } else {
         Err("当前页面无权操作此窗口".into())
+    }
+}
+
+fn authorize_motion_navigation(label: &str, tab: MotionTab) -> Result<(), String> {
+    if label == "main" || label == Page::Handeye.label() && matches!(tab, MotionTab::Robot) {
+        Ok(())
+    } else {
+        Err("当前页面无权请求此 Motion 导航".into())
     }
 }
 
@@ -931,7 +939,7 @@ pub async fn workspace_select(
 pub async fn workspace_open_motion(
     app: AppHandle, view: Webview, workspace: State<'_, Workspace>, tab: MotionTab, profile_key: String,
 ) -> Result<(), String> {
-    authorize(&view, None)?;
+    authorize_motion_navigation(view.label(), tab)?;
     workspace.state.lock().unwrap().navigate_motion(tab, profile_key)?;
     // Retain intent in the snapshot: a lazily created page may not be listening yet.
     workspace.emit(&app);
@@ -1164,6 +1172,25 @@ mod tests {
 #[cfg(test)]
 mod navigation_tests {
     use super::*;
+    #[test]
+    fn handeye_may_only_navigate_to_robot_view_using_its_actual_webview_label() {
+        for tab in [MotionTab::Robot,MotionTab::Positions,MotionTab::Groups] {
+            assert!(authorize_motion_navigation("main",tab).is_ok());
+        }
+        assert!(authorize_motion_navigation("page-handeye",MotionTab::Robot).is_ok());
+        for tab in [MotionTab::Positions,MotionTab::Groups] {
+            assert!(authorize_motion_navigation("page-handeye",tab).is_err());
+        }
+        for label in ["page-motor","page-motion","detached-page-handeye","unknown"] {
+            assert!(authorize_motion_navigation(label,MotionTab::Robot).is_err());
+        }
+        let workspace=Workspace::default();let mut state=workspace.state.lock().unwrap();
+        state.navigate_motion(MotionTab::Groups,"robot".into()).unwrap();
+        state.navigate_motion(MotionTab::Robot,"robot".into()).unwrap();
+        assert_eq!(state.motion_navigation.as_ref().unwrap().revision,2);
+        assert_eq!(serde_json::to_value(&state.motion_navigation).unwrap()["tab"],"robot");
+    }
+
     #[test]
     fn motion_intent_is_retained_versioned_and_rejects_bad_profiles() {
         let workspace = Workspace::default();

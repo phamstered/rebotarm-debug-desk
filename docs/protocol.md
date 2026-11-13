@@ -646,3 +646,6 @@ Controller 的 SSH 记录协议（不经过 Bridge）：请求为 `{op: submit|q
 
 
 Controller 任务停止协调复用现有 joint_command mode=3 和 HardwareStatus 协议，不新增 Bridge 字段。显式 DISABLE 立即可下发；受支撑确认保护的 start_arm_mode(disable-stop) 仅向匹配原机器人身份的 Controller 任务登记停止意图。任务记录远端完成时已分配的原生停止动作编号，只有严格晚于该编号的 DISABLE ACK 可用于最终确认，防止完成前请求的迟到 ACK 解锁。确认要求原机器人及当前连接代次、mode=3、last_command_sequence 覆盖新 ACK、源时间推进、原生接收时刻不早于此次停止请求且接收龄小于 1 秒。发布失败、旧序列、旧源时间和另一机器人反馈不能完成任务；重连后重新发送并确认。这里证明固件输出关闭，不是机械静止，也不保证故障情况下的固定停止时延。普通 stop 的 RETURN 流程不登记立即 DISABLE 意图。
+
+
+workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebView 可请求三种导航，实际 page-handeye WebView 只可请求 robot；其他调用者拒绝。带 revision 和 profile_key 的 motion_navigation 保存在 Rust 快照，延迟创建的 Motion 页面也会应用；旧版本、他页面及不匹配连接不改变目标 Tab。导航不包含控制指令或运动授权。
