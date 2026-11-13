@@ -596,7 +596,7 @@ Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份�
 
 ### 原生共享只读状态（多窗口开发分支）
 
-`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。八个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
+`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。十个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`、`bag_record`、`bag_play`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
 
 `native_observation_refresh {epoch, source, afterPending}` 通过每 source 的串行锁查询；普通同时刷新可共用同一结果，`afterPending:true` 强制在此前工作完成后重新发起，用于控制器操作后的实态核验。刷新响应额外携带 `handler_elapsed_ms`，前端从 IPC 往返耗时中扣除原生等待时间，剩余传输时间计入 age；Controller 的服务器等待也只扣除一次。`native_observation_interval {seconds}` 仅主 WebView 可调用，Topics 间隔为 5–300 秒。原有 Bridge `topics` 请求在桌面原生层复用该源，显式 `refresh:true` 触发共享刷新；浏览器回退仍直接查询 Bridge。
 
@@ -649,3 +649,6 @@ Controller 任务停止协调复用现有 joint_command mode=3 和 HardwareStatu
 
 
 workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebView 可请求三种导航，实际 page-handeye WebView 只可请求 robot；其他调用者拒绝。带 revision 和 profile_key 的 motion_navigation 保存在 Rust 快照，延迟创建的 Motion 页面也会应用；旧版本、他页面及不匹配连接不改变目标 Tab。导航不包含控制指令或运动授权。
+
+
+`bag_record` / `bag_play` 的 value 分别沿用 `RosbagStatus` / `RosbagPlayStatus`（camelCase 字段），每次查询结束后间隔 5 秒，超时 10 秒，新鲜度上限 8 秒且包含查询耗时。两源独立串行，共用现有 SSH Profile；只读 status 不创建目录或改 PID 文件。断线或超时丢弃探测 future 时终止其本机 SSH 子进程，启动/停止操作不套用这个行为。桌面录制/回放操作返回后使用 `afterPending:true` 复查并广播快照；命令返回值不作为其他窗口的当前状态。未知状态保留为 null，不等同于 idle。此处仅是状态查询协议，不提供录制/回放任务的全局互斥或退出恢复。

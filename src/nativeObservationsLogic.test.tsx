@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observationEnvelope, observationValue, useNativeObservations, type ObservationSnapshot, type NativeObservation } from "./nativeObservationsLogic";
+import { sharedBagStatus } from "./nativeRosbagLogic";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listeners: new Set<() => void>() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (_: string, listener: () => void) => { mocks.listeners.add(listener); return () => mocks.listeners.delete(listener); }) }));
@@ -24,6 +25,31 @@ it("nine windows read snapshots without creating per-window remote polling loops
   expect(windows.every(window => window.result.current.entries.agent?.sequence === 2)).toBe(true);
   windows.forEach(window => window.unmount());
   expect(mocks.listeners.size).toBe(0);
+});
+
+it("shares bag changes across windows and treats failures, expiry and disconnect as unknown", async () => {
+  const bagSnapshot = (revision: number, recording: boolean, playing: boolean): ObservationSnapshot => ({epoch:1,revision,connected:true,entries:{
+    bag_record:{sequence:revision,value:{recording,pid:recording?42:0,outputPath:"bags/a",message:"record"},error:null,age_ms:0,ttl_ms:8000},
+    bag_play:{sequence:revision,value:{playing,pid:playing?43:0,bagPath:"bags/b",message:"play"},error:null,age_ms:0,ttl_ms:8000},
+  }});
+  mocks.invoke.mockResolvedValue(bagSnapshot(1,false,false));
+  const windows=Array.from({length:3},()=>renderHook(()=>sharedBagStatus(useNativeObservations(true,"robot"))));
+  await waitFor(()=>expect(windows.every(w=>w.result.current.record.status?.recording===false)).toBe(true));
+  mocks.invoke.mockResolvedValue(bagSnapshot(2,true,true));
+  await act(async()=>changed());
+  await waitFor(()=>expect(windows.every(w=>w.result.current.record.status?.recording && w.result.current.play.status?.playing)).toBe(true));
+  const failed=bagSnapshot(3,false,false);
+  failed.entries.bag_record!.error="SSH gone";
+  failed.entries.bag_play!.age_ms=8001;
+  mocks.invoke.mockResolvedValue(failed);await act(async()=>changed());
+  await waitFor(()=>expect(windows.every(w=>w.result.current.record.status===null && w.result.current.play.status===null)).toBe(true));
+  expect(windows[0].result.current.record.error).toBe("SSH gone");
+  expect(windows[0].result.current.play.error).toContain("过期");
+  mocks.invoke.mockResolvedValue(bagSnapshot(4,false,false));await act(async()=>changed());
+  await waitFor(()=>expect(windows[0].result.current.record.status?.recording).toBe(false));
+  mocks.invoke.mockResolvedValue({epoch:2,revision:5,connected:false,entries:{}});await act(async()=>changed());
+  await waitFor(()=>expect(windows[0].result.current.play.status).toBe(null));
+  expect(mocks.invoke.mock.calls.every(([command])=>command==="native_observation_snapshot")).toBe(true);
 });
 
 it("coalesces native invalidations and cannot replace newer state with a delayed initial read", async () => {

@@ -365,7 +365,7 @@ fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<St
         "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
         profile.ros_setup_script, profile.ros_setup_script,
     );
-    let paths = "mkdir -p \"$HOME/.cache/robot-console\" \"$HOME/robot-console-bags\"; \
+    let paths = "\
                  pid_file=\"$HOME/.cache/robot-console/rosbag.pid\"; \
                  path_file=\"$HOME/.cache/robot-console/rosbag.path\"; ";
     let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true); \
@@ -400,7 +400,8 @@ fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<St
         ),
         _ => return Err("不支持的 rosbag 操作".into()),
     };
-    Ok(format!("bash -lc '{body}'"))
+    let prepare = if action == "status" { "" } else { "mkdir -p \"$HOME/.cache/robot-console\" \"$HOME/robot-console-bags\"; " };
+    Ok(format!("bash -lc '{prepare}{body}'"))
 }
 
 fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
@@ -456,7 +457,7 @@ fn rosbag_play_remote_command(
         "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
         profile.ros_setup_script, profile.ros_setup_script,
     );
-    let paths = "mkdir -p \"$HOME/.cache/robot-console\";                  pid_file=\"$HOME/.cache/robot-console/rosbag-play.pid\";                  path_file=\"$HOME/.cache/robot-console/rosbag-play.path\"; ";
+    let paths = "                 pid_file=\"$HOME/.cache/robot-console/rosbag-play.pid\";                  path_file=\"$HOME/.cache/robot-console/rosbag-play.path\"; ";
     let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true);                  case \"$pid\" in *[!0-9]*|\"\") alive=0 ;;                  *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag play\"; then alive=1; else alive=0; fi ;; esac; ";
     let body = match action {
         "status" => format!(
@@ -472,7 +473,8 @@ fn rosbag_play_remote_command(
         ),
         _ => return Err("不支持的 rosbag 回放操作".into()),
     };
-    Ok(format!("bash -lc '{body}'"))
+    let prepare = if action == "status" { "" } else { "mkdir -p \"$HOME/.cache/robot-console\"; " };
+    Ok(format!("bash -lc '{prepare}{body}'"))
 }
 
 fn parse_rosbag_play_status(output: &str) -> Result<RosbagPlayStatus, String> {
@@ -1112,6 +1114,7 @@ async fn run_rosbag_action(
 ) -> Result<RosbagStatus, String> {
     let remote = rosbag_remote_command(&profile, action)?;
     let output = ssh_base(&profile)
+        .kill_on_drop(action == "status")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1156,6 +1159,7 @@ async fn run_rosbag_play_action(
 ) -> Result<RosbagPlayStatus, String> {
     let remote = rosbag_play_remote_command(&profile, action, bag_path)?;
     let output = ssh_base(&profile)
+        .kill_on_drop(action == "status")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1991,6 +1995,30 @@ mod tests {
             }
         );
         assert!(parse_rosbag_status("unexpected").is_err());
+    }
+
+    #[test]
+    fn bag_status_probes_do_not_create_directories_or_change_pid_records() {
+        let root=std::env::temp_dir().join(format!("bag-status-readonly-{}",std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for command in [rosbag_remote_command(&profile(""),"status").unwrap(),rosbag_play_remote_command(&profile(""),"status","").unwrap()] {
+            assert!(!command.contains("mkdir"));assert!(!command.contains("rm -f"));
+            assert!(!command.contains("kill -INT"));assert!(!command.contains("nohup"));
+            let body=command.strip_prefix("bash -lc '").unwrap().strip_suffix('\'').unwrap();
+            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).output().unwrap();
+            assert!(output.status.success());assert!(String::from_utf8_lossy(&output.stdout).starts_with("IDLE|0|"));
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(),0);
+            let cache=root.join(".cache/robot-console");std::fs::create_dir_all(&cache).unwrap();
+            let name=if command.contains("rosbag-play.pid") {"rosbag-play"} else {"rosbag"};
+            let pid=cache.join(format!("{name}.pid"));let path=cache.join(format!("{name}.path"));
+            std::fs::write(&pid,"invalid-pid\n").unwrap();std::fs::write(&path,"bags/retained\n").unwrap();
+            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).output().unwrap();
+            assert!(output.status.success());assert_eq!(String::from_utf8_lossy(&output.stdout),"IDLE|0|bags/retained\n");
+            assert_eq!(std::fs::read_to_string(&pid).unwrap(),"invalid-pid\n");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(),"bags/retained\n");
+            std::fs::remove_dir_all(root.join(".cache")).unwrap();
+        }
+        std::fs::remove_dir(&root).unwrap();
     }
 
     #[test]

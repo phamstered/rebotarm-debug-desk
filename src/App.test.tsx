@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultProfile } from "./types";
 import { EXPECTED_BRIDGE_BUILD_ID } from "./bridgeVersion";
 import type { MotionGroup } from "./motionGroupsLogic";
 
@@ -45,6 +46,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ save: doubles.save }));
 vi.mock("./bridge", () => ({
   BridgeClient: class {
     connect = doubles.connect;
+    attach = doubles.connect;
     listTopics = doubles.listTopics;
     getGraph = doubles.getGraph;
     getTopicInfo = doubles.getTopicInfo;
@@ -1153,6 +1155,37 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: /停止录制/ }));
     expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording", { profile: expect.any(Object) });
     expect(await screen.findByRole("button", { name: /开始录制/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("uses shared native recording truth and verifies again after a toolbar command", async () => {
+    const user=userEvent.setup(), base=doubles.invoke.getMockImplementation()!, originalListen=doubles.listen.getMockImplementation()!;
+    const resize=globalThis.ResizeObserver;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    globalThis.ResizeObserver=class {observe(){} unobserve(){} disconnect(){}};
+    let changed:(()=>void)|undefined, recording=false, failure=false, revision=1;
+    const snapshot=()=>({epoch:1,revision,connected:true,entries:{bag_record:{sequence:revision,value:{recording,pid:recording?42:0,outputPath:"bags/test",message:"observed"},error:failure?"SSH unavailable":null,age_ms:0,ttl_ms:8000}}});
+    doubles.listen.mockImplementation((name,handler)=>{if(name==="native-observations-changed")changed=()=>handler({payload:null});return originalListen(name,handler);});
+    doubles.invoke.mockImplementation((command,args)=>{
+      if(command==="workspace_snapshot")return Promise.resolve({selected:"motion",pages:{motion:{ready:true,visible:true,detached:true}}});
+      if(command==="native_bridge_context")return Promise.resolve({epoch:1,connected:true,profile:defaultProfile,error:null});
+      if(command==="native_task_snapshot")return Promise.resolve(null);
+      if(command==="native_observation_snapshot")return Promise.resolve(snapshot());
+      if(command==="start_rosbag_recording")return Promise.resolve({recording:false,pid:0,outputPath:"",message:"command returned"});
+      if(command==="native_observation_refresh") {recording=true;revision++;return Promise.resolve(snapshot());}
+      return base(command,args);
+    });
+    const view=render(<App hostedPage="motion" />);
+    try {
+      await user.click(await screen.findByRole("button",{name:"更多工具"}));
+      const start=await screen.findByRole("button",{name:/开始录制/});
+      await waitFor(()=>expect(start).toBeEnabled());await user.click(start);
+      expect(await screen.findByRole("button",{name:/停止录制/})).toBeEnabled();
+      expect(doubles.invoke).toHaveBeenCalledWith("native_observation_refresh",{source:"bag_record",epoch:1,afterPending:true});
+      expect(doubles.invoke).not.toHaveBeenCalledWith("get_rosbag_status",expect.anything());
+      expect(doubles.invoke).not.toHaveBeenCalledWith("get_rosbag_play_status",expect.anything());
+      failure=true;revision++;await act(async()=>changed!());
+      expect(await screen.findByRole("button",{name:/录制状态待确认/})).toBeDisabled();
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);doubles.listen.mockImplementation(originalListen);}
   });
 
   it("saves diagnostics, resets layout and persists connection and toolbar settings", async () => {

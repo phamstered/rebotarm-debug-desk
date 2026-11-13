@@ -3,6 +3,7 @@ import { ownsPagePreference, usePagePreference } from "./pagePreferences";
 import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
 import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
+import { sharedBagStatus } from "./nativeRosbagLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
@@ -477,7 +478,9 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const motionErrorsEnabled = monitorOwner && monitorWorkspace.dashboards.some(hasMotionErrorPanels);
   const motionErrorsEnabledRef = useRef(motionErrorsEnabled);
   motionErrorsEnabledRef.current = motionErrorsEnabled;
-  const [rosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
+  const [localRosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
+  const bagObservations = sharedBagStatus(sharedObservations);
+  const rosbagPlayStatus = nativeDesktop() ? bagObservations.play.status : localRosbagPlayStatus;
   const [bagBusy, setBagBusy] = useState(false);
   const [bagNotice, setBagNotice] = useState("");
   const [bagClockMs, setBagClockMs] = useState<number | null>(null);
@@ -485,6 +488,13 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [bagWallStartedAtMs, setBagWallStartedAtMs] = useState<number | null>(null);
   const bagPlayingRef = useRef(false);
   const bagClockMsRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!nativeDesktop()) return;
+    const playing = Boolean(rosbagPlayStatus?.playing);
+    bagPlayingRef.current = playing;
+    bagClockMsRef.current = null; setBagClockMs(null); setBagOriginMs(null);
+    setBagWallStartedAtMs(playing ? performance.now() : null);
+  }, [rosbagPlayStatus?.playing, rosbagPlayStatus?.pid, rosbagPlayStatus?.bagPath, sharedObservations.epoch]);
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [sidebars, setSidebars] = useState(loadSidebarState);
   const [focusController, setFocusController] = useState("");
@@ -503,7 +513,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       if(page.config.bag_playing){setBagClockMs(batch.bagClockMs);setBagOriginMs(origin=>origin??batch.bagClockMs);}
     }});
   useEffect(()=>{if(stage!=="connected"){monitorReplay.current=new MonitorReplay();setMonitorHistoryNotice("");}},[stage]);
-  const [rosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
+  const [localRosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
+  const rosbagStatus = nativeDesktop() ? bagObservations.record.status : localRosbagStatus;
   const [toolbarBusy, setToolbarBusy] = useState<"record" | "diagnostics" | "">("");
   const [toolbarNotice, setToolbarNotice] = useState("");
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
@@ -1372,12 +1383,14 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         setAppPage("status");
       }
 
+      if (!nativeDesktop()) {
       void invoke<RosbagStatus>("get_rosbag_status", { profile })
         .then(setRosbagStatus)
         .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`));
       void invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile })
         .then(setRosbagPlayStatus)
         .catch(() => undefined);
+      }
     } catch (reason) {
       const raw = reason instanceof Error ? reason.message : String(reason);
       const formatted = formatConnectError(raw, activeStep);
@@ -1507,25 +1520,35 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }
 
   async function toggleRosbagRecording() {
-    if (toolbarBusy) return;
+    const generation = connectionGenerationRef.current;
+    if (toolbarBusy || (nativeDesktop() && !rosbagStatus)) return;
     setToolbarBusy("record");
     setToolbarNotice("");
     try {
       const command = rosbagStatus?.recording ? "stop_rosbag_recording" : "start_rosbag_recording";
       const status = await invoke<RosbagStatus>(command, { profile });
-      setRosbagStatus(status);
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) await sharedObservations.refresh("bag_record", true);
+      else setRosbagStatus(status);
+      if (generation !== connectionGenerationRef.current) return;
       setToolbarNotice(`${status.message}${status.outputPath ? `：${status.outputPath}` : ""}`);
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setToolbarNotice(`rosbag 操作失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      setToolbarBusy("");
+      if (generation === connectionGenerationRef.current) setToolbarBusy("");
     }
   }
 
 
   async function refreshBagPlayStatus() {
+    const generation = connectionGenerationRef.current;
     try {
-      const status = await invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile });
+      const status = nativeDesktop()
+        ? observationValue<RosbagPlayStatus>(await sharedObservations.refresh("bag_play", true))
+        : await invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile });
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) { setBagNotice(status.message); return; }
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
       bagPlayingRef.current = Boolean(status.playing);
@@ -1538,15 +1561,23 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         setBagWallStartedAtMs(performance.now());
       }
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setBagNotice(`无法读取 bag 回放状态：${reason instanceof Error ? reason.message : String(reason)}`);
     }
   }
 
   async function startBagPlay(bagPath: string) {
+    const generation = connectionGenerationRef.current;
     setBagBusy(true);
     setBagNotice("");
     try {
       const status = await invoke<RosbagPlayStatus>("start_rosbag_playback", { profile, bagPath });
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) {
+        await sharedObservations.refresh("bag_play", true);
+        if (generation === connectionGenerationRef.current) setBagNotice(status.message);
+        return;
+      }
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
       bagPlayingRef.current = Boolean(status.playing);
@@ -1568,30 +1599,39 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         }
       }
     } catch (reason) {
-      bagPlayingRef.current = false;
-      setBagWallStartedAtMs(null);
+      if (generation !== connectionGenerationRef.current) return;
+      if (!nativeDesktop()) { bagPlayingRef.current = false; setBagWallStartedAtMs(null); }
       setBagNotice(`bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      setBagBusy(false);
+      if (generation === connectionGenerationRef.current) setBagBusy(false);
     }
   }
 
-    async function stopBagPlay() {
+  async function stopBagPlay() {
+    const generation = connectionGenerationRef.current;
     setBagBusy(true);
     setBagNotice("");
     try {
       const status = await invoke<RosbagPlayStatus>("stop_rosbag_playback", { profile });
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) {
+        await sharedObservations.refresh("bag_play", true);
+        if (generation === connectionGenerationRef.current) setBagNotice(status.message);
+        return;
+      }
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setBagNotice(`停止 bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      bagPlayingRef.current = false;
-      bagClockMsRef.current = null;
-      setBagClockMs(null);
-      setBagOriginMs(null);
-      setBagWallStartedAtMs(null);
-      setBagBusy(false);
+      if (generation === connectionGenerationRef.current) {
+        if (!nativeDesktop()) {
+          bagPlayingRef.current = false; bagClockMsRef.current = null;
+          setBagClockMs(null); setBagOriginMs(null); setBagWallStartedAtMs(null);
+        }
+        setBagBusy(false);
+      }
     }
   }
 
@@ -1909,10 +1949,10 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             type="button"
             className={`toolbar-action record ${rosbagStatus?.recording ? "active" : ""}`}
             aria-pressed={Boolean(rosbagStatus?.recording)}
-            disabled={Boolean(toolbarBusy)}
+            disabled={Boolean(toolbarBusy) || (nativeDesktop() && !rosbagStatus)}
             onClick={() => void toggleRosbagRecording()}
-            title={rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
-          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
+            title={(nativeDesktop() && bagObservations.record.error) || rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
+          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : nativeDesktop() && !rosbagStatus ? "录制状态待确认" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
           <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
           <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title={appPage === "motion" ? "恢复 Motion 默认布局，保留当前 Tab 与编辑内容" : "恢复面板尺寸并展开全部面板"}><span>⊞</span>重置布局</button>
         </div>
@@ -2014,7 +2054,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           liveUpdates={liveUpdates}
           bagStatus={rosbagPlayStatus}
           bagBusy={bagBusy}
-          bagNotice={bagNotice}
+          bagNotice={(nativeDesktop() && bagObservations.play.error) || bagNotice}
+          bagStateUnknown={nativeDesktop() && !rosbagPlayStatus}
           bagClockMs={bagClockMs}
           bagOriginMs={bagOriginMs}
           bagWallStartedAtMs={bagWallStartedAtMs}

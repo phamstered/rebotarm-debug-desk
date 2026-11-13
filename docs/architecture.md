@@ -263,3 +263,6 @@ Controller SSH helper 仅使用 Python 标准库，通过现有 SSH 传入固定
 
 
 Controller 停止证明由 session/controller_stop.rs 持有，与远端完成记录分开。Tasks 在同一互斥锁内登记停止意图和远端完成时的动作编号；运行中提前发送的 DISABLE 不能作为最终证明，完成后需重新发送，并由持续存在的原生 HardwareStatus 订阅确认。watch 结果保留最终状态，使后台 Controller 工作在任务锁释放后仍可获知“输出已关闭”，避免向原调用者返回切换成功。此协调覆盖显式 DISABLE 和已确认支撑的 disable-stop；正常 RETURN 停止流程及其他 arm mode 任务的完整统一管理仍待实现。
+
+
+rosbag 录制与回放的只读状态也由 `session/observations.rs` 调度，分别通过固定 SSH status 命令读取，所有 WebView 只消费带连接代次和帧龄的快照。窗口不发起启动时的重复 bag 查询，手动刷新及操作后复查走相同的串行源。查询不依赖主窗口存活；断开会话取消查询，不把取消只读探测等同于停止远端录制或回放。

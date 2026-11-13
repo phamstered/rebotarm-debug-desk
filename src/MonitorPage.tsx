@@ -45,6 +45,7 @@ export function MonitorPage({
   bagStatus,
   bagBusy,
   bagNotice,
+  bagStateUnknown = false,
   bagClockMs = null,
   bagOriginMs = null,
   bagWallStartedAtMs = null,
@@ -75,6 +76,7 @@ export function MonitorPage({
   bagStatus: RosbagPlayStatus | null;
   bagBusy: boolean;
   bagNotice: string;
+  bagStateUnknown?: boolean;
   /** Latest bag-domain clock (ms) while playing; null when live/unknown. */
   bagClockMs?: number | null;
   bagOriginMs?: number | null;
@@ -499,8 +501,8 @@ export function MonitorPage({
                 {bagBusy ? "处理中…" : "停止回放"}
               </button>
             ) : (
-              <button type="button" className="primary" disabled={bagBusy} onClick={startPlay}>
-                {bagBusy ? "处理中…" : "开始回放"}
+              <button type="button" className="primary" disabled={bagBusy || bagStateUnknown} onClick={startPlay}>
+                {bagBusy ? "处理中…" : bagStateUnknown ? "回放状态待确认" : "开始回放"}
               </button>
             )}
           </div>

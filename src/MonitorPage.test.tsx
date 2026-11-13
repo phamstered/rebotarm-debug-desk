@@ -137,6 +137,16 @@ describe("MonitorPage", () => {
     expect(onStart).toHaveBeenCalledWith("robot-console-bags/demo");
   });
 
+  it("keeps refresh available while shared playback state is unknown", async () => {
+    const user=userEvent.setup(), refresh=vi.fn(), start=vi.fn();
+    render(<MonitorPage workspace={createDefaultMonitorWorkspace("/stm32/joint_states")}
+      {...baseProps({bagStateUnknown:true,onRefreshBagStatus:refresh,onStartBagPlay:start})} />);
+    await user.click(screen.getByRole("button",{name:"Bag 回放"}));
+    expect(screen.getByRole("button",{name:"回放状态待确认"})).toBeDisabled();
+    await user.click(screen.getByRole("button",{name:"刷新状态"}));
+    expect(refresh).toHaveBeenCalledOnce();expect(start).not.toHaveBeenCalled();
+  });
+
   it("adds a torque template dashboard and switches tabs", async () => {
     const user = userEvent.setup();
     let workspace = createDefaultMonitorWorkspace("/stm32/joint_states");

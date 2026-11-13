@@ -26,9 +26,11 @@ pub enum Source {
     Clock,
     Motion,
     Pick,
+    BagRecord,
+    BagPlay,
 }
 impl Source {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 10] = [
         Self::Agent,
         Self::Usb,
         Self::Arm,
@@ -37,10 +39,12 @@ impl Source {
         Self::Clock,
         Self::Motion,
         Self::Pick,
+        Self::BagRecord,
+        Self::BagPlay,
     ];
     fn period(self, topics_ms: u64) -> Duration {
         Duration::from_millis(match self {
-            Self::Agent => 5000,
+            Self::Agent | Self::BagRecord | Self::BagPlay => 5000,
             Self::Usb | Self::Arm => 10000,
             Self::Topics => topics_ms,
             Self::Pick => 500,
@@ -57,7 +61,7 @@ impl Source {
     }
     fn ttl(self, topics_ms: u64) -> u64 {
         match self {
-            Self::Agent => 8000,
+            Self::Agent | Self::BagRecord | Self::BagPlay => 8000,
             Self::Usb | Self::Arm => 15000,
             Self::Topics => topics_ms + 10000,
             Self::Controllers => 3100,
@@ -400,6 +404,10 @@ pub fn reader(transport: Arc<Transport>, profile: Value) -> Reader {
                     .map_err(|e| e.to_string()),
                 Source::Arm => serde_json::to_value(crate::probe_arm_mode(profile()?).await?)
                     .map_err(|e| e.to_string()),
+                Source::BagRecord => serde_json::to_value(crate::get_rosbag_status(profile()?).await?)
+                    .map_err(|e| e.to_string()),
+                Source::BagPlay => serde_json::to_value(crate::get_rosbag_play_status(profile()?).await?)
+                    .map_err(|e| e.to_string()),
                 _ => {
                     if source == Source::Controllers
                         && transport.hello.metadata["controllers_info_supported"] != true
@@ -581,15 +589,53 @@ mod tests {
         for _ in 0..9 {
             let _ = service.snapshot();
         }
-        assert_eq!(counts.lock().unwrap().values().sum::<usize>(), 8);
+        assert_eq!(counts.lock().unwrap().values().sum::<usize>(), 10);
         tokio::time::sleep(Duration::from_millis(1050)).await;
         assert_eq!(counts.lock().unwrap()[&Source::Controllers], 2);
         assert_eq!(counts.lock().unwrap()[&Source::Clock], 2);
         assert_eq!(counts.lock().unwrap()[&Source::Agent], 1);
+        assert_eq!(counts.lock().unwrap()[&Source::BagRecord], 1);
+        assert_eq!(counts.lock().unwrap()[&Source::BagPlay], 1);
         service.stop(2);
         let before = counts.lock().unwrap().clone();
         tokio::time::sleep(Duration::from_millis(1050)).await;
         assert_eq!(*counts.lock().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn bag_readers_share_pending_queries_and_keep_recording_independent_from_playback() {
+        let service=Arc::new(Observations::default());
+        let (tx,mut rx)=mpsc::unbounded_channel();
+        service.start(1,Arc::new(move |source,_| {
+            let tx=tx.clone();
+            Box::pin(async move {
+                if !matches!(source,Source::BagRecord|Source::BagPlay) {return Ok(json!({"supported":false}));}
+                let (done,reply)=oneshot::channel();
+                tx.send((source,done)).unwrap();
+                reply.await.map_err(|_| "canceled".to_string())
+            })
+        }));
+        let first=rx.recv().await.unwrap();let second=rx.recv().await.unwrap();
+        assert_ne!(first.0,second.0);
+        let readers:Vec<_>=(0..9).map(|_| {
+            let service=service.clone();
+            tokio::spawn(async move {service.read(1,Source::BagRecord).await.unwrap()})
+        }).collect();
+        settle().await;assert!(rx.try_recv().is_err());
+        for (source,reply) in [first,second] {
+            reply.send(if source==Source::BagRecord {json!({"recording":true,"pid":42})} else {json!({"playing":false,"pid":0})}).unwrap();
+        }
+        for reader in readers {
+            assert_eq!(reader.await.unwrap().entries[&Source::BagRecord].value.as_ref().unwrap()["recording"],true);
+        }
+        settle().await;
+        assert_eq!(service.snapshot().entries[&Source::BagPlay].value.as_ref().unwrap()["playing"],false);
+        let pending=tokio::spawn({let service=service.clone();async move {service.refresh(1,Source::BagRecord,true).await}});
+        let (source,reply)=rx.recv().await.unwrap();assert_eq!(source,Source::BagRecord);
+        service.stop(2);
+        assert!(pending.await.unwrap().is_err());
+        assert!(reply.send(json!({"recording":true})).is_err());
+        assert!(service.snapshot().entries.is_empty());
     }
 
     #[tokio::test]
