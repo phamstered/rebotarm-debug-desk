@@ -216,34 +216,25 @@ async fn run(
         &activate,
         &deactivate,
     )?;
+    let remote_id = guard
+        .tasks
+        .snapshot()
+        .filter(|task| task.id == guard.id)
+        .ok_or("Controller 任务已失效")?
+        .command_id;
+    let mut job = super::controller_journal::Job::new(remote_id, remote)?;
     hub.send_controller(label, epoch, guard.id, &profile)?;
     let _ = guard.app.emit("native-tasks-changed", ());
-    let output = tokio::time::timeout(
-        Duration::from_secs(20),
-        crate::ssh_base(&profile)
-            .kill_on_drop(true)
-            .arg("-o")
-            .arg("BatchMode=yes")
-            .arg(crate::ssh_target(&profile))
-            .arg(remote)
-            .output(),
-    )
-    .await
-    .map_err(|_| "Controller SSH 超时，远端结果未知；不会重发".to_string())?
-    .map_err(|e| format!("Controller SSH 结果未知：{e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Controller 操作未确认：{}",
-            crate::ros_control_error(&format!(
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        ));
+    // This is the only submit. Losing the SSH reply must never replay control.
+    let submitted = job.submit(&profile).await;
+    if let Err(error) = &submitted {
+        guard.finish(false, error);
     }
+    let mut proof = submitted.ok();
+    let mut remote_succeeded = false;
     let original_profile = serde_json::to_value(&profile).map_err(|e| e.to_string())?;
-    // Every query starts after successful SSH completion. No pre-command cache can
-    // prove completion. A reconnect may verify only the same robot/profile.
+    // Controller state queries start only after a matching remote success record.
+    // A reconnect may verify only the same robot/profile.
     loop {
         if guard
             .tasks
@@ -252,8 +243,41 @@ async fn run(
         {
             return Err("Controller 任务已失效".into());
         }
+        use super::controller_journal::Proof;
+        match proof.take() {
+            Some(Proof::Succeeded) => remote_succeeded = true,
+            Some(Proof::Rejected(detail)) => {
+                guard.finish(true, "");
+                return Err(format!("Controller 远端确认未执行：{detail}"));
+            }
+            Some(Proof::Uncertain(detail)) => {
+                return Err(format!(
+                    "Controller 远端命令异常或超时，ROS 服务结果未确认：{detail}"
+                ))
+            }
+            _ => {}
+        }
         let context = hub.context();
         if context["connected"] == true && same_profile(&original_profile, &context["profile"]) {
+            if !remote_succeeded {
+                let queried = job.query(&profile).await;
+                let query_error = queried.as_ref().err().cloned();
+                proof = queried.ok();
+                if matches!(
+                    proof,
+                    Some(Proof::Succeeded | Proof::Rejected(_) | Proof::Uncertain(_))
+                ) {
+                    continue;
+                }
+                guard.finish(
+                    false,
+                    query_error
+                        .as_deref()
+                        .unwrap_or("Controller 执行结果待确认；正在按编号查询远端记录，不重发切换"),
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
             let epoch = context["epoch"].as_u64().ok_or("连接代次无效")?;
             if let Ok(snapshot) = hub
                 .observations
@@ -272,7 +296,11 @@ async fn run(
         }
         guard.finish(
             false,
-            "Controller 命令已成功，等待原机器人新鲜列表确认目标状态",
+            if remote_succeeded {
+                "Controller 命令已成功，等待原机器人新鲜列表确认目标状态"
+            } else {
+                "Controller 执行结果待确认，等待原机器人连接以查询远端记录"
+            },
         );
         tokio::time::sleep(Duration::from_secs(1)).await;
     }

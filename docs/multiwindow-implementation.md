@@ -240,3 +240,14 @@ Motor 首帧在原生写入前占用全局运动任务及本页迁移锁，发�
 本阶段最终 npm test 全部通过（892 前端 / 157 Rust / 3 运行库测试及其余脚本），日志 /tmp/260-controller-final-all-tests.log。前端、文档、独立 Debug Tauri bundle 构建及严格 codesign 核验通过，日志 /tmp/260-controller-final-{build,docs-build,bundle}.log。新增回归覆盖真实 loopback 会话的页面/配置/代次拒绝、调用 future 消失后工作继续持有占用、未发送撤销、未知结果保持锁、旧编号与伪造 Bridge 终态无效、Controller 与迁移两线程竞争，以及类型/目标状态/帧龄/重复名称校验。
 
 退出旧隔离包后启动最新构建，离线 Motion 从管理姿态库入口加载，完成一次拆出和收回，当前 Tab 与姿态库保留，未连接时执行按钮保持禁用。本轮未在真实窗口发起 Controller 切换；任务互斥和结果提示的证据来自上述测试，离线页面检查不等于实机控制验证。未安装正式应用、未部署 Bridge、未操作生产机械臂。
+
+
+## Controller 远端完成记录与 SSH 回复丢失恢复
+
+本阶段补充前一节缺少的远端记录：每个 Controller 任务分配随机编号，固定命令绑定 SHA-256；Rust 提交方法一次性消费命令内容，后续接口只能查询。远端先持久化 reserved，再由脱离 SSH 标准流的有限子进程执行，父进程退出不丢弃结果。原子记录保留 succeeded / 启动前 rejected / uncertain；恢复时核对版本、编号、摘要和结果字段。succeeded 后仍需原机器人同配置连接的新鲜 Controller 目标状态，不能用记录代替状态核验；明确 rejected 且 started=false 可释放未执行任务。
+
+SSH 回复丢失可以通过只读记录查询恢复；CLI 本身失败/超时、记录缺失或不匹配不自动解锁、不重新发送。记录保留容量为 256 项、每项 16 KiB，仅淘汰已完成的成功/启动前拒绝项。Jetson 只读检查了实际安装的 ros2controlcli switch_controllers.py，确认其成功退出来自 ControllerManager response.ok；没有调用该服务。该机制尚不提供整个桌面进程重启后的活跃任务恢复；其他控制入口、全局停止后的控制模式协调及完整性能/发布验收仍在目标范围内。
+
+最终 npm test 通过（892 前端 / 160 Rust / 3 运行库测试及全部其余脚本），日志 /tmp/260-controller-journal-final-tests.log；前端和文档构建通过。一次测试失败来自 macOS Python 在隔离 HOME 下写字节码缓存，现通过测试环境的 PYTHONDONTWRITEBYTECODE 保留“不创建目录”的原断言；定向和最终全量重跑均通过。Python helper 的 7 项进程/文件回归在 Mac 与 Jetson 临时目录均通过（/tmp/260-controller-journal-jetson.log），覆盖回复丢失、父进程退出、重复提交不执行第二次、只读查询、摘要冲突、超时/异常不误判完成、启动前拒绝、落盘先于启动、记录容量及输出边界。
+
+另以两条独立 SSH 连接验证提交回复被丢弃后可读回成功结果，重复查询不重复执行；命令只向专属临时目录写测试文件，验证后目录已清理（/tmp/260-controller-journal-ssh-recovery.log），没有调用 ROS 控制服务。Mac 当前锁屏，已请求解锁；本轮完成 npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json，日志 /tmp/260-controller-journal-native-build.log。现有隔离 .app 尚未更新，不得用于声称本轮原生 UI 已复验；正式应用、Bridge 进程与机械臂未更新或操作。完整目标仍保持进行中。

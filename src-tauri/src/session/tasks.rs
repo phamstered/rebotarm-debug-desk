@@ -156,7 +156,7 @@ impl Tasks {
         let id = inner.sequence;
         inner.task = Some(Task {
             snapshot: Snapshot { id, epoch: owner.epoch, window: owner.window.label.clone(),
-                command_id: format!("controller-{id}"), kind: Kind::Controller,
+                command_id: super::controller_journal::new_id()?, kind: Kind::Controller,
                 phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
             probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None,
@@ -880,12 +880,13 @@ mod tests {
         tasks.controller_sent(id).unwrap();
         assert!(tasks.controller_sent(id).is_err());
         assert!(tasks.admit(owner("page-motor"),&json!({"op":"joint_command","mode":3}),now).is_ok());
+        let command_id=tasks.snapshot().unwrap().command_id;
         tasks.controller_finish(id,false,"SSH result unknown");
         tasks.lost(None,"disconnected");
         assert_eq!(tasks.snapshot().unwrap().message,"SSH result unknown");
-        tasks.observe(1,&json!({"op":"position_motion","command_id":format!("controller-{id}"),"motion_phase":"succeeded"}));
+        tasks.observe(1,&json!({"op":"position_motion","command_id":command_id,"motion_phase":"succeeded"}));
         assert!(tasks.poll(2,now+Duration::from_secs(30)).is_none());
-        assert!(!tasks.recover(id,2,&json!({"command_id":format!("controller-{id}"),"terminal":true})));
+        assert!(!tasks.recover(id,2,&json!({"command_id":command_id,"terminal":true})));
         assert!(tasks.snapshot().is_some());
         tasks.controller_finish(id+1,true,"");assert!(tasks.snapshot().is_some());
         tasks.controller_finish(id,true,"");assert!(tasks.snapshot().is_none());
