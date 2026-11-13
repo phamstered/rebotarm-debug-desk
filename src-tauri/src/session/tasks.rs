@@ -59,6 +59,7 @@ struct Task {
     action_next: u64,
     inflight: Option<u64>,
     motor: Option<super::motor_task::Motor>,
+    controller: Option<super::controller_stop::Stop>,
 }
 #[derive(Default)]
 struct Inner {
@@ -154,12 +155,13 @@ impl Tasks {
         if inner.migrations.contains(&owner.window.label) { return Err("页面正在迁移，不能切换 Controller".into()); }
         inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
         let id = inner.sequence;
+        let controller=super::controller_stop::Stop::new(inner.motor_context.as_ref(),owner.epoch,Instant::now());
         inner.task = Some(Task {
             snapshot: Snapshot { id, epoch: owner.epoch, window: owner.window.label.clone(),
                 command_id: super::controller_journal::new_id()?, kind: Kind::Controller,
                 phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
-            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None,
+            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller),
         });
         Ok(id)
     }
@@ -175,14 +177,46 @@ impl Tasks {
         Ok(())
     }
 
-    pub fn controller_finish(&self, id: u64, verified: bool, message: &str) {
+    pub fn request_controller_disable(&self, profile: &Value) -> bool {
+        let mut inner=self.inner.lock().unwrap();
+        let Some(task)=inner.task.as_mut().filter(|task|task.controller.is_some()) else {return false;};
+        let control=task.controller.as_mut().unwrap();
+        if !control.matches_profile(profile) {return false;}
+        control.request();
+        task.snapshot.phase=Phase::Stopping;
+        task.snapshot.message="已确认支撑并请求 DISABLE，等待 Controller 结束及输出关闭确认".into();
+        true
+    }
+
+    pub fn controller_outcome(&self, id: u64) -> Result<tokio::sync::watch::Receiver<super::controller_stop::Outcome>,String> {
+        self.inner.lock().unwrap().task.as_ref().filter(|t|t.snapshot.id==id)
+            .and_then(|t|t.controller.as_ref()).map(|c|c.outcome()).ok_or("Controller 任务已失效".into())
+    }
+    pub fn controller_remote_completed(&self, id: u64) {
+        let mut inner=self.inner.lock().unwrap();
+        if let Some(task)=inner.task.as_mut().filter(|t|t.snapshot.id==id && t.sent) {
+            if let Some(control)=&mut task.controller {
+                if !control.completed() {control.complete(task.action_next);task.probed=None;}
+            }
+        }
+    }
+    pub fn controller_finish(&self, id: u64, verified: bool, message: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
-        let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::Controller) else { return; };
-        if verified || !task.sent { inner.task = None; }
-        else {
+        let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::Controller) else { return false; };
+        let control=task.controller.as_mut().unwrap();
+        if !task.sent || verified && !control.requested() {
+            control.finish(super::controller_stop::Outcome::Finished);
+            inner.task = None;return true;
+        }
+        if verified && !control.completed() {control.complete(task.action_next);task.probed=None;}
+        if control.requested() && control.completed() {
+            task.snapshot.phase=Phase::Stopping;
+            task.snapshot.message="Controller 已结束；等待新的 DISABLE 序列及硬件输出关闭反馈".into();
+        } else {
             task.snapshot.phase = Phase::Uncertain;
             task.snapshot.message = message.chars().take(512).collect();
         }
+        false
     }
 
     pub fn configure_motor(&self, epoch: u64, profile: &Value) {
@@ -249,11 +283,12 @@ impl Tasks {
             // The writer uses this same lock before setting sent. Clearing an
             // unsent ticket therefore cannot race with a later transmission.
             if !task.sent {
+                if let Some(control)=&task.controller {control.finish(super::controller_stop::Outcome::Finished);}
                 inner.task = None;
                 return;
             }
             if task.snapshot.kind == Kind::Controller {
-                if task.snapshot.phase != Phase::Uncertain {
+                if task.snapshot.phase != Phase::Uncertain && !task.controller.as_ref().unwrap().requested() {
                     task.snapshot.phase = Phase::Uncertain;
                     task.snapshot.message = "Controller 操作结果未确认；窗口退出或断线不代表操作结束".into();
                 }
@@ -289,6 +324,7 @@ impl Tasks {
                     && task.snapshot.kind == Kind::Position
                     && message["command_id"] == task.snapshot.command_id);
             if cancel {
+                if let Some(control)=&mut task.controller {control.request();}
                 stop(task, "已请求停止，等待 Bridge 确认任务终态");
                 task.stop_pending = false;
                 if let Some(motor) = &mut task.motor {
@@ -365,6 +401,7 @@ impl Tasks {
                 action_next: 0,
                 inflight: None,
                 motor,
+                controller: None,
             });
             Some(id)
         } else {
@@ -408,6 +445,23 @@ impl Tasks {
                 }) as SendPermit
             });
         Ok(Admission { ticket, permit })
+    }
+
+    pub fn disable_reply(&self, ticket: u64, action: u64, epoch: u64, response: Result<&Value,&str>) {
+        {
+            let mut inner=self.inner.lock().unwrap();
+            if let Some(task)=inner.task.as_mut().filter(|t|t.snapshot.id==ticket && t.controller.is_some()) {
+                if task.inflight != Some(action) {return;}
+                if let Ok(value)=response { task.controller.as_mut().unwrap().acknowledge(action,epoch,value); }
+                let confirmed=inner.task.as_ref().unwrap().controller.as_ref().unwrap().confirmed(inner.motor_context.as_ref(),Instant::now());
+                if confirmed {
+                    inner.task.as_ref().unwrap().controller.as_ref().unwrap().finish(super::controller_stop::Outcome::Disabled);
+                    inner.task=None;
+                }
+                return;
+            }
+        }
+        self.reply(Some(ticket),epoch,&json!({"op":"joint_command","mode":3}),response);
     }
 
     pub fn reply(
@@ -599,6 +653,11 @@ impl Tasks {
         if let Some(context) = &mut inner.motor_context {
             context.observe(epoch, message, Instant::now());
         }
+        if inner.task.as_ref().and_then(|task|task.controller.as_ref())
+            .is_some_and(|control|control.confirmed(inner.motor_context.as_ref(),Instant::now())) {
+            inner.task.as_ref().unwrap().controller.as_ref().unwrap().finish(super::controller_stop::Outcome::Disabled);
+            inner.task=None;return;
+        }
         if inner
             .task
             .as_ref()
@@ -655,7 +714,24 @@ impl Tasks {
         let mut inner = self.inner.lock().unwrap();
         let context = inner.motor_context.clone();
         let task = inner.task.as_mut()?;
-        if task.snapshot.kind == Kind::Controller { return None; }
+        if let Some(control)=&mut task.controller {
+            if !control.requested() {return None;}
+            if !task.sent {
+                control.finish(super::controller_stop::Outcome::Finished);inner.task=None;return None;
+            }
+            if task.inflight.is_some() || task.probed.is_some_and(|at|now.saturating_duration_since(at)<Duration::from_secs(1)) {return None;}
+            if let Err(error)=control.prepare(context.as_ref(),epoch,now) {
+                task.snapshot.phase=Phase::Uncertain;task.snapshot.message=error;return None;
+            }
+            task.snapshot.phase=Phase::Stopping;
+            task.snapshot.message=if control.completed() {"Controller 已结束，正在重新确认 DISABLE 输出关闭"} else {"DISABLE 已请求；Controller 远端结果尚未确认，保留占用并继续关闭输出"}.into();
+            task.probed=Some(now);
+            task.action_next=task.action_next.checked_add(1).expect("task action exhausted");
+            let action=task.action_next;task.inflight=Some(action);
+            let ticket=task.snapshot.id;let tasks=self.clone();
+            return Some(StopAction {ticket,action,message:json!({"op":"joint_command","mode":3}),recovery:false,heartbeat:false,
+                permit:Arc::new(move || tasks.inner.lock().unwrap().task.as_ref().is_some_and(|t|t.snapshot.id==ticket && t.inflight==Some(action))) });
+        }
         if task.snapshot.kind == Kind::Motor {
             if !task
                 .motor
@@ -879,7 +955,6 @@ mod tests {
         assert!(tasks.migration("page-motion").is_err());
         tasks.controller_sent(id).unwrap();
         assert!(tasks.controller_sent(id).is_err());
-        assert!(tasks.admit(owner("page-motor"),&json!({"op":"joint_command","mode":3}),now).is_ok());
         let command_id=tasks.snapshot().unwrap().command_id;
         tasks.controller_finish(id,false,"SSH result unknown");
         tasks.lost(None,"disconnected");
@@ -897,6 +972,59 @@ mod tests {
         assert!(tasks.begin_controller(owner("page-motion")).is_err());
         drop(motion);
     }
+    #[test]
+    fn controller_disable_requires_reassertion_after_remote_completion_and_fresh_output_proof() {
+        let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        tasks.configure_motor(1,&json!({"host":"original","commandTopic":"/cmd","statusTopic":"/status"}));
+        let status=|seq,stamp| json!({"op":"topic_message","topic":"/status","data":{"mode":3,"last_command_sequence":seq,"header":{"stamp":{"sec":stamp,"nanosec":0}}}});
+        tasks.observe(1,&status(1,1));
+        let id=tasks.begin_controller(owner("page-motion")).unwrap();
+        let outcome=tasks.controller_outcome(id).unwrap();tasks.controller_sent(id).unwrap();
+        let disabled=tasks.admit(owner("page-motor"),&json!({"op":"joint_command","mode":3}),now).unwrap();
+        assert!((disabled.permit.unwrap())()); // User stop always remains sendable.
+        let early=tasks.poll(1,now).unwrap();assert!((early.permit)());
+        tasks.disable_reply(id,early.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":10})));
+        tasks.observe(1,&status(10,2));assert!(tasks.snapshot().is_some());
+        tasks.controller_remote_completed(id);
+        tasks.disable_reply(id,early.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":10})));
+        tasks.observe(1,&status(10,3));assert!(tasks.snapshot().is_some());
+        assert!(!tasks.controller_finish(id,true,"")); // Target state verification cannot clear a requested stop.
+        tasks.finish_action(id,early.action);
+        let after=tasks.poll(1,Instant::now()).unwrap();assert!(after.action>early.action);
+        tasks.disable_reply(id,early.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":20})));
+        tasks.observe(1,&status(20,4));assert!(tasks.snapshot().is_some()); // wrong action number
+        tasks.disable_reply(id,after.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":30})));
+        tasks.observe(1,&status(29,5));assert!(tasks.snapshot().is_some());
+        tasks.observe(1,&status(30,6));assert!(tasks.snapshot().is_none());
+        assert_eq!(*outcome.borrow(),super::super::controller_stop::Outcome::Disabled);
+        let next=tasks.begin_controller(owner("page-status")).unwrap();
+        tasks.disable_reply(id,after.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":40})));
+        assert_eq!(tasks.snapshot().unwrap().id,next);
+    }
+    #[test]
+    fn supported_disable_stop_is_scoped_to_the_original_robot() {
+        let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        let profile=json!({"host":"original","commandTopic":"/cmd","statusTopic":"/status"});
+        tasks.configure_motor(1,&profile);
+        let id=tasks.begin_controller(owner("page-status")).unwrap();tasks.controller_sent(id).unwrap();
+        let mut other=profile.clone();other["host"]=json!("other");
+        assert!(!tasks.request_controller_disable(&other));assert!(tasks.poll(1,now).is_none());
+        assert!(tasks.request_controller_disable(&profile));assert!(tasks.poll(1,now).is_some());
+        assert!(!tasks.controller_finish(id,true,""));
+    }
+
+    #[test]
+    fn controller_stop_before_submission_cancels_switch_but_not_disable_send_permission() {
+        let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        let id=tasks.begin_controller(owner("page-motion")).unwrap();
+        let outcome=tasks.controller_outcome(id).unwrap();
+        let stop=tasks.admit(owner("main"),&json!({"op":"joint_command","mode":3}),now).unwrap();
+        assert!(tasks.controller_sent(id).is_err());
+        assert!(tasks.poll(1,now).is_none());
+        assert!(tasks.snapshot().is_none());assert!((stop.permit.unwrap())());
+        assert_eq!(*outcome.borrow(),super::super::controller_stop::Outcome::Finished);
+    }
+
     #[test]
     fn controller_and_page_migration_race_has_exactly_one_winner() {
         for _ in 0..32 {

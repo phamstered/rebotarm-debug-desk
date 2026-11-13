@@ -643,3 +643,6 @@ gravity_id_task_status 按 command_id 返回 known、terminal、status 和完整
 开发分支的 Controller 切换 IPC 仍为 `switch_ros_controller` / `switch_ros_controllers`，参数结构不变，但由实际调用 WebView（Motion 或 Status）、当前共享连接配置和原生任务占用校验。成功返回前要求远端完成记录确认命令成功和命令之后强制查询的新鲜目标状态；IPC 等待超过 25 秒返回未确认提示，已启动的原生工作不随调用页面退出而丢弃。成功命令的新状态核验可以跨同配置重连继续；SSH 超时或失败后按编号只读查询远端完成记录，不自动重发，也不借用普通列表/空闲状态解除占用。远端命令自身异常或超时仍保持未确认。
 
 Controller 的 SSH 记录协议（不经过 Bridge）：请求为 `{op: submit|query, id, command_hash}`，仅 submit 带固定命令生成器产生的 `command`。编号由本机生成 192 位随机值，格式为 `controller-` 加 48 位小写十六进制；摘要是完整命令 UTF-8 字节的 SHA-256。Rust 的提交方法消费命令内容，只能调用一次。响应包含 `version:1`、匹配的编号/摘要和 `phase`：`reserved | running | succeeded | rejected | uncertain | unknown`。仅 `succeeded + started:true + exit_code:0 + timed_out:false` 允许进入后续新鲜 Controller 状态核验；`rejected + started:false` 证明尚未启动命令，可释放任务并报告失败。`unknown` 包括记录缺失/淘汰，不能证明未执行；`uncertain` 表示命令进程异常或超时，不代表 ROS 服务未执行。查询不含命令且不创建记录。
+
+
+Controller 任务停止协调复用现有 joint_command mode=3 和 HardwareStatus 协议，不新增 Bridge 字段。显式 DISABLE 立即可下发；受支撑确认保护的 start_arm_mode(disable-stop) 仅向匹配原机器人身份的 Controller 任务登记停止意图。任务记录远端完成时已分配的原生停止动作编号，只有严格晚于该编号的 DISABLE ACK 可用于最终确认，防止完成前请求的迟到 ACK 解锁。确认要求原机器人及当前连接代次、mode=3、last_command_sequence 覆盖新 ACK、源时间推进、原生接收时刻不早于此次停止请求且接收龄小于 1 秒。发布失败、旧序列、旧源时间和另一机器人反馈不能完成任务；重连后重新发送并确认。这里证明固件输出关闭，不是机械静止，也不保证故障情况下的固定停止时延。普通 stop 的 RETURN 流程不登记立即 DISABLE 意图。

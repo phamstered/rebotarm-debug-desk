@@ -1,6 +1,7 @@
 //! Finite Controller switches are app-owned. A lost SSH result is not evidence
-//! that the remote service stopped; only successful execution plus fresh target
-//! states can release a sent task. No control command is automatically retried.
+//! that the remote service stopped. Normal completion requires success plus fresh
+//! target states; explicit DISABLE instead waits for a new output-off proof after
+//! the remote operation ends. The switch itself is never automatically retried.
 use super::{
     observations::{Snapshot, Source},
     runtime::Runtime,
@@ -131,11 +132,32 @@ struct Guard {
     tasks: Arc<Tasks>,
     id: u64,
     app: AppHandle,
+    outcome: tokio::sync::watch::Receiver<super::controller_stop::Outcome>,
 }
 impl Guard {
-    fn finish(&self, verified: bool, message: &str) {
-        self.tasks.controller_finish(self.id, verified, message);
+    fn finish(&self, verified: bool, message: &str) -> bool {
+        let released = self.tasks.controller_finish(self.id, verified, message);
         let _ = self.app.emit("native-tasks-changed", ());
+        released
+    }
+    async fn wait_for_disable(&self) -> Result<String, String> {
+        let mut outcome = self.outcome.clone();
+        loop {
+            match *outcome.borrow() {
+                super::controller_stop::Outcome::Disabled => {
+                    return Err(
+                        "Controller 切换期间收到 DISABLE；已核验新的硬件反馈确认输出关闭".into(),
+                    )
+                }
+                super::controller_stop::Outcome::Finished => {
+                    return Err("Controller 任务已结束".into())
+                }
+                super::controller_stop::Outcome::Pending => {}
+            }
+            if outcome.changed().await.is_err() {
+                return Err("Controller 输出关闭结果未确认".into());
+            }
+        }
     }
 }
 impl Drop for Guard {
@@ -168,6 +190,7 @@ pub async fn start(
         tasks: hub.tasks.clone(),
         id,
         app: app.clone(),
+        outcome: hub.tasks.controller_outcome(id)?,
     };
     let _ = app.emit("native-tasks-changed", ());
     owned(async move {
@@ -236,6 +259,9 @@ async fn run(
     // Controller state queries start only after a matching remote success record.
     // A reconnect may verify only the same robot/profile.
     loop {
+        if *guard.outcome.borrow() == super::controller_stop::Outcome::Disabled {
+            return guard.wait_for_disable().await;
+        }
         if guard
             .tasks
             .snapshot()
@@ -245,7 +271,10 @@ async fn run(
         }
         use super::controller_journal::Proof;
         match proof.take() {
-            Some(Proof::Succeeded) => remote_succeeded = true,
+            Some(Proof::Succeeded) => {
+                remote_succeeded = true;
+                guard.tasks.controller_remote_completed(guard.id);
+            }
             Some(Proof::Rejected(detail)) => {
                 guard.finish(true, "");
                 return Err(format!("Controller 远端确认未执行：{detail}"));
@@ -289,8 +318,10 @@ async fn run(
                     && current["connected"] == true
                     && verified(&snapshot, &expected)
                 {
-                    guard.finish(true, "");
-                    return Ok("Controller 切换完成，原生层已核验新状态".into());
+                    if guard.finish(true, "") {
+                        return Ok("Controller 切换完成，原生层已核验新状态".into());
+                    }
+                    return guard.wait_for_disable().await;
                 }
             }
         }

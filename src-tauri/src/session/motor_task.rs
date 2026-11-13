@@ -92,6 +92,18 @@ struct Stop {
     sequence: Option<u32>,
 }
 impl Motor {
+    // Captures identity for future output-off confirmation only. It grants no
+    // actuation permission; Motor::start still requires fresh feedback.
+    pub fn for_confirmation(context: Option<&Context>, epoch: u64, now: Instant) -> Option<Self> {
+        context.filter(|c| c.epoch == epoch).map(|c| Self {
+            identity: c.identity.clone(),
+            last_command: now,
+            stop: None,
+        })
+    }
+    pub fn clear_confirmation(&mut self) {
+        self.stop = None;
+    }
     pub fn start(context: Option<&Context>, epoch: u64, now: Instant) -> Result<Self, String> {
         let context = context
             .filter(|c| c.epoch == epoch)

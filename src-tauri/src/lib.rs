@@ -1595,6 +1595,7 @@ async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, Str
 
 #[tauri::command]
 async fn start_arm_mode(profile: ConnectionProfile, mode: String, support_confirmed: Option<bool>,
+    app: AppHandle, hub: State<'_, session::runtime::Runtime>,
     on_progress: tauri::ipc::Channel<arm_workflow::Progress>,
     logs: State<'_, control_logs::LogSessions>,
 ) -> Result<RemoteActionResult, String> {
@@ -1602,6 +1603,10 @@ async fn start_arm_mode(profile: ConnectionProfile, mode: String, support_confir
         return Err("请先确认现场支撑机械臂，且夹爪释放无风险".into());
     }
     let remote = arm_mode_remote_command(&profile, &mode)?;
+    if mode == "disable-stop" && hub.tasks.request_controller_disable(&serde_json::to_value(&profile).map_err(|e| e.to_string())?) {
+        let _ = app.emit("native-tasks-changed", ());
+    }
+    // Normal safe_stop includes RETURN before DISABLE; do not interrupt RETURN.
     // Diagnostics must never delay or block a requested stop/DISABLE.
     if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "teaching" | "realsense" | "moveit") {
         let _ = control_logs::prepare(&profile, &logs).await;

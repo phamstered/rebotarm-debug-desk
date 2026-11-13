@@ -260,3 +260,6 @@ Humble 容器使用 host 网络及独立 PID 命名空间，构建目录与 host
 开发分支的 Controller 单个/批量切换由 Rust 任务管理器预留全局运动及页面迁移占用，再以既有固定 SSH 命令执行。工作由应用层持有，WebView 的销毁或 IPC 超时不会终止成功后核验；成功后的公共 Controller 强制查询只在原机器人相同配置的当前会话中进行。未知 SSH 结果通过远端任务记录恢复，不根据普通空闲快照猜测完成，也不重放切换。其他 SSH 控制入口仍待接入。
 
 Controller SSH helper 仅使用 Python 标准库，通过现有 SSH 传入固定 helper 及结构化请求，不安装额外守护进程。提交先在 `~/.cache/rebotarm-debug-desk/controller-operations-v1` 的私有目录持久化记录，再启动脱离 SSH 标准流的有限子进程。记录使用原子替换和 fsync；输出仅保留尾部 2048 字节。每条记录最多 16 KiB、至多保留 256 条，满时仅淘汰成功/启动前拒绝记录，未确认记录不自动淘汰。保留期内同编号同摘要的重复提交返回原记录；Mac 的恢复路径始终只查询，因此淘汰或记录丢失不会导致重新执行。CLI 自身最多等待 20 秒（既有 ROS 命令内部另有 10 秒 timeout）；超时停止本次 CLI 进程组，但不能据此宣称已取消 ROS 服务，故记录为 uncertain。目录和记录不是跨用户认证机制；访问仍由 SSH 用户权限控制。
+
+
+Controller 停止证明由 session/controller_stop.rs 持有，与远端完成记录分开。Tasks 在同一互斥锁内登记停止意图和远端完成时的动作编号；运行中提前发送的 DISABLE 不能作为最终证明，完成后需重新发送，并由持续存在的原生 HardwareStatus 订阅确认。watch 结果保留最终状态，使后台 Controller 工作在任务锁释放后仍可获知“输出已关闭”，避免向原调用者返回切换成功。此协调覆盖显式 DISABLE 和已确认支撑的 disable-stop；正常 RETURN 停止流程及其他 arm mode 任务的完整统一管理仍待实现。

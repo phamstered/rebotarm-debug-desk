@@ -26,3 +26,5 @@ pub mod motor_task;
 pub mod controller_task;
 
 pub mod controller_journal;
+
+pub mod controller_stop;

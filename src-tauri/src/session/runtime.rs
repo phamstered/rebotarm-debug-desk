@@ -424,10 +424,10 @@ impl Runtime {
                             return;
                         }
                         if action.message["op"] == "joint_command" && action.message["mode"] == 3 {
-                            tasks.reply(
-                                Some(action.ticket),
+                            tasks.disable_reply(
+                                action.ticket,
+                                action.action,
                                 epoch,
-                                &action.message,
                                 result
                                     .as_ref()
                                     .map(|frame| &frame.metadata)
@@ -1383,6 +1383,62 @@ mod tests {
             .unwrap()
             .iter()
             .any(|m| m["op"] == "unsubscribe" && m["topic"] == "/status"));
+        hub.close();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn controller_disable_survives_all_pages_detaching_and_waits_for_post_completion_feedback() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        // Incomplete profile prevents SSH readers: this test uses loopback only.
+        hub.set_profile(json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}));
+        hub.connect(port).await.unwrap();
+        let (motion, _) = hub.attach("page-motion").unwrap();
+        let timeout = Duration::from_secs(3);
+        let id = hub.tasks.begin_controller(motion.owner()).unwrap();
+        let outcome = hub.tasks.controller_outcome(id).unwrap();
+        hub.tasks.controller_sent(id).unwrap();
+        hub.request("page-motion", &motion, "control", json!({"op":"joint_command","mode":3}), timeout).await.unwrap();
+        hub.detach("page-motion", &motion).await.unwrap();
+        let disables = || seen.lock().unwrap().iter().filter(|m| m["op"] == "joint_command" && m["mode"] == 3).count();
+        tokio::time::timeout(timeout, async {
+            while disables() < 2 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        let status = |seq, mode, stamp| json!({"op":"topic_message","topic":"/status",
+            "data":{"last_command_sequence":seq,"mode":mode,"header":{"stamp":{"sec":stamp,"nanosec":0}}}});
+        let deliver = |frame: Value| {
+            let events = &events;
+            let hub = &hub;
+            async move {
+                events.send(frame.clone()).unwrap();
+                tokio::time::timeout(timeout, async {
+                    loop {
+                        if hub.core.lock().unwrap().latest_topics.get("/status").is_some_and(|(f,_)| f.metadata == frame) {break;}
+                        tokio::task::yield_now().await;
+                    }
+                }).await.unwrap();
+            }
+        };
+        deliver(status(123, 3, 1)).await;
+        assert!(hub.tasks.snapshot().is_some()); // ACK + DISABLE before remote completion is insufficient.
+        let before = disables();
+        hub.tasks.controller_remote_completed(id);
+        assert!(!hub.tasks.controller_finish(id, true, ""));
+        tokio::time::timeout(timeout, async {
+            while disables() <= before {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        for frame in [status(122, 3, 2), status(123, 1, 3)] {
+            deliver(frame).await;
+            assert!(hub.tasks.snapshot().is_some());
+        }
+        deliver(status(123, 3, 4)).await;
+        tokio::time::timeout(timeout, async {
+            while hub.tasks.snapshot().is_some() {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        assert_eq!(*outcome.borrow(), super::super::controller_stop::Outcome::Disabled);
+        assert_eq!(seen.lock().unwrap().iter().filter(|m|m["op"]=="subscribe" && m["topic"]=="/status").count(), 1);
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="unsubscribe" && m["topic"]=="/status"));
         hub.close();
         server.abort();
     }

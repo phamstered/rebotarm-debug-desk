@@ -251,3 +251,17 @@ SSH 回复丢失可以通过只读记录查询恢复；CLI 本身失败/超时�
 最终 npm test 通过（892 前端 / 160 Rust / 3 运行库测试及全部其余脚本），日志 /tmp/260-controller-journal-final-tests.log；前端和文档构建通过。一次测试失败来自 macOS Python 在隔离 HOME 下写字节码缓存，现通过测试环境的 PYTHONDONTWRITEBYTECODE 保留“不创建目录”的原断言；定向和最终全量重跑均通过。Python helper 的 7 项进程/文件回归在 Mac 与 Jetson 临时目录均通过（/tmp/260-controller-journal-jetson.log），覆盖回复丢失、父进程退出、重复提交不执行第二次、只读查询、摘要冲突、超时/异常不误判完成、启动前拒绝、落盘先于启动、记录容量及输出边界。
 
 另以两条独立 SSH 连接验证提交回复被丢弃后可读回成功结果，重复查询不重复执行；命令只向专属临时目录写测试文件，验证后目录已清理（/tmp/260-controller-journal-ssh-recovery.log），没有调用 ROS 控制服务。Mac 当前锁屏，已请求解锁；本轮完成 npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json，日志 /tmp/260-controller-journal-native-build.log。现有隔离 .app 尚未更新，不得用于声称本轮原生 UI 已复验；正式应用、Bridge 进程与机械臂未更新或操作。完整目标仍保持进行中。
+
+
+
+## Controller 切换期间的 DISABLE 协调
+
+本阶段新增 Controller 停止意图与远端完成屏障。显式 DISABLE 立即发送，原生看门狗继续串行请求关闭输出；远端结果未知时保留任务。成功记录或明确未执行记录确认有限切换结束之后，再发送新的 DISABLE；仅这次 ACK 对应的新鲜原机器人反馈能解除占用，提前发送及迟到的旧 ACK 无效。目标 Controller 状态成功不覆盖停止意图。结果通过原生 watch 保留，后台调用返回关闭输出提示而非切换成功。支撑确认后的 disable-stop 接入同一意图；正常 safe_stop 的 RETURN 没有被提前 DISABLE 打断，其完整原生生命周期仍待后续实现。
+
+新增测试覆盖完成前后 ACK 乱序、旧动作编号、序列不足、错误模式、源时间重复、换机器人/重连、旧回调不影响后继任务、未发送撤销但用户 DISABLE 许可保留。loopback WebSocket 集成测试覆盖所有页面退出后的持续订阅、提前关闭不足以解锁、远端完成后二次 DISABLE 和新鲜反馈。没有调用真实 ROS 控制服务。
+
+本阶段最终 npm test 全部通过（892 前端 / 166 Rust / 3 运行库测试及全部其余脚本），日志 /tmp/260-controller-stop-all-tests.log。前端、文档和最新独立 Debug Tauri bundle 构建及严格 codesign 核验通过，日志 /tmp/260-controller-stop-{build,docs-build,bundle}.log。本次只有 Mac 原生任务逻辑变更，没有新的 Bridge 修改，因此未重复 ROS colcon 验证。
+
+解锁后退出旧包，重新构建并启动最新隔离应用，离线生成 1200×900 标定板并切换 100% 缩放。实际窗口验证了 detach:bounds + rollback:reparent 双重失败、recover:bounds 恢复中途失败、再次恢复成功，以及 dock:bounds 失败后回到原独立窗口、重试收回成功；每步读取原生无障碍树，图片与 12×9、15 / 11.25 mm 输入及缩放始终保留。截图确认大图工具栏和关闭按钮完整可见，Esc 返回后缩放保留。三个单次 fixture 均消费，最终停在主窗口嵌入的手眼页面。此离线窗口验收不等于实机 Controller 停止验收。
+
+未连接生产机械臂，未覆盖 /Applications/Robot Console.app，未部署或重启生产 Bridge。完整目标仍在进行中：直接 JTC、arm mode / Joint4 / 数据采集等生命周期、应用进程重启恢复、离线配置和跨页导航、多显示器与持续运行验证，以及最终安装部署、PR/CI/合并尚未完成。
