@@ -222,3 +222,10 @@ Motor 首帧在原生写入前占用全局运动任务及本页迁移锁，发�
 最终 npm test 全部通过（891 前端 / 150 Rust / 3 运行库测试及全部脚本；/tmp/260-gravity-disable-tests.log）。前端由 Tauri beforeBuildCommand 再次构建，独立 Debug bundle 和严格 codesign 核验通过（/tmp/260-gravity-disable-bundle.log），文档构建通过。Jetson 独立工作区完整 colcon build、colcon test、colcon test-result --verbose 通过：24 tests、0 errors、0 failures、0 skipped（/tmp/260-gravity-disable-ros-all.log）。当前 build ID 为 ac78d78d2600，先前列出的构建/测试句柄均已完成，以上最终结果取代之前在途状态。
 
 本轮 Mac 已可操作。退出旧隔离进程、重建并启动最新隔离包后，实际生成 1200×900 标定板，切换到 100%，完成一次拆出和收回，图片及缩放保留；此项只验证离线窗口回归，不能当作实际重力辨识或多屏验收。没有连接生产机械臂，没有覆盖正式应用或重启生产 Bridge。仍待直接 JTC/Controller/arm mode/Joint4/数据采集与 bag 等生命周期、离线配置与跨页导航、多屏性能，以及最终发布、PR/CI/合并；完整目标保持进行中。
+
+
+## 解锁后的原生迁移故障复验
+
+在提交 7e03905 对应的隔离 Debug 应用中重新验证，未连接 Bridge。向独立配置目录写入单次故障 fixture：detach:bounds + rollback:reparent 后，真实原生迁移及向已关闭目标的回滚失败，页面显示“恢复窗口”；再注入 recover:bounds，恢复中途失败仍保留页面及重试入口；随后重试成功，并可再次正常拆出。另注入 dock:bounds，收回失败自动返回原独立窗口，再次收回成功。每步均读取真实原生无障碍树核验，最终回到主窗口嵌入页。
+
+全程保留 12×9、15 mm / 11.25 mm 输入、1200×900 标定板和 100% 缩放。收回失败后仍能打开图片大图，截图确认工具栏及关闭按钮完整可见，Esc 返回原页面并保留缩放。三个 fixture 均已消费，不留待触发故障文件。本轮仅追加验证记录，没有生产行为变更，未重新运行全量测试；前序全量结果不计作本轮新增验证。未覆盖正式应用、未部署或操作机械臂；完整多窗口目标仍在进行中。
