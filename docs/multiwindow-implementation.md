@@ -207,3 +207,18 @@ Motor 首帧在原生写入前占用全局运动任务及本页迁移锁，发�
 本阶段全量 `npm test` 通过（889 前端 / 147 Rust / 3 运行库测试及全部其余脚本）；`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 和严格 codesign 核验通过，日志 `/tmp/260-motor-native-{all-tests,build,docs-build,bundle}.log`。实际 loopback WebSocket 集成测试验证所有页面退出后自动 DISABLE、错误序列/模式保持占用、新鲜匹配反馈释放占用，硬件订阅只建立一次且不随页面退出释放。单元测试覆盖首次拒绝、未知发布、旧响应/队列许可、流中断、重连不同机器人及新连接停止证明；前端状态读取不续发控制。
 
 本轮 CUA 仍返回 Mac 锁屏错误，已再次请求解锁；本轮构建没有完成新的真实窗口复验，不能将前序迁移验证算作本轮结果。未连接生产机械臂，未覆盖 `/Applications/Robot Console.app` 或部署 Jetson；Bridge 源码无变化。完整目标仍需直接 JTC/重力/Controller/arm mode/Joint4/采集等任务归属、离线配置切换、显式跨页导航、多屏及持续运行验证、最终发布与 PR/CI 合并。
+
+## 重力辨识原生任务（实现与验证进行中）
+
+当前未提交改动将 Gravity 纳入 Tasks：首帧前占用、实际 page-gravity 身份、编号关联、原生心跳/取消、按完整保留终态恢复。前端生成独立 command_id、拒绝旧任务结果、反馈 DONE/FAILED 不解锁、晚到 ACK 不恢复断开的执行。Bridge 新增 GravityTaskCore，在 ROS 受理前登记、保留尚无 GoalHandle 的取消、只读查询不续租、5 秒租约及连接退出取消。Action 返回后等待新鲜 HOLD/DISABLE 与六个具名关节的低速反馈，终态有界保留；异步发送异常保持未知占用，不返回可被误认为明确拒绝的 error。
+
+最新本机 npm test 通过（891 前端 / 150 Rust / 3 运行库测试及其余脚本；/tmp/260-gravity-final-tests.log）；前端和文档构建通过（/tmp/260-gravity-{build,docs-build}.log）。ROS 首轮失败发生在测试助手等待 hello 的 request_id；实际协议 hello 不带编号，已改为直接发送和读取 hello。本轮不能据此宣称 ROS 行为已经通过。
+
+目前最新 Bridge build ID 为 664d6fea7a4f。仅脚本同步至 damiao 的独立工作区 easy_debug_bridge_260_motion_observe，未重启生产 Bridge。该工作区先前两次单线程 colcon 编译已成功；最新异步异常修正仍需最终验证。当前真实在途句柄：exec 88576（单线程 colcon build 后运行 ROS_DOMAIN_ID=220、ROS_LOCALHOST_ONLY=1 的 test_gravity_task_ros.py，日志 /tmp/260-gravity-verified-ros.log）；exec 3070（独立 Debug Tauri bundle，日志 /tmp/260-gravity-bundle.log）。后续先轮询这些句柄或核验其终态，不因等待无输出重复启动。随后还需完整 colcon test、bundle 签名与代码复查、提交推送，以及前文其余完整目标。未连接真实机械臂、未安装正式应用。
+
+
+重力辨识阶段最终验证：显式 DISABLE 不允许随后 HOLD 解锁，Action 返回后重新发布三帧清零且序列递增的 DISABLE；最多每秒重试一次，核对新的固件序列和低速反馈。纯核心测试及实际隔离 ROS Action 测试覆盖此路径，并核对所有字段清零、每帧序列唯一。ROS 还覆盖受理前的占用/取消、非所属客户端不能续租、只读查询不能阻止租约过期、源时间重放不证明停稳和保留终态查询。
+
+最终 npm test 全部通过（891 前端 / 150 Rust / 3 运行库测试及全部脚本；/tmp/260-gravity-disable-tests.log）。前端由 Tauri beforeBuildCommand 再次构建，独立 Debug bundle 和严格 codesign 核验通过（/tmp/260-gravity-disable-bundle.log），文档构建通过。Jetson 独立工作区完整 colcon build、colcon test、colcon test-result --verbose 通过：24 tests、0 errors、0 failures、0 skipped（/tmp/260-gravity-disable-ros-all.log）。当前 build ID 为 ac78d78d2600，先前列出的构建/测试句柄均已完成，以上最终结果取代之前在途状态。
+
+本轮 Mac 已可操作。退出旧隔离进程、重建并启动最新隔离包后，实际生成 1200×900 标定板，切换到 100%，完成一次拆出和收回，图片及缩放保留；此项只验证离线窗口回归，不能当作实际重力辨识或多屏验收。没有连接生产机械臂，没有覆盖正式应用或重启生产 Bridge。仍待直接 JTC/Controller/arm mode/Joint4/数据采集与 bag 等生命周期、离线配置与跨页导航、多屏性能，以及最终发布、PR/CI/合并；完整目标保持进行中。

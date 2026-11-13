@@ -334,6 +334,8 @@ export type BridgeEnvelope = {
   bridge_version?: string;
   bridge_build_id?: string;
   motion_observation_supported?: boolean;
+  gravity_task_supported?: boolean;
+  task_phase?: string;
   known?: boolean;
   terminal?: boolean;
   renewed?: boolean;
@@ -440,7 +442,7 @@ export type UsbProbeStatus = {
 /** Desktop-only native task ownership; not a ROS/Bridge input. */
 export type NativeTaskSnapshot = {
   id: number; epoch: number; window: string; command_id: string;
-  kind: "position" | "pick" | "motor";
+  kind: "position" | "pick" | "motor" | "gravity";
   phase: "submitting" | "running" | "stopping" | "uncertain";
   message: string;
 };

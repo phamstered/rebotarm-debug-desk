@@ -32,6 +32,6 @@ export function NativeTaskStatus() {
   if (!task && !error) return null;
   const page = task?.window.replace(/^page-/, "") as keyof typeof PAGE_TITLES;
   return <div className="global-motion-status" role="status" aria-label="原生共享运动任务">
-    {error || `${PAGE_TITLES[page] || task!.window} · ${task!.kind === "motor" ? "Motor 连续发送" : task!.kind === "pick" ? "视觉抓取" : "点位 / 动作组"} · ${PHASES[task!.phase]} · ${task!.message}`}
+    {error || `${PAGE_TITLES[page] || task!.window} · ${task!.kind === "gravity" ? "重力辨识" : task!.kind === "motor" ? "Motor 连续发送" : task!.kind === "pick" ? "视觉抓取" : "点位 / 动作组"} · ${PHASES[task!.phase]} · ${task!.message}`}
   </div>;
 }

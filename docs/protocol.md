@@ -127,6 +127,7 @@ Send goal（**必须** `confirmation: "ARMED"`）：
 ```json
 {
   "op": "gravity_id_send_goal",
+  "command_id": "uuid",
   "request_id": "uuid",
   "confirmation": "ARMED",
   "joint_mask": 63,
@@ -151,7 +152,7 @@ Send goal（**必须** `confirmation: "ARMED"`）：
 Cancel：
 
 ```json
-{"op":"gravity_id_cancel","request_id":"uuid"}
+{"op":"gravity_id_cancel","request_id":"uuid","command_id":"goal-uuid"}
 ```
 
 可选状态查询：
@@ -572,15 +573,15 @@ These IPC commands do not alter Bridge motion capabilities or remove any executi
 
 These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.
 
-### 原生任务状态（多窗口开发分支，覆盖 Position / Pick / Motor）
+### 原生任务状态（多窗口开发分支，覆盖 Position / Pick / Motor / Gravity）
 
-`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
 桌面原生层把页面的 `position_motion_info` / `visual_pick_status` 映射为共享只读缓存，各窗口均可观察，不直接发送续租请求。只有已受理且所属 WebView 仍存活的任务由 Rust 每 500 ms 续租：Position 使用 `position_motion_heartbeat`，Pick 使用原 `visual_pick_status`。页面不能直接请求 Position 心跳。窗口数据拉取/请求入口维护存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台查询与心跳不刷新窗口存活。取消可越过慢心跳；迟到回复按原生任务编号隔离。停止或重连后每秒查询终态：Position 必须有匹配 command_id、明确 terminal 及一致的完整 motion_state，Pick 必须有匹配编号且 busy=false 的 holding/failed/canceled。未知、单独 idle/busy=false 或 stop_failed 不解锁。恢复取得的完整终态会发给页面以释放同一动作组锁。缺少新能力的 Bridge 会阻止原生多窗口执行，并提示更新。
 
-原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹、重力辨识和 SSH 控制操作的完整原生生命周期仍待接入。
+原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹和 SSH 控制操作的完整原生生命周期仍待接入。
 
 
 Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
@@ -625,3 +626,16 @@ Monitor 使用 key `monitor`，仅实际 `page-monitor` / `page-dashboard` WebVi
 `handeye_capture` 和 `handeye_local` 新增必填 `operationId`（1–128 个 ASCII 字母、数字或连字符）。实际调用 WebView 必须为 `page-handeye`；主窗口或其他页面不能冒充提交。原生层先登记任务并占用页面迁移锁，才运行只读 SSH 采集或本地求解子进程。所属页面每秒调用 `native_local_task_touch({operationId})`，最多一个在途心跳；其他页面的快照查询不续租。取消使用 `native_local_task_cancel({operationId})`。取消或超过 5 秒无有效心跳后，原生看门狗停止等待并销毁工作 future，子进程设置 `kill_on_drop`；SSH 远端只读采集仍保留自身 12 秒超时。已过期、旧编号和其他页面心跳不能恢复任务。
 
 `native_local_task_snapshot` 返回 null 或 `{id,window,kind,phase,message}`，变化事件 `native-local-tasks-changed` 只通知重读。kind 为 capture/compute，phase 为 running/stopping/succeeded/failed/cancelled；仅保留最近一项，message 最多 512 字符。图像、样本、结果及 operationId 不广播。事件回调在状态锁外执行。任务取消/失败终态保留供其他窗口及重建页面读取；成功后全局状态条隐藏。断开/更换采集来源或页面卸载时前端请求取消并拒绝迟到结果。文件选择对话框、文件导出仍沿用既有前端忙状态，本阶段不宣称这些操作已经有同等原生任务生命周期。
+
+
+### 重力辨识任务租约与终态（多窗口开发分支）
+
+hello.gravity_task_supported=true 表示支持本节协议。开始和取消必须带独立于 request_id 的 command_id（1–80 个 ASCII 字母、数字或连字符），重复已保留编号拒绝。开始时即占用，ROS 尚未受理也不能提交第二个辨识；取消在 GoalHandle 到达前保留，之后重试。gravity_id_cancel_ack.accepted 仅表示取消请求登记，不能当作停止。异步发送异常返回 gravity_id_pending，结果未知时保留占用，不伪装成明确拒绝。
+
+gravity_id_heartbeat 带 command_id，仅原 WebSocket 所属者可续租；响应 gravity_id_heartbeat_ack.renewed。5 秒无有效续租或连接退出请求取消；普通 gravity_id_status / gravity_id_task_status 查询不续租。原生 Rust 每 500 ms 为仍存活的所属页面续租，所属页面退出/失联则按编号取消。页面不能直接调用原生心跳。无能力标志的 Bridge 拒绝原生重力辨识执行。
+
+反馈、状态、结果都带 command_id。数值反馈 phase 不表示执行终态。Action 返回之后为 status=awaiting_stop，仍持锁；等待结果之后的 HardwareStatus（HOLD 或 DISABLE）及 joint1–joint6 的有限位置、速度 ≤0.02 rad/s，原生接收龄 <500 ms、源时刻距 ROS 当前时刻 <1 秒，两路源时间均推进，连续满足 200 ms 且距 Action 返回至少 300 ms，才发送 gravity_id_result。该事件 terminal=true，task_phase 为 succeeded/failed/canceled。明确未受理的拒绝可以立即返回失败终态。反馈不完整、过期、倒退或 Action 结果未知时不释放。HOLD 是维持输出，不等于 DISABLE。
+
+gravity_id_task_status 按 command_id 返回 known、terminal、status 和完整 result；未知编号不代表任务结束。最多保留 256 项 / 2 MiB，每项最多 256 KiB；Bridge 重启或淘汰后返回未知。恢复必须核验编号及完整匹配终态。前端忽略旧编号、早到的 DONE/FAILED 反馈及晚到 ACK，不让它们解除当前任务占用。正式 Bridge 尚未部署此开发分支。
+
+辨识任务期间收到显式 DISABLE 时，会同时取消 Action，并记录“必须关闭输出”。鉴于当前编排器在返回结果后仍短暂发送 HOLD，Bridge 在结果返回至少 300 ms 后重新发布三帧清零的 DISABLE，每帧分配新的序列号；未确认时最多每秒重试一次。此时只有 mode=DISABLE 且 last_command_sequence 覆盖这批序列的新鲜固件反馈，连同上述六轴停稳条件，才能结束任务；HOLD 不满足。没有命令订阅者、没有确定 Action 结果或没有新鲜反馈时保持占用。该机制不承诺网络或硬件故障下的固定停机延迟。

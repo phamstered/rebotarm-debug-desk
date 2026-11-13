@@ -21,6 +21,7 @@ pub struct Owner {
 pub enum Kind {
     Position,
     Pick,
+    Gravity,
     Motor,
 }
 
@@ -112,6 +113,7 @@ fn start_kind(op: &str) -> Option<Kind> {
     match op {
         "position_move" | "position_group_start" => Some(Kind::Position),
         "visual_pick_start" => Some(Kind::Pick),
+        "gravity_id_send_goal" => Some(Kind::Gravity),
         _ => None,
     }
 }
@@ -228,9 +230,14 @@ impl Tasks {
         if is_motor && owner.window.label != "page-motor" {
             return Err("只有 Motor 页面可以发送连续关节指令".into());
         }
+        if op=="gravity_id_send_goal" && owner.window.label!="page-gravity" {return Err("只有重力辨识页面可以开始辨识".into());}
         if let Some(task) = &mut inner.task {
+            if op=="gravity_id_cancel" && (task.snapshot.kind!=Kind::Gravity || message["command_id"]!=task.snapshot.command_id) {
+                return Err("取消编号不匹配当前重力辨识任务".into());
+            }
             let cancel = (op == "joint_command" && message["mode"].as_i64() == Some(3))
                 || (op == "visual_pick_cancel" && task.snapshot.kind == Kind::Pick)
+                || (op == "gravity_id_cancel" && task.snapshot.kind == Kind::Gravity && message["command_id"]==task.snapshot.command_id)
                 || (op == "position_cancel"
                     && task.snapshot.kind == Kind::Position
                     && message["command_id"] == task.snapshot.command_id);
@@ -322,7 +329,7 @@ impl Tasks {
         // before another window acquired a task. Never renew for a dead owner.
         let is_heartbeat = heartbeat(op);
         let is_continuation = matches!(op, "position_group_pause" | "position_group_resume");
-        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel")
+        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel" | "gravity_id_cancel")
             || (op == "joint_command" && message["mode"].as_i64() == Some(3));
         let tasks = self.clone();
         let permit =
@@ -472,6 +479,10 @@ impl Tasks {
         };
         let terminal = match task.snapshot.kind {
             Kind::Motor => false,
+            Kind::Gravity => value["op"]=="gravity_id_task_status" && value["known"]==true && value["terminal"]==true &&
+                value["result"]["op"]=="gravity_id_result" && value["result"]["command_id"]==task.snapshot.command_id &&
+                value["result"]["terminal"]==true && value["status"]==value["result"]["task_phase"] &&
+                matches!(value["status"].as_str(),Some("succeeded" | "failed" | "canceled")),
             Kind::Position => {
                 value["op"] == "position_task_status"
                     && value["known"] == true
@@ -524,6 +535,7 @@ impl Tasks {
             value["command_id"] == task.snapshot.command_id
                 && match task.snapshot.kind {
                     Kind::Motor => false,
+                    Kind::Gravity => value["op"]=="gravity_id_heartbeat_ack" && value["renewed"]==true,
                     Kind::Position => {
                         value["op"] == "position_motion_heartbeat_ack" && value["renewed"] == true
                     }
@@ -557,6 +569,8 @@ impl Tasks {
             return;
         };
         let terminal = match task.snapshot.kind {
+            Kind::Gravity if message["op"]=="gravity_id_result" => message["terminal"]==true && matches!(message["task_phase"].as_str(),Some("succeeded" | "failed" | "canceled")),
+            Kind::Gravity if matches!(message["op"].as_str(),Some("gravity_id_status" | "gravity_id_feedback")) => false,
             Kind::Position if message["op"] == "position_motion" => matches!(
                 message["motion_phase"].as_str(),
                 Some("succeeded" | "failed" | "canceled")
@@ -710,6 +724,9 @@ impl Tasks {
         task.inflight = Some(action);
         let message = match (task.snapshot.kind, recovery, heartbeat) {
             (Kind::Motor, _, _) => unreachable!("Motor handled above"),
+            (Kind::Gravity, false, true) => json!({"op":"gravity_id_heartbeat","command_id":task.snapshot.command_id}),
+            (Kind::Gravity, false, false) => json!({"op":"gravity_id_cancel","command_id":task.snapshot.command_id}),
+            (Kind::Gravity, true, _) => json!({"op":"gravity_id_task_status","command_id":task.snapshot.command_id}),
             (Kind::Position, false, true) => {
                 json!({"op":"position_motion_heartbeat", "command_id":task.snapshot.command_id})
             }
@@ -1271,5 +1288,49 @@ mod motor_tests {
         );
         tasks.observe(3, &feedback(10, 3, 2));
         assert!(tasks.snapshot().is_none());
+    }
+}
+
+#[cfg(test)]
+mod gravity_tests {
+    use super::*;
+    fn owner() -> Owner { Owner { epoch: 1, window: WindowToken { label:"page-gravity".into(),incarnation:1 } } }
+    #[test]
+    fn gravity_requires_owner_and_correlated_terminal_not_cancel_ack_or_feedback() {
+        let tasks=Arc::new(Tasks::default()); let now=Instant::now();
+        let request=json!({"op":"gravity_id_send_goal","command_id":"gravity-1"});
+        let mut wrong=owner();wrong.window.label="main".into();
+        assert!(tasks.admit(wrong,&request,now).is_err());
+        let admitted=tasks.admit(owner(),&request,now).unwrap();
+        assert!(tasks.migration("page-gravity").is_err()); assert!(admitted.permit.unwrap()());
+        tasks.reply(admitted.ticket,1,&request,Ok(&json!({"op":"gravity_id_send_goal_ack","accepted":true,"command_id":"gravity-1"})));
+        let heartbeat=tasks.poll(1,now).unwrap();
+        assert_eq!(heartbeat.message["op"],"gravity_id_heartbeat");
+        tasks.finish_action(heartbeat.ticket,heartbeat.action);
+        tasks.lost(Some(&owner()),"closed");
+        assert!(!(heartbeat.permit)());
+        let cancel=tasks.poll(1,now).unwrap();assert_eq!(cancel.message["command_id"],"gravity-1");
+        assert_eq!(cancel.message["op"],"gravity_id_cancel");
+        for event in [
+            json!({"op":"gravity_id_cancel_ack","accepted":true,"command_id":"gravity-1"}),
+            json!({"op":"gravity_id_status","status":"idle","command_id":"gravity-1"}),
+            json!({"op":"gravity_id_feedback","phase":8,"command_id":"gravity-1"}),
+            json!({"op":"gravity_id_result","terminal":false,"task_phase":"succeeded","command_id":"gravity-1"}),
+            json!({"op":"gravity_id_result","terminal":true,"task_phase":"succeeded","command_id":"old"}),
+        ] {tasks.observe(1,&event); assert!(tasks.snapshot().is_some());}
+        tasks.observe(1,&json!({"op":"gravity_id_result","terminal":true,"task_phase":"canceled","command_id":"gravity-1"}));
+        assert!(tasks.snapshot().is_none());assert!(tasks.migration("page-gravity").is_ok());
+    }
+    #[test]
+    fn gravity_recovery_requires_full_retained_matching_terminal() {
+        let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        let a=tasks.admit(owner(),&json!({"op":"gravity_id_send_goal","command_id":"g"}),now).unwrap();
+        assert!(a.permit.unwrap()());tasks.lost(None,"disconnected");
+        let probe=tasks.poll(2,now).unwrap();assert_eq!(probe.message["op"],"gravity_id_task_status");
+        let proof=json!({"op":"gravity_id_task_status","command_id":"g","known":true,"terminal":true,"status":"failed",
+            "result":{"op":"gravity_id_result","command_id":"g","terminal":true,"task_phase":"failed"}});
+        for key in ["command_id","known","terminal","result"] {let mut bad=proof.clone();bad[key]=Value::Null;assert!(!tasks.recover(a.ticket.unwrap(),2,&bad));}
+        assert!(tasks.recover(a.ticket.unwrap(),2,&proof));
+        assert!(!(probe.permit)());assert!(tasks.snapshot().is_none());
     }
 }

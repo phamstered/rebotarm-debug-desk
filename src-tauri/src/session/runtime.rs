@@ -430,6 +430,8 @@ impl Runtime {
                                 if let Ok(frame) = &result {
                                     let state = if frame.op() == "position_task_status" {
                                         &frame.metadata["motion_state"]
+                                    } else if frame.op()=="gravity_id_task_status" {
+                                        &frame.metadata["result"]
                                     } else {
                                         &frame.metadata
                                     };
@@ -671,8 +673,11 @@ impl Runtime {
             core.transport.clone().ok_or("Bridge 尚未连接")?
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
-        if op == "position_motion_heartbeat" {
+        if matches!(op, "position_motion_heartbeat" | "gravity_id_heartbeat") {
             return Err("任务续租由原生会话管理，页面不能直接调用".into());
+        }
+        if op=="gravity_id_send_goal" && transport.hello.metadata["gravity_task_supported"]!=true {
+            return Err("请更新 Bridge：重力辨识需要编号、租约与停止确认".into());
         }
         if matches!(
             op,
@@ -1029,7 +1034,7 @@ mod tests {
                             socket.send(Message::Text(json!({"op":"topic_message", "topic":message["topic"], "data":"<robot name='fixture'/>"}).to_string().into())).await.unwrap();
                         }
                         match message["op"].as_str().unwrap() {
-                            "hello" => json!({"op":"hello", "motion_observation_supported":true}),
+                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true}),
                             "topics" => json!({"op":"topics", "topics":[], "request_id":message["request_id"]}),
                             "resource" => {
                                 let metadata = serde_json::to_vec(&json!({"op":"resource", "uri":message["uri"], "request_id":message["request_id"], "data_length":3})).unwrap();
@@ -1040,8 +1045,10 @@ mod tests {
                             "subscribe" if message["topic"] == "/z_rejected" => json!({"op":"error", "message":"fixture subscription rejected", "request_id":message["request_id"]}),
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
-                            "position_move" | "position_group_start" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
+                            "position_move" | "position_group_start" | "gravity_id_send_goal" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
                             "joint_command" => json!({"op":"joint_command_ack", "mode":message["mode"], "sequence":123, "request_id":message["request_id"]}),
+                            "gravity_id_heartbeat" => json!({"op":"gravity_id_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "gravity_id_cancel" => json!({"op":"gravity_id_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "position_cancel" => json!({"op":"position_cancel_ack", "request_id":message["request_id"]}),
                             "position_motion_info" => json!({"op":"position_motion_info", "busy":false, "request_id":message["request_id"]}),
                             "position_motion_observe" => json!({"op":"position_motion_info", "busy":false, "motion_log_session":"fixture", "motion_log_cursor":0, "motion_logs":[], "request_id":message["request_id"]}),
@@ -1218,6 +1225,25 @@ mod tests {
             .is_empty());
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn gravity_window_loss_cancels_by_id_and_waits_for_verified_result() {
+        let (port,events,seen,server)=fake_bridge().await;
+        let hub=Runtime::default();hub.connect(port).await.unwrap();
+        let (gravity,_)=hub.attach("page-gravity").unwrap();
+        let timeout=Duration::from_secs(2);
+        hub.request("page-gravity",&gravity,"task",json!({"op":"gravity_id_send_goal","command_id":"g"}),timeout).await.unwrap();
+        assert!(hub.tasks.migration("page-gravity").is_err());
+        hub.detach("page-gravity",&gravity).await.unwrap();
+        tokio::time::timeout(timeout,async {
+            while !seen.lock().unwrap().iter().any(|m|m["op"]=="gravity_id_cancel" && m["command_id"]=="g"){tokio::task::yield_now().await;}
+        }).await.unwrap();
+        assert!(hub.tasks.snapshot().is_some());
+        events.send(json!({"op":"gravity_id_result","command_id":"g","terminal":true,"task_phase":"canceled"})).unwrap();
+        tokio::time::timeout(timeout,async {while hub.tasks.snapshot().is_some(){tokio::task::yield_now().await;}}).await.unwrap();
+        assert!(hub.tasks.migration("page-gravity").is_ok());
+        hub.close();server.abort();
     }
 
     #[tokio::test]

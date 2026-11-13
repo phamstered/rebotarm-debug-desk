@@ -208,6 +208,7 @@ export function buildGravityIdSendGoalPayload(
   return { ok: true, payload: {
     op: "gravity_id_send_goal",
     request_id: requestId,
+    command_id: requestId,
     confirmation: "ARMED",
     joint_mask: effectiveJointMask(Number(form.jointMask) || 0),
     mode,
@@ -224,8 +225,8 @@ export function buildGravityIdSendGoalPayload(
   } };
 }
 
-export function buildGravityIdCancelPayload(requestId: string): Record<string, unknown> {
-  return { op: "gravity_id_cancel", request_id: requestId };
+export function buildGravityIdCancelPayload(requestId: string, commandId: string): Record<string, unknown> {
+  return { op: "gravity_id_cancel", request_id: requestId, command_id: commandId };
 }
 
 export function parseGravityIdFeedback(

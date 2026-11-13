@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import {
   FIRMWARE_SAFETY_NOTES,
@@ -20,7 +20,6 @@ import {
   parseGravityIdFeedback,
   parseGravityIdResult,
   phaseLabel,
-  sessionStateFromPhase,
   type GravityIdFeedback,
   type GravityIdGoalForm,
   type GravityIdResult,
@@ -68,12 +67,29 @@ export function GravityIdentificationPage({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"start" | "abort" | "">("");
+  const commandRef = useRef("");
+  const operationRef = useRef(0);
 
   const jointBits = useMemo(() => jointBitsFromMask(form.jointMask), [form.jointMask]);
   const phase = feedback?.phase;
   const running = session === "running" || session === "canceling" ||
     (phase !== undefined && isSessionRunningPhase(phase));
-  useEffect(() => { if (!connected) setArmed(false); }, [connected]);
+  useEffect(() => {
+    const operation = ++operationRef.current;
+    setBusy("");
+    if (!connected) {setArmed(false); return;}
+    let disposed=false;
+    void bridge.request({op:"gravity_id_status"}).then(message => {
+      if (disposed || operationRef.current!==operation || message.op!=="gravity_id_status") return;
+      if (message.busy===true && typeof message.command_id==="string" && message.command_id) {
+        commandRef.current=message.command_id;
+        setSession("canceling");
+        setStatusText(String(message.status || "等待停止确认"));
+        setNotice("已恢复原生任务状态；可 Abort，等待停止确认");
+      }
+    }).catch(() => undefined);
+    return () => {disposed=true;};
+  }, [connected, bridge]);
   const startAllowed = connected && canSendGravityIdGoal(armed ? "ARMED" : "", session) && !busy;
   const abortAllowed = canAbortGravityId(session) || running;
 
@@ -84,20 +100,24 @@ export function GravityIdentificationPage({
 
   useEffect(() => {
     const unsubscribe = bridge.onMessage((message: BridgeEnvelope) => {
+      if (message.op.startsWith("gravity_id_") && (!commandRef.current || message.command_id!==commandRef.current)) return;
       if (message.op === "gravity_id_feedback") {
         const parsed = parseGravityIdFeedback(message);
         if (parsed) {
           setFeedback(parsed);
-          setSession(sessionStateFromPhase(parsed.phase));
+          // Feedback DONE/FAILED may precede firmware HOLD and disarm.
+          setSession(current => current==="canceling" ? current : "running");
           setError("");
         }
         return;
       }
       if (message.op === "gravity_id_result") {
+        if (message.terminal!==true || !["succeeded","failed","canceled"].includes(message.task_phase ?? "")) return;
         const parsed = parseGravityIdResult(message);
         if (parsed) {
           setResult(parsed);
-          setSession("idle");
+          commandRef.current="";
+          setFeedback(null); setSession("idle"); setStatusText(message.task_phase!);
           setNotice(parsed.success ? (parsed.message || "辨识完成") : (parsed.message || "辨识失败"));
           if (!parsed.success) setError(parsed.message || "GravityIdentification 失败");
         }
@@ -107,15 +127,14 @@ export function GravityIdentificationPage({
         const status = String((message as BridgeEnvelope & { status?: string }).status ?? "");
         if (status) {
           setStatusText(status);
-          if (status === "idle" || status === "rejected") setSession("idle");
-          else if (status === "canceling") setSession("canceling");
+          if (status === "canceling" || status === "awaiting_stop") setSession("canceling");
           else if (status === "executing" || status === "accepted") setSession("running");
         }
       }
       if (message.op === "disconnected") {
-        setSession("idle");
-        setFeedback(null);
-        setStatusText("idle");
+        operationRef.current++;
+        setArmed(false); setFeedback(null); setBusy("");
+        if (commandRef.current) {setSession("canceling");setStatusText("连接中断，停止未确认");}
       }
     });
     return unsubscribe;
@@ -126,6 +145,7 @@ export function GravityIdentificationPage({
   }
 
   async function start() {
+    const operation=++operationRef.current;
     setBusy("start");
     setError("");
     setNotice("");
@@ -137,28 +157,38 @@ export function GravityIdentificationPage({
         crypto.randomUUID(),
       );
       if (!built.ok) throw new Error(built.error);
-      await bridge.request(built.payload as never);
+      commandRef.current=String(built.payload.command_id);
+      const reply=await bridge.request(built.payload as never);
+      if (operationRef.current!==operation || commandRef.current!==built.payload.command_id) return;
+      if (reply.op!=="gravity_id_send_goal_ack" || reply.accepted!==true || reply.command_id!==commandRef.current) throw new Error("重力辨识受理响应不匹配");
       setSession("running");
       setNotice("Goal 已发送，等待 Feedback…");
     } catch (reason) {
+      if (operationRef.current!==operation) return;
       setSession("idle");
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy("");
+      if (operationRef.current===operation) setBusy("");
     }
   }
 
   async function abort() {
+    const commandId=commandRef.current;
+    if (!commandId) return;
+    const operation=++operationRef.current;
     setBusy("abort");
     setError("");
     try {
-      await bridge.request(buildGravityIdCancelPayload(crypto.randomUUID()) as never);
+      const response=await bridge.request(buildGravityIdCancelPayload(crypto.randomUUID(), commandId) as never);
+      if (operationRef.current!==operation || commandRef.current!==commandId) return;
+      if (response.accepted!==true) throw new Error("取消未被受理，继续等待原任务终态");
       setSession("canceling");
       setNotice("已请求 Abort → 目标 HOLD（非 DISABLE）");
     } catch (reason) {
+      if (operationRef.current!==operation) return;
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy("");
+      if (operationRef.current===operation) setBusy("");
     }
   }
 

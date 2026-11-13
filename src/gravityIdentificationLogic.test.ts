@@ -88,7 +88,7 @@ describe("gravityIdentificationLogic ARMED gate", () => {
       write_yaml: true,
       lock_gripper: true,
     });
-    expect(buildGravityIdCancelPayload("c1")).toEqual({ op: "gravity_id_cancel", request_id: "c1" });
+    expect(buildGravityIdCancelPayload("c1", "r2")).toEqual({ op: "gravity_id_cancel", request_id: "c1", command_id: "r2" });
   });
 
   it("rejects invalid mode / non-finite goal fields", () => {

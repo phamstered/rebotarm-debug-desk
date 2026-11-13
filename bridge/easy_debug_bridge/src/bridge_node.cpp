@@ -42,6 +42,7 @@
 #include "easy_debug_bridge/bridge_build_id.hpp"
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion.hpp"
+#include "easy_debug_bridge/gravity_task_core.hpp"
 #include "easy_debug_bridge/clock_sync_core.hpp"
 #include "easy_debug_bridge/topic_json.hpp"
 
@@ -433,6 +434,10 @@ class BridgeNode : public rclcpp::Node {
           if (firmware_clock_.observe(message->data, std::chrono::steady_clock::now()))
             clock_monitor_.new_epoch();
         }, safety_options);
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+    ensure_gravity_id_client();
+    gravity_id_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { gravity_id_tick(); });
+#endif
     controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_);
     visual_pick_ = std::make_unique<easy_debug_bridge::VisualPick>(get_parameter("visual_pick_config").as_string(),
@@ -513,6 +518,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void remove_session(uint64_t client) {
+    gravity_id_disconnect(client);
     if(visual_pick_)visual_pick_->cancel(client);
     controller_registry_->disconnected(client);
     position_motion_->disconnected(client);
@@ -559,10 +565,12 @@ class BridgeNode : public rclcpp::Node {
     const std::string op = request.get<std::string>("op", "");
     const std::string request_id = request.get<std::string>("request_id", "");
     try {
+      if (gravity_id_busy() && (op=="position_move" || op=="position_group_start" || op=="position_group_resume" || op=="visual_pick_start" || op=="trajectory_command" || (op=="joint_command" && request.get<int>("mode",-1)!=3)))
+        throw std::runtime_error("重力辨识持有运动锁，需等待停止确认");
       if (op == "hello") {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
-                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"motion_observation_supported\":true,\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
+                     EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"motion_observation_supported\":true,\"gravity_task_supported\":true,\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
                      ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
@@ -630,9 +638,9 @@ class BridgeNode : public rclcpp::Node {
       } else if (op == "gravity_id_send_goal") {
         gravity_id_send_goal(session, request, request_id);
       } else if (op == "gravity_id_cancel") {
-        gravity_id_cancel(session, request_id);
-      } else if (op == "gravity_id_status") {
-        gravity_id_send_status(session, request_id);
+        gravity_id_cancel(session, request, request_id);
+      } else if (op == "gravity_id_status" || op == "gravity_id_task_status" || op == "gravity_id_heartbeat") {
+        gravity_id_send_status(session, request, request_id);
       } else {
         session->send(error_message(request_id, "未知操作：" + op));
       }
@@ -1034,7 +1042,7 @@ class BridgeNode : public rclcpp::Node {
     const double effort = request.get<double>("effort", 0.0);
     const bool disable = mode_value == microros_stm32h723_bridge::msg::JointCommand::MODE_DISABLE;
     if ((position_motion_->busy() || visual_pick_->busy()) && !disable) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
-    if (disable) { visual_pick_->cancel(); position_motion_->disconnected(0); }
+    if (disable) { gravity_id_disable(); visual_pick_->cancel(); position_motion_->disconnected(0); }
 
     easy_debug_bridge::CommandFields fields;
     fields.mode = mode_value;
@@ -1267,52 +1275,103 @@ class BridgeNode : public rclcpp::Node {
     return goal;
   }
 
-  void gravity_id_send_status(const std::shared_ptr<WebSocketSession> &session,
-                              const std::string &request_id) {
-#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
-    std::string status = "idle";
-    {
-      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-      status = gravity_id_status_;
-    }
-    session->send("{\"op\":\"gravity_id_status\",\"request_id\":" + json_quote(request_id) +
-                  ",\"status\":" + json_quote(status) + "}");
-#else
-    session->send(error_message(
-        request_id,
-        "GravityIdentification action 未编译进 Bridge（Jetson 需 stack PR #23 的 "
-        "microros_stm32h723_bridge，并重新 colcon build easy_debug_bridge）"));
-#endif
+  static std::string gravity_rejected_json(const std::string &id, const std::string &message) {
+    return "{\"op\":\"gravity_id_result\",\"command_id\":"+json_quote(id)+",\"terminal\":true,\"task_phase\":\"failed\",\"success\":false,\"message\":"+json_quote(message)+"}";
   }
-
-  void gravity_id_cancel(const std::shared_ptr<WebSocketSession> &session,
-                         const std::string &request_id) {
-#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
-    std::shared_ptr<GoalHandleGravityId> handle;
-    {
-      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-      handle = gravity_id_goal_handle_;
-      gravity_id_status_ = "canceling";
-    }
-    if (!handle) {
-      session->send(error_message(request_id, "没有正在执行的 GravityIdentification goal"));
+  bool gravity_id_busy() {
+    std::lock_guard<std::mutex> lock(gravity_id_mutex_); return gravity_task_.busy();
+  }
+  void gravity_id_disable() {
+    std::lock_guard<std::mutex> lock(gravity_id_mutex_); gravity_task_.disable();
+  }
+  void gravity_id_disconnect(uint64_t owner) {
+    std::lock_guard<std::mutex> lock(gravity_id_mutex_); gravity_task_.lost(owner);
+  }
+  void gravity_id_send_status(const std::shared_ptr<WebSocketSession> &session,
+                              const boost::property_tree::ptree &request,
+                              const std::string &request_id) {
+    const auto op=request.get<std::string>("op","");
+    const auto id=request.get<std::string>("command_id","");
+    if (op!="gravity_id_status" && !easy_debug_bridge::valid_motion_command_id(id))
+      throw std::runtime_error("重力辨识 command_id 无效");
+    std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+    if (op=="gravity_id_heartbeat") {
+      const bool renewed=gravity_task_.renew(session->id(),id,std::chrono::steady_clock::now());
+      session->send("{\"op\":\"gravity_id_heartbeat_ack\",\"request_id\":"+json_quote(request_id)+",\"command_id\":"+json_quote(id)+",\"renewed\":"+(renewed?"true":"false")+"}");
       return;
     }
-    ensure_gravity_id_client();
-    gravity_id_client_->async_cancel_goal(
-        handle,
-        [this, session, request_id](auto /*cancel_response*/) {
-          session->send("{\"op\":\"gravity_id_cancel_ack\",\"request_id\":" +
-                        json_quote(request_id) + "}");
-          broadcast("{\"op\":\"gravity_id_status\",\"status\":\"canceling\"}");
-        });
-#else
-    session->send(error_message(
-        request_id,
-        "GravityIdentification action 未编译进 Bridge（Jetson 需 stack PR #23 的 "
-        "microros_stm32h723_bridge，并重新 colcon build easy_debug_bridge）"));
-#endif
+    const auto &active=gravity_task_.active();
+    const bool current=active && (id.empty() || active->id==id);
+    const auto phase=gravity_task_.terminal(id);
+    const std::string selected=current?active->id:id;
+    session->send("{\"op\":"+json_quote(op)+",\"request_id\":"+json_quote(request_id)+",\"command_id\":"+json_quote(selected)+
+      ",\"known\":"+(current || phase?"true":"false")+",\"terminal\":"+(phase?"true":"false")+
+      ",\"busy\":"+(current?"true":"false")+",\"status\":"+json_quote(current?active->phase:phase.value_or("unknown"))+
+      ",\"result\":"+(phase?gravity_task_.retained(id):"null")+"}");
   }
+  void gravity_id_cancel(const std::shared_ptr<WebSocketSession> &session,
+                         const boost::property_tree::ptree &request,
+                         const std::string &request_id) {
+    const auto id=request.get<std::string>("command_id","");
+    if (!easy_debug_bridge::valid_motion_command_id(id)) throw std::runtime_error("取消重力辨识需指定 command_id");
+    std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+    const bool accepted=gravity_task_.cancel(id);
+    session->send("{\"op\":\"gravity_id_cancel_ack\",\"request_id\":"+json_quote(request_id)+",\"command_id\":"+json_quote(id)+",\"accepted\":"+(accepted?"true":"false")+"}");
+  }
+#if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
+  void gravity_id_tick() {
+    using Clock=std::chrono::steady_clock;
+    const auto at=Clock::now();
+    int64_t status_stamp=0,joint_stamp=0;
+    uint8_t mode=0;uint32_t sequence=0;
+    bool stopped=false;
+    {
+      std::lock_guard<std::mutex> lock(control_mutex_);
+      const auto stamp=[](const auto &s){return static_cast<int64_t>(s.sec)*1000000000LL+s.nanosec;};
+      status_stamp=stamp(latest_status_.header.stamp);joint_stamp=stamp(latest_joint_state_.header.stamp);
+      mode=latest_status_.mode;sequence=latest_status_.last_command_sequence;
+      const auto ros_now=now().nanoseconds();
+      stopped=have_status_ && have_joint_state_ && (latest_status_.mode==0 || latest_status_.mode==3) &&
+        at-status_received_at_<std::chrono::milliseconds(500) && at-joint_received_at_<std::chrono::milliseconds(500) &&
+        status_stamp>0 && joint_stamp>0 && ros_now>=status_stamp && ros_now-status_stamp<1000000000LL &&
+        ros_now>=joint_stamp && ros_now-joint_stamp<1000000000LL;
+      for (int joint=1;joint<=6;++joint) {
+        const auto &names=latest_joint_state_.name;
+        const auto name="joint"+std::to_string(joint);
+        const auto found=std::find(names.begin(),names.end(),name);
+        const auto index=static_cast<size_t>(std::distance(names.begin(),found));
+        stopped=stopped && found!=names.end() && std::count(names.begin(),names.end(),name)==1 &&
+          index<latest_joint_state_.position.size() && index<latest_joint_state_.velocity.size() &&
+          std::isfinite(latest_joint_state_.position[index]) && std::isfinite(latest_joint_state_.velocity[index]) &&
+          std::abs(latest_joint_state_.velocity[index])<=0.02;
+      }
+    }
+    std::shared_ptr<GoalHandleGravityId> handle;
+    std::optional<easy_debug_bridge::GravityTaskCore::Task> done;
+    {
+      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+      done=gravity_task_.observe_stop(at,status_stamp,joint_stamp,stopped,mode,sequence);
+      // A canceled orchestrator briefly publishes HOLD after its Action result.
+      // Reassert an explicitly requested DISABLE after that interval, then
+      // require firmware confirmation of the newly allocated sequence.
+      if (gravity_task_.disable_due(at) && command_publisher_->get_subscription_count()>0) {
+        microros_stm32h723_bridge::msg::JointCommand command;
+        command.mode=3;command.position.fill(0);command.velocity.fill(0);
+        command.kp.fill(0);command.kd.fill(0);command.effort.fill(0);
+        std::vector<uint32_t> sequences;
+        {std::lock_guard<std::mutex> control(control_mutex_);sequences=easy_debug_bridge::allocate_sequences(sequence_,3);}
+        for (auto value:sequences) {command.sequence=value;command.header.stamp=now();command_publisher_->publish(command);}
+        gravity_task_.disabled_sent(sequences.back(),at);
+      }
+      if (gravity_task_.cancel_due(at)) handle=gravity_id_goal_handle_;
+    }
+    if (done) broadcast(done->result_json);
+    if (handle) {
+      try { gravity_id_client_->async_cancel_goal(handle); }
+      catch (const std::exception &error) {RCLCPP_WARN(get_logger(),"Gravity cancel pending: %s",error.what());}
+    }
+  }
+#endif
 
   void gravity_id_send_goal(const std::shared_ptr<WebSocketSession> &session,
                             const boost::property_tree::ptree &request,
@@ -1326,19 +1385,16 @@ class BridgeNode : public rclcpp::Node {
       return;
     }
 #if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID
-    ensure_gravity_id_client();
+    const auto id=request.get<std::string>("command_id","");
+    {
+      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+      gravity_task_.start(session->id(),id,std::chrono::steady_clock::now());
+    }
     if (!gravity_id_client_->wait_for_action_server(std::chrono::milliseconds(500))) {
+      {std::lock_guard<std::mutex> lock(gravity_id_mutex_);gravity_task_.rejected(id,gravity_rejected_json(id,"Action server unavailable"));}
       session->send(error_message(request_id, "GravityIdentification action 服务器 /StartGravityID 不可用"));
       return;
     }
-    {
-      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-      if (gravity_id_goal_handle_) {
-        session->send(error_message(request_id, "已有 GravityIdentification goal 在执行，请先 Abort"));
-        return;
-      }
-    }
-
     using GravityIdentification = microros_stm32h723_bridge::action::GravityIdentification;
     auto goal = GravityIdentification::Goal();
     goal.joint_mask = easy_debug_bridge::gravity_id_effective_mask(fields.joint_mask);
@@ -1356,33 +1412,27 @@ class BridgeNode : public rclcpp::Node {
 
     auto options = rclcpp_action::Client<GravityIdentification>::SendGoalOptions();
     options.goal_response_callback =
-        [this, session, request_id](std::shared_ptr<GoalHandleGravityId> handle) {
+        [this, session, request_id, id](std::shared_ptr<GoalHandleGravityId> handle) {
           if (!handle) {
-            {
-              std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-              gravity_id_status_ = "idle";
-              gravity_id_goal_handle_.reset();
-            }
-            session->send(error_message(request_id, "GravityIdentification goal 被拒绝"));
-            broadcast("{\"op\":\"gravity_id_status\",\"status\":\"rejected\"}");
-            return;
+            const auto event=gravity_rejected_json(id,"GravityIdentification goal 被拒绝");
+            {std::lock_guard<std::mutex> lock(gravity_id_mutex_);gravity_task_.rejected(id,event);}
+            session->send(error_message(request_id,"GravityIdentification goal 被拒绝"));broadcast(event);return;
           }
           {
             std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-            gravity_id_goal_handle_ = handle;
-            gravity_id_status_ = "executing";
-            gravity_id_last_feedback_at_ = std::chrono::steady_clock::time_point{};
+            if (!gravity_task_.matches(id)) {gravity_id_client_->async_cancel_goal(handle);return;}
+            gravity_id_goal_handle_=handle;gravity_task_.accepted(id);
+            gravity_id_last_feedback_at_={};
           }
-          session->send("{\"op\":\"gravity_id_send_goal_ack\",\"request_id\":" +
-                        json_quote(request_id) + ",\"accepted\":true}");
-          broadcast("{\"op\":\"gravity_id_status\",\"status\":\"executing\"}");
+          session->send("{\"op\":\"gravity_id_send_goal_ack\",\"request_id\":"+json_quote(request_id)+",\"command_id\":"+json_quote(id)+",\"accepted\":true}");
         };
     options.feedback_callback =
-        [this](GoalHandleGravityId::SharedPtr,
+        [this, id](GoalHandleGravityId::SharedPtr,
                const std::shared_ptr<const GravityIdentification::Feedback> feedback) {
           const auto now = std::chrono::steady_clock::now();
           {
             std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+            if (!gravity_task_.matches(id) || gravity_task_.active()->result_received) return;
             if (gravity_id_last_feedback_at_.time_since_epoch().count() != 0) {
               const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                   now - gravity_id_last_feedback_at_).count();
@@ -1391,7 +1441,7 @@ class BridgeNode : public rclcpp::Node {
             gravity_id_last_feedback_at_ = now;
           }
           std::ostringstream out;
-          out << "{\"op\":\"gravity_id_feedback\""
+          out << "{\"op\":\"gravity_id_feedback\",\"command_id\":" << json_quote(id)
               << ",\"phase\":" << static_cast<int>(feedback->phase)
               << ",\"pose_index\":" << feedback->pose_index
               << ",\"pose_count\":" << feedback->pose_count
@@ -1405,16 +1455,22 @@ class BridgeNode : public rclcpp::Node {
           broadcast(out.str());
         };
     options.result_callback =
-        [this](const GoalHandleGravityId::WrappedResult &result) {
+        [this, id](const GoalHandleGravityId::WrappedResult &result) {
+          if (result.code!=rclcpp_action::ResultCode::SUCCEEDED && result.code!=rclcpp_action::ResultCode::ABORTED && result.code!=rclcpp_action::ResultCode::CANCELED) {
+            std::lock_guard<std::mutex> lock(gravity_id_mutex_);gravity_task_.cancel(id);return;
+          }
+          int64_t status_stamp=0,joint_stamp=0;
           {
-            std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-            gravity_id_goal_handle_.reset();
-            gravity_id_status_ = "idle";
+            std::lock_guard<std::mutex> lock(control_mutex_);
+            status_stamp=static_cast<int64_t>(latest_status_.header.stamp.sec)*1000000000LL+latest_status_.header.stamp.nanosec;
+            joint_stamp=static_cast<int64_t>(latest_joint_state_.header.stamp.sec)*1000000000LL+latest_joint_state_.header.stamp.nanosec;
           }
           const bool success = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
                                result.result && result.result->success;
           std::ostringstream out;
-          out << "{\"op\":\"gravity_id_result\""
+          const std::string phase=success?"succeeded":result.code==rclcpp_action::ResultCode::CANCELED?"canceled":"failed";
+          out << "{\"op\":\"gravity_id_result\",\"terminal\":true,\"command_id\":" << json_quote(id)
+              << ",\"task_phase\":" << json_quote(phase)
               << ",\"success\":" << (success ? "true" : "false")
               << ",\"code\":" << static_cast<int>(result.code);
           if (result.result) {
@@ -1431,15 +1487,24 @@ class BridgeNode : public rclcpp::Node {
                    "\"message\":" << json_quote("GravityIdentification 无 result 载荷");
           }
           out << '}';
-          broadcast(out.str());
-          broadcast("{\"op\":\"gravity_id_status\",\"status\":\"idle\"}");
+          {
+            std::lock_guard<std::mutex> lock(gravity_id_mutex_);
+            if (!gravity_task_.matches(id)) return;
+            gravity_id_goal_handle_.reset();
+            const auto payload=out.str();
+            gravity_task_.result(id,payload.size()>256*1024?"failed":phase,
+              payload.size()>256*1024?gravity_rejected_json(id,"Action 结果过大；仅保留停止确认"):payload,
+              std::chrono::steady_clock::now(),status_stamp,joint_stamp);
+          }
+          broadcast("{\"op\":\"gravity_id_status\",\"command_id\":"+json_quote(id)+",\"status\":\"awaiting_stop\",\"terminal\":false,\"busy\":true}");
         };
-
-    {
-      std::lock_guard<std::mutex> lock(gravity_id_mutex_);
-      gravity_id_status_ = "accepted";
+    try {gravity_id_client_->async_send_goal(goal, options);}
+    catch (const std::exception &error) {
+      {std::lock_guard<std::mutex> lock(gravity_id_mutex_);gravity_task_.cancel(id);}
+      // An async send exception is not proof that the ROS goal was rejected.
+      session->send("{\"op\":\"gravity_id_pending\",\"request_id\":"+json_quote(request_id)+",\"command_id\":"+json_quote(id)+",\"message\":"+json_quote(std::string("Goal 发布结果未知，保持占用并请求取消：")+error.what())+"}");
     }
-    gravity_id_client_->async_send_goal(goal, options);
+
 #else
     session->send(error_message(
         request_id,
@@ -2277,7 +2342,8 @@ class BridgeNode : public rclcpp::Node {
       microros_stm32h723_bridge::action::GravityIdentification>> gravity_id_goal_handle_;
 #endif
   std::mutex gravity_id_mutex_;
-  std::string gravity_id_status_{"idle"};
+  easy_debug_bridge::GravityTaskCore gravity_task_;
+  rclcpp::TimerBase::SharedPtr gravity_id_timer_;
   std::chrono::steady_clock::time_point gravity_id_last_feedback_at_{};
 };
 
