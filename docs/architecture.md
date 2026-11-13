@@ -266,3 +266,5 @@ Controller 停止证明由 session/controller_stop.rs 持有，与远端完成�
 
 
 rosbag 录制与回放的只读状态也由 `session/observations.rs` 调度，分别通过固定 SSH status 命令读取，所有 WebView 只消费带连接代次和帧龄的快照。窗口不发起启动时的重复 bag 查询，手动刷新及操作后复查走相同的串行源。查询不依赖主窗口存活；断开会话取消查询，不把取消只读探测等同于停止远端录制或回放。
+
+有限 rosbag 启动/停止操作由 `session/bag_operation.rs` 的应用级 worker 持有，与原生页面迁移使用同一页面操作锁，并按录制/回放分别互斥。提交前核对原始 WebView incarnation 与共享连接；提交后不依赖发起 IPC future。远端 journal 成功后，原机器人连接的共享状态源排在旧查询之后重新核验。不同机器人连接不参与该任务恢复。后台 worker 目前随桌面进程存在，长期 bag 进程管理及桌面进程重启恢复尚未完成。

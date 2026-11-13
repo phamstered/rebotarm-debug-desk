@@ -1,3 +1,4 @@
+import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
 import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
@@ -102,7 +103,7 @@ export function NativeOfflineWorkspace({ page, snapshot, onSelect, onConnection,
       <button onClick={onConnection}>返回连接</button>
     </header>
     {error && <div className="native-workspace-error" role="alert">{error}<button onClick={onDismissError}>关闭提示</button></div>}
-    <NativeLocalTaskStatus />
+    <NativeLocalTaskStatus /><NativeBagOperationStatus />
     <NativeWorkspaceHost page={page} snapshot={snapshot} covered={false} onError={onError} />
   </main>;
 }

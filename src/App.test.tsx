@@ -161,6 +161,7 @@ describe("App workflow", () => {
         const snapshot = {revision: before.revision + 1, content: args!.content!}; documents.set(key, snapshot);
         return Promise.resolve({accepted: true, snapshot});
       }
+      if (command === "native_bag_operation_snapshot") return Promise.resolve([]);
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "data_collection_action") return Promise.resolve({
         state: "stopped", managed: false, pid: 0, recording: false, pendingFrames: 0, savedEpisodes: 0,

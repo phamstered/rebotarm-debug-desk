@@ -652,3 +652,7 @@ workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebV
 
 
 `bag_record` / `bag_play` 的 value 分别沿用 `RosbagStatus` / `RosbagPlayStatus`（camelCase 字段），每次查询结束后间隔 5 秒，超时 10 秒，新鲜度上限 8 秒且包含查询耗时。两源独立串行，共用现有 SSH Profile；只读 status 不创建目录或改 PID 文件。断线或超时丢弃探测 future 时终止其本机 SSH 子进程，启动/停止操作不套用这个行为。桌面录制/回放操作返回后使用 `afterPending:true` 复查并广播快照；命令返回值不作为其他窗口的当前状态。未知状态保留为 null，不等同于 idle。此处仅是状态查询协议，不提供录制/回放任务的全局互斥或退出恢复。
+
+`start_rosbag_recording` / `stop_rosbag_recording` / `start_rosbag_playback` / `stop_rosbag_playback` 通过真实 Tauri WebView 鉴权，核对已附着页面、连接代次及当前共享 Profile。录制允许 main / page-dashboard / page-motion，回放只允许 page-monitor。响应仍为原有状态对象，但现在来自远端操作成功后重新取得的新鲜共享状态；25 秒内未确认时 IPC 返回仍在核验的错误，原生后台继续。
+
+`native_bag_operation_snapshot` 返回至多两项（record / play）的最新操作元数据：`id, kind, window, host, starting, phase, message`；phase 为 submitting / verifying / uncertain / succeeded / failed。`native-bag-operations-changed` 仅发失效通知，读取不续租或重发指令。同类未确认操作不允许重复提交。操作复用现有一次性 SSH journal（内部 controller- 编号及记录目录，编号和完整命令 SHA-256 绑定）；对未知、运行中及执行后不确定结果仅查询恢复，只有明确未启动的 rejected 可按未执行释放。保留的记录和页面状态不构成应用进程重启后的任务自动恢复。

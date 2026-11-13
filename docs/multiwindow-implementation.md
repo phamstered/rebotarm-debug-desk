@@ -300,3 +300,15 @@ SSH 回复丢失可以通过只读记录查询恢复；CLI 本身失败/超时�
 最终 `npm test` 全部通过：898 前端 / 169 Rust / 3 运行库测试及全部其余脚本，日志 `/tmp/260-bag-shared-final-tests.log`。`npm run build`、文档构建和 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-bag-shared-{build,docs,native-build}.log`。只读 shell 在临时 HOME 中实际执行，确认空目录不产生文件、已有无效 PID 和路径文件不被修改。首次定向 Rust 构建的序列化类型错误及原生工具栏测试定位错误已修正；以上为最终完整重跑结果。
 
 本轮 CUA 返回 Mac 锁屏错误，已请求解锁；尚未退出旧隔离应用、替换隔离 bundle 或完成本轮真实窗口复验，不将前一构建的原生验证计为本轮结果。没有安装正式应用、没有修改或部署 Bridge、没有启动录制/回放或机器人动作。仍需真实窗口复验及完整目标中的其余任务生命周期、多屏性能和最终发布验收。
+
+## rosbag 有限操作的原生归属
+
+本阶段将启动/停止请求移到应用级 worker，并复用一次性远端 journal。发送前登记真实页面/连接/完整 Profile；与迁移共用 local_operation 锁，同类录制或回放操作跨窗口互斥。未发送而页面失效可撤销；已发送后页面 IPC 消失不取消 worker。正常完成需要远端成功记录及原连接新的共享状态；未知结果保留占用且只查询、不重新提交。IPC 等待 25 秒后返回仍在核验，不代表后台任务结束。连接页、离线工作区及功能页显示保留的操作元数据。
+
+同时修复原停止脚本在 TERM 后立即删 PID 并报告 STOPPED 的问题：再次等待并检查记录 PID；仍存在则非零退出并保留文件，不作为停止完成。隔离 shell 测试将 kill / ps / sleep 替换为本地函数，验证进程拒绝退出时标记保留，以及退出后才清理；没有对真实进程发信号。
+
+此阶段尚不接管整段录制/回放运行期、进程组/启动身份或桌面进程重启恢复；有限操作核验结束后页面可迁移，不能据此宣称采集全过程的原生生命周期完成。播放与其他运动任务的完整协调也仍待后续接入。
+
+本阶段最终 `npm test` 全部通过（901 前端 / 174 Rust / 3 运行库测试及全部其余脚本），日志 `/tmp/260-bag-operation-all-tests.log`。`npm run build`、`npm run docs:build` 和独立标识的 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-bag-operation-{build,docs,native-build}.log`。新增 loopback Bridge 回归检查实际页面附着、Profile、连接与页面 incarnation；本地异步测试确认 IPC future 取消后 worker 继续持有迁移许可直至核验结束。前端覆盖共享提示、过期初读不覆盖新终态、查询失败不显示空闲。远端 journal 的既有进程回归随全量测试重跑，本阶段没有在真实 Jetson 发起 bag 操作。
+
+CUA 再次确认 Mac 处于锁屏状态；此前解锁请求仍待回复，没有重复索要。此次尚未替换隔离 .app 或进行新一轮原生窗口验证，正式应用及生产 Bridge 未更新。上述构建是二进制构建，不是安装或部署。完整目标保持进行中。

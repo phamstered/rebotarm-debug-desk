@@ -79,6 +79,7 @@ impl Core {
 pub struct Runtime {
     pub tasks: Arc<Tasks>,
     pub local_tasks: Arc<super::local_tasks::LocalTasks>,
+    pub bag_operations: Arc<super::bag_operation::Operations>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
     motion_logs: Arc<super::motion_observations::MotionLogs>,
@@ -95,6 +96,7 @@ impl Default for Runtime {
         Self {
             tasks: Arc::new(Tasks::default()),
             local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
+            bag_operations: Arc::new(super::bag_operation::Operations::default()),
             observations: Arc::new(super::observations::Observations::default()),
             resources: Arc::new(super::resources::Resources::default()),
             motion_logs: Arc::new(super::motion_observations::MotionLogs::default()),
@@ -171,6 +173,19 @@ impl Runtime {
     }
     pub fn set_profile(&self, profile: Value) {
         self.core.lock().unwrap().profile = profile;
+    }
+    pub fn begin_bag(&self,label:&str,profile:&crate::ConnectionProfile,kind:super::bag_operation::Kind,starting:bool)->Result<(u64,Owner),String> {
+        let core=self.core.lock().unwrap();
+        if core.error.is_some() || core.transport.is_none() || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 请求与当前共享连接不一致或已断开".into());}
+        let window=core.clients.iter().find(|(token,client)|token.label==label && client.error.is_none()).map(|(token,_)|token.clone()).ok_or("功能页面尚未附着当前连接")?;
+        let owner=Owner{epoch:core.epoch,window};
+        let id=self.bag_operations.begin(&self.tasks,owner.clone(),kind,starting,profile.host.clone())?;
+        Ok((id,owner))
+    }
+    pub fn send_bag(&self,owner:&Owner,id:u64,profile:&crate::ConnectionProfile,kind:super::bag_operation::Kind)->Result<(),String> {
+        let core=self.core.lock().unwrap();
+        if core.error.is_some() || core.transport.is_none() || core.epoch!=owner.epoch || !core.clients.get(&owner.window).is_some_and(|client|client.error.is_none()) || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 提交前连接或页面已失效".into());}
+        self.bag_operations.sending(kind,id,owner)
     }
     pub fn begin_controller(&self, label: &str, profile: &crate::ConnectionProfile) -> Result<u64, String> {
         let core = self.core.lock().unwrap();
@@ -1441,6 +1456,26 @@ mod tests {
         assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="unsubscribe" && m["topic"]=="/status"));
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn bag_admission_and_send_require_current_connection_profile_and_exact_page_incarnation() {
+        use super::super::bag_operation::{Kind,Phase};
+        let (port,_events,_seen,server)=fake_bridge().await;let hub=Runtime::default();
+        let profile=json!({"host":"127.0.0.1","sshPort":1,"username":"fixture","identityFile":"", "localPort":port,"remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash","commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
+        let request:crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
+        assert!(hub.begin_bag("page-motion",&request,Kind::Record,true).is_err());
+        hub.set_profile(profile);hub.connect(port).await.unwrap();
+        assert!(hub.begin_bag("page-motion",&request,Kind::Record,true).is_err());
+        let (page,_)=hub.attach("page-motion").unwrap();let mut other=request.clone();other.ros_domain_id+=1;
+        assert!(hub.begin_bag("page-motion",&other,Kind::Record,true).is_err());
+        let (id,owner)=hub.begin_bag("page-motion",&request,Kind::Record,true).unwrap();
+        assert!(hub.send_bag(&owner,id,&other,Kind::Record).is_err());
+        hub.detach("page-motion",&page).await.unwrap();let (replacement,_)=hub.attach("page-motion").unwrap();
+        assert_ne!(page.window,replacement.window);
+        assert!(hub.send_bag(&owner,id,&request,Kind::Record).is_err());
+        hub.bag_operations.update(Kind::Record,id,Phase::Failed,"not submitted",true);
+        assert!(hub.tasks.migration("page-motion").is_ok());hub.close();server.abort();
     }
 
     #[tokio::test]

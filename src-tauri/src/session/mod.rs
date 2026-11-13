@@ -28,3 +28,4 @@ pub mod controller_task;
 pub mod controller_journal;
 
 pub mod controller_stop;
+pub mod bag_operation;

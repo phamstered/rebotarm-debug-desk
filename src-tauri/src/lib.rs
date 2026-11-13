@@ -395,7 +395,7 @@ fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<St
              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; \
              done; \
-             if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; \
+             if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; done; if kill -0 \"$pid\" 2>/dev/null; then echo \"rosbag process has not exited; retaining PID\" >&2; exit 1; fi; \
              rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$output\""
         ),
         _ => return Err("不支持的 rosbag 操作".into()),
@@ -469,7 +469,7 @@ fn rosbag_play_remote_command(
             domain = profile.ros_domain_id,
         ),
         "stop" => format!(
-            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$bag\"; exit 0; fi;              kill -INT \"$pid\";              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25;              done;              if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi;              rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$bag\""
+            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$bag\"; exit 0; fi;              kill -INT \"$pid\";              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25;              done;              if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; done; if kill -0 \"$pid\" 2>/dev/null; then echo \"rosbag process has not exited; retaining PID\" >&2; exit 1; fi;              rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$bag\""
         ),
         _ => return Err("不支持的 rosbag 回放操作".into()),
     };
@@ -1143,13 +1143,19 @@ async fn get_rosbag_status(profile: ConnectionProfile) -> Result<RosbagStatus, S
 }
 
 #[tauri::command]
-async fn start_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
-    run_rosbag_action(profile, "start").await
+async fn start_rosbag_recording(
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_remote_command(&profile, "start")?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Record,true,String::new(),remote).await
 }
 
 #[tauri::command]
-async fn stop_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
-    run_rosbag_action(profile, "stop").await
+async fn stop_rosbag_recording(
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_remote_command(&profile, "stop")?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Record,false,String::new(),remote).await
 }
 
 async fn run_rosbag_play_action(
@@ -1189,15 +1195,18 @@ async fn get_rosbag_play_status(profile: ConnectionProfile) -> Result<RosbagPlay
 
 #[tauri::command]
 async fn start_rosbag_playback(
-    profile: ConnectionProfile,
-    bag_path: String,
-) -> Result<RosbagPlayStatus, String> {
-    run_rosbag_play_action(profile, "start", &bag_path).await
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile, bag_path: String,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_play_remote_command(&profile, "start", &bag_path)?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Play,true,bag_path,remote).await
 }
 
 #[tauri::command]
-async fn stop_rosbag_playback(profile: ConnectionProfile) -> Result<RosbagPlayStatus, String> {
-    run_rosbag_play_action(profile, "stop", "").await
+async fn stop_rosbag_playback(
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_play_remote_command(&profile, "stop", "")?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Play,false,String::new(),remote).await
 }
 
 #[tauri::command]
@@ -1669,6 +1678,7 @@ pub fn run() {
             session::documents::editor_document_commit,
             session::ipc::native_bridge_context,
             session::ipc::native_task_snapshot,
+            session::ipc::native_bag_operation_snapshot,
             session::ipc::native_local_task_snapshot,
             session::ipc::native_local_task_touch,
             session::ipc::native_local_task_cancel,
@@ -1995,6 +2005,27 @@ mod tests {
             }
         );
         assert!(parse_rosbag_status("unexpected").is_err());
+    }
+
+    #[test]
+    fn bag_stop_preserves_pid_until_the_managed_process_exits() {
+        let root=std::env::temp_dir().join(session::controller_journal::new_id().unwrap());
+        let cache=root.join(".cache/robot-console");std::fs::create_dir_all(&cache).unwrap();
+        for (name,command) in [("rosbag",rosbag_remote_command(&profile(""),"stop").unwrap()),("rosbag-play",rosbag_play_remote_command(&profile(""),"stop","").unwrap())] {
+            let body=command.strip_prefix("bash -lc '").unwrap().strip_suffix('\'').unwrap();
+            let pid=cache.join(format!("{name}.pid"));std::fs::write(&pid,"42\n").unwrap();
+            // Local shell doubles only: never send a signal to a real process.
+            let setup="ps() { echo 'ros2 bag record ros2 bag play'; }; sleep() { :; }; ";
+            let stuck=format!("{setup}kill() {{ return 0; }}; {body}");
+            let result=std::process::Command::new("bash").args(["-c",&stuck]).env("HOME",&root).output().unwrap();
+            assert!(!result.status.success());assert!(!String::from_utf8_lossy(&result.stdout).contains("STOPPED"));
+            assert_eq!(std::fs::read_to_string(&pid).unwrap(),"42\n");
+            let exits=format!("{setup}stopped=0; kill() {{ if [ \"$1\" = -TERM ]; then stopped=1; return 0; fi; if [ \"$1\" = -0 ] && [ \"$stopped\" = 1 ]; then return 1; fi; return 0; }}; {body}");
+            let result=std::process::Command::new("bash").args(["-c",&exits]).env("HOME",&root).output().unwrap();
+            assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+            assert!(String::from_utf8_lossy(&result.stdout).starts_with("STOPPED|0|"));assert!(!pid.exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
