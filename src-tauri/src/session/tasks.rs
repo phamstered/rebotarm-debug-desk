@@ -1,6 +1,7 @@
 //! Native ownership for Bridge's leased Position/Pick and Motor tasks. Request admission,
 //! the writer's final permission check, and page migration share one lock.
-//! Direct trajectory/gravity and SSH task lifetimes are not yet managed here.
+//! Controller switches share admission; direct trajectories and other SSH tasks
+//! still need their full terminal lifecycle.
 use super::{command_queue::SendPermit, windows::WindowToken};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -23,6 +24,7 @@ pub enum Kind {
     Pick,
     Gravity,
     Motor,
+    Controller,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -143,6 +145,46 @@ fn stop(task: &mut Task, reason: &str) {
 }
 
 impl Tasks {
+    pub fn begin_controller(&self, owner: Owner) -> Result<u64, String> {
+        if !matches!(owner.window.label.as_str(), "page-motion" | "page-status") {
+            return Err("只有 Motion 或 Status 页面可以切换 Controller".into());
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner.task.is_some() { return Err("已有共享运动或控制任务，等待终态后再切换 Controller".into()); }
+        if inner.migrations.contains(&owner.window.label) { return Err("页面正在迁移，不能切换 Controller".into()); }
+        inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
+        let id = inner.sequence;
+        inner.task = Some(Task {
+            snapshot: Snapshot { id, epoch: owner.epoch, window: owner.window.label.clone(),
+                command_id: format!("controller-{id}"), kind: Kind::Controller,
+                phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
+            owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
+            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None,
+        });
+        Ok(id)
+    }
+
+    pub fn controller_sent(&self, id: u64) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::Controller)
+            .ok_or("Controller 任务已失效，未发送切换")?;
+        if task.sent || stopped(task) { return Err("Controller 任务已发送或撤销".into()); }
+        task.sent = true;
+        task.snapshot.phase = Phase::Running;
+        task.snapshot.message = "Controller 切换中，完成后核验新状态".into();
+        Ok(())
+    }
+
+    pub fn controller_finish(&self, id: u64, verified: bool, message: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::Controller) else { return; };
+        if verified || !task.sent { inner.task = None; }
+        else {
+            task.snapshot.phase = Phase::Uncertain;
+            task.snapshot.message = message.chars().take(512).collect();
+        }
+    }
+
     pub fn configure_motor(&self, epoch: u64, profile: &Value) {
         self.inner.lock().unwrap().motor_context = super::motor_task::Context::new(epoch, profile);
     }
@@ -210,7 +252,12 @@ impl Tasks {
                 inner.task = None;
                 return;
             }
-            stop(task, reason);
+            if task.snapshot.kind == Kind::Controller {
+                if task.snapshot.phase != Phase::Uncertain {
+                    task.snapshot.phase = Phase::Uncertain;
+                    task.snapshot.message = "Controller 操作结果未确认；窗口退出或断线不代表操作结束".into();
+                }
+            } else { stop(task, reason); }
         }
     }
 
@@ -478,7 +525,7 @@ impl Tasks {
             return false;
         };
         let terminal = match task.snapshot.kind {
-            Kind::Motor => false,
+            Kind::Motor | Kind::Controller => false,
             Kind::Gravity => value["op"]=="gravity_id_task_status" && value["known"]==true && value["terminal"]==true &&
                 value["result"]["op"]=="gravity_id_result" && value["result"]["command_id"]==task.snapshot.command_id &&
                 value["result"]["terminal"]==true && value["status"]==value["result"]["task_phase"] &&
@@ -534,7 +581,7 @@ impl Tasks {
         let renewed = response.is_ok_and(|value| {
             value["command_id"] == task.snapshot.command_id
                 && match task.snapshot.kind {
-                    Kind::Motor => false,
+                    Kind::Motor | Kind::Controller => false,
                     Kind::Gravity => value["op"]=="gravity_id_heartbeat_ack" && value["renewed"]==true,
                     Kind::Position => {
                         value["op"] == "position_motion_heartbeat_ack" && value["renewed"] == true
@@ -568,6 +615,7 @@ impl Tasks {
         }) else {
             return;
         };
+        if task.snapshot.kind == Kind::Controller { return; }
         let terminal = match task.snapshot.kind {
             Kind::Gravity if message["op"]=="gravity_id_result" => message["terminal"]==true && matches!(message["task_phase"].as_str(),Some("succeeded" | "failed" | "canceled")),
             Kind::Gravity if matches!(message["op"].as_str(),Some("gravity_id_status" | "gravity_id_feedback")) => false,
@@ -607,6 +655,7 @@ impl Tasks {
         let mut inner = self.inner.lock().unwrap();
         let context = inner.motor_context.clone();
         let task = inner.task.as_mut()?;
+        if task.snapshot.kind == Kind::Controller { return None; }
         if task.snapshot.kind == Kind::Motor {
             if !task
                 .motor
@@ -723,7 +772,7 @@ impl Tasks {
         let action = task.action_next;
         task.inflight = Some(action);
         let message = match (task.snapshot.kind, recovery, heartbeat) {
-            (Kind::Motor, _, _) => unreachable!("Motor handled above"),
+            (Kind::Motor | Kind::Controller, _, _) => unreachable!("Native task handled above"),
             (Kind::Gravity, false, true) => json!({"op":"gravity_id_heartbeat","command_id":task.snapshot.command_id}),
             (Kind::Gravity, false, false) => json!({"op":"gravity_id_cancel","command_id":task.snapshot.command_id}),
             (Kind::Gravity, true, _) => json!({"op":"gravity_id_task_status","command_id":task.snapshot.command_id}),
@@ -817,6 +866,56 @@ mod tests {
             )
             .unwrap()
     }
+    #[test]
+    fn controller_reservation_conflicts_with_motion_and_migration_and_unknown_stays_owned() {
+        let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        assert!(tasks.begin_controller(owner("page-handeye")).is_err());
+        let moving=tasks.migration("page-motion").unwrap();
+        assert!(tasks.begin_controller(owner("page-motion")).is_err());drop(moving);
+        let id=tasks.begin_controller(owner("page-motion")).unwrap();
+        for op in ["position_move","visual_pick_start","trajectory_command"] {
+            assert!(tasks.admit(owner("page-status"),&json!({"op":op,"command_id":"x"}),now).is_err());
+        }
+        assert!(tasks.migration("page-motion").is_err());
+        tasks.controller_sent(id).unwrap();
+        assert!(tasks.controller_sent(id).is_err());
+        assert!(tasks.admit(owner("page-motor"),&json!({"op":"joint_command","mode":3}),now).is_ok());
+        tasks.controller_finish(id,false,"SSH result unknown");
+        tasks.lost(None,"disconnected");
+        assert_eq!(tasks.snapshot().unwrap().message,"SSH result unknown");
+        tasks.observe(1,&json!({"op":"position_motion","command_id":format!("controller-{id}"),"motion_phase":"succeeded"}));
+        assert!(tasks.poll(2,now+Duration::from_secs(30)).is_none());
+        assert!(!tasks.recover(id,2,&json!({"command_id":format!("controller-{id}"),"terminal":true})));
+        assert!(tasks.snapshot().is_some());
+        tasks.controller_finish(id+1,true,"");assert!(tasks.snapshot().is_some());
+        tasks.controller_finish(id,true,"");assert!(tasks.snapshot().is_none());
+        let next=tasks.begin_controller(owner("page-status")).unwrap();
+        tasks.controller_finish(id,false,"old");assert_eq!(tasks.snapshot().unwrap().id,next);
+        tasks.controller_finish(next,false,"preflight rejected");assert!(tasks.snapshot().is_none());
+        let motion=start(&tasks,"position_move",now);
+        assert!(tasks.begin_controller(owner("page-motion")).is_err());
+        drop(motion);
+    }
+    #[test]
+    fn controller_and_page_migration_race_has_exactly_one_winner() {
+        for _ in 0..32 {
+            let tasks=Arc::new(Tasks::default());
+            let barrier=Arc::new(std::sync::Barrier::new(2));
+            let moving=tasks.clone();let start=barrier.clone();
+            let thread=std::thread::spawn(move || {start.wait();moving.migration("page-motion")});
+            barrier.wait();let operation=tasks.begin_controller(owner("page-motion"));
+            let migration=thread.join().unwrap();
+            assert_ne!(operation.is_ok(),migration.is_ok());
+        }
+    }
+    #[test]
+    fn controller_lost_before_send_cannot_later_execute() {
+        let tasks=Arc::new(Tasks::default());let owner=owner("page-motion");
+        let id=tasks.begin_controller(owner.clone()).unwrap();
+        tasks.lost(Some(&owner),"window lost");
+        assert!(tasks.controller_sent(id).is_err());assert!(tasks.snapshot().is_none());
+    }
+
     #[test]
     fn submitting_tasks_are_exclusive_and_migration_is_atomic_in_both_directions() {
         let tasks = Arc::new(Tasks::default());

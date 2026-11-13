@@ -575,7 +575,7 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 ### 原生任务状态（多窗口开发分支，覆盖 Position / Pick / Motor / Gravity）
 
-`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
@@ -639,3 +639,5 @@ gravity_id_heartbeat 带 command_id，仅原 WebSocket 所属者可续租；响�
 gravity_id_task_status 按 command_id 返回 known、terminal、status 和完整 result；未知编号不代表任务结束。最多保留 256 项 / 2 MiB，每项最多 256 KiB；Bridge 重启或淘汰后返回未知。恢复必须核验编号及完整匹配终态。前端忽略旧编号、早到的 DONE/FAILED 反馈及晚到 ACK，不让它们解除当前任务占用。正式 Bridge 尚未部署此开发分支。
 
 辨识任务期间收到显式 DISABLE 时，会同时取消 Action，并记录“必须关闭输出”。鉴于当前编排器在返回结果后仍短暂发送 HOLD，Bridge 在结果返回至少 300 ms 后重新发布三帧清零的 DISABLE，每帧分配新的序列号；未确认时最多每秒重试一次。此时只有 mode=DISABLE 且 last_command_sequence 覆盖这批序列的新鲜固件反馈，连同上述六轴停稳条件，才能结束任务；HOLD 不满足。没有命令订阅者、没有确定 Action 结果或没有新鲜反馈时保持占用。该机制不承诺网络或硬件故障下的固定停机延迟。
+
+开发分支的 Controller 切换 IPC 仍为 `switch_ros_controller` / `switch_ros_controllers`，参数结构不变，但由实际调用 WebView（Motion 或 Status）、当前共享连接配置和原生任务占用校验。成功返回前要求 SSH 命令成功和命令之后强制查询的新鲜目标状态；IPC 等待超过 25 秒返回未确认提示，已启动的原生工作不随调用页面退出而丢弃。成功命令的新状态核验可以跨同配置重连继续；SSH 超时或失败不自动重发，也不借用普通列表/空闲状态解除占用。此类未知执行结果的远端完成记录恢复尚未实现。

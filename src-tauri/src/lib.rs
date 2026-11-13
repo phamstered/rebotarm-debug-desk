@@ -16,7 +16,7 @@ mod motion_groups;
 mod arm_workflow;
 mod node_runtime;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectionProfile {
     host: String,
@@ -1034,72 +1034,22 @@ async fn check_ros_controllers(profile: ConnectionProfile) -> Result<RosControlS
 
 #[tauri::command]
 async fn switch_ros_controller(
-    profile: ConnectionProfile,
-    controller_name: String,
-    action: String,
+    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
+    profile: ConnectionProfile, controller_name: String, action: String,
 ) -> Result<String, String> {
     let remote = controller_switch_command(&profile, &controller_name, &action)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 Controller 操作：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}\n{stderr}");
-    if !output.status.success() {
-        return Err(format!(
-            "Controller 操作失败：{}",
-            ros_control_error(&combined)
-        ));
-    }
-    Ok(stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| strip_ansi(line.trim()))
-        .unwrap_or_else(|| format!("Controller {controller_name} {action} 完成")))
+    let (activate, deactivate) = if action == "activate" { (vec![controller_name], vec![]) }
+        else { (vec![], vec![controller_name]) };
+    session::controller_task::start(app, window.label().into(), &hub, profile, activate, deactivate, remote).await
 }
 
 #[tauri::command]
 async fn switch_ros_controllers(
-    profile: ConnectionProfile,
-    activate: Vec<String>,
-    deactivate: Vec<String>,
+    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
+    profile: ConnectionProfile, activate: Vec<String>, deactivate: Vec<String>,
 ) -> Result<String, String> {
     let remote = controllers_switch_command(&profile, &activate, &deactivate)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 Controller 批量切换：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}\n{stderr}");
-    if !output.status.success() {
-        return Err(format!(
-            "Controller 批量切换失败：{}",
-            ros_control_error(&combined)
-        ));
-    }
-    Ok(stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| strip_ansi(line.trim()))
-        .unwrap_or_else(|| {
-            format!(
-                "Controllers switch 完成（activate={} deactivate={}）",
-                activate.join(","),
-                deactivate.join(",")
-            )
-        }))
+    session::controller_task::start(app, window.label().into(), &hub, profile, activate, deactivate, remote).await
 }
 
 #[tauri::command]

@@ -442,7 +442,7 @@ export type UsbProbeStatus = {
 /** Desktop-only native task ownership; not a ROS/Bridge input. */
 export type NativeTaskSnapshot = {
   id: number; epoch: number; window: string; command_id: string;
-  kind: "position" | "pick" | "motor" | "gravity";
+  kind: "position" | "pick" | "motor" | "gravity" | "controller";
   phase: "submitting" | "running" | "stopping" | "uncertain";
   message: string;
 };

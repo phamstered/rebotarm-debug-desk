@@ -52,3 +52,11 @@ it("keeps Motor output confirmation visible after a publish ACK without renewing
   expect(screen.queryByRole("status")).toBeNull();
   expect(mocks.invoke.mock.calls.every(([command]) => command === "native_task_snapshot")).toBe(true);
 });
+
+
+it("labels Controller uncertainty without claiming the remote operation has stopped", async () => {
+  mocks.invoke.mockResolvedValue({ ...task, kind: "controller", phase: "uncertain", message: "等待原机器人新状态核验" });
+  render(<NativeTaskStatus />);
+  expect(await screen.findByRole("status")).toHaveTextContent("Motion · Controller 切换 · 结果未确认");
+  expect(mocks.invoke.mock.calls.every(([command]) => command === "native_task_snapshot")).toBe(true);
+});
