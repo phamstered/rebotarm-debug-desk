@@ -82,6 +82,7 @@ struct Inner {
 pub struct Tasks {
     inner: Mutex<Inner>,
     observations: Mutex<Option<std::sync::Weak<super::observations::Observations>>>,
+    recovery_error: Mutex<Option<String>>,
 }
 
 pub struct Admission {
@@ -177,10 +178,16 @@ fn stop(task: &mut Task, reason: &str) {
 }
 
 impl Tasks {
+    pub fn recovery_failed(&self, message: String) {
+        *self.recovery_error.lock().unwrap() = Some(message);
+    }
     pub fn bind_observations(&self, observations: &Arc<super::observations::Observations>) {
         *self.observations.lock().unwrap() = Some(Arc::downgrade(observations));
     }
     pub fn check_activity(&self, check: super::activity::Check<'_>) -> Result<(), String> {
+        if !matches!(check, super::activity::Check::Migration(_)) {
+            if let Some(error) = self.recovery_error.lock().unwrap().as_ref() { return Err(error.clone()); }
+        }
         let observations = self.observations.lock().unwrap().as_ref().and_then(|weak| weak.upgrade());
         if let Some(observations) = observations { super::activity::check(&observations.activity_snapshot(), check)?; }
         Ok(())

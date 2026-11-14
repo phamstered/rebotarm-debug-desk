@@ -1,6 +1,7 @@
 //! Bound remote completion proof for one Controller operation. Only submit can
 //! execute, and the native worker calls it exactly once. All recovery is query.
 use crate::ConnectionProfile;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{io::Read, process::Stdio, time::Duration};
@@ -41,7 +42,34 @@ pub struct Job {
     hash: String,
     command: Option<String>,
 }
+/// Recovery data deliberately cannot contain executable command text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ticket {
+    pub id: String,
+    pub hash: String,
+}
+impl Ticket {
+    pub fn validate(&self) -> Result<(), String> {
+        let suffix = self.id.strip_prefix("controller-")
+            .or_else(|| self.id.strip_prefix("arm-mode-"))
+            .or_else(|| self.id.strip_prefix("collection-"))
+            .or_else(|| self.id.strip_prefix("bag-"));
+        let hex = |s: &str, n| s.len() == n && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !suffix.is_some_and(|s| hex(s, 48)) || !hex(&self.hash, 64) {
+            return Err("远端任务恢复编号或摘要无效".into());
+        }
+        Ok(())
+    }
+}
 impl Job {
+    pub fn ticket(&self) -> Ticket {
+        Ticket { id: self.id.clone(), hash: self.hash.clone() }
+    }
+    pub fn recover(ticket: Ticket) -> Result<Self, String> {
+        ticket.validate()?;
+        Ok(Self { id: ticket.id, hash: ticket.hash, command: None })
+    }
     pub fn new(id: String, command: String) -> Result<Self, String> {
         let suffix = id.strip_prefix("controller-").or_else(|| id.strip_prefix("arm-mode-")).or_else(|| id.strip_prefix("collection-")).or_else(|| id.strip_prefix("bag-"));
         let limit = if id.starts_with("arm-mode-") || id.starts_with("collection-") { 131072 } else { 32768 };
@@ -149,6 +177,21 @@ fn remote_command() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persisted_ticket_is_query_only_and_rejects_executable_or_malformed_fields() {
+        let job = Job::new(new_bag_id().unwrap(), "echo never replay".into()).unwrap();
+        let value = serde_json::to_value(job.ticket()).unwrap();
+        let mut restored = Job::recover(serde_json::from_value(value.clone()).unwrap()).unwrap();
+        assert!(restored.submission().is_err());
+        assert_eq!(restored.query_request(), job.query_request());
+        assert!(restored.query_request().get("command").is_none());
+        let mut injected = value.clone(); injected["command"] = json!("touch unexpected");
+        assert!(serde_json::from_value::<Ticket>(injected).is_err());
+        for (key, bad) in [("id", json!("bag-../bad")), ("hash", json!("0".repeat(63))), ("hash", json!("Z".repeat(64)))] {
+            let mut invalid = value.clone(); invalid[key] = bad;
+            assert!(Job::recover(serde_json::from_value(invalid).unwrap()).is_err());
+        }
+    }
     #[test]
     fn bag_success_requires_bound_receipt_and_cannot_repeat_submission() {
         let mut job=Job::new(new_bag_id().unwrap(),"echo bag".into()).unwrap();

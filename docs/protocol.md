@@ -710,3 +710,12 @@ arm-mode-* 远端编号选择固定 128 KiB / 600 秒执行策略；controller-*
 原生 `session/activity.rs` 只读检查共享 `bag_record`、`bag_play`、`collection` 快照，无新增 IPC/Bridge 字段。Tasks 通过弱引用读取这三个源的精简快照，避免高频控制准入复制 Topics 等大对象；不启动另一套轮询。新运动/在线采样需要新鲜空闲的 bag_play；开始录制、Episode 和回放分别检查自身及关联冲突源。新连接尚无首帧查询结果时不会允许冲突操作。bag 回执须与 kind、PID、active 和路径匹配；collection 的 state、recording、pendingFrames、managed、PID 和进程身份须一致。外部 Episode 的 managed=false 本身不代表空闲。
 
 迁移时 Monitor 检查 bag_play，数据采集检查 collection，录制入口 main/page-dashboard/page-motion 检查 bag_record。非空闲、过期、失败、缺失或不一致均拒绝相关准入；bag 停止、Episode 保存/丢弃/结束和 DISABLE 不要求先证明空闲；停止/收尾期间仍阻止新回放进入，结果未知时继续保留许可。非冲突的离线编辑与计算不受限制。观察没有授予外部进程所有权，也不能代替已有任务的同实例退出/终态核验；没有远端全局锁或跨桌面进程的恢复承诺。
+
+
+### Native bag recovery journal
+
+`bag-recovery-v1.json` is a local version-1 write-ahead journal, bounded to record/play entries and 48 KiB. It stores the original Profile, authorized page, operation intent/path, query-only remote journal ticket (`id`, SHA-256 `hash`), optional predecessor receipt and verified running receipt. Command payloads are never serialized. A 0600 temporary file is fsynced, atomically renamed, and the parent directory fsynced before the first remote submission. Terminal removal uses the same durable path and checks the ticket to prevent an older worker clearing a successor.
+
+Startup restores native permits before Workspace initialization. Pending tickets are recovered using `Job::recover`, which has no command and rejects submission; polling occurs only while connected to the matching Profile. Running receipts resume the existing shared observation consumer. A journal success still requires fresh matching process status; unknown remote records remain nonterminal. Disk failures retain occupancy and retry cleanup. Malformed/version-mismatched files are preserved and cause a visible admission barrier; explicit stops and DISABLE remain available, but stops in this degraded state cannot create durable recovery records or clear that barrier. No protocol field changed on the Bridge. Controller, calibration and motion restart recovery remain separate outstanding work.
+
+The native `native_bag_operation_snapshot` entries include `recovery_error: true` for a journal-level error (reserved id 0); the UI labels it as task recovery failure instead of presenting it as a record/play control operation. Normal entries use false.

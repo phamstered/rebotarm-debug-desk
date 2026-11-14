@@ -37,3 +37,12 @@ it("keeps a running playback visible until process exit is confirmed",async()=>{
   mocks.invoke.mockResolvedValue([{...task,kind:"play",phase:"succeeded"}]);await act(async()=>changed());
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+it("labels corrupt recovery as an application error rather than a playback stop",async()=>{
+  mocks.invoke.mockResolvedValue([{...task,id:0,kind:"play",host:"",window:"main",recovery_error:true,message:"恢复文件损坏，保留原文件"}]);
+  render(<NativeBagOperationStatus/>);
+  const status=await screen.findByRole("status");
+  expect(status).toHaveTextContent("任务恢复异常 · 恢复文件损坏，保留原文件");
+  expect(status).not.toHaveTextContent("回放停止");
+  expect(status).not.toHaveTextContent("main");
+});

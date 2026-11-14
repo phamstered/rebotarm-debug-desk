@@ -502,3 +502,13 @@ export type MotionLogEntry = {
   seq: number; timestamp_ms: number; command_id: string; phase: string;
   level: "info" | "warn" | "error"; message: string;
 };
+export interface NativeBagOperation {
+  id: number;
+  kind: "record" | "play";
+  window: string;
+  host: string;
+  starting: boolean;
+  phase: "submitting" | "verifying" | "uncertain" | "running" | "succeeded" | "failed";
+  message: string;
+  recovery_error?: boolean;
+}

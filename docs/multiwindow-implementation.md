@@ -487,3 +487,18 @@ Jetson 临时目录中运行 11 项 bag 测试、14 项 journal 测试和 3 项 
 通过部署脚本仅同步独立 easy_debug_bridge_260_motion_observe 工作区，随后单线程 colcon build、完整 colcon test 与 colcon test-result --verbose 全部通过：30 tests，0 errors，0 failures，0 skipped（/tmp/260-jtc-receipt-ros.log）。隔离域 223 的安装二进制冒烟核对实际 /proc/PID/exe，并读回 build ID 3de66d6c389e、直接轨迹及 Joint4 能力、未知任务非终态和拒绝历史（/tmp/260-jtc-receipt-smoke.log）；进程已清理。
 
 这一轮补足了安装版真实 JTC 的首段接收延迟验证，硬件为模拟关节，不能据此保证实机最坏调度时延或延迟期间起点不变。正式应用和生产 Bridge 没有更新。完整目标仍包括外部活动跨连接归属、未知任务与桌面重启恢复、多屏/拔屏和九窗口持续运行验收，最终安装部署、PR/CI/合并继续待完成。
+
+
+## Bag 桌面重启恢复与持久化占用
+
+bag 提交前新增 0600、版本 1、最多两个资源/48 KiB 的本地 write-ahead 文件，使用临时文件 fsync、原子 rename 和目录 fsync。记录机器人配置、原页面、原远端查询编号/摘要及已验证进程回执，不保存命令正文。原生启动先恢复占用，再初始化 Workspace；待确认任务仅在显式连接原机器人后查询原编号，不自动连接或重发。已确认运行的实例恢复原有共享状态监控；新鲜同实例退出证据和恢复记录持久化清理均成功后才释放。
+
+显式停止转移归属时保存原进程身份；停止在发送前失败或被远端证明拒绝时恢复运行检查点，重启后不会遗失原运行占用。迟到 worker 无权清理后继记录。落盘失败阻止提交；清理失败保留占用并重试。损坏、过大、版本不符、symlink 或非法字段文件保持原样并显示恢复异常，阻止新运动、在线采样、Controller 切换与 bag 启动，保留 DISABLE、显式停止和离线操作。损坏状态下的显式停止只在当前进程核验，不覆盖文件，也不解除全局恢复错误；未知远端记录仍保持待确认。
+
+完整 npm test 最终通过：921 前端 / 237 Rust / 3 运行库及其余脚本（/tmp/260-bag-recovery-final-tests.log）。新增测试覆盖提交前落盘、序列化票据禁止 submit、重启恢复占用、运行实例恢复、另一 Profile/替换实例不释放、停止失败恢复原实例、迟到终态、落盘/清理失败、私有权限、大小/字段/版本/symlink 负例，以及恢复错误不误显示为“回放停止”。初次全量通过后，真实 UI 发现错误提示前缀不准确，修正并增加前端回归后重新完整运行。最终仅清理了 types.ts 末尾空行，没有后续功能修改。
+
+前端、文档、独立 Debug .app 构建与严格 codesign 核验通过（/tmp/260-bag-recovery-final-{build,docs,bundle}.log）。真实 CUA 重启候选包，使用独立配置中的非执行模拟 ticket（offline-recovery.invalid）验证主窗口显示待恢复且不自动连接；退出后文件内容未改变。另使用明确创建的损坏模拟记录，验证应用仍启动、离线手眼页可生成 1200×900 标定板；最终包显示“任务恢复异常”，不再显示“回放停止”。测试文件移至 /tmp/260-recovery-corrupt-native-fixture.txt 后重新启动，确认无待恢复错误且保持未连接。没有修改或删除真实任务记录，未连接机械臂或运行真实 bag。
+
+前一轮 fe2e547 包在解锁后另完成了原生图片与迁移复验：大图、100% 原始尺寸与 Esc 返回正常；拆窗 bounds 与回滚 reparent 双故障后可恢复，参数/图片/缩放保留，底部保存按钮和滚动条可见（/tmp/260-unlocked-native-verification.txt）。这些是该轮包的证据，不作为本轮 bag 逻辑的实机测试。
+
+正式 /Applications/Robot Console.app 和生产 Bridge 未替换。本轮无 Bridge 包修改，不需重复 colcon 或远端部署；此前真实 JTC 隔离结果仍见上节。完整 Issue #260 仍未完成：Controller/运动/标定/采集等其他任务的桌面重启恢复、外部活动跨连接归属、多屏/拔屏与九窗口持续运行、最终 PR/CI/合并和正式安装部署继续待完成。

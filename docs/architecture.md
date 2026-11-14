@@ -279,3 +279,8 @@ Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快
 
 
 共享外部活动准入由 `session/activity.rs` 解析已有 observations 的三个状态源，Tasks 在与任务/迁移互斥相同的临界区内检查；原生发送许可和 SSH 提交前复查。只复制 bag/collection 快照，不复制完整 Topics 等大对象，不增加 SSH 查询。此层不发出停止命令、不把外部活动收编成本桌面的任务；原有任务的进程回执及终态证据继续独立核验。远端状态是有时效的观察，不是所有 ROS 客户端共用的远端互斥锁，任意未登记 bag 进程和外部跨连接恢复仍属边界。
+
+
+### Bag ownership across desktop restarts
+
+The native session restores rosbag ownership from a bounded private write-ahead journal before creating functional workspaces. Only remote query tickets and process receipts persist; command text never does. Recovery uses the existing shared observations and requires an explicitly established connection to the original Profile. It does not auto-connect or replay controls. Durable terminal cleanup precedes releasing native occupancy. Corrupt recovery records keep a visible admission barrier with stop/DISABLE and offline editing available. This applies to bag operations; full restart recovery for other task kinds is still pending.
