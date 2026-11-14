@@ -1,6 +1,6 @@
-# 多窗口实现记录（进行中）
+# 多窗口实现与验收记录
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十一项公共查询、运动日志、各类控制任务的原生归属与恢复记录、Monitor 独立历史已接入 Rust；离线配置交接已接入并完成隔离窗口验证。最新代码的完整原生验收和发布流程仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)，交付 PR：[#269](https://github.com/phamstered/rebotarm-debug-desk/pull/269)。九页面拆收、原生共享会话、公共查询、任务归属与恢复、Monitor 历史及版本化编辑已实现。正式应用已安装，生产 Bridge 已更新并完成只读核验。以下保留开发过程及最终验收证据；早期“未实现 / 待验证”描述仅代表当时状态，当前结论以本节索引和末尾交付记录为准。外接屏拔插按用户说明延期，隔离模拟测试不等于实机运动验收。CI 与合并状态以 PR 当前检查为准。
 
 ## 当前验收索引
 
@@ -13,7 +13,7 @@
 | 任务独立于页面、冲突互斥、断线代次和恢复记录 | 各类任务状态机、持久化与 loopback 回归；Controller/JTC/Joint4 等隔离 ROS 验证；Release 原生重载及未知任务阻止迁移复测 | 模拟恢复记录不等于实机任务终态核验 |
 | 有界图像/点云分发、共享资源、Monitor 历史 | 九窗口 30 分钟记录、两次慢消费者实验、帧龄区间、缓存及队列回归 | 测量来自旧 Debug 候选包和模拟数据，不是 Release 长期性能保证 |
 | 外部活动跨连接隔离 | 共享观察绑定连接 Profile/epoch，换连接重置；迟到回复及本桌面任务身份由回归验证 | 不接管任意外部进程、不保证其他客户端全局互斥；不能把观察当成本桌面所有权 |
-| 全量测试、构建、CI、合并和安装 | 各阶段本机全量测试、隔离 ROS 测试和候选包记录见末尾；正式应用已安装、签名/哈希及离线启动通过 | PR #269 CI/合并进行中，生产 Bridge 更新结果待核验 |
+| 全量测试、构建、CI、合并和安装 | 各阶段本机全量测试、ROS 测试和候选包记录见末尾；正式应用已安装、签名/哈希及离线启动通过；生产 Bridge 的进程、hello 及硬件反馈核验通过 | CI/合并状态以 PR #269 当前检查为准；不跳过必要检查 |
 
 未知任务历史不构成结束证据；当前保留占用且不重放。这是已实现的失败处理边界，不声称能从被删除的 Bridge 历史恢复终态。继续验收时应验证这些提示和停止入口，不通过清空记录来伪造任务完成。
 
@@ -696,3 +696,13 @@ hello 新增 `visual_pick_cancel_id_supported`；原生桌面在旧 Bridge 上�
 `npm run install:mac` 成功完成正式 Release 构建及 `/Applications/Robot Console.app` 安装；标识为 `dev.easydebug.desktop`，严格 codesign 通过，安装包与构建产物的主二进制 SHA-256 均为 `33c0efb410e9f85668b34e7b542d6b0cb1590bc3bfd4208bf2eab858d3fbfb72`。实际启动正式应用，保持未连接，打开手眼标定页，确认页面工具栏和图片工具完整加载；未发出运动请求。安装日志 `/tmp/260-production-install.log`。
 
 PR [#269](https://github.com/phamstered/rebotarm-debug-desk/pull/269) 已建立，等待 CI 和仓库自动合并检查。生产 Bridge 更新前只读核验得到连续递增时间戳的 mode=DISABLE / fault_code=0，未发现运动控制进程或其他 Bridge 连接。统一脚本已完成 dry-run，并备份至 `easy_debug_bridge/backup/easy_debug_bridge-20261115-004646.tar.gz`，正在单线程构建。现场 `visual_pick.json` 的 0 mm 下探、抓取偏移及 `plane_verified=false` 从该备份逐字节保留，配置 SHA-256 为 `d848bb15a982f4064f61dd34d400b9076b76edb77823e15d7f66e00cd4421cd8`；不以仓库默认值替代现场标定。编译完成不代表运行进程已替换，后续须单独核验重启、安装二进制及 hello。
+
+生产构建已完成，随后重新读取新鲜 DISABLE 反馈，再通过统一脚本 `--skip-sync --skip-build --restart` 更新运行进程。首次参数核验发现脚本默认 status Topic 与现场不同，因此显式传入 `--ros-domain-id 0 --joint-state-topic /stm32/joint_states --command-topic /stm32/joint_commands --status-topic /stm32/status` 完成纠正。最终 PID 395235、127.0.0.1:8765，`/proc/<pid>/exe` 与安装路径解析到同一新二进制；hello 返回 `f2339e317dd4` 及全部新增任务能力。现场配置哈希保持一致。
+
+新进程实际接受 `position_motion_observe`、`visual_pick_observe` 和 `gravity_id_status`；Pick 空闲，Position 无任务并正确报告 MoveIt 尚未启动。收到三帧递增源时间戳的 HardwareStatus，mode=DISABLE、fault_code=0。验证只连接只读临时隧道，结束后关闭自己的隧道，没有启动控制器或下发运动。正式应用保持离线手眼页。证据 `/tmp/260-production-{deploy,restart-corrected,final-readonly}.log`、`/tmp/260-production-final-readonly.json` 与 `/tmp/260-production-final-process.txt`。
+
+### 现场配置与 ROS 测试隔离修正
+
+生产工作区的首次完整 `colcon test` 为 30 项中 29 项通过、1 项失败，不能计为全量通过。`object_detection_ros` 默认读取安装目录中的现场 `visual_pick.json`，却断言未标定预览；现场抓取偏移和已标定状态使合成桌面被正确拒绝。未修改现场配置或产品校验，改为物体检测与 RGB 跟踪两个测试显式传入独立 `test/fixtures/visual_pick_unverified.json`。该配置仅用于隔离域的模拟 Bridge。
+
+修正后两个 ROS 定向测试全部通过（23.06 秒），同一工作区仍保留原现场配置；日志 `/tmp/260-fixture-targeted-ros.log`。完整 `npm test` 再次通过：935 前端、276 Rust、3 运行库及所有其余脚本；`npm run build` 通过。日志 `/tmp/260-test-fixture-{full-tests,build}.log`。测试源码参与版本哈希，因此配套版本更新为 `5013e4e77e4f`，需要重新打包并更新运行进程；上节 `f2339e317dd4` 为此前实际验收版本，不冒充最终版本。完整 ROS 复测及最终部署继续按真实结果核验。
