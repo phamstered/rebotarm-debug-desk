@@ -117,3 +117,13 @@ it("does not apply a late cancel error to a replacement task", async () => {
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.getByRole("button", { name: "取消直接轨迹" })).toBeEnabled();
 });
+
+
+it("shows Joint4 release as unconfirmed and never offers an unsupported trajectory cancel", async () => {
+  mocks.invoke.mockResolvedValue({ ...task, window: "page-calibration", kind: "joint4", phase: "uncertain", message: "已请求释放姿态，重力前馈不会因此关闭" });
+  render(<NativeTaskStatus />);
+  expect(await screen.findByRole("status")).toHaveTextContent("Joint4 标定 · 结果未确认");
+  expect(screen.getByRole("status")).toHaveTextContent("重力前馈不会因此关闭");
+  expect(screen.queryByRole("button", { name: "取消直接轨迹" })).not.toBeInTheDocument();
+  expect(mocks.invoke.mock.calls.every(([command]) => command === "native_task_snapshot")).toBe(true);
+});

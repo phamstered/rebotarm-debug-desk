@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 pub type SendPermit = Arc<dyn Fn() -> bool + Send + Sync>;
 
 #[derive(Default)]
-pub struct CommandQueue(Mutex<[u64; 5]>);
+pub struct CommandQueue(Mutex<[u64; 6]>);
 
 fn domain(message: &Value) -> Option<usize> {
     match message["op"].as_str()? {
@@ -16,6 +16,7 @@ fn domain(message: &Value) -> Option<usize> {
         "position_move" | "position_group_start" | "position_group_resume" => Some(2),
         "visual_pick_start" => Some(3),
         "gravity_id_send_goal" => Some(4),
+        "joint4_start" | "joint4_capture" => Some(5),
         _ => None,
     }
 }
@@ -28,11 +29,12 @@ impl CommandQueue {
     ) -> Option<SendPermit> {
         let mut generations = self.0.lock().unwrap();
         let stopped: &[usize] = match message["op"].as_str() {
-            Some("joint_command") if message["mode"].as_i64() == Some(3) => &[0, 1, 2, 3, 4],
+            Some("joint_command") if message["mode"].as_i64() == Some(3) => &[0, 1, 2, 3, 4, 5],
             Some("position_cancel" | "position_group_pause") => &[2],
             Some("visual_pick_cancel") => &[3],
             Some("gravity_id_cancel") => &[4],
             Some("trajectory_cancel") => &[1],
+            Some("joint4_cancel") => &[5],
             _ => &[],
         };
         // Check a task-bound stop while holding the same lock that prepares

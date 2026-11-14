@@ -259,6 +259,53 @@ impl Runtime {
         if core.error.is_some() || core.transport.is_none() || core.epoch!=owner.epoch || !core.clients.get(&owner.window).is_some_and(|client|client.error.is_none()) || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 提交前连接或页面已失效".into());}
         self.bag_operations.sending(kind,id,owner)
     }
+    pub fn prepare_joint4(&self, label: &str, profile: &crate::ConnectionProfile, action: &str,
+        confirmation: Option<&str>) -> Result<super::joint4_task::Prepared, String> {
+        use super::joint4_task::{Job, Prepared};
+        let core = self.core.lock().unwrap();
+        if core.error.is_some() || !super::controller_task::same_profile(&core.profile,
+            &serde_json::to_value(profile).map_err(|e| e.to_string())?) {
+            return Err("Joint4 请求与当前共享连接不一致或已断开".into());
+        }
+        let transport = core.transport.clone().ok_or("Bridge 尚未连接")?;
+        let token = core.clients.iter().find(|(t,c)| t.label == label && c.error.is_none())
+            .map(|(t,_)| t.clone()).ok_or("功能页面尚未附着当前连接")?;
+        let attachment = Attachment { epoch: core.epoch, window: token };
+        core.validate(label, &attachment)?;
+        let id = format!("joint4-{}", super::controller_journal::new_id()?);
+        let mut message = json!({"op":"joint4_start", "action":action,"command_id":id,"confirmation":confirmation});
+        if action == "capture_pose" { message["op"] = "joint4_capture".into(); message["operation_id"] = id.clone().into(); }
+        super::joint4_task::validate(label, &message)?;
+        if transport.hello.metadata["joint4_task_supported"] != true {
+            return Err("请更新 Bridge：Joint4 需要姿态租约、采样去重和释放确认；不会退回 SSH 直接调用".into());
+        }
+        if matches!(action, "capture_pose" | "release_pose") {
+            if let Some(command) = self.tasks.joint4_command(&attachment.owner(), action == "release_pose")? {
+                if action == "release_pose" {
+                    drop(core);
+                    let changed = self.task_changed.lock().unwrap().clone();
+                    if let Some(changed) = changed { changed(); }
+                    return Ok(Prepared::Release(json!({"success":true,"pending":true,"command_id":command,
+                        "message":"已登记释放姿态请求，等待 Bridge 核验；重力前馈不会因此关闭"})));
+                }
+                message["command_id"] = command.into();
+            } else if action == "capture_pose" { return Err("没有本页面已受理的 Joint4 姿态任务".into()); }
+        }
+        let admission = self.tasks.admit(attachment.owner(), &message, Instant::now())?;
+        Ok(Prepared::Job(Job { attachment, transport, message, admission }))
+    }
+
+    pub fn finish_joint4(&self, attachment: &Attachment, ticket: Option<u64>, request: &Value, result: Result<&Value, &str>) {
+        let core = self.core.lock().unwrap();
+        if core.epoch == attachment.epoch {
+            self.tasks.reply(ticket, attachment.epoch, request, result);
+            if let Ok(value) = result { self.tasks.observe(attachment.epoch, value); }
+        }
+        drop(core);
+        let changed = self.task_changed.lock().unwrap().clone();
+        if let Some(changed) = changed { changed(); }
+    }
+
     pub fn begin_controller(&self, label: &str, profile: &crate::ConnectionProfile) -> Result<u64, String> {
         let core = self.core.lock().unwrap();
         if core.error.is_some() || core.transport.is_none() { return Err("Bridge 尚未连接".into()); }
@@ -571,7 +618,7 @@ impl Runtime {
                                 if let Ok(frame) = &result {
                                     let state = if frame.op() == "position_task_status" {
                                         &frame.metadata["motion_state"]
-                                    } else if matches!(frame.op(), "gravity_id_task_status" | "trajectory_task_status") {
+                                    } else if matches!(frame.op(), "gravity_id_task_status" | "trajectory_task_status" | "joint4_task_status") {
                                         &frame.metadata["result"]
                                     } else {
                                         &frame.metadata
@@ -814,8 +861,11 @@ impl Runtime {
             core.transport.clone().ok_or("Bridge 尚未连接")?
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
-        if matches!(op, "position_motion_heartbeat" | "gravity_id_heartbeat" | "trajectory_heartbeat") {
+        if matches!(op, "position_motion_heartbeat" | "gravity_id_heartbeat" | "trajectory_heartbeat" | "joint4_heartbeat") {
             return Err("任务续租由原生会话管理，页面不能直接调用".into());
+        }
+        if matches!(op, "joint4_start" | "joint4_capture" | "joint4_cancel") {
+            return Err("Joint4 操作须通过受限原生标定入口".into());
         }
         if op == "trajectory_cancel" {
             return Err("直接轨迹取消须通过原生任务入口登记，页面不能向当前连接直接发送".into());
@@ -1244,6 +1294,12 @@ mod tests {
         Arc<Mutex<Vec<Value>>>,
         tokio::task::JoinHandle<()>,
     ) {
+        fake_bridge_capabilities(trajectory, false).await
+    }
+
+    async fn fake_bridge_capabilities(trajectory: bool, joint4: bool) -> (
+        u16, mpsc::UnboundedSender<Value>, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
@@ -1263,7 +1319,7 @@ mod tests {
                             socket.send(Message::Text(json!({"op":"topic_message", "topic":message["topic"], "data":"<robot name='fixture'/>"}).to_string().into())).await.unwrap();
                         }
                         match message["op"].as_str().unwrap() {
-                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true, "trajectory_task_supported":trajectory}),
+                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true, "trajectory_task_supported":trajectory, "joint4_task_supported":joint4}),
                             "topics" => json!({"op":"topics", "topics":[], "request_id":message["request_id"]}),
                             "resource" => {
                                 let metadata = serde_json::to_vec(&json!({"op":"resource", "uri":message["uri"], "request_id":message["request_id"], "data_length":3})).unwrap();
@@ -1275,6 +1331,11 @@ mod tests {
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "position_move" | "position_group_start" | "gravity_id_send_goal" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
+                            "joint4_start" => json!({"op":"joint4_start_ack","accepted":true,"success":true,"message":"holding","action":message["action"],"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "joint4_capture" => json!({"op":"joint4_capture_ack","success":true,"message":"sample 1","operation_id":message["operation_id"],"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "joint4_heartbeat" => json!({"op":"joint4_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "joint4_cancel" => json!({"op":"joint4_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "joint4_task_status" => json!({"op":"joint4_task_status","known":false,"terminal":false,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "trajectory_command" => json!({"op":"trajectory_command_ack", "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
                             "trajectory_heartbeat" => json!({"op":"trajectory_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "trajectory_cancel" => json!({"op":"trajectory_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
@@ -1458,6 +1519,51 @@ mod tests {
             .is_empty());
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn joint4_native_entry_checks_capability_profile_and_actual_page_before_reserving() {
+        let (port,_events,seen,server)=fake_bridge().await;
+        let hub=Runtime::default();let profile=offline_profile("fixture.invalid");
+        let request: crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
+        hub.set_profile(profile);hub.connect(port).await.unwrap();let (page,_)=hub.attach("page-calibration").unwrap();
+        let error=hub.prepare_joint4("page-calibration",&request,"begin_pose",Some("SUPPORTED"));
+        assert!(matches!(error,Err(e) if e.contains("请更新 Bridge")));
+        assert!(hub.tasks.snapshot().is_none());
+        for op in ["joint4_start","joint4_capture","joint4_cancel","joint4_heartbeat"] {
+            assert!(hub.request("page-calibration",&page,"bypass",json!({"op":op}),Duration::from_secs(1)).await.is_err());
+        }
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"].as_str().is_some_and(|op|op.starts_with("joint4_"))));
+        hub.close();server.abort();
+    }
+
+    #[tokio::test]
+    async fn joint4_loopback_keeps_hold_after_ack_and_releases_on_owner_loss_only_with_proof() {
+        use super::super::joint4_task::Prepared;
+        let (port,events,seen,server)=fake_bridge_capabilities(false,true).await;
+        let hub=Runtime::default();let profile=offline_profile("fixture.invalid");
+        let request: crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
+        hub.set_profile(profile);hub.connect(port).await.unwrap();let (page,_)=hub.attach("page-calibration").unwrap();
+        let (motion,_)=hub.attach("page-motion").unwrap();
+        assert!(hub.prepare_joint4("page-motion",&request,"begin_pose",Some("SUPPORTED")).is_err());
+        let mut other=request.clone();other.host="other.invalid".into();
+        assert!(hub.prepare_joint4("page-calibration",&other,"begin_pose",Some("SUPPORTED")).is_err());
+        assert!(hub.prepare_joint4("page-calibration",&request,"begin_pose",None).is_err());
+        let Prepared::Job(job)=hub.prepare_joint4("page-calibration",&request,"begin_pose",Some("SUPPORTED")).unwrap() else {panic!()};
+        let command=job.message["command_id"].clone();
+        assert!(hub.tasks.migration("page-calibration").is_err());
+        assert_eq!(job.run(&hub).await.unwrap()["success"],true);assert!(hub.tasks.snapshot().is_some());
+        assert!(hub.request("page-motion",&motion,"conflict",json!({"op":"position_move","command_id":"other"}),Duration::from_secs(1)).await.is_err());
+        let Prepared::Job(job)=hub.prepare_joint4("page-calibration",&request,"capture_pose",Some("HANDS_CLEAR")).unwrap() else {panic!()};
+        assert_eq!(job.run(&hub).await.unwrap()["message"],"sample 1");
+        hub.detach("page-calibration",&page).await.unwrap();
+        let timeout=Duration::from_secs(3);
+        tokio::time::timeout(timeout,async {while !seen.lock().unwrap().iter().any(|m|m["op"]=="joint4_cancel" && m["command_id"]==command) {tokio::task::yield_now().await;}}).await.unwrap();
+        assert!(hub.tasks.snapshot().is_some());
+        events.send(json!({"op":"joint4_task_state","command_id":command,"action":"begin_pose","terminal":true,"task_phase":"canceled","evidence":"pose_released"})).unwrap();
+        tokio::time::timeout(timeout,async {while hub.tasks.snapshot().is_some(){tokio::task::yield_now().await;}}).await.unwrap();
+        assert!(hub.tasks.migration("page-calibration").is_ok());
+        hub.close();server.abort();
     }
 
     #[tokio::test]

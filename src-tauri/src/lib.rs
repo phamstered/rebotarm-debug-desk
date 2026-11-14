@@ -130,13 +130,6 @@ struct RemoteActionResult {
 }
 
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TriggerServiceResponse {
-    success: bool,
-    message: String,
-}
-
 fn ssh_target(profile: &ConnectionProfile) -> String {
     if profile.username.trim().is_empty() {
         profile.host.clone()
@@ -269,63 +262,6 @@ fn controllers_switch_command(
     ))
 }
 
-
-fn joint4_calibration_service(action: &str) -> Option<&'static str> {
-    match action {
-        "begin_pose" => Some("/joint4_calibration_controller/begin_pose"),
-        "release_pose" => Some("/joint4_calibration_controller/release_pose"),
-        "capture_pose" => Some("/joint4_calibration_controller/capture_pose"),
-        "fit" => Some("/joint4_calibration_controller/fit"),
-        "reset" => Some("/joint4_calibration_controller/reset"),
-        _ => None,
-    }
-}
-
-fn joint4_calibration_service_command(
-    profile: &ConnectionProfile,
-    action: &str,
-) -> Result<String, String> {
-    let transport = ros_transport_setup();
-    if !is_safe_setup_script(&profile.ros_setup_script) {
-        return Err("ROS 环境脚本路径包含不允许的字符".into());
-    }
-    let service = joint4_calibration_service(action).ok_or("不支持的 joint4 标定操作")?;
-    Ok(format!(
-        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
-         if [ -f \"{}\" ]; then source \"{}\"; fi; \
-         ROS_DOMAIN_ID={} timeout 10 ros2 service call {} std_srvs/srv/Trigger \"{{}}\" 2>&1'",
-        profile.ros_setup_script, profile.ros_setup_script, profile.ros_domain_id, service,
-    ))
-}
-
-fn parse_trigger_service_response(output: &str) -> Result<TriggerServiceResponse, String> {
-    let success = if output.contains("success=True") || output.contains("success: true") {
-        true
-    } else if output.contains("success=False") || output.contains("success: false") {
-        false
-    } else {
-        return Err("无法解析 Trigger 服务响应".into());
-    };
-    let message = ["message='", "message=\"", "message: '", "message: \""]
-        .iter()
-        .find_map(|marker| {
-            let start = output.rfind(marker)? + marker.len();
-            let quote = marker.chars().last()?;
-            let rest = &output[start..];
-            let end = rest.rfind(quote)?;
-            Some(rest[..end].replace("\\'", "'").replace("\\\"", "\""))
-        })
-        .unwrap_or_else(|| {
-            output
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("Trigger 服务已返回")
-                .trim()
-                .to_string()
-        });
-    Ok(TriggerServiceResponse { success, message })
-}
 
 fn validate_calibration_report(path: &str, content: &str) -> Result<(), String> {
     let path = Path::new(path);
@@ -985,27 +921,10 @@ async fn switch_ros_controllers(
 
 #[tauri::command]
 async fn call_joint4_calibration_service(
-    profile: ConnectionProfile,
-    action: String,
-) -> Result<TriggerServiceResponse, String> {
-    let remote = joint4_calibration_service_command(&profile, &action)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 joint4 标定服务调用：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        return Err(format!(
-            "joint4 标定服务调用失败：{}",
-            ros_control_error(&format!("{stdout}\n{stderr}"))
-        ));
-    }
-    parse_trigger_service_response(&stdout)
+    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
+    profile: ConnectionProfile, action: String, confirmation: Option<String>,
+) -> Result<serde_json::Value, String> {
+    session::joint4_task::start(app, window.label().into(), &hub, profile, action, confirmation).await
 }
 
 #[tauri::command]
@@ -1819,35 +1738,6 @@ mod tests {
             &[],
         )
         .is_err());
-    }
-
-    #[test]
-    fn restricts_and_parses_joint4_calibration_trigger_calls() {
-        let command = joint4_calibration_service_command(&profile(""), "capture_pose").unwrap();
-        assert!(command.contains("/joint4_calibration_controller/capture_pose"));
-        assert!(command.contains("std_srvs/srv/Trigger"));
-        assert!(command.contains("ROS_DOMAIN_ID=0"));
-        assert!(joint4_calibration_service_command(&profile(""), "shell;reboot").is_err());
-
-        assert_eq!(
-            parse_trigger_service_response(
-                "response:\nstd_srvs.srv.Trigger_Response(success=True, message='captured sample 4')\n",
-            )
-            .unwrap(),
-            TriggerServiceResponse {
-                success: true,
-                message: "captured sample 4".into(),
-            }
-        );
-        assert_eq!(
-            parse_trigger_service_response("success: false\nmessage: 'pose is not stable'\n")
-                .unwrap(),
-            TriggerServiceResponse {
-                success: false,
-                message: "pose is not stable".into(),
-            }
-        );
-        assert!(parse_trigger_service_response("service unavailable").is_err());
     }
 
     #[test]

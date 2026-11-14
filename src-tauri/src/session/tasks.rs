@@ -27,6 +27,7 @@ pub enum Kind {
     Controller,
     ArmMode,
     Trajectory,
+    Joint4,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -62,7 +63,8 @@ struct Task {
     inflight: Option<u64>,
     motor: Option<super::motor_task::Motor>,
     controller: Option<super::controller_stop::Stop>,
-    trajectory_origin: Option<String>,
+    leased_origin: Option<String>,
+    joint4: Option<super::joint4_task::State>,
 }
 #[derive(Default)]
 struct Inner {
@@ -122,6 +124,7 @@ fn start_kind(op: &str) -> Option<Kind> {
         "visual_pick_start" => Some(Kind::Pick),
         "gravity_id_send_goal" => Some(Kind::Gravity),
         "trajectory_command" => Some(Kind::Trajectory),
+        "joint4_start" => Some(Kind::Joint4),
         _ => None,
     }
 }
@@ -136,6 +139,7 @@ fn actuation(op: &str, message: &Value) -> bool {
                 | "gravity_id_send_goal"
                 | "position_group_resume"
                 | "position_group_pause"
+                | "joint4_capture"
         )
         || (op == "joint_command" && message["mode"].as_i64() != Some(3))
 }
@@ -162,6 +166,16 @@ impl Tasks {
         Ok(())
     }
 
+    pub fn joint4_command(&self, owner: &Owner, release: bool) -> Result<Option<String>, String> {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(task) = inner.task.as_mut() else { return Ok(None); };
+        if task.snapshot.kind != Kind::Joint4 || &task.owner != owner {
+            return Err("已有其他页面或连接持有任务，请等待终态确认".into());
+        }
+        if release { stop(task, "已请求释放 Joint4 姿态，等待核验；重力前馈不会因此关闭"); }
+        Ok(Some(task.snapshot.command_id.clone()))
+    }
+
     pub fn begin_controller(&self, owner: Owner) -> Result<u64, String> {
         self.begin_finite_control(owner, Kind::Controller)
     }
@@ -185,7 +199,7 @@ impl Tasks {
                 command_id: if kind == Kind::ArmMode { super::controller_journal::new_arm_id()? } else { super::controller_journal::new_id()? }, kind,
                 phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
-            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller), trajectory_origin: None,
+            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller), leased_origin: None, joint4: None,
         });
         Ok(id)
     }
@@ -352,10 +366,19 @@ impl Tasks {
             return Err("页面正在迁移，不能提交运动".into());
         }
         let motor_context = inner.motor_context.clone();
-        let trajectory_origin = if op == "trajectory_command" {
+        let leased_origin = if matches!(op, "trajectory_command" | "joint4_start") {
             Some(inner.connection_identity.as_ref().filter(|(epoch, _)| *epoch == owner.epoch)
-                .ok_or("直接轨迹缺少当前机器人连接身份")?.1.clone())
+                .ok_or("任务缺少当前机器人连接身份")?.1.clone())
         } else { None };
+        if matches!(op, "joint4_start" | "joint4_capture") {
+            super::joint4_task::validate(&owner.window.label, message)?;
+        }
+        if op == "joint4_capture" && !inner.task.as_ref().is_some_and(|task|
+            task.snapshot.kind == Kind::Joint4 && task.owner == owner && task.admitted
+            && !stopped(task) && message["command_id"] == task.snapshot.command_id
+            && task.joint4.as_ref().is_some_and(|j| j.action == "begin_pose" && j.operation.is_none())) {
+            return Err("Capture 需要本页面已受理的 Joint4 姿态任务，且没有在途采样".into());
+        }
         let is_motor = op == "joint_command" && message["mode"].as_i64() != Some(3);
         if is_motor && owner.window.label != "page-motor" {
             return Err("只有 Motor 页面可以发送连续关节指令".into());
@@ -371,7 +394,11 @@ impl Tasks {
             if op == "trajectory_cancel" && (task.snapshot.kind != Kind::Trajectory || message["command_id"] != task.snapshot.command_id) {
                 return Err("取消编号不匹配当前直接轨迹任务".into());
             }
+            if op == "joint4_cancel" && (task.snapshot.kind != Kind::Joint4 || message["command_id"] != task.snapshot.command_id) {
+                return Err("取消编号不匹配当前 Joint4 任务".into());
+            }
             let cancel = (op == "joint_command" && message["mode"].as_i64() == Some(3))
+                || (op == "joint4_cancel" && task.snapshot.kind == Kind::Joint4 && message["command_id"] == task.snapshot.command_id)
                 || (op == "trajectory_cancel" && task.snapshot.kind == Kind::Trajectory && message["command_id"] == task.snapshot.command_id)
                 || (op == "visual_pick_cancel" && task.snapshot.kind == Kind::Pick)
                 || (op == "gravity_id_cancel" && task.snapshot.kind == Kind::Gravity && message["command_id"]==task.snapshot.command_id)
@@ -392,6 +419,7 @@ impl Tasks {
                     && task.owner == owner
                     && task.admitted
                     && !stopped(task))
+                && op != "joint4_capture"
                 && !(matches!(op, "position_group_pause" | "position_group_resume")
                     && task.snapshot.kind == Kind::Position
                     && task.owner == owner
@@ -457,19 +485,25 @@ impl Tasks {
                 inflight: None,
                 motor,
                 controller: None,
-                trajectory_origin,
+                leased_origin,
+                joint4: (kind == Kind::Joint4).then(|| super::joint4_task::State {
+                    action: message["action"].as_str().unwrap().into(), operation: None,
+                }),
             });
             Some(id)
         } else {
             None
         };
+        if op == "joint4_capture" {
+            inner.task.as_mut().unwrap().joint4.as_mut().unwrap().operation = message["operation_id"].as_str().map(String::from);
+        }
         let expected = inner.task.as_ref().map(|task| task.snapshot.id);
         drop(inner);
         // Heartbeats must be checked at write time, including a query queued
         // before another window acquired a task. Never renew for a dead owner.
         let is_heartbeat = heartbeat(op);
-        let is_continuation = matches!(op, "position_group_pause" | "position_group_resume");
-        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel" | "gravity_id_cancel" | "trajectory_cancel")
+        let is_continuation = matches!(op, "position_group_pause" | "position_group_resume" | "joint4_capture");
+        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel" | "gravity_id_cancel" | "trajectory_cancel" | "joint4_cancel")
             || (op == "joint_command" && message["mode"].as_i64() == Some(3));
         let tasks = self.clone();
         let permit =
@@ -527,6 +561,20 @@ impl Tasks {
         request: &Value,
         response: Result<&Value, &str>,
     ) {
+        if request["op"] == "joint4_capture" {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(task) = inner.task.as_mut().filter(|t| t.owner.epoch == epoch
+                && t.snapshot.kind == Kind::Joint4 && request["command_id"] == t.snapshot.command_id) {
+                let state = task.joint4.as_mut().unwrap();
+                if state.operation.as_deref() == request["operation_id"].as_str() {
+                    state.operation = None;
+                    if !response.is_ok_and(|v| super::joint4_task::capture_reply(v, request)) {
+                        stop(task, "Joint4 采样结果未确认，已请求释放姿态；不会重发采样");
+                    }
+                }
+            }
+            return;
+        }
         if ticket.is_none() {
             return;
         }
@@ -596,18 +644,19 @@ impl Tasks {
         let expected_ack = format!("{}_ack", request["op"].as_str().unwrap_or(""));
         match response {
             Ok(value)
-                if (value["op"] == "error" && task.snapshot.kind != Kind::Trajectory
+                if (value["op"] == "error" && !matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4)
                     || (value["op"] == expected_ack
                         && value["command_id"] == task.snapshot.command_id
                         && value["accepted"] == false
-                        && (task.snapshot.kind != Kind::Trajectory || value["evidence"] == "not_published")))
+                        && (match task.snapshot.kind { Kind::Trajectory => value["evidence"] == "not_published", Kind::Joint4 => super::joint4_task::start_reply(value, request), _ => true })))
                     && !task.admitted =>
             {
                 inner.task = None;
             }
             Ok(value)
                 if value["command_id"] == task.snapshot.command_id
-                    && ((value["op"] == expected_ack && value["accepted"] == true)
+                    && ((value["op"] == expected_ack && value["accepted"] == true
+                        && (task.snapshot.kind != Kind::Joint4 || super::joint4_task::start_reply(value, request)))
                         || (task.snapshot.kind == Kind::Pick && value["op"] == "visual_pick_state" && value["busy"] == true)) =>
             {
                 task.admitted = true;
@@ -635,10 +684,15 @@ impl Tasks {
         }) else {
             return false;
         };
-        if task.snapshot.kind == Kind::Trajectory && !inner.connection_identity.as_ref().is_some_and(|(current_epoch, identity)|
-            *current_epoch == epoch && task.trajectory_origin.as_ref() == Some(identity)) { return false; }
+        if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && !inner.connection_identity.as_ref().is_some_and(|(current_epoch, identity)|
+            *current_epoch == epoch && task.leased_origin.as_ref() == Some(identity)) { return false; }
         let terminal = match task.snapshot.kind {
             Kind::Motor | Kind::Controller | Kind::ArmMode => false,
+            Kind::Joint4 => value["op"] == "joint4_task_status" && value["known"] == true
+                && value["terminal"] == true && value["busy"] == false
+                && value["result"]["command_id"] == task.snapshot.command_id
+                && value["task_phase"] == value["result"]["task_phase"]
+                && super::joint4_task::terminal(&value["result"], &task.joint4.as_ref().unwrap().action),
             Kind::Trajectory => value["op"] == "trajectory_task_status" && value["known"] == true
                 && value["terminal"] == true && value["busy"] == false
                 && value["result"]["command_id"] == task.snapshot.command_id
@@ -700,6 +754,7 @@ impl Tasks {
             value["command_id"] == task.snapshot.command_id
                 && match task.snapshot.kind {
                     Kind::Motor | Kind::Controller | Kind::ArmMode => false,
+                    Kind::Joint4 => value["op"] == "joint4_heartbeat_ack" && value["renewed"] == true,
                     Kind::Trajectory => value["op"] == "trajectory_heartbeat_ack" && value["renewed"] == true,
                     Kind::Gravity => value["op"]=="gravity_id_heartbeat_ack" && value["renewed"]==true,
                     Kind::Position => {
@@ -741,6 +796,7 @@ impl Tasks {
         };
         if matches!(task.snapshot.kind, Kind::Controller | Kind::ArmMode) { return; }
         let terminal = match task.snapshot.kind {
+            Kind::Joint4 if message["op"] == "joint4_task_state" => super::joint4_task::terminal(message, &task.joint4.as_ref().unwrap().action),
             Kind::Trajectory if message["op"] == "trajectory_task_state" => super::trajectory_task::terminal(message),
             Kind::Gravity if message["op"]=="gravity_id_result" => message["terminal"]==true && matches!(message["task_phase"].as_str(),Some("succeeded" | "failed" | "canceled")),
             Kind::Gravity if matches!(message["op"].as_str(),Some("gravity_id_status" | "gravity_id_feedback")) => false,
@@ -761,16 +817,17 @@ impl Tasks {
             inner.task = None;
             return;
         }
-        if task.snapshot.kind == Kind::Trajectory && (message["terminal"] != false
+        if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && (message["terminal"] != false
+            || (task.snapshot.kind == Kind::Joint4 && message["action"] != task.joint4.as_ref().unwrap().action)
             || !matches!(message["task_phase"].as_str(), Some("queued" | "running" | "stopping"))) {
-            stop(task, "直接轨迹状态或终态证据未确认，已请求取消并保留占用");
+            stop(task, "任务状态或终态证据未确认，已请求取消并保留占用");
             task.snapshot.phase = Phase::Uncertain;
             return;
         }
         task.admitted = true;
-        if task.snapshot.kind == Kind::Trajectory && message["task_phase"] == "stopping" && !stopped(task) {
+        if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && message["task_phase"] == "stopping" && !stopped(task) {
             task.snapshot.phase = Phase::Stopping;
-            task.snapshot.message = "Bridge 正在停止直接轨迹，等待终态证据".into();
+            task.snapshot.message = "Bridge 正在停止任务，等待终态证据".into();
             return;
         }
         if message["motion_phase"] == "stop_failed" || message["pick_phase"] == "stop_failed" {
@@ -792,10 +849,10 @@ impl Tasks {
         let context = inner.motor_context.clone();
         let identity = inner.connection_identity.clone();
         let task = inner.task.as_mut()?;
-        if task.snapshot.kind == Kind::Trajectory && !identity.as_ref().is_some_and(|(current_epoch, identity)|
-            *current_epoch == epoch && task.trajectory_origin.as_ref() == Some(identity)) {
+        if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && !identity.as_ref().is_some_and(|(current_epoch, identity)|
+            *current_epoch == epoch && task.leased_origin.as_ref() == Some(identity)) {
             task.snapshot.phase = Phase::Uncertain;
-            task.snapshot.message = "直接轨迹结果未确认，请重连原机器人配置核验；未向其他连接发送控制请求".into();
+            task.snapshot.message = "任务结果未确认，请重连原机器人配置核验；未向其他连接发送控制请求".into();
             return None;
         }
         if let Some(control)=&mut task.controller {
@@ -933,6 +990,9 @@ impl Tasks {
         task.inflight = Some(action);
         let message = match (task.snapshot.kind, recovery, heartbeat) {
             (Kind::Motor | Kind::Controller | Kind::ArmMode, _, _) => unreachable!("Native task handled above"),
+            (Kind::Joint4, false, true) => json!({"op":"joint4_heartbeat","command_id":task.snapshot.command_id}),
+            (Kind::Joint4, false, false) => json!({"op":"joint4_cancel","command_id":task.snapshot.command_id}),
+            (Kind::Joint4, true, _) => json!({"op":"joint4_task_status","command_id":task.snapshot.command_id}),
             (Kind::Trajectory, false, true) => json!({"op":"trajectory_heartbeat","command_id":task.snapshot.command_id}),
             (Kind::Trajectory, false, false) => json!({"op":"trajectory_cancel","command_id":task.snapshot.command_id}),
             (Kind::Trajectory, true, _) => json!({"op":"trajectory_task_status","command_id":task.snapshot.command_id}),

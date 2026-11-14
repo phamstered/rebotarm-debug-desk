@@ -417,3 +417,15 @@ Socket 控制入口串行受理；排队开始也计入 busy，直接发布与�
 Jetson 使用部署脚本同步独立 `~/easy_debug_bridge_260_motion_observe`，最终以 `MAKEFLAGS="-j1 -l1" CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1` 构建，完整 `colcon test` 和 `colcon test-result --verbose` 通过：27 tests，0 errors，0 failures，0 skipped（`/tmp/260-direct-adapter-verified-ros.log`）。首轮定向测试因模拟 DISABLE 订阅采用 reliable、与 Bridge best-effort 不兼容而失败；修正模拟订阅后重新测试，没有修改生产 QoS 或放宽断言。新增 ROS 覆盖源时间戳过期、重复编号、限幅拒绝、夹爪单位、缺失末点参考不解锁、断连取消、只读轮询不续租和保留终态。
 
 另起并清理了独立域 221、随机回环端口的临时安装二进制进程，实际 `hello` 返回 build ID `071d637c39f5` 与 `trajectory_task_supported:true`；未知任务保持非终态，白名单拒绝可按编号恢复 `not_published`（`/tmp/260-direct-adapter-hello-smoke.log`）。这不是生产进程重启或部署。完整目标仍包括 Joint4、外部采集/回放协调、未知任务和桌面重启恢复、真实 JTC 边界、多屏及持续运行，以及最终 PR/CI/合并和正式安装部署；当前目标保持进行中。
+
+## Joint4 原生任务归属与服务协议接入
+
+`call_joint4_calibration_service` 已移除 SSH 直调，改为实际 `page-calibration`、当前 Profile / 附着代次校验后登记共享任务，再由应用 worker 发送 Bridge 请求。未发送时取消可撤销写入许可；已发送工作不随 IPC future 退出而丢弃。Begin 的服务 ACK 不释放姿态任务；Capture 必须属于同一页面已受理的 Begin，包含独立操作编号且至多一个在途请求。Release 先登记意图，取消有保留容量并撤销之前排队的 Begin/Capture。页面失联停止续租并请求释放，未知结果不自动重发服务。
+
+原生层区分 `pose_released` 与 `output_disabled`，前者仍保留重力前馈；取消 ACK 不等于上述任一证据。只有动作、编号、连接及证据一致的终态可以解除任务占用；重连只查询原机器人配置的保留结果。前端保留托住/手离开确认，等待 Begin/Capture 时可在托住确认后请求 Release，迟到响应不覆盖释放提示或写入另一 Profile。全局状态显示 Joint4 归属，普通查询不代为续租。
+
+本阶段仅完成桌面发送与消费契约，**当前 Bridge 尚未实现 `joint4_task_supported`、ROS 服务串行/去重和反馈核验适配器**。桌面显式拒绝缺少能力的 Bridge，不回退 SSH；此开发中间状态不能发布为可用的 Joint4 实机功能。完整目标继续包含该 ROS 接线、外部采集/回放协调、未知任务与桌面重启恢复、真实 JTC 边界、多屏及持续运行验收，以及最终 PR/CI/合并和正式安装部署。
+
+最终 `npm test` 通过：919 前端 / 219 Rust / 3 运行库测试与其余脚本（`/tmp/260-joint4-native-verified-tests.log`）。新增回归覆盖实际回环 WebSocket 中的能力/页面/配置拒绝、服务 ACK 后持有姿态、页面退出后取消及证据终态释放；状态机覆盖重复采样、迟到回执、错误动作、旧代次、队列撤销和同机器人重连查询。应用 worker 测试确认调用 future 被取消后仍能处理完成；前端回归验证等待期间 Release、取消前迟到回复隔离以及换配置/断线不写入旧样本。测试不连接真实 ROS 服务或机械臂。
+
+`npm run build`、文档构建及独立 Debug `.app` 构建通过（`/tmp/260-joint4-native-{build,docs,bundle}.log`），严格 codesign 核验通过。再次使用 CUA 选择隔离应用时，系统仍返回 Mac 锁屏；本轮没有启动新包并完成真实窗口复验，未将既有图片迁移验收记作本版本证据。正式 `/Applications/Robot Console.app` 和生产 Bridge 未替换。

@@ -195,6 +195,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Capture 仅在 Controller active、状态新鲜、姿态保持稳定且确认手部支撑已撤掉后开放。
 - `safety_fault` 会锁定采样和拟合；托住 joint4 后可执行 Release 清除新版 Controller 的故障锁存。对旧版 Controller，姿态已释放且速度不超过 0.05 rad/s 时允许重新 Begin，以当前安全位置重建参考，避免界面与 Controller 互相锁死。
 - 标定采样和拟合结果可保存为本机 JSON/CSV 审计报告。
+- 多窗口开发分支的 Joint4 已接入原生任务占用：Begin 的服务回复不释放姿态任务，Capture 只能属于同一任务，Release 显示“已请求、等待核验”。Begin/Capture 等待期间仍可在托住确认后请求 Release；迟到回复不会覆盖释放提示或写入另一连接的样本。页面失联停止续租并请求释放；不把解除软保持误称为关闭重力前馈。
+- 此开发阶段要求 Bridge 的 `joint4_task_supported` 能力；当前 ROS 适配器尚未接入，旧 Bridge 会得到更新提示，不能进行 Joint4 实机标定。原 SSH 直调已移除，不回退绕过共享任务锁。此中间版本尚未安装到正式应用。
 
 ## 11. TCP 拖拽轨迹下发
 
@@ -265,7 +267,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | 电机交互 | 独立导航页、7 个默认关节、安全确认、每关节滑块/使能、使用当前位置、20 Hz 流、切页 DISABLE | `src/App.test.tsx`、`src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort、关节掩码解析/校验及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
-| Joint4 标定 | 状态解析、安全门控、fault 恢复、Trigger 服务白名单、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/lib.rs` |
+| Joint4 标定 | 状态解析、安全门控、fault 恢复、原生任务归属、服务协议、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/session/joint4_task.rs`、`src-tauri/src/lib.rs` |
 | 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置/姿态逆解收敛与限位钳制、四元数/RPY 转换、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
 | 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |
 | 轨迹规划 | IK 目标与失败边界、TCP 松手预览后确认、夹爪能力门禁、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |

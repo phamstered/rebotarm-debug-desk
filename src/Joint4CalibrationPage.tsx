@@ -1,7 +1,7 @@
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import {
   buildCalibrationReport,
@@ -80,6 +80,9 @@ export function Joint4CalibrationPage({
   const [serviceBlocked, setServiceBlocked] = useState(false);
   const [supportConfirmed, setSupportConfirmed] = useState(false);
   const [handsClear, setHandsClear] = useState(false);
+  const source = JSON.stringify(profile);
+  const generation = useRef(0);
+  const pending = useRef<CalibrationAction | "">("");
   const [clock, setClock] = useState(Date.now());
   const controllerActive = connected && controllerState === "active";
   const migrationBusy = busy ? "Joint4 标定操作中，请等待完成" : status?.poseActive ? "Joint4 姿态保持中，请先安全 Release" : "";
@@ -91,7 +94,9 @@ export function Joint4CalibrationPage({
   const displayCount = Math.max(status?.sampleCount ?? 0, samples.length);
   const captureAllowed = availability.captureAllowed && !serviceBlocked && handsClear;
   const beginAllowed = availability.beginAllowed && !serviceBlocked && supportConfirmed;
-  const releaseAllowed = Boolean(status?.poseActive || status?.safetyFault || serviceBlocked) && supportConfirmed;
+  const releaseAllowed = Boolean(status?.poseActive || status?.safetyFault || serviceBlocked || busy === "begin_pose" || busy === "capture_pose") && supportConfirmed;
+
+  useEffect(() => { setSamples([]); setFit(null); }, [source]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 250);
@@ -99,6 +104,8 @@ export function Joint4CalibrationPage({
   }, []);
 
   useEffect(() => {
+    generation.current += 1; pending.current = "";
+    setBusy(""); setError(""); setNotice(""); setServiceBlocked(false);
     setStatus(null); setSupportConfirmed(false); setHandsClear(false);
     if (!connected) return;
     let disposed = false;
@@ -122,16 +129,25 @@ export function Joint4CalibrationPage({
         setSubscriptionError("status.data 必须包含 12 个有限数值");
       }
     });
-    return () => { disposed = true; unsubscribe(); };
-  }, [bridge, connected]);
+    return () => { disposed = true; generation.current += 1; pending.current = ""; unsubscribe(); };
+  }, [bridge, connected, source]);
 
   async function callService(action: CalibrationAction) {
     if (!connected) { setError("机器人未连接"); return; }
+    if (pending.current && (action !== "release_pose" || pending.current === "release_pose")) return;
+    if ((action === "begin_pose" && !beginAllowed) || (action === "capture_pose" && !captureAllowed)
+      || (action === "release_pose" && !releaseAllowed)) return;
+    const version = ++generation.current;
+    pending.current = action;
     setBusy(action);
     setError("");
     setNotice("");
     try {
-      const response = await invoke<TriggerServiceResponse>("call_joint4_calibration_service", { profile, action });
+      const response = await invoke<TriggerServiceResponse>("call_joint4_calibration_service", {
+        profile, action, confirmation: action === "capture_pose" ? "HANDS_CLEAR"
+          : action === "begin_pose" || action === "release_pose" ? "SUPPORTED" : null,
+      });
+      if (generation.current !== version) return;
       if (!response.success) throw new Error(response.message || `${action} 被控制器拒绝`);
       setServiceBlocked(false);
       setNotice(response.message || `${action} 完成`);
@@ -155,10 +171,11 @@ export function Joint4CalibrationPage({
         setHandsClear(false);
       }
     } catch (reason) {
+      if (generation.current !== version) return;
       setServiceBlocked(true);
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy("");
+      if (generation.current === version) { pending.current = ""; setBusy(""); }
     }
   }
 
@@ -212,7 +229,7 @@ export function Joint4CalibrationPage({
       <section className="calibration-safety-banner">
         <strong>受力标定模式</strong>
         <span>保持急停可用。开始姿态前先托住机械臂；稳定阶段逐渐撤掉手部支撑，避免手力污染回归。</span>
-        <button className="danger" disabled={!releaseAllowed || Boolean(busy)} onClick={() => void callService("release_pose")}>安全停止 · Release</button>
+        <button className="danger" disabled={!releaseAllowed || busy === "release_pose" || busy === "save"} onClick={() => void callService("release_pose")}>安全停止 · Release</button>
       </section>
 
       {(allBlockers.length > 0 || error) && (

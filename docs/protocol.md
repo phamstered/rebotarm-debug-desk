@@ -576,7 +576,7 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 ### 原生任务状态（多窗口开发分支）
 
-`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller | arm_mode`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller | arm_mode | trajectory | joint4`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
@@ -604,6 +604,16 @@ Bridge 在运动回调组串行处理发布、反馈和任务状态，最多保�
 首段校验使用 Bridge 收到的起始快照与请求时间，不能视为控制器内的实时限幅器。[JTC 2.53.1 的采样实现](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/trajectory.cpp) 在实际更新时选取起始状态和起始时间，传输/调度延迟会改变到首点的时间。隔离模拟节点测试覆盖任务协议和反馈证据，不替代真实 JTC 的首段插值及硬件验证。
 
 取消、所属连接断开或 5 秒租约失效会请求共享序列分配器发送三帧零输出 DISABLE，必要时每秒重申；缺少订阅者或发布错误继续保留占用，不向 JTC 发送空轨迹。完成需原轨迹时长已过、JTC reference 已在末点且速度为零，actual 与独立测量连续新鲜停稳 200 ms；成功还核验目标误差，取消还核验 DISABLE 序列回执。时间基准改变保留 uncertain，不能只靠墙钟等待释放。排队取消/断连/DISABLE 与直接发布共用撤销屏障；重复编号不重发，已发布任务绝不返回 not_published。
+
+### Joint4 原生任务协议（开发分支，Bridge 适配器待接入）
+
+桌面 `call_joint4_calibration_service` 已移除直接 SSH 服务调用，改由应用级工作持有请求。只允许当前附着的 `page-calibration`，请求 Profile 必须匹配共享连接；Begin / Release 要求 `confirmation:"SUPPORTED"`，Capture 要求 `"HANDS_CLEAR"`。原生入口要求 hello 显式声明 `joint4_task_supported:true`。**当前仓库 Bridge 尚未实现该能力，因此本阶段拒绝服务调用并提示更新，不作为可用的 Joint4 实机版本发布。** 以下为已实现的桌面端发送与消费契约，不能视作 ROS 适配器验收。
+
+- `joint4_start`：唯一 `command_id`、`action:begin_pose|release_pose|fit|reset` 和上述确认。请求发送前占用全局运动槽及本页迁移许可；原生 worker 不随 IPC future 退出而丢弃已发送请求。`joint4_start_ack` 必须匹配编号及 action，包含布尔 `accepted` / `success` 和至多 16 KiB 的 `message`；仅明确 `accepted:false,success:false,evidence:"not_called"` 可释放未受理的任务。普通错误或回执丢失请求取消，不重新调用服务。
+- `joint4_capture`：沿用本页面已受理的 Begin 任务编号，另有唯一 `operation_id` 和手离开确认；同一时刻至多一个在途 Capture。回复 `joint4_capture_ack` 必须同时匹配两编号，含布尔 success 和有界 message。采样回执不结束姿态任务；异常回复请求释放，不重发采样。Bridge 适配器还须实现操作去重及服务串行。
+- 已有任务时的 Release 只登记取消意图，IPC 回复 `{success:true,pending:true,command_id,message}`，不是姿态释放证明。原生 worker 发送 `joint4_cancel`；窗口失联或超过 5 秒没有所属页面活动也触发取消。活跃已受理任务每 500 ms 至多一次 `joint4_heartbeat`，要求编号匹配的 `joint4_heartbeat_ack,renewed:true`。页面不能直接调用这四类控制/续租消息。取消及 DISABLE 使此前排队的 Begin/Capture 失效；取消有保留发送容量。
+- `joint4_task_state` 须匹配 `command_id`、原 action 和 `terminal:true`。认可的 phase/evidence 配对为 `canceled/pose_released`、`canceled/output_disabled`、`failed/not_called`、`failed/service_rejected`，以及仅 Fit/Reset 可用的 `succeeded/service_verified`。`pose_released` 表示解除软保持，重力前馈仍有效；不能作为硬件关闭输出证据。Bridge 必须在未完成服务均已收束、相应状态及必要硬件反馈核验后给出证据，不能以服务 ACK 冒充这些终态。
+- 重连只向同一机器人、ROS/反馈配置查询 `joint4_task_status`；要求 `known:true,terminal:true,busy:false`、匹配编号/phase 及嵌套 result 中完整有效终态。未知、缺字段或其他连接不能释放占用，查询不代替所属窗口续租。桌面进程重启恢复尚未实现。
 
 ### 原生页面附着（多窗口开发分支）
 
