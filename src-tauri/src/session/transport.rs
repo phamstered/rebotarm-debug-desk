@@ -56,7 +56,7 @@ fn fail_pending(pending: &Pending, error: &str) {
 fn urgent_command(message: &Value) -> bool {
     matches!(
         message["op"].as_str(),
-        Some("position_cancel" | "visual_pick_cancel" | "gravity_id_cancel")
+        Some("position_cancel" | "visual_pick_cancel" | "gravity_id_cancel" | "trajectory_cancel")
     ) || (message["op"] == "joint_command" && message["mode"].as_i64() == Some(3))
 }
 
@@ -302,6 +302,7 @@ mod tests {
         assert!(urgent_command(&json!({"op":"position_cancel"})));
         assert!(urgent_command(&json!({"op":"visual_pick_cancel"})));
         assert!(urgent_command(&json!({"op":"gravity_id_cancel"})));
+        assert!(urgent_command(&json!({"op":"trajectory_cancel"})));
         for mode in [0, 1, 2, 4, 5] {
             assert!(!urgent_command(
                 &json!({"op":"joint_command","mode":mode,"urgent":true})

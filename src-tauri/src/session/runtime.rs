@@ -170,6 +170,14 @@ impl Runtime {
     pub fn set_task_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
         *self.task_changed.lock().unwrap() = Some(callback);
     }
+    pub fn cancel_trajectory(&self, id: u64, command_id: &str) -> Result<(), String> {
+        self.tasks.cancel_trajectory(id, command_id)?;
+        // Offline tasks have no live network watchdog to emit a change. Notify
+        // all windows immediately, outside both state/callback locks.
+        let changed = self.task_changed.lock().unwrap().clone();
+        if let Some(changed) = changed { changed(); }
+        Ok(())
+    }
     pub fn set_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
         *self.changed.lock().unwrap() = Some(callback);
     }
@@ -506,7 +514,7 @@ impl Runtime {
                                 if let Ok(frame) = &result {
                                     let state = if frame.op() == "position_task_status" {
                                         &frame.metadata["motion_state"]
-                                    } else if frame.op()=="gravity_id_task_status" {
+                                    } else if matches!(frame.op(), "gravity_id_task_status" | "trajectory_task_status") {
                                         &frame.metadata["result"]
                                     } else {
                                         &frame.metadata
@@ -749,8 +757,14 @@ impl Runtime {
             core.transport.clone().ok_or("Bridge 尚未连接")?
         };
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
-        if matches!(op, "position_motion_heartbeat" | "gravity_id_heartbeat") {
+        if matches!(op, "position_motion_heartbeat" | "gravity_id_heartbeat" | "trajectory_heartbeat") {
             return Err("任务续租由原生会话管理，页面不能直接调用".into());
+        }
+        if op == "trajectory_cancel" {
+            return Err("直接轨迹取消须通过原生任务入口登记，页面不能向当前连接直接发送".into());
+        }
+        if op == "trajectory_command" && transport.hello.metadata["trajectory_task_supported"] != true {
+            return Err("请更新 Bridge：直接轨迹需要编号、租约与停止证据，不能仅凭发布 ACK 执行".into());
         }
         if op=="gravity_id_send_goal" && transport.hello.metadata["gravity_task_supported"]!=true {
             return Err("请更新 Bridge：重力辨识需要编号、租约与停止确认".into());
@@ -1091,6 +1105,15 @@ mod tests {
         Arc<Mutex<Vec<Value>>>,
         tokio::task::JoinHandle<()>,
     ) {
+        fake_bridge_with_trajectory(false).await
+    }
+
+    async fn fake_bridge_with_trajectory(trajectory: bool) -> (
+        u16,
+        mpsc::UnboundedSender<Value>,
+        Arc<Mutex<Vec<Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
@@ -1110,7 +1133,7 @@ mod tests {
                             socket.send(Message::Text(json!({"op":"topic_message", "topic":message["topic"], "data":"<robot name='fixture'/>"}).to_string().into())).await.unwrap();
                         }
                         match message["op"].as_str().unwrap() {
-                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true}),
+                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true, "trajectory_task_supported":trajectory}),
                             "topics" => json!({"op":"topics", "topics":[], "request_id":message["request_id"]}),
                             "resource" => {
                                 let metadata = serde_json::to_vec(&json!({"op":"resource", "uri":message["uri"], "request_id":message["request_id"], "data_length":3})).unwrap();
@@ -1122,6 +1145,10 @@ mod tests {
                             "subscribe" => json!({"op":"subscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "unsubscribe" => json!({"op":"unsubscribed", "topic":message["topic"], "request_id":message["request_id"]}),
                             "position_move" | "position_group_start" | "gravity_id_send_goal" => json!({"op":format!("{}_ack", message["op"].as_str().unwrap()), "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
+                            "trajectory_command" => json!({"op":"trajectory_command_ack", "accepted":true, "command_id":message["command_id"], "request_id":message["request_id"]}),
+                            "trajectory_heartbeat" => json!({"op":"trajectory_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "trajectory_cancel" => json!({"op":"trajectory_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
+                            "trajectory_task_status" => json!({"op":"trajectory_task_status","command_id":message["command_id"],"known":false,"terminal":false,"busy":false,"task_phase":"unknown","request_id":message["request_id"]}),
                             "joint_command" => json!({"op":"joint_command_ack", "mode":message["mode"], "sequence":123, "request_id":message["request_id"]}),
                             "gravity_id_heartbeat" => json!({"op":"gravity_id_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "gravity_id_cancel" => json!({"op":"gravity_id_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
@@ -1301,6 +1328,73 @@ mod tests {
             .is_empty());
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn direct_trajectory_requires_capability_before_any_publication_or_reservation() {
+        let (port, _events, seen, server)=fake_bridge().await;
+        let hub=Runtime::default();hub.connect(port).await.unwrap();
+        let (motion,_)=hub.attach("page-motion").unwrap();
+        let error=hub.request("page-motion",&motion,"direct",json!({"op":"trajectory_command","command_id":"x"}),Duration::from_secs(2)).await.unwrap_err();
+        assert!(error.contains("请更新 Bridge"));assert!(hub.tasks.snapshot().is_none());
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="trajectory_command"));
+        hub.close();server.abort();
+    }
+
+    #[test]
+    fn direct_trajectory_cancel_intent_notifies_without_a_live_socket() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hub=Runtime::default();
+        hub.tasks.configure_motor(1,&json!({"host":"fixture"}));
+        let owner=Owner {epoch:1,window:WindowToken {label:"page-motion".into(),incarnation:1}};
+        let a=hub.tasks.admit(owner,&json!({"op":"trajectory_command","command_id":"offline"}),Instant::now()).unwrap();
+        assert!(a.permit.unwrap()());
+        let changes=Arc::new(AtomicUsize::new(0));let notified=changes.clone();let tasks=hub.tasks.clone();
+        hub.set_task_changed(Arc::new(move || {
+            assert_eq!(tasks.snapshot().unwrap().phase,super::super::tasks::Phase::Stopping);
+            notified.fetch_add(1,Ordering::SeqCst);
+        }));
+        assert!(hub.cancel_trajectory(a.ticket.unwrap(),"other").is_err());
+        assert_eq!(changes.load(Ordering::SeqCst),0);
+        hub.cancel_trajectory(a.ticket.unwrap(),"offline").unwrap();
+        assert_eq!(changes.load(Ordering::SeqCst),1);
+        assert!(hub.core.lock().unwrap().transport.is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_trajectory_is_owned_after_ack_and_last_page_exit_cancels_until_proven_terminal() {
+        let (port,events,seen,server)=fake_bridge_with_trajectory(true).await;
+        let hub=Runtime::default();
+        // The deliberately incomplete Profile prevents all SSH readers.
+        hub.set_profile(json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}));
+        hub.connect(port).await.unwrap();
+        let (motion,_)=hub.attach("page-motion").unwrap();
+        let (monitor,_)=hub.attach("page-monitor").unwrap();
+        let timeout=Duration::from_secs(3);
+        let command=json!({"op":"trajectory_command","command_id":"direct-loopback"});
+        assert!(hub.request("page-monitor",&monitor,"direct",command.clone(),timeout).await.is_err());
+        let ack=hub.request("page-motion",&motion,"direct",command,timeout).await.unwrap();
+        assert_eq!(ack.op(),"trajectory_command_ack");assert!(hub.tasks.snapshot().is_some());
+        assert!(hub.tasks.migration("page-motion").is_err());
+        assert!(hub.request("page-monitor",&monitor,"renew",json!({"op":"trajectory_heartbeat","command_id":"direct-loopback"}),timeout).await.is_err());
+        assert!(hub.request("page-motion",&motion,"cancel",json!({"op":"trajectory_cancel","command_id":"direct-loopback"}),timeout).await.is_err());
+        assert!(hub.request("page-motion",&motion,"position",json!({"op":"position_move","command_id":"conflict"}),timeout).await.is_err());
+        hub.detach("page-monitor",&monitor).await.unwrap();hub.detach("page-motion",&motion).await.unwrap();
+        tokio::time::timeout(timeout,async {
+            while !seen.lock().unwrap().iter().any(|m|m["op"]=="trajectory_cancel" && m["command_id"]=="direct-loopback") {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        assert!(hub.tasks.snapshot().is_some());
+        // Cancel ACK is already returned by the fake Bridge. Even another
+        // task's valid terminal may not release this task's migration lock.
+        let (observer,_)=hub.attach("page-status").unwrap();
+        events.send(json!({"op":"trajectory_task_state","command_id":"other","terminal":true,"task_phase":"canceled","evidence":"output_disabled"})).unwrap();
+        let bytes=tokio::time::timeout(timeout,hub.next("page-status",&observer)).await.unwrap().unwrap();assert!(!bytes.is_empty());
+        assert!(hub.tasks.snapshot().is_some());
+        events.send(json!({"op":"trajectory_task_state","command_id":"direct-loopback","terminal":true,"task_phase":"canceled","evidence":"output_disabled"})).unwrap();
+        tokio::time::timeout(timeout,async {while hub.tasks.snapshot().is_some(){tokio::task::yield_now().await;}}).await.unwrap();
+        assert!(hub.tasks.migration("page-motion").is_ok());
+        assert_eq!(seen.lock().unwrap().iter().filter(|m|m["op"]=="trajectory_command").count(),1);
+        hub.close();server.abort();
     }
 
     #[tokio::test]

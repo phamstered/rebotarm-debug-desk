@@ -573,7 +573,7 @@ These IPC commands do not alter Bridge motion capabilities or remove any executi
 
 These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.
 
-### 原生任务状态（多窗口开发分支，覆盖 Position / Pick / Motor / Gravity）
+### 原生任务状态（多窗口开发分支）
 
 `native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller | arm_mode`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
 
@@ -587,6 +587,16 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
 
 Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 不小于该次 DISABLE ACK、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
+
+### 直接 JTC 的原生消费路径（多窗口开发分支，ROS 适配器未接入）
+
+桌面 `trajectory_command` 增加唯一 `command_id`，原生入口仅允许当前 Motion 页面提交，且要求 hello 中 `trajectory_task_supported:true`。当前 Bridge 尚未声明该能力，此开发分支的原生入口会在发送前明确拒绝此入口；现有 MoveIt 点位 / Pose 入口不受此能力字段影响。不能把隔离假 Bridge 的验证当成 ROS 适配器已完成。
+
+能力满足时，Rust 将直接轨迹纳入共享运动和迁移锁。原生层消费的 `trajectory_command_ack` 必须匹配 `command_id` 和 `accepted:true`，仅表示受理；明确 `accepted:false,evidence:"not_published"` 可以释放尚未受理的任务，普通 error、旧式发布 ACK 和超时继续保留任务并请求取消。所属窗口的存活驱动每 500 ms 至多一次 `trajectory_heartbeat`，页面不能直接调用续租；超过 5 秒失联或页面退出请求编号匹配的 `trajectory_cancel`。取消具有保留发送容量，撤销之前排队的直接轨迹，ACK 不解除占用。
+
+原生终态消费格式为 `op:"trajectory_task_state"`、匹配 `command_id`、`terminal:true`，并严格匹配 `task_phase/evidence`：`succeeded/target_observed`、`canceled/output_disabled` 或 `failed/not_published`。缺失证据、其他编号、旧连接事件及 `uncertain` 保留占用。重连原机器人配置后只发 `trajectory_task_status`，要求 `known:true,terminal:true,busy:false` 和嵌套 `result` 中完整一致的上述终态；不重发轨迹或向替换连接发送取消。身份包括 SSH/远端 Bridge、ROS domain/setup 和反馈 Topic，不包含本地隧道端口。
+
+各页面读取 `native_task_snapshot` 可显示 `kind:"trajectory"`；`native_trajectory_cancel` 只登记本机取消意图，参数 `id` 与 `commandId` 必须同时匹配当前任务。网络发送由原生看门狗执行，IPC 返回成功不代表机械臂已停止。该桌面路径已有隔离回归；Bridge 的实际订阅、发布及停止证据生成仍未接入。
 
 ### 原生页面附着（多窗口开发分支）
 

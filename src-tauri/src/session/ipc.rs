@@ -79,6 +79,19 @@ pub fn native_task_snapshot(
 }
 
 #[tauri::command]
+pub fn native_trajectory_cancel(
+    window: Webview,
+    hub: State<'_, Runtime>,
+    id: u64,
+    command_id: String,
+) -> Result<(), String> {
+    observation_caller(&window)?;
+    // Intent is local and correlated. The native watchdog alone sends the
+    // cancellation, and never sends it to a replacement connection's task.
+    hub.cancel_trajectory(id, &command_id)
+}
+
+#[tauri::command]
 pub fn native_local_task_snapshot(window: Webview, hub: State<'_, Runtime>) -> Result<Option<super::local_tasks::Snapshot>, String> {
     observation_caller(&window)?;
     Ok(hub.local_tasks.snapshot())

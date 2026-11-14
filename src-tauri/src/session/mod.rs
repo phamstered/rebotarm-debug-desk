@@ -33,3 +33,5 @@ pub mod bag_operation;
 pub mod arm_operation;
 
 pub mod collection_operation;
+
+pub mod trajectory_task;

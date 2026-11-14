@@ -1048,6 +1048,7 @@ describe("App workflow", () => {
     await user.click(screen.getByTestId("send-trajectory"));
     await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({
       op: "trajectory_command",
+      command_id: expect.any(String),
       topic: "/arm/trajectory_controller/joint_trajectory",
       joint_names: ["joint1", "joint2"],
       trajectory_points: [

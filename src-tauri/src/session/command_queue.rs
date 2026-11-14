@@ -32,6 +32,7 @@ impl CommandQueue {
             Some("position_cancel" | "position_group_pause") => &[2],
             Some("visual_pick_cancel") => &[3],
             Some("gravity_id_cancel") => &[4],
+            Some("trajectory_cancel") => &[1],
             _ => &[],
         };
         // Check a task-bound stop while holding the same lock that prepares
@@ -102,6 +103,18 @@ mod tests {
             .prepare(&json!({"op":"position_move"}), Some(Arc::new(|| false)))
             .unwrap()());
     }
+    #[test]
+    fn trajectory_cancel_revokes_only_older_direct_trajectories() {
+        let queue=Arc::new(CommandQueue::default());
+        let trajectory=queue.prepare(&json!({"op":"trajectory_command"}),None).unwrap();
+        let position=queue.prepare(&json!({"op":"position_move"}),None).unwrap();
+        queue.prepare(&json!({"op":"trajectory_cancel"}),None);
+        assert!(!trajectory());assert!(position());
+        let next=queue.prepare(&json!({"op":"trajectory_command"}),None).unwrap();
+        let stale=queue.prepare(&json!({"op":"trajectory_cancel"}),Some(Arc::new(||false))).unwrap();
+        assert!(!stale());assert!(next());
+    }
+
     #[test]
     fn stale_task_cancel_does_not_revoke_a_successor_start() {
         let queue = Arc::new(CommandQueue::default());

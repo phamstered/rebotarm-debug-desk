@@ -1575,6 +1575,7 @@ pub fn run() {
             session::documents::editor_document_commit,
             session::ipc::native_bridge_context,
             session::ipc::native_task_snapshot,
+            session::ipc::native_trajectory_cancel,
             session::ipc::native_bag_operation_snapshot,
             session::ipc::native_collection_operation_snapshot,
             session::ipc::native_local_task_snapshot,

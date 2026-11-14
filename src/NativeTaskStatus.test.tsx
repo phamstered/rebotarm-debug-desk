@@ -72,3 +72,48 @@ it("keeps arm environment ownership visible across windows until native verifica
   await act(async () => changed());
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+it("requests correlated direct trajectory cancellation and keeps the task after IPC returns", async () => {
+  const direct = { ...task, kind: "trajectory", phase: "running", message: "Bridge 已受理" };
+  mocks.invoke.mockImplementation(async command => command === "native_task_snapshot" ? direct : undefined);
+  render(<NativeTaskStatus />);
+  expect(await screen.findByRole("status")).toHaveTextContent("直接 JTC 轨迹 · 执行中");
+  await act(async () => { screen.getByRole("button", { name: "取消直接轨迹" }).click(); screen.getByRole("button", { name: "取消直接轨迹" }).click(); });
+  expect(mocks.invoke.mock.calls.filter(([command]) => command === "native_trajectory_cancel")).toEqual([
+    ["native_trajectory_cancel", { id: 1, commandId: "x" }],
+  ]);
+  expect(screen.getByRole("status")).toHaveTextContent("直接 JTC 轨迹");
+  expect(screen.getByRole("button", { name: "取消直接轨迹" })).toBeDisabled();
+  mocks.invoke.mockResolvedValue({ ...direct, phase: "stopping", message: "等待停止证据" });
+  await act(async () => changed());
+  expect(screen.getByRole("status")).toHaveTextContent("等待停止证据");
+  mocks.invoke.mockResolvedValue(null); await act(async () => changed());
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("keeps direct trajectory ownership after cancel IPC failure and permits retry", async () => {
+  const direct = { ...task, kind: "trajectory", phase: "running" };
+  mocks.invoke.mockImplementation(async command => {
+    if (command === "native_trajectory_cancel") throw new Error("IPC failed");
+    return direct;
+  });
+  render(<NativeTaskStatus />);
+  await screen.findByRole("status");
+  await act(async () => screen.getByRole("button", { name: "取消直接轨迹" }).click());
+  expect(screen.getByRole("alert")).toHaveTextContent("IPC failed");
+  expect(screen.getByRole("button", { name: "取消直接轨迹" })).toBeEnabled();
+  expect(screen.getByRole("status")).toHaveTextContent("直接 JTC 轨迹");
+});
+
+it("does not apply a late cancel error to a replacement task", async () => {
+  let reject!: (reason: Error) => void;
+  let current = { ...task, kind: "trajectory", phase: "running" };
+  mocks.invoke.mockImplementation(command => command === "native_trajectory_cancel"
+    ? new Promise((_, fail) => { reject = fail; }) : Promise.resolve(current));
+  render(<NativeTaskStatus />); await screen.findByRole("status");
+  act(() => screen.getByRole("button", { name: "取消直接轨迹" }).click());
+  current = { ...current, id: 2, command_id: "next" }; await act(async () => changed());
+  await act(async () => reject(new Error("old cancellation failed")));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("button", { name: "取消直接轨迹" })).toBeEnabled();
+});

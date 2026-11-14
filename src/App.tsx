@@ -635,6 +635,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     }
     await bridge.request({
       ...createTrajectoryPayload(request.jointNames, request.points),
+      command_id: crypto.randomUUID(),
       topic: controller.topic,
     }, 30_000);
   }, [bridge, activeTrajectoryController, controllerStateSample, messages, profile.jointStateTopic, controllers.action]);

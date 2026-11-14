@@ -1,7 +1,7 @@
 //! Native ownership for Bridge's leased Position/Pick and Motor tasks. Request admission,
 //! the writer's final permission check, and page migration share one lock.
-//! Controller switches share admission; direct trajectories and other SSH tasks
-//! still need their full terminal lifecycle.
+//! Controller switches and leased direct trajectories share admission. Direct
+//! trajectory terminals require explicit verifier evidence, never a publish ACK.
 use super::{command_queue::SendPermit, windows::WindowToken};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -26,6 +26,7 @@ pub enum Kind {
     Motor,
     Controller,
     ArmMode,
+    Trajectory,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -61,6 +62,7 @@ struct Task {
     inflight: Option<u64>,
     motor: Option<super::motor_task::Motor>,
     controller: Option<super::controller_stop::Stop>,
+    trajectory_origin: Option<String>,
 }
 #[derive(Default)]
 struct Inner {
@@ -69,6 +71,7 @@ struct Inner {
     migrations: BTreeSet<String>,
     local_operations: BTreeSet<String>,
     motor_context: Option<super::motor_task::Context>,
+    connection_identity: Option<(u64, String)>,
 }
 
 #[derive(Default)]
@@ -118,6 +121,7 @@ fn start_kind(op: &str) -> Option<Kind> {
         "position_move" | "position_group_start" => Some(Kind::Position),
         "visual_pick_start" => Some(Kind::Pick),
         "gravity_id_send_goal" => Some(Kind::Gravity),
+        "trajectory_command" => Some(Kind::Trajectory),
         _ => None,
     }
 }
@@ -147,6 +151,17 @@ fn stop(task: &mut Task, reason: &str) {
 }
 
 impl Tasks {
+    /// Records stop intent only. The application worker performs the correlated
+    /// cancel; a new connection may only query the old task's retained result.
+    pub fn cancel_trajectory(&self, id: u64, command_id: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let task = inner.task.as_mut().filter(|task| task.snapshot.id == id
+            && task.snapshot.kind == Kind::Trajectory && task.snapshot.command_id == command_id)
+            .ok_or("直接轨迹任务已改变，请刷新状态")?;
+        stop(task, "已请求取消直接轨迹，等待停止证据");
+        Ok(())
+    }
+
     pub fn begin_controller(&self, owner: Owner) -> Result<u64, String> {
         self.begin_finite_control(owner, Kind::Controller)
     }
@@ -170,7 +185,7 @@ impl Tasks {
                 command_id: if kind == Kind::ArmMode { super::controller_journal::new_arm_id()? } else { super::controller_journal::new_id()? }, kind,
                 phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
-            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller),
+            probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller), trajectory_origin: None,
         });
         Ok(id)
     }
@@ -237,7 +252,9 @@ impl Tasks {
     }
 
     pub fn configure_motor(&self, epoch: u64, profile: &Value) {
-        self.inner.lock().unwrap().motor_context = super::motor_task::Context::new(epoch, profile);
+        let mut inner = self.inner.lock().unwrap();
+        inner.motor_context = super::motor_task::Context::new(epoch, profile);
+        inner.connection_identity = super::trajectory_task::connection_identity(profile).map(|identity| (epoch, identity));
     }
 
     pub fn snapshot(&self) -> Option<Snapshot> {
@@ -325,16 +342,27 @@ impl Tasks {
             return Err("页面正在迁移，不能提交运动".into());
         }
         let motor_context = inner.motor_context.clone();
+        let trajectory_origin = if op == "trajectory_command" {
+            Some(inner.connection_identity.as_ref().filter(|(epoch, _)| *epoch == owner.epoch)
+                .ok_or("直接轨迹缺少当前机器人连接身份")?.1.clone())
+        } else { None };
         let is_motor = op == "joint_command" && message["mode"].as_i64() != Some(3);
         if is_motor && owner.window.label != "page-motor" {
             return Err("只有 Motor 页面可以发送连续关节指令".into());
+        }
+        if op == "trajectory_command" && owner.window.label != "page-motion" {
+            return Err("只有 Motion 页面可以下发直接轨迹".into());
         }
         if op=="gravity_id_send_goal" && owner.window.label!="page-gravity" {return Err("只有重力辨识页面可以开始辨识".into());}
         if let Some(task) = &mut inner.task {
             if op=="gravity_id_cancel" && (task.snapshot.kind!=Kind::Gravity || message["command_id"]!=task.snapshot.command_id) {
                 return Err("取消编号不匹配当前重力辨识任务".into());
             }
+            if op == "trajectory_cancel" && (task.snapshot.kind != Kind::Trajectory || message["command_id"] != task.snapshot.command_id) {
+                return Err("取消编号不匹配当前直接轨迹任务".into());
+            }
             let cancel = (op == "joint_command" && message["mode"].as_i64() == Some(3))
+                || (op == "trajectory_cancel" && task.snapshot.kind == Kind::Trajectory && message["command_id"] == task.snapshot.command_id)
                 || (op == "visual_pick_cancel" && task.snapshot.kind == Kind::Pick)
                 || (op == "gravity_id_cancel" && task.snapshot.kind == Kind::Gravity && message["command_id"]==task.snapshot.command_id)
                 || (op == "position_cancel"
@@ -419,6 +447,7 @@ impl Tasks {
                 inflight: None,
                 motor,
                 controller: None,
+                trajectory_origin,
             });
             Some(id)
         } else {
@@ -430,7 +459,7 @@ impl Tasks {
         // before another window acquired a task. Never renew for a dead owner.
         let is_heartbeat = heartbeat(op);
         let is_continuation = matches!(op, "position_group_pause" | "position_group_resume");
-        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel" | "gravity_id_cancel")
+        let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel" | "gravity_id_cancel" | "trajectory_cancel")
             || (op == "joint_command" && message["mode"].as_i64() == Some(3));
         let tasks = self.clone();
         let permit =
@@ -557,10 +586,11 @@ impl Tasks {
         let expected_ack = format!("{}_ack", request["op"].as_str().unwrap_or(""));
         match response {
             Ok(value)
-                if (value["op"] == "error"
+                if (value["op"] == "error" && task.snapshot.kind != Kind::Trajectory
                     || (value["op"] == expected_ack
                         && value["command_id"] == task.snapshot.command_id
-                        && value["accepted"] == false))
+                        && value["accepted"] == false
+                        && (task.snapshot.kind != Kind::Trajectory || value["evidence"] == "not_published")))
                     && !task.admitted =>
             {
                 inner.task = None;
@@ -568,7 +598,7 @@ impl Tasks {
             Ok(value)
                 if value["command_id"] == task.snapshot.command_id
                     && ((value["op"] == expected_ack && value["accepted"] == true)
-                        || (value["op"] == "visual_pick_state" && value["busy"] == true)) =>
+                        || (task.snapshot.kind == Kind::Pick && value["op"] == "visual_pick_state" && value["busy"] == true)) =>
             {
                 task.admitted = true;
                 if !stopped(task) {
@@ -595,8 +625,15 @@ impl Tasks {
         }) else {
             return false;
         };
+        if task.snapshot.kind == Kind::Trajectory && !inner.connection_identity.as_ref().is_some_and(|(current_epoch, identity)|
+            *current_epoch == epoch && task.trajectory_origin.as_ref() == Some(identity)) { return false; }
         let terminal = match task.snapshot.kind {
             Kind::Motor | Kind::Controller | Kind::ArmMode => false,
+            Kind::Trajectory => value["op"] == "trajectory_task_status" && value["known"] == true
+                && value["terminal"] == true && value["busy"] == false
+                && value["result"]["command_id"] == task.snapshot.command_id
+                && value["task_phase"] == value["result"]["task_phase"]
+                && super::trajectory_task::terminal(&value["result"]),
             Kind::Gravity => value["op"]=="gravity_id_task_status" && value["known"]==true && value["terminal"]==true &&
                 value["result"]["op"]=="gravity_id_result" && value["result"]["command_id"]==task.snapshot.command_id &&
                 value["result"]["terminal"]==true && value["status"]==value["result"]["task_phase"] &&
@@ -653,6 +690,7 @@ impl Tasks {
             value["command_id"] == task.snapshot.command_id
                 && match task.snapshot.kind {
                     Kind::Motor | Kind::Controller | Kind::ArmMode => false,
+                    Kind::Trajectory => value["op"] == "trajectory_heartbeat_ack" && value["renewed"] == true,
                     Kind::Gravity => value["op"]=="gravity_id_heartbeat_ack" && value["renewed"]==true,
                     Kind::Position => {
                         value["op"] == "position_motion_heartbeat_ack" && value["renewed"] == true
@@ -693,6 +731,7 @@ impl Tasks {
         };
         if matches!(task.snapshot.kind, Kind::Controller | Kind::ArmMode) { return; }
         let terminal = match task.snapshot.kind {
+            Kind::Trajectory if message["op"] == "trajectory_task_state" => super::trajectory_task::terminal(message),
             Kind::Gravity if message["op"]=="gravity_id_result" => message["terminal"]==true && matches!(message["task_phase"].as_str(),Some("succeeded" | "failed" | "canceled")),
             Kind::Gravity if matches!(message["op"].as_str(),Some("gravity_id_status" | "gravity_id_feedback")) => false,
             Kind::Position if message["op"] == "position_motion" => matches!(
@@ -712,7 +751,18 @@ impl Tasks {
             inner.task = None;
             return;
         }
+        if task.snapshot.kind == Kind::Trajectory && (message["terminal"] != false
+            || !matches!(message["task_phase"].as_str(), Some("queued" | "running" | "stopping"))) {
+            stop(task, "直接轨迹状态或终态证据未确认，已请求取消并保留占用");
+            task.snapshot.phase = Phase::Uncertain;
+            return;
+        }
         task.admitted = true;
+        if task.snapshot.kind == Kind::Trajectory && message["task_phase"] == "stopping" && !stopped(task) {
+            task.snapshot.phase = Phase::Stopping;
+            task.snapshot.message = "Bridge 正在停止直接轨迹，等待终态证据".into();
+            return;
+        }
         if message["motion_phase"] == "stop_failed" || message["pick_phase"] == "stop_failed" {
             task.snapshot.phase = Phase::Uncertain;
             task.snapshot.message = "Bridge 未能确认停止，任务仍被占用".into();
@@ -730,7 +780,14 @@ impl Tasks {
     pub fn poll(self: &Arc<Self>, epoch: u64, now: Instant) -> Option<StopAction> {
         let mut inner = self.inner.lock().unwrap();
         let context = inner.motor_context.clone();
+        let identity = inner.connection_identity.clone();
         let task = inner.task.as_mut()?;
+        if task.snapshot.kind == Kind::Trajectory && !identity.as_ref().is_some_and(|(current_epoch, identity)|
+            *current_epoch == epoch && task.trajectory_origin.as_ref() == Some(identity)) {
+            task.snapshot.phase = Phase::Uncertain;
+            task.snapshot.message = "直接轨迹结果未确认，请重连原机器人配置核验；未向其他连接发送控制请求".into();
+            return None;
+        }
         if let Some(control)=&mut task.controller {
             if !control.requested() {return None;}
             if !task.sent {
@@ -866,6 +923,9 @@ impl Tasks {
         task.inflight = Some(action);
         let message = match (task.snapshot.kind, recovery, heartbeat) {
             (Kind::Motor | Kind::Controller | Kind::ArmMode, _, _) => unreachable!("Native task handled above"),
+            (Kind::Trajectory, false, true) => json!({"op":"trajectory_heartbeat","command_id":task.snapshot.command_id}),
+            (Kind::Trajectory, false, false) => json!({"op":"trajectory_cancel","command_id":task.snapshot.command_id}),
+            (Kind::Trajectory, true, _) => json!({"op":"trajectory_task_status","command_id":task.snapshot.command_id}),
             (Kind::Gravity, false, true) => json!({"op":"gravity_id_heartbeat","command_id":task.snapshot.command_id}),
             (Kind::Gravity, false, false) => json!({"op":"gravity_id_cancel","command_id":task.snapshot.command_id}),
             (Kind::Gravity, true, _) => json!({"op":"gravity_id_task_status","command_id":task.snapshot.command_id}),

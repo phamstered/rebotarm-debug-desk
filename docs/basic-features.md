@@ -198,6 +198,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 11. TCP 拖拽轨迹下发
 
+多窗口开发分支已给直接 JTC 下发增加原生任务编号、跨窗口占用、取消入口与终态证据校验。所属页面退出会请求取消，发布 / 取消 ACK 不解除占用；重连后仅查询原任务。此路径要求 Bridge 声明 `trajectory_task_supported`，当前 ROS 适配器尚未接入，因此该分支暂时拒绝直接 JTC 入口并显示更新提示，不代表已恢复实机可用；常用 MoveIt 点位和 Pose 执行仍使用原有入口。详见[多窗口实现记录](./multiwindow-implementation)。
+
 ### Robot View 关节联合调整
 
 - 在 Robot View 选择「关节调整」，可分别输入 joint1–joint6 的目标角度（度），也可选择或点击模型关节后用滑块调整。所有已编辑轴同时预览，切换所选关节保留其他目标；未编辑轴继续显示实时反馈。夹爪（joint7，`gripper_finger_left_joint`）为独立直线自由度，以单指行程 mm 调整；fixed 与 mimic 关节不提供独立操作。
