@@ -298,3 +298,7 @@ Finite Controller and arm-environment operations use a separate one-record nativ
 ### Motor 连续流的桌面重启恢复
 
 Motor 首条使能指令发送前，Rust 在阻塞工作线程持久化原连接身份及任务编号；记录不包含运动参数。原生发送许可与任务占用采用同一锁，磁盘返回后重新检查任务是否已撤销。关流终态先冻结任务，再由应用级清理线程持久化移除记录；磁盘等待不持有共享 Core/Tasks 锁。启动恢复先于页面布局初始化，保持旧任务占用且不恢复发送许可；显式重连原机器人后沿用 DISABLE 序列与新鲜 HardwareStatus 的确认路径。
+
+### Bridge 租约任务的桌面重启恢复
+
+Position（含动作组）、Pick、Gravity、直接 Trajectory 和 Joint4 共享 `leased_recovery` 持久化门禁。原生任务状态与真正写入 Bridge 的许可串行；提交前落盘及终态后清理在独立阻塞线程完成，不持有 Core/Tasks 锁。Joint4 的应用级 worker 与普通 Bridge IPC 均使用该入口，Capture 沿用原姿态任务记录。重启恢复仅保留原编号和来源，按已有查询协议核验终态；不恢复页面授权、任务续租或动作参数。Bridge 历史不可用时继续显示未知结果，普通空闲状态不能释放旧任务。

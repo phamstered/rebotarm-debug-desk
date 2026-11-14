@@ -48,3 +48,5 @@ pub mod activity;
 pub mod finite_recovery;
 
 pub mod motor_recovery;
+
+pub mod leased_recovery;

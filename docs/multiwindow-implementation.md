@@ -611,3 +611,15 @@ Controller 单个/批量切换及 arm_mode 操作在提交前保存最多 24 KiB
 完整目标继续进行。Motor 的桌面重启恢复已接入；Position/Pick/Gravity/直接轨迹/Joint4 的进程重启恢复、外部活动跨连接归属、外接屏拔插及最终发布验收等仍需完成，不把本阶段作为整个 Issue #260 的交付。
 
 本轮隔离配置 `npm run tauri build -- --debug --bundles app --config /tmp/260-native-motor-recovery.json` 及 `codesign --verify --deep --strict` 通过，产物 `Robot Console Motor Recovery Test.app`（标识仍为 `dev.easydebug.multiwindowtest`），构建日志 `/tmp/260-motor-recovery-bundle.log`。该包未启动、未安装到 `/Applications`；不能据此宣称原生恢复交互已验收。
+
+## 其余 Bridge 运动任务的桌面进程重启恢复
+
+Position/动作组、Pick、Gravity、直接 Trajectory 和 Joint4 接入 `leased-recovery-v1.json`。首次提交前保存原页面、原连接 Profile、任务种类和编号，Joint4 另存核验终态所需的 action；不保存目标、轨迹、动作组内容、采样正文或授权。普通 Bridge IPC 和 Joint4 的应用级 Job 都必须经过持久化许可，Capture 沿用原姿态任务记录。落盘期间页面丢失或取消会使待发送指令失效；预发送失败也先清理可能已落盘的记录。
+
+启动在 Workspace 前恢复未知占用，仅在用户显式连接原配置后查询原编号，不重发动作、不恢复续租或动作组 resume。十个连接身份字段逐项隔离；直接轨迹和 Joint4 仍核对原有 evidence，嵌套结果编号、阶段和动作类型不符也不释放。通过终态核验后先冻结任务，持久化清理完成才允许新任务和迁移；迟到状态或停止错误不能覆盖清理失败。损坏、未知版本或与其他恢复记录冲突时保留文件并禁止新运动，显式 DISABLE 保持可用。
+
+新增回归覆盖五类任务及 Joint4 四种 action、动作组、首帧写前门禁、重启仅查询、错误连接与排队期间变更、旧编号/不足终态证据、磁盘写入/清理失败、取消落盘竞争及损坏/冲突记录。真实 loopback WebSocket 核验各类恢复只查询、Position 历史终态清理、未知状态继续占用，以及记录锁等待时 DISABLE 到达但已取消 Position 未发布。原 Joint4 loopback 用例现在走生产持久化路径，确认 Trigger/Capture 回执不释放姿态，原记录不被 Capture 替换，释放证据和文件清理完成后才解除占用。
+
+最终 `npm test` 通过：927 前端、272 Rust、3 运行库，以及 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build`、`npm run docs:build`、`npm run tauri build -- --debug --bundles app --config /tmp/260-native-leased-recovery.json` 和严格 codesign 校验通过。日志 `/tmp/260-leased-recovery-{full-tests,build,docs,bundle}.log`。产物 `Robot Console Leased Recovery Test.app` 使用隔离标识 `dev.easydebug.multiwindowtest`，未启动或安装到生产位置；本轮没有 Bridge 源码或 Jetson 部署变更。
+
+原生启动检查仍被 Mac 锁屏阻止，真实渲染进程退出恢复尚待解锁复测；没有重复请求解锁或等待外接屏。任务历史若已被 Bridge 丢弃，查询的普通 idle/unknown 仍不足以核验旧动作结束，当前会保留未知占用，这不是完整未知结果恢复的证明。外部活动跨连接归属、外接屏拔插、上述边界及最终 PR/CI/合并/正式安装仍需后续完成；完整 Issue #260 保持进行中。

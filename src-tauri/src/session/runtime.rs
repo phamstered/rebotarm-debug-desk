@@ -100,6 +100,7 @@ impl Core {
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
     pub tasks: Arc<Tasks>,
+    pub leased_recovery: Arc<super::leased_recovery::Recovery>,
     pub motor_recovery: Arc<super::motor_recovery::Recovery>,
     pub finite_recovery: Arc<super::finite_recovery::Recovery>,
     pub local_tasks: Arc<super::local_tasks::LocalTasks>,
@@ -124,6 +125,7 @@ impl Default for Runtime {
         tasks.bind_observations(&observations);
         Self {
             tasks,
+            leased_recovery: Arc::new(super::leased_recovery::Recovery::default()),
             motor_recovery: Arc::new(super::motor_recovery::Recovery::default()),
             finite_recovery: Arc::new(super::finite_recovery::Recovery::default()),
             local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
@@ -324,7 +326,16 @@ impl Runtime {
             } else if action == "capture_pose" { return Err("没有本页面已受理的 Joint4 姿态任务".into()); }
         }
         let admission = self.tasks.admit(attachment.owner(), &message, Instant::now())?;
-        Ok(Prepared::Job(Job { attachment, transport, message, admission }))
+        Ok(Prepared::Job(Job { attachment, transport, message, admission, profile:core.profile.clone() }))
+    }
+
+    pub async fn prepare_leased_record(&self, ticket: Option<u64>, profile: Value) -> Result<(), String> {
+        if let Some(id) = ticket.filter(|id| self.tasks.leased_needs_prepare(*id)) {
+            let recovery=self.leased_recovery.clone(); let tasks=self.tasks.clone();
+            tokio::task::spawn_blocking(move || recovery.prepare(&tasks,id,profile)).await
+                .map_err(|e|e.to_string())??;
+        }
+        Ok(())
     }
 
     pub fn finish_joint4(&self, attachment: &Attachment, ticket: Option<u64>, request: &Value, result: Result<&Value, &str>) {
@@ -1155,7 +1166,7 @@ impl Runtime {
         };
         if message["op"] == "joint_command" && message["mode"] != 3 {
             if let Some(id) = admission.ticket.filter(|id| self.tasks.motor_needs_prepare(*id)) {
-                let recovery = self.motor_recovery.clone(); let tasks = self.tasks.clone();
+                let recovery = self.motor_recovery.clone(); let tasks = self.tasks.clone(); let profile = profile.clone();
                 let prepared = tokio::task::spawn_blocking(move || recovery.prepare(&tasks, id, profile)).await
                     .map_err(|e| e.to_string()).and_then(|result| result);
                 if let Err(error) = prepared {
@@ -1163,6 +1174,10 @@ impl Runtime {
                     return Err(error);
                 }
             }
+        }
+        if let Err(error) = self.prepare_leased_record(admission.ticket, profile).await {
+            self.tasks.reply(admission.ticket, attachment.epoch, &message, Err(&error));
+            return Err(error);
         }
         let result = transport
             .request_guarded(message.clone(), timeout, admission.permit)
@@ -1812,7 +1827,10 @@ mod tests {
     async fn joint4_loopback_keeps_hold_after_ack_and_releases_on_owner_loss_only_with_proof() {
         use super::super::joint4_task::Prepared;
         let (port,events,seen,server)=fake_bridge_capabilities(false,true).await;
-        let hub=Runtime::default();let profile=offline_profile("fixture.invalid");
+        let hub=Runtime::default();
+        let path=std::env::temp_dir().join(super::super::controller_journal::new_id().unwrap()).join("leased.json");
+        hub.leased_recovery.restore(&hub.tasks,Ok(path.clone()));
+        let profile=offline_profile("fixture.invalid");
         let request: crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
         hub.set_profile(profile);hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;let (page,_)=hub.attach("page-calibration").unwrap();
         let (motion,_)=hub.attach("page-motion").unwrap();
@@ -1824,17 +1842,23 @@ mod tests {
         let command=job.message["command_id"].clone();
         assert!(hub.tasks.migration("page-calibration").is_err());
         assert_eq!(job.run(&hub).await.unwrap()["success"],true);assert!(hub.tasks.snapshot().is_some());
+        let saved_record=std::fs::read(&path).unwrap();
+        assert!(String::from_utf8_lossy(&saved_record).contains(command.as_str().unwrap()));
         assert!(hub.request("page-motion",&motion,"conflict",json!({"op":"position_move","command_id":"other"}),Duration::from_secs(1)).await.is_err());
         let Prepared::Job(job)=hub.prepare_joint4("page-calibration",&request,"capture_pose",Some("HANDS_CLEAR")).unwrap() else {panic!()};
         assert_eq!(job.run(&hub).await.unwrap()["message"],"sample 1");
+        assert_eq!(std::fs::read(&path).unwrap(),saved_record, "capture does not replace the pose task record");
         hub.detach("page-calibration",&page).await.unwrap();
         let timeout=Duration::from_secs(3);
         tokio::time::timeout(timeout,async {while !seen.lock().unwrap().iter().any(|m|m["op"]=="joint4_cancel" && m["command_id"]==command) {tokio::task::yield_now().await;}}).await.unwrap();
         assert!(hub.tasks.snapshot().is_some());
         events.send(json!({"op":"joint4_task_state","command_id":command,"action":"begin_pose","terminal":true,"task_phase":"canceled","evidence":"pose_released"})).unwrap();
-        tokio::time::timeout(timeout,async {while hub.tasks.snapshot().is_some(){tokio::task::yield_now().await;}}).await.unwrap();
+        tokio::time::timeout(timeout,async {while hub.tasks.leased_terminal().is_none(){tokio::task::yield_now().await;}}).await.unwrap();
+        assert!(hub.tasks.migration("page-calibration").is_err());
+        assert!(hub.leased_recovery.cleanup(&hub.tasks).unwrap());
         assert!(hub.tasks.migration("page-calibration").is_ok());
-        hub.close();server.abort();
+        hub.close();server.await.unwrap();
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]
@@ -1921,6 +1945,82 @@ mod tests {
         tokio::time::timeout(timeout,async {while hub.tasks.snapshot().is_some(){tokio::task::yield_now().await;}}).await.unwrap();
         assert!(hub.tasks.migration("page-gravity").is_ok());
         hub.close();server.abort();
+    }
+
+    #[tokio::test]
+    async fn restored_leased_tasks_only_query_over_loopback_and_wait_for_retained_terminal_proof() {
+        use super::super::{leased_recovery::Record, tasks::Kind};
+        for (kind,label,query,action) in [
+            (Kind::Position,"page-motion","position_task_status",None),
+            (Kind::Pick,"page-motion","visual_pick_observe",None),
+            (Kind::Gravity,"page-gravity","gravity_id_task_status",None),
+            (Kind::Trajectory,"page-motion","trajectory_task_status",None),
+            (Kind::Joint4,"page-calibration","joint4_task_status",Some("begin_pose")),
+        ] {
+            let (port,_events,seen,server)=fake_bridge_capabilities(true,true).await;
+            let hub=Runtime::default(); let profile=offline_profile("fixture.invalid");
+            let path=std::env::temp_dir().join(super::super::controller_journal::new_id().unwrap()).join("leased.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let record=Record {kind,window:label.into(),command_id:"retained-motion".into(),profile:profile.clone(),joint4_action:action.map(String::from)};
+            std::fs::write(&path,serde_json::to_vec(&json!({"version":1,"record":record})).unwrap()).unwrap();
+            hub.leased_recovery.restore(&hub.tasks,Ok(path.clone()));
+            hub.connect_profile(port,profile).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2),async {
+                while !seen.lock().unwrap().iter().any(|m|m["op"]==query) {tokio::task::yield_now().await;}
+            }).await.unwrap();
+            assert!(!seen.lock().unwrap().iter().any(|m|matches!(m["op"].as_str(),Some("position_move"|"position_group_start"|"visual_pick_start"|"gravity_id_send_goal"|"trajectory_command"|"joint4_start"|"joint4_capture"|"joint_command"|"position_motion_heartbeat"|"visual_pick_status"|"gravity_id_heartbeat"|"trajectory_heartbeat"|"joint4_heartbeat"))));
+            if kind==Kind::Position {
+                tokio::time::timeout(Duration::from_secs(2),async {while hub.tasks.leased_terminal().is_none(){tokio::task::yield_now().await;}}).await.unwrap();
+                assert!(hub.tasks.migration(label).is_err());
+                assert!(hub.leased_recovery.cleanup(&hub.tasks).unwrap()); assert!(hub.tasks.snapshot().is_none());
+            } else {
+                assert!(hub.tasks.snapshot().is_some()); assert!(hub.tasks.migration(label).is_err());
+                assert!(!hub.leased_recovery.cleanup(&hub.tasks).unwrap());
+            }
+            hub.close();server.await.unwrap();std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leased_journal_wait_cannot_block_explicit_disable_or_publish_cancelled_command() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Arc::new(Runtime::default());
+        let path = std::env::temp_dir().join(super::super::controller_journal::new_id().unwrap()).join("leased.json");
+        hub.leased_recovery.restore(&hub.tasks, Ok(path.clone()));
+        hub.connect_profile(port, offline_profile("fixture.invalid")).await.unwrap(); seed_idle_activity(&hub).await;
+        let (motor, _) = hub.attach("page-motion").unwrap(); let (main, _) = hub.attach("main").unwrap();
+        events.send(json!({"op":"topic_message","topic":"/status","data":{"mode":3,"last_command_sequence":1,"header":{"stamp":{"sec":1,"nanosec":0}}}})).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !hub.core.lock().unwrap().latest_topics.contains_key("/status") { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let recovery = hub.leased_recovery.clone();
+        let disk = std::thread::spawn(move || {
+            let _lock = recovery.lock_for_test(); locked.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        ready.await.unwrap();
+        let worker_hub = hub.clone(); let worker_motor = motor.clone();
+        let starting = tokio::spawn(async move {
+            worker_hub.request("page-motion", &worker_motor, "control", json!({"op":"position_move","command_id":"blocked-position"}), Duration::from_secs(2)).await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while hub.tasks.snapshot().is_none() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert!(hub.leased_recovery.error_snapshot().is_none(), "UI error reads cannot wait on the disk lock");
+        let disabled = tokio::time::timeout(Duration::from_secs(1), hub.request("main", &main, "control",
+            json!({"op":"joint_command","mode":3}), Duration::from_secs(1))).await.unwrap().unwrap();
+        assert_eq!(disabled.op(), "joint_command_ack");
+        assert!(seen.lock().unwrap().iter().any(|m|m["op"] == "joint_command" && m["mode"] == 3));
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"] == "position_move"));
+        hub.detach("page-motion", &motor).await.unwrap();
+        release.send(()).unwrap(); disk.join().unwrap();
+        assert!(starting.await.unwrap().is_err());
+        assert!(hub.leased_recovery.cleanup(&hub.tasks).unwrap());
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"] == "position_move"));
+        hub.close(); server.await.unwrap();
+        if path.parent().unwrap().exists() { std::fs::remove_dir_all(path.parent().unwrap()).unwrap(); }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

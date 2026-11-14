@@ -84,6 +84,7 @@ pub struct Job {
     pub transport: Arc<Transport>,
     pub message: Value,
     pub admission: Admission,
+    pub profile: Value,
 }
 
 pub enum Prepared {
@@ -93,6 +94,10 @@ pub enum Prepared {
 
 impl Job {
     pub async fn run(self, hub: &Runtime) -> Result<Value, String> {
+        if let Err(error)=hub.prepare_leased_record(self.admission.ticket,self.profile).await {
+            hub.finish_joint4(&self.attachment,self.admission.ticket,&self.message,Err(&error));
+            return Err(error);
+        }
         let result = self
             .transport
             .request_guarded(

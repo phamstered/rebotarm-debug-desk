@@ -1591,6 +1591,7 @@ pub fn run() {
                 }));
             session::finite_recovery::initialize(app.handle());
             session::motor_recovery::initialize(app.handle());
+            session::leased_recovery::initialize(app.handle());
             session::bag_operation::initialize(app.handle());
             session::collection_operation::initialize(app.handle());
             session::workspace::Workspace::initialize(app.handle());
