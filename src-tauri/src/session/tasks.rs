@@ -157,6 +157,13 @@ fn start_kind(op: &str) -> Option<Kind> {
         _ => None,
     }
 }
+fn leased(kind: Kind) -> bool {
+    matches!(kind, Kind::Position | Kind::Pick | Kind::Gravity | Kind::Trajectory | Kind::Joint4)
+}
+fn same_connection(task: &Task, identity: Option<&(u64, String)>, epoch: u64) -> bool {
+    !leased(task.snapshot.kind) || identity.is_some_and(|(current_epoch, identity)|
+        *current_epoch == epoch && task.leased_origin.as_ref() == Some(identity))
+}
 fn heartbeat(op: &str) -> bool {
     matches!(op, "position_motion_info" | "visual_pick_status")
 }
@@ -509,7 +516,7 @@ impl Tasks {
             return Err("页面正在迁移，不能提交运动".into());
         }
         let motor_context = inner.motor_context.clone();
-        let leased_origin = if matches!(op, "trajectory_command" | "joint4_start") {
+        let leased_origin = if start_kind(op).is_some() {
             Some(inner.connection_identity.as_ref().filter(|(epoch, _)| *epoch == owner.epoch)
                 .ok_or("任务缺少当前机器人连接身份")?.1.clone())
         } else { None };
@@ -653,13 +660,18 @@ impl Tasks {
         let is_cancel = matches!(op, "position_cancel" | "visual_pick_cancel" | "gravity_id_cancel" | "trajectory_cancel" | "joint4_cancel")
             || (op == "joint_command" && message["mode"].as_i64() == Some(3));
         let tasks = self.clone();
+        let is_disable = op == "joint_command" && message["mode"].as_i64() == Some(3);
         let permit =
             (ticket.is_some() || is_heartbeat || is_continuation || is_cancel).then(|| {
                 Arc::new(move || {
                     let mut inner = tasks.inner.lock().unwrap();
+                    let identity = inner.connection_identity.clone();
                     let Some(task) = inner.task.as_mut() else {
                         return ticket.is_none() && !is_continuation;
                     };
+                    if !is_disable && !same_connection(task, identity.as_ref(), owner.epoch) {
+                        return false;
+                    }
                     if is_cancel {
                         return expected == Some(task.snapshot.id);
                     }
@@ -833,8 +845,7 @@ impl Tasks {
         }) else {
             return false;
         };
-        if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && !inner.connection_identity.as_ref().is_some_and(|(current_epoch, identity)|
-            *current_epoch == epoch && task.leased_origin.as_ref() == Some(identity)) { return false; }
+        if !same_connection(task, inner.connection_identity.as_ref(), epoch) { return false; }
         let terminal = match task.snapshot.kind {
             Kind::Motor | Kind::Controller | Kind::ArmMode => false,
             Kind::Joint4 => value["op"] == "joint4_task_status" && value["known"] == true
@@ -1001,8 +1012,7 @@ impl Tasks {
         let context = inner.motor_context.clone();
         let identity = inner.connection_identity.clone();
         let task = inner.task.as_mut()?;
-        if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && !identity.as_ref().is_some_and(|(current_epoch, identity)|
-            *current_epoch == epoch && task.leased_origin.as_ref() == Some(identity)) {
+        if !same_connection(task, identity.as_ref(), epoch) {
             task.snapshot.phase = Phase::Uncertain;
             task.snapshot.message = "任务结果未确认，请重连原机器人配置核验；未向其他连接发送控制请求".into();
             return None;
@@ -1173,14 +1183,12 @@ impl Tasks {
             recovery,
             heartbeat,
             permit: Arc::new(move || {
-                tasks
-                    .inner
-                    .lock()
-                    .unwrap()
-                    .task
+                let inner = tasks.inner.lock().unwrap();
+                inner.task
                     .as_ref()
                     .is_some_and(|task| {
                         task.snapshot.id == ticket
+                            && same_connection(task, inner.connection_identity.as_ref(), epoch)
                             && (!heartbeat
                                 || (!stopped(task)
                                     && task.owner.epoch == epoch
@@ -1234,6 +1242,7 @@ mod tests {
         }
     }
     fn start(tasks: &Arc<Tasks>, kind: &str, now: Instant) -> Admission {
+        tasks.configure_motor(1, &json!({"host":"fixture"}));
         tasks
             .admit(
                 owner("page-motion"),
@@ -1536,6 +1545,7 @@ mod tests {
             .unwrap();
         assert!(!heartbeat.permit.unwrap()());
         tasks.lost(None, "disconnected");
+        tasks.configure_motor(2, &json!({"host":"fixture"}));
         let probe = tasks.poll(2, now).unwrap();
         assert!(probe.recovery);
         for (epoch, value) in [
@@ -1561,6 +1571,7 @@ mod tests {
         let admission = start(&tasks, "visual_pick_start", now);
         assert!(admission.permit.unwrap()());
         tasks.lost(None, "disconnected");
+        tasks.configure_motor(2, &json!({"host":"fixture"}));
         for value in [
             json!({"op":"visual_pick_state","command_id":"","pick_phase":"idle","busy":false}),
             json!({"op":"visual_pick_state","command_id":"other","pick_phase":"canceled","busy":false}),
@@ -1661,6 +1672,7 @@ mod tests {
         let admission = start(&tasks, "position_group_start", now);
         assert!(admission.permit.unwrap()());
         tasks.lost(None, "disconnected");
+        tasks.configure_motor(2, &json!({"host":"fixture"}));
         let probe = tasks.poll(2, now).unwrap();
         assert_eq!(probe.message["op"], "position_task_status");
         let proof = json!({"op":"position_task_status","command_id":"command-1","known":true,"terminal":true,"motion_phase":"canceled",
@@ -1875,12 +1887,88 @@ mod motor_tests {
 }
 
 #[cfg(test)]
+mod leased_identity_tests {
+    use super::*;
+
+    fn owner(op: &str, epoch: u64) -> Owner {
+        Owner { epoch, window: WindowToken {
+            label: if op == "gravity_id_send_goal" { "page-gravity" } else { "page-motion" }.into(),
+            incarnation: epoch,
+        } }
+    }
+    fn cases() -> Vec<(&'static str, Value)> {
+        vec![
+            ("position_move", json!({"op":"position_task_status","command_id":"same-id","known":true,"terminal":true,
+                "motion_phase":"canceled","motion_state":{"op":"position_motion","command_id":"same-id","motion_phase":"canceled"}})),
+            ("visual_pick_start", json!({"op":"visual_pick_state","command_id":"same-id","busy":false,"pick_phase":"canceled"})),
+            ("gravity_id_send_goal", json!({"op":"gravity_id_task_status","command_id":"same-id","known":true,"terminal":true,"status":"canceled",
+                "result":{"op":"gravity_id_result","command_id":"same-id","terminal":true,"task_phase":"canceled"}})),
+        ]
+    }
+
+    #[test]
+    fn leased_recovery_only_queries_and_accepts_evidence_from_original_robot_configuration() {
+        let original = json!({"host":"original","remotePort":8765,"rosDomainId":225,"commandTopic":"/cmd","statusTopic":"/status"});
+        for (op, proof) in cases() {
+            for field in ["host", "sshPort", "username", "identityFile", "remotePort", "rosDomainId", "rosSetupScript", "commandTopic", "statusTopic", "jointStateTopic"] {
+                let tasks = Arc::new(Tasks::default());
+                let now = Instant::now();
+                tasks.configure_motor(1, &original);
+                let admission = tasks.admit(owner(op, 1), &json!({"op":op,"command_id":"same-id"}), now).unwrap();
+                let ticket = admission.ticket.unwrap();
+                assert!((admission.permit.unwrap())());
+                tasks.lost(None, "disconnected");
+                let mut other = original.clone();
+                other[field] = json!("different");
+                tasks.configure_motor(2, &other);
+                assert!(tasks.poll(2, now).is_none(), "{op}: {field}");
+                assert!(!tasks.recover(ticket, 2, &proof), "same command ID on another robot is not proof");
+                assert!(tasks.migration(&owner(op, 1).window.label).is_err());
+                let disable = tasks.admit(owner(op, 2), &json!({"op":"joint_command","mode":3}), now).unwrap();
+                assert!((disable.permit.unwrap())(), "explicit DISABLE must remain available");
+                let mut reconnected = original.clone();
+                reconnected["localPort"] = json!(19999);
+                tasks.configure_motor(3, &reconnected);
+                let query = tasks.poll(3, now).unwrap();
+                assert!(query.recovery && !query.heartbeat);
+                assert!((query.permit)());
+                tasks.configure_motor(4, &other);
+                assert!(!(query.permit)(), "queued query must be fenced again at send time");
+                assert!(!tasks.recover(ticket, 3, &proof), "late original-session proof cannot release a newer connection");
+                tasks.configure_motor(5, &reconnected);
+                assert!(tasks.recover(ticket, 5, &proof));
+                assert!(tasks.snapshot().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn leased_submission_needs_current_identity_and_writer_rechecks_it() {
+        for (op, _) in cases() {
+            let tasks = Arc::new(Tasks::default());
+            let now = Instant::now();
+            let request = json!({"op":op,"command_id":"same-id"});
+            assert!(tasks.admit(owner(op, 1), &request, now).is_err());
+            tasks.configure_motor(0, &json!({"host":"original"}));
+            assert!(tasks.admit(owner(op, 1), &request, now).is_err());
+            tasks.configure_motor(1, &json!({"host":"original"}));
+            let admission = tasks.admit(owner(op, 1), &request, now).unwrap();
+            tasks.configure_motor(2, &json!({"host":"other"}));
+            assert!(!(admission.permit.unwrap())());
+            tasks.lost(None, "unsent");
+            assert!(tasks.snapshot().is_none());
+        }
+    }
+}
+
+#[cfg(test)]
 mod gravity_tests {
     use super::*;
     fn owner() -> Owner { Owner { epoch: 1, window: WindowToken { label:"page-gravity".into(),incarnation:1 } } }
     #[test]
     fn gravity_requires_owner_and_correlated_terminal_not_cancel_ack_or_feedback() {
         let tasks=Arc::new(Tasks::default()); let now=Instant::now();
+        tasks.configure_motor(1, &json!({"host":"fixture"}));
         let request=json!({"op":"gravity_id_send_goal","command_id":"gravity-1"});
         let mut wrong=owner();wrong.window.label="main".into();
         assert!(tasks.admit(wrong,&request,now).is_err());
@@ -1907,8 +1995,10 @@ mod gravity_tests {
     #[test]
     fn gravity_recovery_requires_full_retained_matching_terminal() {
         let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        tasks.configure_motor(1, &json!({"host":"fixture"}));
         let a=tasks.admit(owner(),&json!({"op":"gravity_id_send_goal","command_id":"g"}),now).unwrap();
         assert!(a.permit.unwrap()());tasks.lost(None,"disconnected");
+        tasks.configure_motor(2, &json!({"host":"fixture"}));
         let probe=tasks.poll(2,now).unwrap();assert_eq!(probe.message["op"],"gravity_id_task_status");
         let proof=json!({"op":"gravity_id_task_status","command_id":"g","known":true,"terminal":true,"status":"failed",
             "result":{"op":"gravity_id_result","command_id":"g","terminal":true,"task_phase":"failed"}});

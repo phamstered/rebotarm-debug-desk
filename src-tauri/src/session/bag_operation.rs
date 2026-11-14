@@ -1163,6 +1163,7 @@ mod tests {
         use std::time::Instant;
         for kind in [Kind::Record, Kind::Play] {
             let tasks = Arc::new(Tasks::default());
+            tasks.configure_motor(1, &profile());
             let ops = Operations::default();
             let label = if kind == Kind::Play {
                 "page-monitor"
@@ -1270,6 +1271,7 @@ mod tests {
         use std::{sync::Barrier, thread, time::Instant};
         for _ in 0..20 {
             let tasks = Arc::new(Tasks::default());
+            tasks.configure_motor(1, &profile());
             let gate = Arc::new(Barrier::new(2));
             let a = tasks.clone();
             let b = gate.clone();
@@ -1300,6 +1302,7 @@ mod tests {
                 .is_ok());
         }
         let tasks = Arc::new(Tasks::default());
+        tasks.configure_motor(1, &profile());
         tasks
             .admit(
                 owner("page-motion"),

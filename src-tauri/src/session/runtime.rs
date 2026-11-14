@@ -1274,7 +1274,7 @@ mod tests {
         use super::super::{activity::tests::{active, idle_value}, observations::Source};
         use std::sync::atomic::{AtomicBool, Ordering};
         let (port, _events, seen, server) = fake_bridge().await;
-        let hub=Runtime::default(); hub.connect(port).await.unwrap();
+        let hub=Runtime::default(); hub.connect_profile(port, offline_profile("fixture")).await.unwrap();
         let (motion,_)=hub.attach("page-motion").unwrap();
         let request=json!({"op":"position_move","command_id":"external-conflict"});
         let timeout=Duration::from_secs(1);
@@ -1723,7 +1723,7 @@ mod tests {
     #[tokio::test]
     async fn gravity_window_loss_cancels_by_id_and_waits_for_verified_result() {
         let (port,events,seen,server)=fake_bridge().await;
-        let hub=Runtime::default();hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
+        let hub=Runtime::default();hub.connect_profile(port, offline_profile("fixture")).await.unwrap(); seed_idle_activity(&hub).await;
         let (gravity,_)=hub.attach("page-gravity").unwrap();
         let timeout=Duration::from_secs(2);
         hub.request("page-gravity",&gravity,"task",json!({"op":"gravity_id_send_goal","command_id":"g"}),timeout).await.unwrap();
@@ -2183,7 +2183,7 @@ mod tests {
     async fn native_task_owner_controls_heartbeats_and_detach_waits_for_real_terminal() {
         let (port, events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
+        hub.connect_profile(port, offline_profile("fixture")).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         let (main, _) = hub.attach("main").unwrap();
         let timeout = Duration::from_secs(1);
@@ -2293,7 +2293,7 @@ mod tests {
     async fn reconnect_recovers_only_retained_task_proof_and_routes_full_group_terminal() {
         let (port, _events, _seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
+        hub.connect_profile(port, offline_profile("fixture")).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         hub.request(
             "page-motion",
@@ -2306,8 +2306,23 @@ mod tests {
         .unwrap();
         hub.close();
         assert!(hub.tasks.snapshot().is_some());
+        // A second robot may retain the same command ID; never query it to
+        // release the first robot's reservation, even when its proof is valid.
+        let (other_port, _other_events, other_seen, other_server) = fake_bridge().await;
+        hub.connect_profile(other_port, offline_profile("other-fixture")).await.unwrap();
+        seed_idle_activity(&hub).await;
+        let (other_page, _) = hub.attach("page-motion").unwrap();
+        hub.request("page-motion", &other_page, "disable", json!({"op":"joint_command","mode":3}), Duration::from_secs(1)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert!(hub.tasks.snapshot().is_some());
+        assert!(hub.tasks.migration("page-motion").is_err());
+        assert!(!other_seen.lock().unwrap().iter().any(|m| matches!(m["op"].as_str(),
+            Some("position_task_status" | "position_motion_heartbeat" | "position_cancel"))));
+        assert!(other_seen.lock().unwrap().iter().any(|m| m["op"] == "joint_command" && m["mode"] == 3));
+        hub.close();
+        other_server.await.unwrap();
         let (port, _events, seen, next_server) = fake_bridge().await;
-        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
+        hub.connect_profile(port, offline_profile("fixture")).await.unwrap(); seed_idle_activity(&hub).await;
         let (observer, _) = hub.attach("page-monitor").unwrap();
         let packed = hub.next("page-monitor", &observer).await.unwrap();
         let terminal = WireFrame::parse(Arc::from(&packed[17..]), false).unwrap();

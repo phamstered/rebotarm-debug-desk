@@ -259,6 +259,7 @@ pub mod tests {
         let observations = Arc::new(Observations::default());
         let tasks = Arc::new(Tasks::default());
         tasks.bind_observations(&observations);
+        tasks.configure_motor(1, &json!({"host":"fixture"}));
         let values = Arc::new(Mutex::new(snapshot().entries));
         let inputs = values.clone();
         observations.start(

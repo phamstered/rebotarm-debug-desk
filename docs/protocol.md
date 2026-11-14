@@ -580,6 +580,8 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
+Position/动作组、Pick、Gravity、Trajectory、Joint4 的原生任务同时保存连接身份：host、sshPort、username、identityFile、remotePort、rosDomainId、rosSetupScript、commandTopic、statusTopic、jointStateTopic；localPort 不参与。新任务缺少当前代次的身份时拒绝提交。重连查询及终态接收均核对原身份与当前代次；不匹配时保留 uncertain 占用。排队发送时再次核验，防止准入后的配置变化使旧执行、查询、续租或取消流入另一连接。显式 mode=3 的 DISABLE 不受此身份门禁限制；它不能凭 ACK 解锁旧任务。原有只读共享状态观察不受影响，协议字段与远端消息不变。
+
 桌面原生层把页面的 `position_motion_info` / `visual_pick_status` 映射为共享只读缓存，各窗口均可观察，不直接发送续租请求。只有已受理且所属 WebView 仍存活的任务由 Rust 每 500 ms 续租：Position 使用 `position_motion_heartbeat`，Pick 使用原 `visual_pick_status`。页面不能直接请求 Position 心跳。窗口数据拉取/请求入口维护存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台查询与心跳不刷新窗口存活。取消可越过慢心跳；迟到回复按原生任务编号隔离。停止或重连后每秒查询终态：Position 必须有匹配 command_id、明确 terminal 及一致的完整 motion_state，Pick 必须有匹配编号且 busy=false 的 holding/failed/canceled。未知、单独 idle/busy=false 或 stop_failed 不解锁。恢复取得的完整终态会发给页面以释放同一动作组锁。缺少新能力的 Bridge 会阻止原生多窗口执行，并提示更新。
 
 原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹和 SSH 控制操作的完整原生生命周期仍待接入。
