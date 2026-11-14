@@ -39,3 +39,5 @@ pub mod trajectory_task;
 pub mod joint4_task;
 
 pub mod bag_receipt;
+
+pub mod activity;

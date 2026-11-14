@@ -94,6 +94,9 @@ impl Operations {
             return Err("只有数据采集页面可操作 Episode".into());
         }
         let mut inner = self.inner.lock().unwrap();
+        if matches!(action, Action::Launch | Action::StartEpisode) {
+            tasks.check_activity(super::activity::Check::CollectionStart)?;
+        }
         let recording = inner.entry.as_ref().is_some_and(|e| e.permit.is_some());
         if let Some(entry) = inner.entry.as_ref().filter(|e| e.permit.is_some()) {
             if entry.snapshot.phase != Phase::Recording {
@@ -112,8 +115,10 @@ impl Operations {
         let id = inner.sequence.checked_add(1).ok_or("采集任务编号耗尽")?;
         let permit = if recording {
             inner.entry.as_mut().unwrap().permit.take().unwrap()
-        } else {
+        } else if matches!(action, Action::Launch | Action::StartEpisode) {
             tasks.sampling_operation(&owner.window.label)?
+        } else {
+            tasks.settling_operation(&owner.window.label)?
         };
         inner.sequence = id;
         inner.entry = Some(Entry {
@@ -361,7 +366,10 @@ pub async fn start(
                 return Err(message);
             }
         }
-        if let Err(message) = hub.send_collection(&owner, id, &profile) {
+        let check = if matches!(action, Action::Launch | Action::StartEpisode) {
+            hub.tasks.check_activity(super::activity::Check::CollectionStart)
+        } else { Ok(()) };
+        if let Err(message) = check.and_then(|_| hub.send_collection(&owner, id, &profile)) {
             guard.operations.rejected(id, &message);
             guard.notify();
             return Err(message);

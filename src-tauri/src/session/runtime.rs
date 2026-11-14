@@ -104,12 +104,15 @@ pub struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
+        let observations = Arc::new(super::observations::Observations::default());
+        let tasks = Arc::new(Tasks::default());
+        tasks.bind_observations(&observations);
         Self {
-            tasks: Arc::new(Tasks::default()),
+            tasks,
             local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
             bag_operations: Arc::new(super::bag_operation::Operations::default()),
             collection_operations: Arc::new(super::collection_operation::Operations::default()),
-            observations: Arc::new(super::observations::Observations::default()),
+            observations,
             resources: Arc::new(super::resources::Resources::default()),
             motion_logs: Arc::new(super::motion_observations::MotionLogs::default()),
             core: Arc::new(Mutex::new(Core {
@@ -1206,11 +1209,63 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
+    // These loopback tests simulate ROS/SSH activity too: a fake Bridge alone
+    // cannot prove that remote bag playback is idle.
+    async fn seed_idle_activity(hub: &Runtime) {
+        use super::super::{activity::tests::idle_value, observations::Source};
+        let (epoch, transport, profile) = {
+            let core = hub.core.lock().unwrap();
+            (core.epoch, core.transport.clone().unwrap(), core.profile.clone())
+        };
+        let reader = super::super::motion_observations::reader(
+            super::super::observations::reader(transport.clone(), profile), transport,
+            hub.motion_logs.clone(), epoch);
+        hub.observations.start(epoch, Arc::new(move |source, force| {
+            if matches!(source, Source::BagRecord | Source::BagPlay | Source::Collection) {
+                Box::pin(async move { Ok(idle_value(source)) })
+            } else { reader(source, force) }
+        }));
+        for source in [Source::BagRecord, Source::BagPlay, Source::Collection] {
+            hub.observations.read(epoch, source).await.unwrap();
+        }
+    }
+
     fn offline_profile(host: &str) -> Value {
         json!({"host":host,"sshPort":1,"username":"fixture","identityFile":"", "localPort":18765,
             "remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash",
             "commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints",
             "rgbdRgbTopic":"/fixture/rgb", "rgbdMaxFps":30})
+    }
+
+    #[tokio::test]
+    async fn external_playback_blocks_loopback_publication_and_migration_without_a_local_bag_task() {
+        use super::super::{activity::tests::{active, idle_value}, observations::Source};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (port, _events, seen, server) = fake_bridge().await;
+        let hub=Runtime::default(); hub.connect(port).await.unwrap();
+        let (motion,_)=hub.attach("page-motion").unwrap();
+        let request=json!({"op":"position_move","command_id":"external-conflict"});
+        let timeout=Duration::from_secs(1);
+        assert!(hub.request("page-motion",&motion,"test",request.clone(),timeout).await.is_err(),
+            "a new connection needs actual idle evidence before motion");
+        let playing=Arc::new(AtomicBool::new(true)); let remote=playing.clone();
+        hub.observations.start(motion.epoch,Arc::new(move |source,_| {
+            let value=if source==Source::BagPlay && remote.load(Ordering::Acquire) {active(source)} else {idle_value(source)};
+            Box::pin(async move {Ok(value)})
+        }));
+        hub.observations.read(motion.epoch,Source::BagPlay).await.unwrap();
+        assert!(hub.bag_operations.snapshot().is_empty(),"this activity was not launched here");
+        assert!(hub.request("page-motion",&motion,"test",request.clone(),timeout).await.is_err());
+        assert!(hub.tasks.migration("page-monitor").is_err());
+        assert!(seen.lock().unwrap().iter().all(|m|m["op"]!="position_move"));
+        hub.request("page-motion",&motion,"test",json!({"op":"joint_command","mode":3}),timeout).await.unwrap();
+        assert!(seen.lock().unwrap().iter().any(|m|m["op"]=="joint_command" && m["mode"]==3));
+        playing.store(false,Ordering::Release);
+        hub.observations.refresh(motion.epoch,Source::BagPlay,true).await.unwrap();
+        assert!(hub.tasks.migration("page-monitor").is_ok());
+        hub.request("page-motion",&motion,"test",request,timeout).await.unwrap();
+        assert_eq!(seen.lock().unwrap().iter().filter(|m|m["op"]=="position_move").count(),1);
+        hub.close(); server.abort();
     }
 
     #[tokio::test]
@@ -1266,7 +1321,7 @@ mod tests {
         let (port, _events, _seen, server) = fake_bridge().await;
         let hub = Runtime::default();
         let a = offline_profile("127.0.0.1"); let b = offline_profile("fixture-b.invalid");
-        hub.connect_profile(port, a.clone()).await.unwrap();
+        hub.connect_profile(port, a.clone()).await.unwrap(); seed_idle_activity(&hub).await;
         hub.attach("page-motion").unwrap(); hub.attach("page-handeye").unwrap();
         assert!(hub.select_offline_profile("main", b.clone()).await.is_err());
         assert!(hub.connect_profile(port, b.clone()).await.is_err());
@@ -1372,7 +1427,7 @@ mod tests {
     async fn monitor_history_survives_slow_and_absent_windows_without_reusing_telemetry_queue() {
         let (port, events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (monitor, _) = hub.attach("page-monitor").unwrap();
         let (main, _) = hub.attach("main").unwrap();
         let cfg = super::super::monitor::Config {
@@ -1467,7 +1522,7 @@ mod tests {
         hub.close();
         server.abort();
         let (port, _next_events, _next_seen, next_server) = fake_bridge().await;
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (fresh, _) = hub.attach("page-monitor").unwrap();
         hub.close_matching(Some(old_epoch));
         assert!(hub
@@ -1484,7 +1539,7 @@ mod tests {
     async fn monitor_batch_subscription_failure_settles_other_topics_and_can_retry() {
         let (port, _events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (monitor, _) = hub.attach("page-monitor").unwrap();
         let mut cfg = super::super::monitor::Config {
             topics: BTreeMap::from([
@@ -1526,7 +1581,7 @@ mod tests {
         let (port,_events,seen,server)=fake_bridge().await;
         let hub=Runtime::default();let profile=offline_profile("fixture.invalid");
         let request: crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
-        hub.set_profile(profile);hub.connect(port).await.unwrap();let (page,_)=hub.attach("page-calibration").unwrap();
+        hub.set_profile(profile);hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;let (page,_)=hub.attach("page-calibration").unwrap();
         let error=hub.prepare_joint4("page-calibration",&request,"begin_pose",Some("SUPPORTED"));
         assert!(matches!(error,Err(e) if e.contains("请更新 Bridge")));
         assert!(hub.tasks.snapshot().is_none());
@@ -1543,7 +1598,7 @@ mod tests {
         let (port,events,seen,server)=fake_bridge_capabilities(false,true).await;
         let hub=Runtime::default();let profile=offline_profile("fixture.invalid");
         let request: crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
-        hub.set_profile(profile);hub.connect(port).await.unwrap();let (page,_)=hub.attach("page-calibration").unwrap();
+        hub.set_profile(profile);hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;let (page,_)=hub.attach("page-calibration").unwrap();
         let (motion,_)=hub.attach("page-motion").unwrap();
         assert!(hub.prepare_joint4("page-motion",&request,"begin_pose",Some("SUPPORTED")).is_err());
         let mut other=request.clone();other.host="other.invalid".into();
@@ -1569,7 +1624,7 @@ mod tests {
     #[tokio::test]
     async fn direct_trajectory_requires_capability_before_any_publication_or_reservation() {
         let (port, _events, seen, server)=fake_bridge().await;
-        let hub=Runtime::default();hub.connect(port).await.unwrap();
+        let hub=Runtime::default();hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion,_)=hub.attach("page-motion").unwrap();
         let error=hub.request("page-motion",&motion,"direct",json!({"op":"trajectory_command","command_id":"x"}),Duration::from_secs(2)).await.unwrap_err();
         assert!(error.contains("请更新 Bridge"));assert!(hub.tasks.snapshot().is_none());
@@ -1603,7 +1658,7 @@ mod tests {
         let hub=Runtime::default();
         // The deliberately incomplete Profile prevents all SSH readers.
         hub.set_profile(json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}));
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion,_)=hub.attach("page-motion").unwrap();
         let (monitor,_)=hub.attach("page-monitor").unwrap();
         let timeout=Duration::from_secs(3);
@@ -1636,7 +1691,7 @@ mod tests {
     #[tokio::test]
     async fn gravity_window_loss_cancels_by_id_and_waits_for_verified_result() {
         let (port,events,seen,server)=fake_bridge().await;
-        let hub=Runtime::default();hub.connect(port).await.unwrap();
+        let hub=Runtime::default();hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (gravity,_)=hub.attach("page-gravity").unwrap();
         let timeout=Duration::from_secs(2);
         hub.request("page-gravity",&gravity,"task",json!({"op":"gravity_id_send_goal","command_id":"g"}),timeout).await.unwrap();
@@ -1660,7 +1715,7 @@ mod tests {
         hub.set_profile(
             json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}),
         );
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motor, _) = hub.attach("page-motor").unwrap();
         let (main, _) = hub.attach("main").unwrap();
         let timeout = Duration::from_secs(2);
@@ -1778,7 +1833,7 @@ mod tests {
         let hub = Runtime::default();
         // Incomplete profile prevents SSH readers: this test uses loopback only.
         hub.set_profile(json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}));
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         let timeout = Duration::from_secs(3);
         let id = hub.tasks.begin_controller(motion.owner()).unwrap();
@@ -1834,7 +1889,7 @@ mod tests {
         let hub = Runtime::default();
         // Incomplete profile prevents SSH readers: this test uses loopback only.
         hub.set_profile(json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}));
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         let timeout = Duration::from_secs(3);
         let id = hub.tasks.begin_arm_mode(motion.owner()).unwrap();
@@ -1891,7 +1946,7 @@ mod tests {
         let profile = json!({"host":"127.0.0.1","sshPort":1,"username":"fixture","identityFile":"", "localPort":port,"remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash","commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
         let request: crate::ConnectionProfile = serde_json::from_value(profile.clone()).unwrap();
         assert!(hub.collection_owner("page-collection", &request).is_err());
-        hub.set_profile(profile.clone()); hub.connect(port).await.unwrap();
+        hub.set_profile(profile.clone()); hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         assert!(hub.collection_owner("page-collection", &request).is_err());
         let (page, _) = hub.attach("page-collection").unwrap();
         let owner = hub.collection_owner("page-collection", &request).unwrap();
@@ -1922,7 +1977,7 @@ mod tests {
         let profile=json!({"host":"127.0.0.1","sshPort":1,"username":"fixture","identityFile":"", "localPort":port,"remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash","commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
         let request:crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
         assert!(hub.begin_bag("page-motion",&request,Kind::Record,true).is_err());
-        hub.set_profile(profile);hub.connect(port).await.unwrap();
+        hub.set_profile(profile);hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         assert!(hub.begin_bag("page-motion",&request,Kind::Record,true).is_err());
         let (page,_)=hub.attach("page-motion").unwrap();let mut other=request.clone();other.ros_domain_id+=1;
         assert!(hub.begin_bag("page-motion",&other,Kind::Record,true).is_err());
@@ -1943,7 +1998,7 @@ mod tests {
             "remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash", "commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
         let request:crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
         assert!(hub.begin_controller("page-motion",&request).is_err());
-        hub.set_profile(profile.clone());hub.connect(port).await.unwrap();
+        hub.set_profile(profile.clone());hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         assert!(hub.begin_controller("page-motion",&request).is_err());
         let (motion,_)=hub.attach("page-motion").unwrap();
         let mut other=request.clone();other.ros_domain_id+=1;
@@ -1965,7 +2020,7 @@ mod tests {
             "remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash", "commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
         let request:crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
         assert!(hub.begin_arm_mode("page-motion",&request).is_err());
-        hub.set_profile(profile.clone());hub.connect(port).await.unwrap();
+        hub.set_profile(profile.clone());hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         assert!(hub.begin_arm_mode("page-motion",&request).is_err());
         let (motion,_)=hub.attach("page-motion").unwrap();
         let mut other=request.clone();other.ros_domain_id+=1;
@@ -1983,7 +2038,7 @@ mod tests {
     async fn native_task_owner_controls_heartbeats_and_detach_waits_for_real_terminal() {
         let (port, events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         let (main, _) = hub.attach("main").unwrap();
         let timeout = Duration::from_secs(1);
@@ -2093,7 +2148,7 @@ mod tests {
     async fn reconnect_recovers_only_retained_task_proof_and_routes_full_group_terminal() {
         let (port, _events, _seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         hub.request(
             "page-motion",
@@ -2107,7 +2162,7 @@ mod tests {
         hub.close();
         assert!(hub.tasks.snapshot().is_some());
         let (port, _events, seen, next_server) = fake_bridge().await;
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (observer, _) = hub.attach("page-monitor").unwrap();
         let packed = hub.next("page-monitor", &observer).await.unwrap();
         let terminal = WireFrame::parse(Arc::from(&packed[17..]), false).unwrap();
@@ -2136,7 +2191,7 @@ mod tests {
         let (port, _events, seen, server) = fake_bridge().await;
         let hub = Arc::new(Runtime::default());
         hub.set_observation_changed(Arc::new(|| {}));
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let labels = [
             "page-motion",
             "page-status",
@@ -2218,9 +2273,9 @@ mod tests {
     async fn two_windows_share_subscription_and_closing_one_preserves_other() {
         let (port, events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         // Calling connect again does not create another socket.
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (main, _) = hub.attach("main").unwrap();
         let (handeye, _) = hub.attach("page-handeye").unwrap();
         assert!(hub.attach("malicious").is_err());
@@ -2306,7 +2361,7 @@ mod tests {
     async fn resource_reads_across_native_pages_use_one_upstream_binary_response() {
         let (port, _events, requests, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (motion, _) = hub.attach("page-motion").unwrap();
         let (topics, _) = hub.attach("page-dashboard").unwrap();
         let message =
@@ -2361,7 +2416,7 @@ mod tests {
     async fn close_wakes_pending_pull_and_old_attachment_cannot_access_new_connection() {
         let (port, _events, _seen, server) = fake_bridge().await;
         let hub = Arc::new(Runtime::default());
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (old, _) = hub.attach("main").unwrap();
         let pulling_hub = hub.clone();
         let token = old.clone();
@@ -2379,7 +2434,7 @@ mod tests {
         hub.close();
         assert!(pull.await.unwrap().is_err());
         let (port, _events2, _seen2, next_server) = fake_bridge().await;
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (new, _) = hub.attach("main").unwrap();
         assert_ne!(new.epoch, old.epoch);
         assert!(hub.next("main", &old).await.is_err());
@@ -2428,7 +2483,7 @@ mod tests {
     async fn transient_local_model_before_ack_is_replayed_to_later_window_without_resubscription() {
         let (port, _events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        hub.connect(port).await.unwrap();
+        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
         let (main, _) = hub.attach("main").unwrap();
         let request =
             json!({"op":"subscribe", "topic":"/robot_description", "type":"std_msgs/msg/String"});

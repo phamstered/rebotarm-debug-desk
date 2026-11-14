@@ -113,7 +113,8 @@ struct Session {
     changed: Arc<Mutex<Option<Changed>>>,
 }
 impl Session {
-    fn snapshot(&self) -> Snapshot {
+    fn snapshot(&self) -> Snapshot { self.selected_snapshot(None) }
+    fn selected_snapshot(&self, sources: Option<&[Source]>) -> Snapshot {
         let entries = self.entries.lock().unwrap();
         Snapshot {
             handler_elapsed_ms: 0,
@@ -122,6 +123,7 @@ impl Session {
             revision: self.revision.load(Ordering::Acquire),
             entries: entries
                 .iter()
+                .filter(|(source, _)| sources.is_none_or(|sources| sources.contains(source)))
                 .map(|(&source, entry)| {
                     (
                         source,
@@ -319,7 +321,11 @@ impl Observations {
             });
         }
     }
-    pub fn snapshot(&self) -> Snapshot {
+    pub fn activity_snapshot(&self) -> Snapshot {
+        self.selected_snapshot(Some(&[Source::BagRecord, Source::BagPlay, Source::Collection]))
+    }
+    pub fn snapshot(&self) -> Snapshot { self.selected_snapshot(None) }
+    fn selected_snapshot(&self, sources: Option<&[Source]>) -> Snapshot {
         self.session.lock().unwrap().as_ref().map_or_else(
             || Snapshot {
                 handler_elapsed_ms: 0,
@@ -328,7 +334,7 @@ impl Observations {
                 revision: self.revision.load(Ordering::Acquire),
                 entries: BTreeMap::new(),
             },
-            |session| session.snapshot(),
+            |session| session.selected_snapshot(sources),
         )
     }
     pub fn versions(&self) -> (u64, BTreeMap<Source, u64>) {

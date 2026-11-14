@@ -81,6 +81,7 @@ struct Inner {
 #[derive(Default)]
 pub struct Tasks {
     inner: Mutex<Inner>,
+    observations: Mutex<Option<std::sync::Weak<super::observations::Observations>>>,
 }
 
 pub struct Admission {
@@ -176,6 +177,15 @@ fn stop(task: &mut Task, reason: &str) {
 }
 
 impl Tasks {
+    pub fn bind_observations(&self, observations: &Arc<super::observations::Observations>) {
+        *self.observations.lock().unwrap() = Some(Arc::downgrade(observations));
+    }
+    pub fn check_activity(&self, check: super::activity::Check<'_>) -> Result<(), String> {
+        let observations = self.observations.lock().unwrap().as_ref().and_then(|weak| weak.upgrade());
+        if let Some(observations) = observations { super::activity::check(&observations.activity_snapshot(), check)?; }
+        Ok(())
+    }
+
     /// Records stop intent only. The application worker performs the correlated
     /// cancel; a new connection may only query the old task's retained result.
     pub fn cancel_trajectory(&self, id: u64, command_id: &str) -> Result<(), String> {
@@ -210,6 +220,7 @@ impl Tasks {
             return Err("只有 Motion 或 Status 页面可以切换 Controller".into());
         }
         let mut inner = self.inner.lock().unwrap();
+        self.check_activity(super::activity::Check::Motion)?;
         if inner.task.is_some() || inner.playback { return Err("已有共享运动、回放或控制任务，等待终态后再切换 Controller".into()); }
         if inner.migrations.contains(&owner.window.label) { return Err("页面正在迁移，不能切换 Controller".into()); }
         inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
@@ -235,6 +246,7 @@ impl Tasks {
 
     pub fn controller_sent(&self, id: u64) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
+        self.check_activity(super::activity::Check::Motion)?;
         let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && matches!(t.snapshot.kind, Kind::Controller | Kind::ArmMode))
             .ok_or("Controller 任务已失效，未发送切换")?;
         if task.sent || stopped(task) { return Err("Controller 任务已发送或撤销".into()); }
@@ -312,15 +324,21 @@ impl Tasks {
     }
 
     pub fn local_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
-        self.local_activity(label, false)
+        self.local_activity(label, false, false)
     }
     pub fn sampling_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
-        self.local_activity(label, true)
+        self.local_activity(label, true, false)
     }
-    fn local_activity(self: &Arc<Self>, label: &str, conflicts: bool) -> Result<LocalOperation, String> {
+    pub fn settling_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
+        // Stop/finalize may coexist with an already running playback, but keeps
+        // a new playback from starting while the stop outcome is unresolved.
+        self.local_activity(label, true, true)
+    }
+    fn local_activity(self: &Arc<Self>, label: &str, conflicts: bool, stopping: bool) -> Result<LocalOperation, String> {
         let mut inner = self.inner.lock().unwrap();
         if inner.migrations.contains(label) { return Err("页面正在迁移，不能开始本地任务".into()); }
-        if conflicts && inner.playback { return Err("回放运行中或结果待确认，不能开始采样/录制".into()); }
+        if conflicts && !stopping { self.check_activity(super::activity::Check::Sampling)?; }
+        if conflicts && !stopping && inner.playback { return Err("回放运行中或结果待确认，不能开始采样/录制".into()); }
         if !inner.local_operations.insert(label.into()) { return Err("此页面已有本地任务正在进行".into()); }
         if conflicts { inner.playback_conflicts.insert(label.into()); }
         Ok(LocalOperation { tasks: self.clone(), label: label.into(), playback: false })
@@ -328,6 +346,7 @@ impl Tasks {
 
     pub fn playback_operation(self: &Arc<Self>, label: &str, starting: bool) -> Result<LocalOperation, String> {
         let mut inner = self.inner.lock().unwrap();
+        if starting { self.check_activity(super::activity::Check::PlaybackStart)?; }
         if inner.playback || inner.migrations.contains(label) || inner.local_operations.contains(label)
             || (starting && (inner.task.is_some() || !inner.playback_conflicts.is_empty())) {
             return Err("运动、采样、本地操作或页面迁移未结束，不能开始回放".into());
@@ -339,6 +358,7 @@ impl Tasks {
 
     pub fn migration(self: &Arc<Self>, label: &str) -> Result<Migration, String> {
         let mut inner = self.inner.lock().unwrap();
+        self.check_activity(super::activity::Check::Migration(label))?;
         if inner.local_operations.contains(label) { return Err("此页面的本地任务尚未结束，不能迁移窗口".into()); }
         if inner
             .task
@@ -402,6 +422,9 @@ impl Tasks {
     ) -> Result<Admission, String> {
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
         let mut inner = self.inner.lock().unwrap();
+        let checks_activity = actuation(op, message) && op != "position_group_pause"
+            && !(op == "joint4_start" && message["action"] == "release_pose");
+        if checks_activity { self.check_activity(super::activity::Check::Motion)?; }
         if actuation(op, message) && inner.playback { return Err("回放仍在运行或退出未确认，不能提交运动".into()); }
         if actuation(op, message) && inner.migrations.contains(&owner.window.label) {
             return Err("页面正在迁移，不能提交运动".into());
@@ -563,6 +586,7 @@ impl Tasks {
                         return task.owner.epoch < owner.epoch
                             || (task.owner == owner && !stopped(task));
                     }
+                    if checks_activity && tasks.check_activity(super::activity::Check::Motion).is_err() { return false; }
                     if expected != Some(task.snapshot.id) || task.owner != owner || stopped(task) {
                         return false;
                     }

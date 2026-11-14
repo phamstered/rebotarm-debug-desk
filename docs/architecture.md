@@ -276,3 +276,6 @@ rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 w
 Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。进程重启恢复及外部录制的完整生命周期仍在开发范围内。
 
 多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。Bridge 的 `joint4_calibration.cpp` 持有互斥服务调用、姿态租约和有界回执/终态记录，复用 Controller Registry 与底层独立反馈及 DISABLE 序列分配。服务未返回时不允许 Release 越过它；状态和硬件证据确认后才释放任务。桌面拒绝旧能力入口；开发分支尚未作为已发布的实机控制链路验收。
+
+
+共享外部活动准入由 `session/activity.rs` 解析已有 observations 的三个状态源，Tasks 在与任务/迁移互斥相同的临界区内检查；原生发送许可和 SSH 提交前复查。只复制 bag/collection 快照，不复制完整 Topics 等大对象，不增加 SSH 查询。此层不发出停止命令、不把外部活动收编成本桌面的任务；原有任务的进程回执及终态证据继续独立核验。远端状态是有时效的观察，不是所有 ROS 客户端共用的远端互斥锁，任意未登记 bag 进程和外部跨连接恢复仍属边界。

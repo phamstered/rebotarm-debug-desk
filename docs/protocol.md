@@ -703,3 +703,8 @@ arm-mode-* 远端编号选择固定 128 KiB / 600 秒执行策略；controller-*
 远端 `collection-<48 hex>` 任务绑定整个命令的 SHA-256，命令至多 128 KiB（包含参数的 shell 引号展开）、截止 180 秒。复用有限 journal 的先落盘后执行和一次提交规则，后续只能 query；保留上限 256 项，与 Controller/arm mode 共用容量。采集 helper 成功时附带不含日志/图像的有界回执，包含 state/managed/pid/processIdentity/recording/pendingFrames/savedEpisodes 和 root + NUL + repoId 的 SHA-256。缺少回执或非零/超时均不表示成功。当前身份沿用 Linux PID 与进程启动时刻，不宣称跨远端重启的录制身份恢复。公共 CollectionStatus 新增 `processIdentity`（未管理的进程为空）。
 
 `native_collection_operation_snapshot` 返回 null 或 `{id,action,phase,host,message,busy}`；仅主窗口和白名单功能页可读。`native-collection-operation-changed` 只发送失效通知，页面随后合并读取快照。phase 为 preparing/verifying/uncertain/recording/succeeded/failed；recording 保留迁移占用但允许同连接保存、丢弃或结束操作，其余 busy 阶段禁止重复提交。failed 只用于明确未执行，uncertain 不自动解锁。真正成功须以回执匹配原连接新的 `collection` 状态，并在当前 epoch 下原子完成；旧代次、旧编号或普通 idle 不能完成该任务。此协议尚无跨桌面进程重启恢复。
+
+
+原生 `session/activity.rs` 只读检查共享 `bag_record`、`bag_play`、`collection` 快照，无新增 IPC/Bridge 字段。Tasks 通过弱引用读取这三个源的精简快照，避免高频控制准入复制 Topics 等大对象；不启动另一套轮询。新运动/在线采样需要新鲜空闲的 bag_play；开始录制、Episode 和回放分别检查自身及关联冲突源。新连接尚无首帧查询结果时不会允许冲突操作。bag 回执须与 kind、PID、active 和路径匹配；collection 的 state、recording、pendingFrames、managed、PID 和进程身份须一致。外部 Episode 的 managed=false 本身不代表空闲。
+
+迁移时 Monitor 检查 bag_play，数据采集检查 collection，录制入口 main/page-dashboard/page-motion 检查 bag_record。非空闲、过期、失败、缺失或不一致均拒绝相关准入；bag 停止、Episode 保存/丢弃/结束和 DISABLE 不要求先证明空闲；停止/收尾期间仍阻止新回放进入，结果未知时继续保留许可。非冲突的离线编辑与计算不受限制。观察没有授予外部进程所有权，也不能代替已有任务的同实例退出/终态核验；没有远端全局锁或跨桌面进程的恢复承诺。

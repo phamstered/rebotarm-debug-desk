@@ -103,6 +103,7 @@ impl Operations {
             return Err("当前页面无权执行此 rosbag 操作".into());
         }
         let mut inner = self.inner.lock().unwrap();
+        if starting && kind == Kind::Record { tasks.check_activity(super::activity::Check::RecordStart)?; }
         let id = inner.sequence.checked_add(1).ok_or("rosbag 操作编号耗尽")?;
         let (permit, receipt) =
             if let Some(previous) = inner.entries.get_mut(&kind).filter(|e| e.permit.is_some()) {
@@ -126,7 +127,7 @@ impl Operations {
                 } else if starting {
                     tasks.sampling_operation(&owner.window.label)?
                 } else {
-                    tasks.local_operation(&owner.window.label)?
+                    tasks.settling_operation(&owner.window.label)?
                 };
                 (permit, None)
             };
@@ -365,7 +366,10 @@ pub async fn start(
     guard.update(Phase::Submitting, "操作已由原生层接管", false);
     owned(async move {
         let hub = guard.app.state::<Runtime>();
-        if let Err(message) = hub.send_bag(&owner, id, &profile, kind) {
+        let check = if starting {
+            hub.tasks.check_activity(if kind == Kind::Play { super::activity::Check::PlaybackStart } else { super::activity::Check::RecordStart })
+        } else { Ok(()) };
+        if let Err(message) = check.and_then(|_| hub.send_bag(&owner, id, &profile, kind)) {
             rejected(guard, profile, &message);
             return Err(message);
         }
