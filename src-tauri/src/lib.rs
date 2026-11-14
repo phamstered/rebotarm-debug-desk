@@ -1,10 +1,11 @@
 mod handeye;
+mod session;
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Duration};
 
@@ -15,7 +16,7 @@ mod motion_groups;
 mod arm_workflow;
 mod node_runtime;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectionProfile {
     host: String,
@@ -36,6 +37,17 @@ struct ConnectionProfile {
 #[derive(Default)]
 struct SessionState {
     tunnel: Mutex<Option<Child>>,
+    local_port: Mutex<Option<u16>>,
+}
+
+impl SessionState {
+    fn close_on_exit(&self) {
+        // Tauri process exit need not drop managed state or run another async
+        // task. Signal only the child we own before the event loop terminates.
+        *self.local_port.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        let child = self.tunnel.lock().unwrap_or_else(|error| error.into_inner()).take();
+        if let Some(mut child) = child { let _ = child.start_kill(); }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -70,6 +82,7 @@ struct RosControlStatus {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RosbagStatus {
+    receipt: Option<session::bag_receipt::Receipt>,
     recording: bool,
     pid: u32,
     output_path: String,
@@ -79,6 +92,7 @@ struct RosbagStatus {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RosbagPlayStatus {
+    receipt: Option<session::bag_receipt::Receipt>,
     playing: bool,
     pid: u32,
     bag_path: String,
@@ -127,13 +141,6 @@ struct RemoteActionResult {
     detail: String,
 }
 
-
-#[derive(Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TriggerServiceResponse {
-    success: bool,
-    message: String,
-}
 
 fn ssh_target(profile: &ConnectionProfile) -> String {
     if profile.username.trim().is_empty() {
@@ -268,63 +275,6 @@ fn controllers_switch_command(
 }
 
 
-fn joint4_calibration_service(action: &str) -> Option<&'static str> {
-    match action {
-        "begin_pose" => Some("/joint4_calibration_controller/begin_pose"),
-        "release_pose" => Some("/joint4_calibration_controller/release_pose"),
-        "capture_pose" => Some("/joint4_calibration_controller/capture_pose"),
-        "fit" => Some("/joint4_calibration_controller/fit"),
-        "reset" => Some("/joint4_calibration_controller/reset"),
-        _ => None,
-    }
-}
-
-fn joint4_calibration_service_command(
-    profile: &ConnectionProfile,
-    action: &str,
-) -> Result<String, String> {
-    let transport = ros_transport_setup();
-    if !is_safe_setup_script(&profile.ros_setup_script) {
-        return Err("ROS 环境脚本路径包含不允许的字符".into());
-    }
-    let service = joint4_calibration_service(action).ok_or("不支持的 joint4 标定操作")?;
-    Ok(format!(
-        "bash -lc '{transport}source /opt/ros/humble/setup.bash; \
-         if [ -f \"{}\" ]; then source \"{}\"; fi; \
-         ROS_DOMAIN_ID={} timeout 10 ros2 service call {} std_srvs/srv/Trigger \"{{}}\" 2>&1'",
-        profile.ros_setup_script, profile.ros_setup_script, profile.ros_domain_id, service,
-    ))
-}
-
-fn parse_trigger_service_response(output: &str) -> Result<TriggerServiceResponse, String> {
-    let success = if output.contains("success=True") || output.contains("success: true") {
-        true
-    } else if output.contains("success=False") || output.contains("success: false") {
-        false
-    } else {
-        return Err("无法解析 Trigger 服务响应".into());
-    };
-    let message = ["message='", "message=\"", "message: '", "message: \""]
-        .iter()
-        .find_map(|marker| {
-            let start = output.rfind(marker)? + marker.len();
-            let quote = marker.chars().last()?;
-            let rest = &output[start..];
-            let end = rest.rfind(quote)?;
-            Some(rest[..end].replace("\\'", "'").replace("\\\"", "\""))
-        })
-        .unwrap_or_else(|| {
-            output
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("Trigger 服务已返回")
-                .trim()
-                .to_string()
-        });
-    Ok(TriggerServiceResponse { success, message })
-}
-
 fn validate_calibration_report(path: &str, content: &str) -> Result<(), String> {
     let path = Path::new(path);
     if !path.is_absolute() {
@@ -354,51 +304,24 @@ fn validate_diagnostics_snapshot(path: &str, content: &str) -> Result<(), String
     Ok(())
 }
 
-fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<String, String> {
-    let transport = ros_transport_setup();
-    if !is_safe_setup_script(&profile.ros_setup_script) {
-        return Err("ROS 环境脚本路径包含不允许的字符".into());
+fn bag_remote_command(profile: &ConnectionProfile, kind: &str, action: &str, bag_path: &str) -> Result<String, String> {
+    if !matches!(kind, "record" | "play") || !matches!(action, "status" | "start" | "stop") {
+        return Err("Unsupported rosbag operation".into());
     }
-    let setup = format!(
-        "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
-        profile.ros_setup_script, profile.ros_setup_script,
-    );
-    let paths = "mkdir -p \"$HOME/.cache/robot-console\" \"$HOME/robot-console-bags\"; \
-                 pid_file=\"$HOME/.cache/robot-console/rosbag.pid\"; \
-                 path_file=\"$HOME/.cache/robot-console/rosbag.path\"; ";
-    let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true); \
-                 case \"$pid\" in *[!0-9]*|\"\") alive=0 ;; \
-                 *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag record\"; then alive=1; else alive=0; fi ;; esac; ";
-    let body = match action {
-        "status" => format!(
-            "{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
-             if [ \"$alive\" = 1 ]; then printf \"RECORDING|%s|%s\\n\" \"$pid\" \"$output\"; \
-             else printf \"IDLE|0|%s\\n\" \"$output\"; fi"
-        ),
-        "start" => format!(
-            "{setup}{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
-             if [ \"$alive\" = 1 ]; then printf \"RECORDING|%s|%s\\n\" \"$pid\" \"$output\"; exit 0; fi; \
-             output=\"$HOME/robot-console-bags/robot-console-$(date +%Y%m%d-%H%M%S)\"; \
-             ROS_DOMAIN_ID={} nohup ros2 bag record -a -o \"$output\" \
-             >\"$HOME/.cache/robot-console/rosbag.log\" 2>&1 </dev/null & pid=$!; \
-             printf \"%s\\n\" \"$pid\" >\"$pid_file\"; printf \"%s\\n\" \"$output\" >\"$path_file\"; sleep 1; \
-             if ! kill -0 \"$pid\" 2>/dev/null; then cat \"$HOME/.cache/robot-console/rosbag.log\" >&2; exit 1; fi; \
-             printf \"STARTED|%s|%s\\n\" \"$pid\" \"$output\"",
-            profile.ros_domain_id,
-        ),
-        "stop" => format!(
-            "{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
-             if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$output\"; exit 0; fi; \
-             kill -INT \"$pid\"; \
-             for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
-               if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; \
-             done; \
-             if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; \
-             rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$output\""
-        ),
-        _ => return Err("不支持的 rosbag 操作".into()),
-    };
-    Ok(format!("bash -lc '{body}'"))
+    if !is_safe_setup_script(&profile.ros_setup_script) || (!bag_path.is_empty() && !is_safe_setup_script(bag_path))
+        || (kind == "play" && action == "start" && bag_path.is_empty()) {
+        return Err("Invalid rosbag setup or path".into());
+    }
+    let request = serde_json::json!({"kind":kind,"action":action,"setup":profile.ros_setup_script,
+        "domain":profile.ros_domain_id,"path":bag_path,"transport":ros_transport_setup()});
+    let quote = |word: &str| format!("'{}'", word.replace('\'', "'\\''"));
+    let command = format!("python3 -c {} {}", quote(include_str!("bag_remote.py")), quote(&request.to_string()));
+    if command.len() > 32768 {return Err("Rosbag helper request exceeds journal limit".into());}
+    Ok(command)
+}
+
+fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<String, String> {
+    bag_remote_command(profile, "record", action, "")
 }
 
 fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
@@ -421,6 +344,7 @@ fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
     let output_path = fields.next().unwrap_or_default().to_string();
     let recording = matches!(state, "STARTED" | "RECORDING");
     Ok(RosbagStatus {
+        receipt: session::bag_receipt::Receipt::output(output, session::bag_operation::Kind::Record, recording, pid, &output_path)?,
         recording,
         pid: if recording { pid } else { 0 },
         output_path,
@@ -434,43 +358,8 @@ fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
     })
 }
 
-fn rosbag_play_remote_command(
-    profile: &ConnectionProfile,
-    action: &str,
-    bag_path: &str,
-) -> Result<String, String> {
-    let transport = ros_transport_setup();
-    if !is_safe_setup_script(&profile.ros_setup_script) {
-        return Err("ROS 环境脚本路径包含不允许的字符".into());
-    }
-    if action != "status" && action != "stop" {
-        if bag_path.is_empty() || !is_safe_setup_script(bag_path) {
-            return Err("bag 路径包含不允许的字符".into());
-        }
-    } else if !bag_path.is_empty() && !is_safe_setup_script(bag_path) {
-        return Err("bag 路径包含不允许的字符".into());
-    }
-    let setup = format!(
-        "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
-        profile.ros_setup_script, profile.ros_setup_script,
-    );
-    let paths = "mkdir -p \"$HOME/.cache/robot-console\";                  pid_file=\"$HOME/.cache/robot-console/rosbag-play.pid\";                  path_file=\"$HOME/.cache/robot-console/rosbag-play.path\"; ";
-    let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true);                  case \"$pid\" in *[!0-9]*|\"\") alive=0 ;;                  *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag play\"; then alive=1; else alive=0; fi ;; esac; ";
-    let body = match action {
-        "status" => format!(
-            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" = 1 ]; then printf \"PLAYING|%s|%s\\n\" \"$pid\" \"$bag\";              else printf \"IDLE|0|%s\\n\" \"$bag\"; fi"
-        ),
-        "start" => format!(
-            "{setup}{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" = 1 ]; then printf \"PLAYING|%s|%s\\n\" \"$pid\" \"$bag\"; exit 0; fi;              bag=\"{bag_path}\";              if [ ! -e \"$bag\" ]; then echo \"bag path not found: $bag\" >&2; exit 1; fi;              ROS_DOMAIN_ID={domain} nohup ros2 bag play \"$bag\" --clock              >\"$HOME/.cache/robot-console/rosbag-play.log\" 2>&1 </dev/null & pid=$!;              printf \"%s\\n\" \"$pid\" >\"$pid_file\"; printf \"%s\\n\" \"$bag\" >\"$path_file\"; sleep 1;              if ! kill -0 \"$pid\" 2>/dev/null; then cat \"$HOME/.cache/robot-console/rosbag-play.log\" >&2; exit 1; fi;              printf \"STARTED|%s|%s\\n\" \"$pid\" \"$bag\"",
-            bag_path = bag_path,
-            domain = profile.ros_domain_id,
-        ),
-        "stop" => format!(
-            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$bag\"; exit 0; fi;              kill -INT \"$pid\";              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25;              done;              if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi;              rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$bag\""
-        ),
-        _ => return Err("不支持的 rosbag 回放操作".into()),
-    };
-    Ok(format!("bash -lc '{body}'"))
+fn rosbag_play_remote_command(profile: &ConnectionProfile, action: &str, bag_path: &str) -> Result<String, String> {
+    bag_remote_command(profile, "play", action, bag_path)
 }
 
 fn parse_rosbag_play_status(output: &str) -> Result<RosbagPlayStatus, String> {
@@ -493,6 +382,7 @@ fn parse_rosbag_play_status(output: &str) -> Result<RosbagPlayStatus, String> {
     let bag_path = fields.next().unwrap_or_default().to_string();
     let playing = matches!(state, "STARTED" | "PLAYING");
     Ok(RosbagPlayStatus {
+        receipt: session::bag_receipt::Receipt::output(output, session::bag_operation::Kind::Play, playing, pid, &bag_path)?,
         playing,
         pid: if playing { pid } else { 0 },
         bag_path,
@@ -881,13 +771,6 @@ fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
     })
 }
 
-fn parse_remote_action_ok(output: &str) -> Option<(u32, String)> {
-    let line = output.lines().rev().find(|line| line.starts_with("OK|"))?;
-    let mut fields = line.trim_start_matches("OK|").splitn(2, '|');
-    let pid = fields.next()?.parse().unwrap_or_default();
-    let label = fields.next().unwrap_or("").to_string();
-    Some((pid, label))
-}
 
 fn restart_agent_remote_command() -> String {
     format!(
@@ -962,6 +845,7 @@ async fn check_ssh(profile: ConnectionProfile) -> Result<String, String> {
 async fn check_micro_ros_agent(profile: ConnectionProfile) -> Result<AgentServiceStatus, String> {
     const SERVICE: &str = "micro-ros-agent-stm32h723.service";
     let output = ssh_base(&profile)
+        .kill_on_drop(true)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1031,97 +915,30 @@ async fn check_ros_controllers(profile: ConnectionProfile) -> Result<RosControlS
 
 #[tauri::command]
 async fn switch_ros_controller(
-    profile: ConnectionProfile,
-    controller_name: String,
-    action: String,
+    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
+    profile: ConnectionProfile, controller_name: String, action: String,
 ) -> Result<String, String> {
     let remote = controller_switch_command(&profile, &controller_name, &action)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 Controller 操作：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}\n{stderr}");
-    if !output.status.success() {
-        return Err(format!(
-            "Controller 操作失败：{}",
-            ros_control_error(&combined)
-        ));
-    }
-    Ok(stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| strip_ansi(line.trim()))
-        .unwrap_or_else(|| format!("Controller {controller_name} {action} 完成")))
+    let (activate, deactivate) = if action == "activate" { (vec![controller_name], vec![]) }
+        else { (vec![], vec![controller_name]) };
+    session::controller_task::start(app, window.label().into(), &hub, profile, activate, deactivate, remote).await
 }
 
 #[tauri::command]
 async fn switch_ros_controllers(
-    profile: ConnectionProfile,
-    activate: Vec<String>,
-    deactivate: Vec<String>,
+    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
+    profile: ConnectionProfile, activate: Vec<String>, deactivate: Vec<String>,
 ) -> Result<String, String> {
     let remote = controllers_switch_command(&profile, &activate, &deactivate)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 Controller 批量切换：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}\n{stderr}");
-    if !output.status.success() {
-        return Err(format!(
-            "Controller 批量切换失败：{}",
-            ros_control_error(&combined)
-        ));
-    }
-    Ok(stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| strip_ansi(line.trim()))
-        .unwrap_or_else(|| {
-            format!(
-                "Controllers switch 完成（activate={} deactivate={}）",
-                activate.join(","),
-                deactivate.join(",")
-            )
-        }))
+    session::controller_task::start(app, window.label().into(), &hub, profile, activate, deactivate, remote).await
 }
 
 #[tauri::command]
 async fn call_joint4_calibration_service(
-    profile: ConnectionProfile,
-    action: String,
-) -> Result<TriggerServiceResponse, String> {
-    let remote = joint4_calibration_service_command(&profile, &action)?;
-    let output = ssh_base(&profile)
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote)
-        .output()
-        .await
-        .map_err(|error| format!("无法执行 joint4 标定服务调用：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        return Err(format!(
-            "joint4 标定服务调用失败：{}",
-            ros_control_error(&format!("{stdout}\n{stderr}"))
-        ));
-    }
-    parse_trigger_service_response(&stdout)
+    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
+    profile: ConnectionProfile, action: String, confirmation: Option<String>,
+) -> Result<serde_json::Value, String> {
+    session::joint4_task::start(app, window.label().into(), &hub, profile, action, confirmation).await
 }
 
 #[tauri::command]
@@ -1159,6 +976,7 @@ async fn run_rosbag_action(
 ) -> Result<RosbagStatus, String> {
     let remote = rosbag_remote_command(&profile, action)?;
     let output = ssh_base(&profile)
+        .kill_on_drop(action == "status")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1187,13 +1005,19 @@ async fn get_rosbag_status(profile: ConnectionProfile) -> Result<RosbagStatus, S
 }
 
 #[tauri::command]
-async fn start_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
-    run_rosbag_action(profile, "start").await
+async fn start_rosbag_recording(
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_remote_command(&profile, "start")?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Record,true,String::new(),remote).await
 }
 
 #[tauri::command]
-async fn stop_rosbag_recording(profile: ConnectionProfile) -> Result<RosbagStatus, String> {
-    run_rosbag_action(profile, "stop").await
+async fn stop_rosbag_recording(
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_remote_command(&profile, "stop")?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Record,false,String::new(),remote).await
 }
 
 async fn run_rosbag_play_action(
@@ -1203,6 +1027,7 @@ async fn run_rosbag_play_action(
 ) -> Result<RosbagPlayStatus, String> {
     let remote = rosbag_play_remote_command(&profile, action, bag_path)?;
     let output = ssh_base(&profile)
+        .kill_on_drop(action == "status")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1232,23 +1057,28 @@ async fn get_rosbag_play_status(profile: ConnectionProfile) -> Result<RosbagPlay
 
 #[tauri::command]
 async fn start_rosbag_playback(
-    profile: ConnectionProfile,
-    bag_path: String,
-) -> Result<RosbagPlayStatus, String> {
-    run_rosbag_play_action(profile, "start", &bag_path).await
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile, bag_path: String,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_play_remote_command(&profile, "start", &bag_path)?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Play,true,bag_path,remote).await
 }
 
 #[tauri::command]
-async fn stop_rosbag_playback(profile: ConnectionProfile) -> Result<RosbagPlayStatus, String> {
-    run_rosbag_play_action(profile, "stop", "").await
+async fn stop_rosbag_playback(
+    app:AppHandle,window:tauri::Webview,hub:State<'_,session::runtime::Runtime>,profile:ConnectionProfile,
+)->Result<serde_json::Value,String> {
+    let remote=rosbag_play_remote_command(&profile, "stop", "")?;
+    session::bag_operation::start(app,window.label().into(),&hub,profile,session::bag_operation::Kind::Play,false,String::new(),remote).await
 }
 
 #[tauri::command]
 async fn start_session(
     profile: ConnectionProfile,
     state: State<'_, SessionState>,
+    hub: State<'_, session::runtime::Runtime>,
 ) -> Result<u16, String> {
     let transport = ros_transport_setup();
+    hub.close();
     stop_tunnel(&state).await;
 
     if !is_safe_setup_script(&profile.ros_setup_script) {
@@ -1335,10 +1165,12 @@ async fn start_session(
         return Err(format!("SSH 隧道提前退出（{status}）：{}", stderr.trim()));
     }
     *state.tunnel.lock().map_err(|_| "隧道状态锁异常")? = Some(child);
+    *state.local_port.lock().map_err(|_| "隧道状态锁异常")? = Some(local_port);
     Ok(local_port)
 }
 
 async fn stop_tunnel(state: &State<'_, SessionState>) {
+    if let Ok(mut port) = state.local_port.lock() { *port = None; }
     let child = state.tunnel.lock().ok().and_then(|mut guard| guard.take());
     if let Some(mut child) = child {
         let _ = child.kill().await;
@@ -1556,6 +1388,7 @@ async fn deploy_bridge(
 async fn probe_jetson_usb(profile: ConnectionProfile) -> Result<UsbProbeStatus, String> {
     let remote = usb_probe_remote_command();
     let output = ssh_base(&profile)
+        .kill_on_drop(true)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1616,6 +1449,7 @@ async fn restart_micro_ros_agent(profile: ConnectionProfile) -> Result<RemoteAct
 async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, String> {
     let remote = arm_mode_remote_command(&profile, "status")?;
     let output = ssh_base(&profile)
+        .kill_on_drop(true)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg(ssh_target(&profile))
@@ -1635,64 +1469,89 @@ async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, Str
 }
 
 #[tauri::command]
-async fn start_arm_mode(profile: ConnectionProfile, mode: String, support_confirmed: Option<bool>,
+async fn start_arm_mode(window: tauri::Webview, profile: ConnectionProfile, mode: String, support_confirmed: Option<bool>,
+    app: AppHandle, hub: State<'_, session::runtime::Runtime>,
     on_progress: tauri::ipc::Channel<arm_workflow::Progress>,
-    logs: State<'_, control_logs::LogSessions>,
 ) -> Result<RemoteActionResult, String> {
+    session::arm_operation::authorize(window.label())?;
     if matches!(mode.as_str(), "teaching" | "disable-stop") && support_confirmed != Some(true) {
         return Err("请先确认现场支撑机械臂，且夹爪释放无风险".into());
     }
     let remote = arm_mode_remote_command(&profile, &mode)?;
-    // Diagnostics must never delay or block a requested stop/DISABLE.
-    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "teaching" | "realsense" | "moveit") {
-        let _ = control_logs::prepare(&profile, &logs).await;
+    if mode == "disable-stop" && hub.disable_finite_terminal(window.label(), &profile).await? {
+        return Err("DISABLE 请求已受理；原控制操作已结束但恢复记录仍在清理。请核对新的输出关闭反馈；环境清理尚未执行".into());
     }
-    let mut command = ssh_base(&profile);
-    command.arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote);
-    let (ok, exit_code, stdout, stderr) = arm_workflow::run(&mut command, Some(on_progress)).await?;
-    if !ok {
-        return Ok(RemoteActionResult {
-            ok: false,
-            exit_code,
-            message: format!("arm mode `{mode}` 失败"),
-            detail: stderr_tail(&stderr, &stdout),
-        });
+    if mode == "disable-stop" && hub.tasks.request_controller_disable(&serde_json::to_value(&profile).map_err(|e| e.to_string())?) {
+        let _ = app.emit("native-tasks-changed", ());
+        return Err("已请求关闭输出；正在等待当前控制切换结束及新的关闭反馈。控制环境清理尚未执行，请待共享任务结束后重试退出".into());
     }
-    let (pid, label) = parse_remote_action_ok(&stdout).unwrap_or((0, mode.clone()));
-    Ok(RemoteActionResult {
-        ok: true,
-        exit_code: 0,
-        message: if mode == "stop" || mode == "disable-stop" {
-            "控制环境已停止，输出已关闭".into()
-        } else if mode == "moveit" {
-            label
-        } else if mode == "trajectory" {
-            format!("Trajectory + MoveIt 已就绪 (pid {pid})")
-        } else {
-            format!("{label} 已启动 (pid {pid})")
-        },
-        detail: stderr_tail(&stderr, &stdout),
-    })
+    session::arm_operation::start(app, window.label().to_owned(), &hub, profile, mode, remote, on_progress).await
+
 }
 
 
 #[tauri::command]
-async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
+async fn stop_session(state: State<'_, SessionState>, hub: State<'_, session::runtime::Runtime>) -> Result<(), String> {
+    hub.close();
     stop_tunnel(&state).await;
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
+        .manage(session::runtime::Runtime::default())
+        .manage(session::workspace::Workspace::default())
+        .manage(session::documents::Documents::default())
         .manage(control_logs::LogSessions::default())
-        .manage(data_collection::CollectionState::default())
+        .on_page_load(|view, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                session::workspace::Workspace::page_loading(view);
+            }
+        });
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let builder = builder.on_web_content_process_terminate(|view| {
+        session::workspace::Workspace::page_loading(view);
+        // A custom termination handler replaces tauri-runtime-wry's default
+        // reload handler. Keep that recovery after fencing the old document.
+        if let Err(error) = view.reload() {
+            eprintln!("重新加载退出的页面 {} 失败：{error}", view.label());
+        }
+    });
+    builder
         .invoke_handler(tauri::generate_handler![
+            session::documents::editor_document_read,
+            session::documents::editor_document_commit,
+            session::ipc::native_bridge_context,
+            session::ipc::native_offline_profile,
+            session::ipc::native_task_snapshot,
+            session::ipc::native_trajectory_cancel,
+            session::ipc::native_bag_operation_snapshot,
+            session::ipc::native_collection_operation_snapshot,
+            session::ipc::native_local_task_snapshot,
+            session::ipc::native_local_task_touch,
+            session::ipc::native_local_task_cancel,
+            session::ipc::native_observation_snapshot,
+            session::ipc::native_observation_refresh,
+            session::ipc::native_observation_interval,
+            session::workspace::workspace_snapshot,
+            session::workspace::workspace_select,
+            session::workspace::workspace_open_motion,
+            session::workspace::workspace_detach,
+            session::workspace::workspace_dock,
+            session::workspace::workspace_bounds,
+            session::workspace::workspace_cover,
+            session::workspace::workspace_page_ready,
+            session::workspace::workspace_show_main,
+            session::workspace::workspace_recover,
+            session::ipc::native_bridge_attach,
+            session::ipc::native_bridge_detach,
+            session::ipc::native_bridge_next,
+            session::ipc::native_bridge_request,
+            session::ipc::native_monitor_configure,
+            session::ipc::native_monitor_history,
             check_ssh,
             control_logs::read_control_log,
             control_logs::download_control_log,
@@ -1720,19 +1579,78 @@ pub fn run() {
             stop_rosbag_playback,
             start_session,
             stop_session,
-            deploy_bridge,
-            positions::positions_load,
-            motion_groups::motion_groups_load,
-            motion_groups::motion_groups_save,
-            positions::positions_save
+            deploy_bridge
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Robot Console");
+        .setup(|app| {
+            let local_task_handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>().local_tasks.set_changed(std::sync::Arc::new(move || {
+                let _ = local_task_handle.emit("native-local-tasks-changed", ());
+            }));
+            let task_handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>().set_task_changed(std::sync::Arc::new(move || {
+                let _ = task_handle.emit("native-tasks-changed", ());
+            }));
+            let observations_handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>().set_observation_changed(std::sync::Arc::new(move || {
+                let _ = observations_handle.emit("native-observations-changed", ());
+            }));
+            let handle = app.handle().clone();
+            app.state::<session::runtime::Runtime>()
+                .set_changed(std::sync::Arc::new(move || {
+                    let _ = handle.emit("native-session-changed", ());
+                }));
+            session::finite_recovery::initialize(app.handle());
+            session::motor_recovery::initialize(app.handle());
+            session::leased_recovery::initialize(app.handle());
+            session::bag_operation::initialize(app.handle());
+            session::collection_operation::initialize(app.handle());
+            session::workspace::Workspace::initialize(app.handle());
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            session::workspace::Workspace::window_event(window.app_handle(), window, event)
+        })
+        .build(tauri::generate_context!())
+        .expect("failed to build Robot Console")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = app.state::<session::workspace::Workspace>().show_main(&app).await {
+                        let _ = app.emit("workspace-error", error);
+                    }
+                });
+            }
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<session::workspace::Workspace>().flush();
+                app.state::<session::runtime::Runtime>().close();
+                app.state::<SessionState>().close_on_exit();
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn process_exit_stops_only_the_owned_tunnel_without_async_cleanup() {
+        use tokio::io::AsyncReadExt;
+        // Disable kill_on_drop here so EOF proves the synchronous exit signal.
+        let mut child = Command::new("sh").args(["-c", "exec sleep 30"])
+            .stderr(Stdio::piped()).kill_on_drop(false).spawn().unwrap();
+        let mut pipe = child.stderr.take().unwrap();
+        let mut other = Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+        let state = SessionState { tunnel: Mutex::new(Some(child)), local_port: Mutex::new(Some(18765)) };
+        state.close_on_exit();
+        state.close_on_exit(); // Exit cleanup is idempotent.
+        assert!(state.tunnel.lock().unwrap().is_none());
+        assert!(state.local_port.lock().unwrap().is_none());
+        tokio::time::timeout(Duration::from_secs(2), pipe.read_to_end(&mut Vec::new())).await.unwrap().unwrap();
+        assert!(other.try_wait().unwrap().is_none(), "unrelated children must survive");
+        other.kill().await.unwrap(); other.wait().await.unwrap();
+    }
 
     fn profile(username: &str) -> ConnectionProfile {
         ConnectionProfile {
@@ -1880,35 +1798,6 @@ mod tests {
     }
 
     #[test]
-    fn restricts_and_parses_joint4_calibration_trigger_calls() {
-        let command = joint4_calibration_service_command(&profile(""), "capture_pose").unwrap();
-        assert!(command.contains("/joint4_calibration_controller/capture_pose"));
-        assert!(command.contains("std_srvs/srv/Trigger"));
-        assert!(command.contains("ROS_DOMAIN_ID=0"));
-        assert!(joint4_calibration_service_command(&profile(""), "shell;reboot").is_err());
-
-        assert_eq!(
-            parse_trigger_service_response(
-                "response:\nstd_srvs.srv.Trigger_Response(success=True, message='captured sample 4')\n",
-            )
-            .unwrap(),
-            TriggerServiceResponse {
-                success: true,
-                message: "captured sample 4".into(),
-            }
-        );
-        assert_eq!(
-            parse_trigger_service_response("success: false\nmessage: 'pose is not stable'\n")
-                .unwrap(),
-            TriggerServiceResponse {
-                success: false,
-                message: "pose is not stable".into(),
-            }
-        );
-        assert!(parse_trigger_service_response("service unavailable").is_err());
-    }
-
-    #[test]
     fn validates_joint4_calibration_report_paths_and_sizes() {
         assert!(validate_calibration_report("/tmp/joint4.json", "{}").is_ok());
         assert!(validate_calibration_report("/tmp/joint4.csv", "pose,q4").is_ok());
@@ -1937,16 +1826,18 @@ mod tests {
     #[test]
     fn builds_and_parses_rosbag_recording_commands() {
         let start = rosbag_remote_command(&profile(""), "start").unwrap();
-        assert!(start.contains("ROS_DOMAIN_ID=0 nohup ros2 bag record -a"));
-        assert!(start.contains("$HOME/robot-console-bags"));
-        assert!(start.contains("rosbag.pid"));
+        assert!(start.contains("\"kind\":\"record\""));
+        assert!(start.contains("\"domain\":0"));
+        assert!(start.contains("robot-console-bags"));
+        assert!(start.len() <= 32768);
         let stop = rosbag_remote_command(&profile(""), "stop").unwrap();
-        assert!(stop.contains("kill -INT"));
+        assert!(stop.contains("\"action\":\"stop\""));
         assert!(rosbag_remote_command(&profile(""), "delete").is_err());
 
         assert_eq!(
             parse_rosbag_status("noise\nSTARTED|42|/home/robot/robot-console-bags/run\n").unwrap(),
             RosbagStatus {
+                receipt: None,
                 recording: true,
                 pid: 42,
                 output_path: "/home/robot/robot-console-bags/run".into(),
@@ -1956,6 +1847,7 @@ mod tests {
         assert_eq!(
             parse_rosbag_status("STOPPED|0|/home/robot/robot-console-bags/run\n").unwrap(),
             RosbagStatus {
+                receipt: None,
                 recording: false,
                 pid: 0,
                 output_path: "/home/robot/robot-console-bags/run".into(),
@@ -1966,6 +1858,34 @@ mod tests {
     }
 
     #[test]
+    fn bag_stop_preserves_pid_until_the_managed_process_exits() {
+        let output=std::process::Command::new("python3").arg("tests/test_bag_remote.py")
+            .current_dir(env!("CARGO_MANIFEST_DIR")).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
+        assert!(output.status.success(),"{}{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn bag_status_probes_do_not_create_directories_or_change_pid_records() {
+        let root=std::env::temp_dir().join(format!("bag-status-readonly-{}",std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for (name,command) in [("rosbag",rosbag_remote_command(&profile(""),"status").unwrap()),("rosbag-play",rosbag_play_remote_command(&profile(""),"status","").unwrap())] {
+            let body=&command;
+            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
+            assert!(output.status.success());assert!(String::from_utf8_lossy(&output.stdout).starts_with("IDLE|0|"));
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(),0);
+            let cache=root.join(".cache/robot-console");std::fs::create_dir_all(&cache).unwrap();
+            let pid=cache.join(format!("{name}.pid"));let path=cache.join(format!("{name}.path"));
+            std::fs::write(&pid,"invalid-pid\n").unwrap();std::fs::write(&path,"bags/retained\n").unwrap();
+            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
+            assert!(output.status.success());assert!(String::from_utf8_lossy(&output.stdout).starts_with("IDLE|0|bags/retained\nROBOT_CONSOLE_BAG_RECEIPT="));
+            assert_eq!(std::fs::read_to_string(&pid).unwrap(),"invalid-pid\n");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(),"bags/retained\n");
+            std::fs::remove_dir_all(root.join(".cache")).unwrap();
+        }
+        std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
     fn builds_and_parses_rosbag_playback_commands() {
         let start = rosbag_play_remote_command(
             &profile(""),
@@ -1973,12 +1893,13 @@ mod tests {
             "robot-console-bags/robot-console-demo",
         )
         .unwrap();
-        assert!(start.contains("ROS_DOMAIN_ID=0 nohup ros2 bag play"));
+        assert!(start.contains("\"kind\":\"play\""));
+        assert!(start.contains("\"domain\":0"));
         assert!(start.contains("robot-console-bags/robot-console-demo"));
-        assert!(start.contains("rosbag-play.pid"));
+        assert!(start.len() <= 32768);
         assert!(start.contains("--clock"));
         let stop = rosbag_play_remote_command(&profile(""), "stop", "").unwrap();
-        assert!(stop.contains("kill -INT"));
+        assert!(stop.contains("\"action\":\"stop\""));
         assert!(rosbag_play_remote_command(&profile(""), "start", "bad;rm").is_err());
         assert!(rosbag_play_remote_command(&profile(""), "delete", "").is_err());
 
@@ -1988,6 +1909,7 @@ mod tests {
             )
             .unwrap(),
             RosbagPlayStatus {
+                receipt: None,
                 playing: true,
                 pid: 9,
                 bag_path: "/home/robot/robot-console-bags/run".into(),
@@ -1997,6 +1919,7 @@ mod tests {
         assert_eq!(
             parse_rosbag_play_status("STOPPED|0|/home/robot/robot-console-bags/run\n").unwrap(),
             RosbagPlayStatus {
+                receipt: None,
                 playing: false,
                 pid: 0,
                 bag_path: "/home/robot/robot-console-bags/run".into(),
@@ -2288,6 +2211,14 @@ __BYID_SEP__\n\
         let output = run_status("Project/missing/install/setup.bash");
         assert!(output.contains(&format!("WORKSPACE={}", legacy.display())));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn all_arm_mode_commands_fit_the_bound_single_submission_journal() {
+        for mode in ["teleop", "trajectory", "vla", "teaching", "moveit", "realsense", "stop", "disable-stop"] {
+            let remote = arm_mode_remote_command(&profile(""), mode).unwrap();
+            assert!(session::controller_journal::Job::new(session::controller_journal::new_arm_id().unwrap(), remote).is_ok(), "{mode}");
+        }
     }
 
     #[test]

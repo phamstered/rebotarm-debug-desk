@@ -1,0 +1,708 @@
+# 多窗口实现与验收记录
+
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)，交付 PR：[#269](https://github.com/phamstered/rebotarm-debug-desk/pull/269)。九页面拆收、原生共享会话、公共查询、任务归属与恢复、Monitor 历史及版本化编辑已实现。正式应用已安装，生产 Bridge 已更新并完成只读核验。以下保留开发过程及最终验收证据；早期“未实现 / 待验证”描述仅代表当时状态，当前结论以本节索引和末尾交付记录为准。外接屏拔插按用户说明延期，隔离模拟测试不等于实机运动验收。CI 与合并状态以 PR 当前检查为准。
+
+## 当前验收索引
+
+下文按开发时间保留证据，旧段落中的“待完成”只代表当时状态。当前按 Issue #260 原验收范围核对：
+
+| 验收项 | 已有证据 | 仍未证明的部分 |
+| --- | --- | --- |
+| 九页面单实例、拆收、状态保留、布局恢复 | 原生九窗口、手眼 50 次迁移、窄窗口滚动、迁移/回滚失败恢复及启动布局恢复实测 | 外接屏拔插按用户说明延期；不能以坐标约束单测替代真实拔屏 |
+| 一个 Rust 上游会话、订阅合并、主窗口不作数据中转 | 九窗口连接的 TCP 数与 ROS 订阅计数、主窗口隐藏后持续收帧；Release 双消费者及主窗口重载保持同一 TCP/订阅 | 九窗口 30 分钟指标仍来自旧 Debug 候选包 |
+| 任务独立于页面、冲突互斥、断线代次和恢复记录 | 各类任务状态机、持久化与 loopback 回归；Controller/JTC/Joint4 等隔离 ROS 验证；Release 原生重载及未知任务阻止迁移复测 | 模拟恢复记录不等于实机任务终态核验 |
+| 有界图像/点云分发、共享资源、Monitor 历史 | 九窗口 30 分钟记录、两次慢消费者实验、帧龄区间、缓存及队列回归 | 测量来自旧 Debug 候选包和模拟数据，不是 Release 长期性能保证 |
+| 外部活动跨连接隔离 | 共享观察绑定连接 Profile/epoch，换连接重置；迟到回复及本桌面任务身份由回归验证 | 不接管任意外部进程、不保证其他客户端全局互斥；不能把观察当成本桌面所有权 |
+| 全量测试、构建、CI、合并和安装 | 各阶段本机全量测试、ROS 测试和候选包记录见末尾；正式应用已安装、签名/哈希及离线启动通过；生产 Bridge 的进程、hello 及硬件反馈核验通过 | CI/合并状态以 PR #269 当前检查为准；不跳过必要检查 |
+
+未知任务历史不构成结束证据；当前保留占用且不重放。这是已实现的失败处理边界，不声称能从被删除的 Bridge 历史恢复终态。继续验收时应验证这些提示和停止入口，不通过清空记录来伪造任务完成。
+
+## 完整交付范围
+
+九个导航页面均可拆出、聚焦、收回，关闭保留数据；每个功能一个实例。所有窗口共享一个 Rust 管理的 Bridge WebSocket 与 SSH 隧道，公共轮询、订阅、任务协调和缓存独立于主窗口生命周期。副屏失焦不暂停展示；隐藏窗口停止绘制，任务按既有安全规则处理。运动或采样进行中禁止迁移相应页面。恢复窗口布局但不恢复运动授权。
+
+图像、点云保持二进制，按兴趣分发和最新帧覆盖；ACK、故障、任务终态可靠交付。Monitor 采集与显示分离；模型资源共用字节缓存，场景只在实际展示窗口创建。所有既有反馈、控制器、时钟、限位及现场确认门禁继续有效。
+
+## 已编写的基础模块
+
+`src-tauri/src/session/`：
+
+- `transport.rs`：原生 loopback WebSocket 客户端，hello 核验、请求关联、取消/DISABLE 保留容量、断连与超时清理，不自动重试未知执行结果。通过 runtime/ipc 接入桌面，连接入口只使用 SSH session 返回的实际端口。
+- `wire.rs`：保留 RCI1/RCR1/RCD1/RCT1 二进制帧，核验元数据类型与长度，不把图像转换成 Base64。
+- `delivery.rs`：每窗口有界队列，可靠消息优先，预览每流最多保留一帧。可靠队列溢出返回明确错误，由调用方处理窗口失联，不能静默丢弃 ACK。IPC 已采用单个在途拉取，不把积压转移到 WebView Channel 内部。
+- `subscriptions.rs`：按窗口代次和组件消费者引用合并 Topic 订阅；每个 Topic 串行等待上游 ACK；区分期望订阅与已确认订阅。关闭/重开窗口期间旧响应不重新授权新窗口。当前 Bridge 仅支持 Image unsubscribe，普通 Topic 最后消费者离开后不再分发，但保留上游订阅至会话断开。
+- `windows.rs`：九页面窗口白名单、窗口 incarnation 核验、窗口恢复位置约束。窗口身份必须来自 Tauri 实际调用窗口，不能只信任前端传入 token。
+
+- `runtime.rs` / `ipc.rs` 与 `nativeBridgeLogic.ts`：真实调用窗口鉴权、共享连接、按消费者合并订阅、独立 ACK 请求和有界长轮询；跨 IPC 帧龄保留。原生帧二进制头为 17 字节，见协议。URDF 在订阅 ACK 前到达也会保留，并支持后加入窗口复用。
+
+## 待接入和验收
+
+1. 原生会话与前端适配器已接通并有跨窗口模拟测试。后续必须补全窗口异常退出时的任务所有权/安全停止；原生共享资源缓存与 Monitor 独立历史已接入，Monitor 在最新帧合并前保存有界采样历史。
+2. Agent、USB、arm mode、Controller、Topics、clock、Motion、Pick、bag recording、bag playback、Episode 采集十一项公共状态/轮询已移到原生会话。其他任务生命周期和完整共享配置仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
+3. 页面路由、拆出、收回、关闭拦截已接入。采用同一个原生 WebView reparent，迁移时不复制/重建 React、样本或 GPU 场景；原生调用者鉴权也改为稳定 WebView 身份。布局持久化、工作区变化后的窗口约束及主窗口隐藏/恢复已接入；迁移失败回滚已接入并进行原生故障验证；实际拔屏、多屏仍待验证。
+4. 窗口菜单与全部九页面接入；执行/采样中禁止迁移；全局任务状态一致；主窗口关闭不终止其他窗口会话。
+5. 图像/点云和 Monitor 展示按窗口兴趣驱动；共享资源缓存已接入；刷新限流、源数据新鲜度门禁继续验收。
+6. 全量单元测试、构建、原生多窗口视觉验收；三窗口及九窗口、50 次拆收、30 分钟内存稳定性、断线/慢消费者/崩溃/外接屏验证。确认 CI 后按仓库流程合并、安装。
+
+尚未验证多窗口运行时性能；Bridge 新协议仅在独立工作区验证，未部署到正式运行进程。隔离传输测试只监听本机随机回环端口，不发布真实机器人命令。
+
+## 页面窗口接入记录
+
+- 主窗口保留导航与连接入口；每个功能按需创建唯一的 `page-*` WebView，地址为 `index.html?page=<白名单页面>`。独立窗口为 `detached-page-*`，关闭请求执行收回，不销毁页面。
+- 页面通过 `native_bridge_context` 获取共享连接代次，附着自己的消费者；断线清理实时数据、保留本页编辑内容。旧代次发现/附着结果不会写入新会话。
+- 拆收按钮展示阻止原因；手眼采样/求解、Joint4 姿态保持、Episode 采集/保存、Motor 预检/发送和运动任务报告忙状态。此处仍是前端状态上报，原生任务租约必须补齐才能保证跨窗口命令互斥及崩溃安全。
+- 主窗口 HTML 弹层覆盖期间隐藏嵌入的原生页面，独立窗口不跟随隐藏。原生页面可见状态与 document visibility 共同控制绘制，失焦本身不会暂停。
+- Motor 的隐藏/断线处理保留草稿、清除授权并发送 DISABLE；晚到预检不会重启定时发送。也修复了控制锁只改变 UI 指示而未清理定时器的问题。
+- 首次原生验证：离线手眼页把格子边长改为 16 mm、生成标定板、切换到原始尺寸 100%，拆出后再收回，三个状态均保留。随后修复独立窗口宽度沿用原父窗口的问题，并在真实原生窗口确认右侧按钮与滚动条完整；关闭独立窗口收回后仍保留 16 mm 输入。整个九页面/多屏验收尚未完成。
+- 已完成一轮全量单元测试（823 前端 / 79 Rust）和前端、独立原生 Debug bundle 构建；后续尺寸与页面安全修复需以新一轮结果为准。日志位于本机 `/tmp/260-workspace-*.log`、`/tmp/260-native-window-build.log`。
+
+
+### macOS 尺寸兼容记录
+
+本机 `tauri-runtime-wry 2.11.4` 的空 Window 在 reparent 后尚无 `has_children` 标志，`inner_size()` 会返回首个 WebView 的旧 frame。因此须在移入前读取空窗口大小，后续使用 `Resized/ScaleFactorChanged` 事件的真实尺寸。诊断曾记录新 1200 px 窗口内查询得到旧 1440 px 页面宽度，修复后已视觉复验。主窗口嵌入区域还需把 CSS viewport 换算到 WebView 原生 frame，保留 WebKit 的标题栏 inset，避免上移遮挡主窗口按钮；不硬编码标题栏高度。
+
+最新一轮全量测试：828 前端、81 Rust 和其余全量脚本通过（`/tmp/260-workspace-verified-tests.log`）；`npm run build` 日志为 `/tmp/260-workspace-verified-build.log`。原生隔离构建为 `/tmp/260-native-window-build-5.log`，正式应用尚未安装。
+
+## 共享查询接入记录
+
+- `observations.rs` 在应用会话中统一调度六个固定只读来源，查询不依赖任何 WebView；每源串行执行，快照和错误限制大小。普通并发刷新合并，操作后复查强制排在旧查询后重新发起。
+- 页面只订阅状态变更并读取快照；不同窗口的显示状态保留同一连接代次、递增版本和原始帧龄。过期处理本地执行，不发起远端请求。Controller 缓存/服务器等待与原生 IPC 等待分别计时，不能重复扣除或延长有效期。
+- 断线取消在途只读查询，三个 SSH 探测进程启用 drop 时终止，旧会话结果不能写入新连接。原生 Topics 请求也复用公共来源，避免页面初次附着重复发现。
+- 隔离测试覆盖九个消费者只产生一次查询、普通刷新合并、操作后新查询、无 WebView 时继续调度、断线取消、过期/错误、超大响应和前端旧响应隔离。全量测试日志 `/tmp/260-shared-polling-tests.log`，前端构建日志 `/tmp/260-shared-polling-build.log`。本阶段没有启动真实机械臂动作，也未更新正式安装包。
+
+## 共享资源缓存记录
+
+- `resources.rs` 把原始 RCR1 资源字节保存在 Rust 会话中，按完整 URI 与编码合并上游请求。最多 128 MiB / 512 项和 64 个在途 URI，按最近使用顺序淘汰；错误与超出单个缓存预算的响应不保留。
+- 相同资源在各窗口之间复用同一个 Rust `Arc`；桌面 BridgeClient 只合并当前在途请求，不再各自持有长期 128 MiB 字节缓存。IPC 和 GPU 场景仍有各窗口所需的工作副本，不能据此声称整个应用只有一份模型内存。
+- 单元测试覆盖九消费者、LRU 容量、队列压力、错误重试、URI 不匹配、断线取消及旧结果隔离。真实 loopback 假 Bridge 的两页面测试确认只产生一个上游资源请求，返回原始二进制。全量验证日志 `/tmp/260-resource-sharing-all-tests.log`。
+- 下一步任务所有权须先于运动轮询迁移：`position_motion_info` 在 Bridge 内续租运动，不能让应用级无条件轮询在操作页面崩溃后继续替它续租。需结合原生租约、取消/停止确认、页面失联处理一起接入。
+
+本阶段最终全量结果：837 前端 / 90 Rust 与其余全部测试通过，`npm run build` 通过（`/tmp/260-resource-sharing-build.log`）。缓存验证使用本机隔离 WebSocket，不连接生产 Jetson。
+
+## 原生任务第一阶段：Position / Pick
+
+- `tasks.rs` 在提交时登记占用，原生窗口身份、incarnation、连接代次及 command_id 关联；与拆收迁移共用互斥，消除仅依赖页面 busy 上报的竞态。尚未受理也阻止其他窗口提交执行命令；取消/DISABLE 不被占用挡住。
+- 任务来源页面的 IPC 入口维护存活时间。5 秒未继续请求/拉取、页面会话退出或队列错误后，Rust 看门狗请求取消；其他窗口的 info/status 不能替它续租。取消 ACK 不释放占用，stop_failed/未知结果保留；任务终态按编号匹配，忽略 Pick 子步骤终态和旧代次响应。
+- `command_queue.rs` 与发送器在写入前检查停止代次及任务许可。取消/DISABLE 可越过普通队列；停止之前已经排队、甚至尚未开始 poll 的旧执行请求不能在停止之后发送。迟到的原生取消不会撤销后继任务的排队许可。已发送的指令仍由 Bridge 取消和确认终态。
+- `native_task_snapshot` / `native-tasks-changed` 提供所有窗口的状态提示，不依赖主 WebView 转发。查询快照不产生远端心跳。
+- 隔离测试使用本机随机回环 WebSocket：两窗口实际验证单任务占用、拒绝代续租、所属页面退出触发取消，以及取消 ACK 后仍保持占用直到匹配终态。另覆盖未发送失败、未知受理、迁移竞争、旧响应、Pick 子任务和队列撤销。
+
+下一阶段继续完成其他任务的原生生命周期；Position 的跨连接按 command_id 查询终态及只读查询/续租分离已在下节接入。Motor/直接 JTC 轨迹/重力辨识、Controller/arm mode/Joint4/采集/手眼本地操作的完整原生生命周期尚未接入，不能据此声称全局运动互斥及崩溃安全完成。九页面布局恢复、多屏与性能验收仍按上文完整范围推进。
+
+本阶段验证：`npm test` 全部通过（840 前端、102 Rust 与其余脚本；`/tmp/260-native-task-verified-tests.log`），`npm run build` 通过（`/tmp/260-native-task-build.log`）；独立标识的 Debug Tauri bundle 构建及 `codesign --verify --deep --strict` 通过（`/tmp/260-native-task-bundle.log`）。尚未在原生窗口实际执行任务或验证新增状态提示的多窗口布局；正式应用与 Jetson 都未替换。
+
+
+## 共享运动观察、日志及任务恢复
+
+- `position_motion_observe` / `visual_pick_observe` 不刷新租约，由 Rust 分别每 1 秒 / 500 ms 统一调用。页面收到原生失效通知后读取缓存，不再各自远程轮询；离开主窗口不影响公共查询。
+- Position 用专用 command_id 心跳，Pick 用既有 status 续租；只为已受理、实际所属窗口仍存活的任务发送。慢心跳不阻塞取消，旧任务响应不能影响后继任务。断线状态通知移到 Core 锁外，避免重入死锁。
+- Bridge 保存至多 256 个 / 2 MiB 的完整 Position 终态（每项 256 KiB）；跨连接恢复必须匹配编号和状态，重启/淘汰导致未知时保留占用。恢复事件保留动作组元数据，不能以仅 busy=false 释放任务。
+- Rust 运动日志至多 5000 项 / 2 MiB，按每窗口独立游标分页；截断、跨会话、非法序号及迟到响应均覆盖测试。缓存回复计入源年龄；抓取 UI 拒绝旧缓存重置任务，夹爪旧反馈不被重新续鲜。
+- 验证环境：Mac loopback 假 Bridge；Jetson 独立 `~/easy_debug_bridge_260_motion_observe`，脚本同步、单线程 colcon 构建。ROS 测试使用测试文件明确限定的隔离域和模拟机器人，未向正式机械臂发送动作。构建保留 `-UNDEBUG`，确保 Release 测试中的 assert 生效。正式应用未更新。
+
+本阶段合入 main 的 Release 断言与时间戳溢出测试修复后，全量 `npm test` 通过（845 前端 / 114 Rust 与其余脚本），前端、文档和独立 Debug Tauri bundle 构建、codesign 核验通过。日志为本机 `/tmp/260-integrated-main-{tests,build,docs-build,bundle}.log`。Jetson 完整 `colcon build` / `colcon test` / `colcon test-result --verbose` 通过：22 tests，0 errors，0 failures，0 skipped（`/tmp/260-integrated-main-ros-build-test.log`）。修复前的一次 ROS 测试因旧测试时间戳溢出停滞并被定向终止，不计为通过。
+
+手眼页离线原生拆收验收已完成 40 次完整循环：16 mm 标定板参数、生成图片及 100% 缩放均保留。受前台焦点变化打断的批次未计数；其中一次主窗口仍显示“已在独立窗口打开”，聚焦独立窗口后内容完整。尚未完成 50 次及 30 分钟性能验收。过程中仅采样了父进程 RSS（约 119–170 MiB），不含 WebKit 子进程，不能据此声称整体内存稳定。正式应用和生产 Bridge 均未替换。
+
+合并后的 Bridge build ID `e9be0475146b` 已通过实际随机 loopback 端口验证：两类只读观察、未知任务不解锁、未知心跳不续租，以及 4 项无效字段/编号负例。验证域为 166，只启动并清理自己的临时 Bridge 进程（`/tmp/260-integrated-main-smoke.log`）。
+
+## 窗口布局及主窗口生命周期
+
+- `layout.rs` 保存带版本和大小限制的窗口偏好，原子替换文件；未知页面、未来版本、无效坐标与损坏文件不进入运行状态。只有普通窗口位置/尺寸和拆出状态持久化，不保存执行授权。应用标识隔离配置目录。
+- 主窗口关闭改为隐藏，嵌入页面收到不可见状态，独立窗口保持可用。“主窗口”按钮在采样等禁止迁移期间仍可使用；Dock Reopen 同样恢复主窗口，不收回独立页。
+- 启动时创建已保存的独立页，收到 ready 后执行已有迁移流程；暂未 ready 的状态不覆盖保存的拆出偏好。显示器工作区变化后约束普通窗口，保存坐标包含负原点和窗口装饰尺寸；最小化、最大化、全屏不覆盖普通尺寸。
+- 原生离线验证：生成标定板并设为 100%，拆出、关闭主窗口后图片及缩放仍在；从独立窗口恢复主窗口成功；退出/重开隔离应用后手眼页自动恢复为独立窗口。独立窗口右侧工具和滚动条完整。此次未验证真实连接跨主窗口关闭的连续性，也未实测多屏热插拔或修改后位置恢复。重启应用只恢复布局，不承诺恢复未保存图片/样本。
+- 最终验证：`npm test` 通过（845 前端 / 117 Rust 与其余脚本），`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 及 codesign 通过；日志 `/tmp/260-window-layout-{all-tests,build,docs-build,bundle}.log`。本阶段未修改 Bridge。完整任务仍需其他控制生命周期、Monitor 历史、共享编辑、迁移失败回滚和全部性能/多屏验收。
+
+### 迁移失败恢复
+
+拆出、收回以同一页面为事务：记录父窗口、尺寸、可见性与焦点，逐步完成迁移；失败自动恢复。恢复未完成时保留窗口和页面，显示“恢复窗口”，禁止继续拆收，允许在无执行/采样占用后重试。重试只恢复该页面，保留其他窗口随后发生的布局及 busy 变化。只有确认窗口为空才清理，清理失败也不撤销已成功收回的页面。
+
+本机原生故障注入发现两层运行库问题，已使用与锁文件同版本的 vendor 补丁，保留上游许可证与来源说明，不改全局 Cargo 缓存：
+
+- `tauri-runtime-wry 2.11.4` 原实现会先移出源列表再调用原生迁移；改为成功后转移所有权，缺失/关闭目标返回错误，处理同父窗口请求，标记目标 child-WebView 状态，消除旧 frame 干扰窗口尺寸查询。
+- `tauri 2.11.5` 原实现在 runtime 成功前修改父窗口记录。真实测试中关闭目标的延迟销毁事件会误删存活页面的 IPC 注册，出现“failed to acquire webview reference”，即使图片仍然可见。现在仅成功后提交父窗口记录。回归测试还原旧顺序确实失败（`/tmp/260-tauri-registration-before-fix.log`），修复后通过。
+
+隔离应用 `dev.easydebug.multiwindowtest` 的 Debug 构建可读取其配置目录的单次 `migration-faults.json`，正式标识/Release 构建不读取。列表最多 10 项、文件最多 2 KiB；使用后改名为 `migration-faults.consumed.json`。例如 `['detach:bounds', 'rollback:reparent']`（写入时用 JSON 双引号）会在已移动页面后触发尺寸失败，再向真正已关闭的原生窗口发出回滚请求；不是只在 native 调用前返回一个模拟错误。
+
+已在离线原生手眼页验证：生成 1200×900 标定板，输入 16 mm，缩放 100%；关闭目标引发拆出失败后可再次调用拆出；拆出和回滚双重失败显示恢复入口；恢复中途再次失败后仍可重试；收回尺寸失败回到原独立窗口；收回后的空窗口清理失败保留主窗口页面，关闭空窗口可再次清理。上述过程中输入、图片与缩放均保留。另补充失败重试的焦点恢复，使错误信息随当前承载页面的窗口显示。
+
+本阶段不宣称原生进程被杀后可保留未保存的 JS 堆，不把可见截图等同于 IPC 可继续操作。仍待全部九页面、跨显示器、持续运行性能和其他任务生命周期验收。
+
+最终原生复验：恢复中途再次失败会自动聚焦实际承载页面的窗口，错误及重试按钮直接可见；随后连续完成 **50 轮拆出＋收回（100 次迁移）**，每轮自动读取真实原生无障碍树，核对 16 mm（输入文本 `016`）、1200×900 标定板及 100% 缩放，均保留。该批操作墙钟约 127 秒，含工具调用开销，不能作为应用迁移延迟指标。保存独立窗口布局后退出并重新启动，手眼页自动恢复为独立窗口。重启只验证布局恢复，不宣称未保存表单或图片跨进程保留。
+
+最终验证：`npm test` 通过（847 前端 / 122 Rust / 2 运行库测试与全部其余脚本），`npm run build`、独立 Debug Tauri bundle 和 `codesign --verify --deep --strict` 通过；日志 `/tmp/260-migration-{verified-tests,build,bundle}.log`。原生全程离线，没有连接生产 Bridge、发送机械臂指令或覆盖 `/Applications/Robot Console.app`。此阶段不修改 Bridge，未新增 ROS 部署。
+
+## Monitor 独立历史
+
+- Rust `monitor.rs` 在预览合并前捕获选定数值 Topic，原生订阅消费者不依赖 Monitor WebView 存活。最多 64 个 Topic、8192 帧 / 8 MiB；新样本到达时淘汰距其超过 30 秒的数据。每页 256 帧 / 512 KiB，超限单帧（64 KiB）建立明确缺口。
+- 仅 Monitor 页面可配置和读取；连接代次、附着代次和独立游标校验。历史读取与普通 Bridge 消息回调分离，保留接收时刻，不向控制反馈回放历史。暂停停止采集，隐藏仅停止拉取/绘制；恢复分批补齐，截断会提示并重建曲线，配置/暂停边界重置诊断配对。
+- 修复批量订阅中某 Topic 被拒绝时其余 ACK 未结算的问题；旧连接订阅超时只能关闭原代次，不能误关已建立的新连接。
+- 实际 loopback 假 Bridge 验证 600 帧全部进入历史、预览只保留最新帧；页面退出后重开仍能读取原生保留历史，两个消费者只有一次上游订阅；断线与旧附着拒绝，订阅错误可恢复。前端覆盖迟到响应、隐藏/暂停恢复、原始帧龄、bag 倒退、截断和批量点数限制。
+- 全量 `npm test` 通过：859 前端 / 128 Rust / 2 运行库测试与全部其余脚本（`/tmp/260-monitor-all-tests.log`）；前端、文档及独立 Debug Tauri bundle 构建通过（`/tmp/260-monitor-{build,docs-build,bundle}.log`），codesign 核验通过。
+- 原生离线同时打开主窗口、手眼、Monitor，确认七张图的滚动区域与底部面板可见、暂停控件响应正常。CUA 滚轮接口报 `noWindowsAvailable`，改用实际窗口的 Page Down 完成滚动验证，进程未退出。此项不等于连接中历史补齐的原生端到端性能验收；采样完整性证据来自上述实际 WebSocket 集成测试。
+- 本阶段复查发现各 App 实例仍可能用本地持久化覆盖 Monitor 配置；下文“Monitor 版本化配置”已处理此问题。正式应用与生产 Bridge 未修改。
+
+### 收回后的离线入口
+
+原生复验发现未连接时将 Monitor 收回会回到连接表单，缺少重开刚才页面的入口。连接表单新增“返回已打开页面”，只列出原生层已创建并 ready 的页面；通过同一个 `NativeWorkspaceHost` 恢复或聚焦，不创建第二份图表/编辑器，不自动连接、不授予运动权限。切回连接表单时隐藏嵌入页，独立窗口不受影响。
+
+已在最新隔离应用实际完成“暂停 Monitor → 收回 → 返回已打开页面 → 再次拆出”，两次迁移后仍为同一七面板仪表盘且保留暂停状态；主窗口离线下拉与页面拆出按钮完整可见。全量测试 861 前端 / 128 Rust / 2 运行库测试及其余脚本通过；前端、文档、独立 Debug bundle 与 codesign 均通过，日志 `/tmp/260-offline-workspace-{all-tests,build,docs-build,bundle}.log`。此轮不连接生产机器人，不替换正式应用。
+
+## Monitor 版本化配置
+
+- `documents.rs` 增加独立于 Bridge 连接的原生写入器：固定文档键、实际 WebView 权限、大小/结构校验、版本比较、互斥内原子保存。冲突返回新快照，不自动重试旧内容；文件损坏、超限、读取或写入错误不降级为空配置覆盖。通知仅携带键和版本，原始图像/采样点不广播、不写入 Monitor 配置。
+- Monitor/Topics 首次读取时将旧 localStorage 导入 `monitor-workspace.v2.json`，多个窗口同时迁移只产生一个权威版本；其余 App 不再持续写回 Monitor 本地键。Topics 添加字段使用最新配置提交，成功后才转至 Monitor；元数据更新按稳定仪表盘/面板/序列身份保留已有采样点。整体布局替换校验发起时的版本；迟到读响应不能覆盖新快照。每个读者最多排队 32 项编辑。
+- 测试覆盖实际线程并发写入、旧版本拒绝、外部文件变更、损坏/超限文件保留、非法字段/调用者、两 React 消费者的迁移及同步、样本不进配置、失效旧读、保存失败、队列压力和被删除文件不从旧种子复活。原生测试临时目录使用独立序号，避免并行测试依赖时钟分辨率。
+- 全量 `npm test` 通过（868 前端 / 132 Rust / 2 运行库测试与其余脚本）；前端、文档、独立 Debug bundle 与 codesign 通过。日志 `/tmp/260-shared-editing-{all-tests,build,docs-build,bundle}.log`。
+- 原生离线验收：七面板配置成功迁移为 2943 字节的文件且不含 points；通过真实 Monitor 窗口改名，退出并重启后名称保留，主窗口/手眼启动不覆盖它。备份隔离配置后放入无效测试内容，真实 UI 拒绝保存、保留当前仪表盘和未保存名称；确认文件未被覆盖，恢复备份后再次保存成功，错误消失。配置测试仅触及 `dev.easydebug.multiwindowtest`，生产应用与 Bridge 未修改。Topics 到 Monitor 同步的证据为两消费者测试，本阶段没有连接机器人进行原生实时字段选择。
+
+共享编辑仍需完成：姿态库与动作组页面接入版本化写入和变更通知、脏草稿冲突提示、异步保存状态；移除旧无版本写入入口；主窗口离线 Motion 编辑入口须复用已有 Motion 页，避免第二个编辑器；其他布局偏好按所属页面写入。存储层已为 `positions` / `motion_groups` 保留旧文件路径与校验适配，但这不代表对应前端已迁移。随后继续其余原生任务生命周期、九窗口及持续运行/多屏验收，完整 Issue #260 尚未达到交付条件。
+
+
+## 姿态库与动作组共享编辑
+
+两类页面已接入 `editor_document_read/commit`，沿用原文件路径；移除无版本校验的旧读写 IPC。保存基于最新文档，仅修改指定连接的目标记录，保留其他配置。编辑和删除带记录基线，防止整份文档版本更新后仍把旧草稿覆盖回去。Status 新保存的姿态通过轻量失效通知同步到 Motion；草稿独立保留。姿态保存对话框和编辑页等待写入结果，失败展示原因，阻止重复提交和保存中的页面迁移。
+
+本阶段已完成下述全量测试和隔离原生验证。离线主窗口的重复 Motion 编辑入口及其他偏好单写者仍待后续接入；完整目标保持进行中。
+
+
+本阶段原生复验发现 Motion 拆出后可出现仅剩窗口工具栏、内容消失，重新选择页面可短暂恢复。已将原生页的可见性以 Rust 快照为准（避免 reparent 后 WebKit `document.hidden` 影响独立窗口），并把 Motion 内容的路由显示与绘制/查询活跃状态分离。真实窗口仍显示时不会因绘制暂停隐藏编辑表单；隐藏或最小化仍暂停绘制。
+
+
+四窗口启动时还捕获到一次真实原生死锁：主线程处理 `workspace_page_ready` 的事件广播，在 `WryWebviewDispatcher::eval_script` 等待父窗口 ID 锁；恢复窗口的后台线程持有同一锁，在 `reparent` 等待主线程 ACK。栈保存于 `/tmp/260-window-startup-sample.txt`。运行库修复改为先复制并释放源 ID 锁，再发送/等待迁移；主线程在迁移成功后、ACK 前提交新 ID。回归测试在临时还原旧持锁顺序时失败（`GUI event blocked by waiting caller`），修复后三项运行库测试通过；失败仍保留原父窗口，断开的响应通道返回错误。
+
+
+最终验证：`npm test` 全部通过（876 前端 / 133 Rust / 3 运行库测试与全部其余脚本，`/tmp/260-position-group-final-tests.log`）。`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 和 `codesign --verify --deep --strict` 均通过；日志 `/tmp/260-position-group-{build,docs-build,bundle}.log`。还原旧锁顺序的临时负例按预期失败，记录于 `/tmp/260-reparent-old-lock-test.log`，不影响上述最终全量结果。
+
+离线原生实测：主窗口、Motion、Monitor、手眼四窗口连续三次恢复启动成功；姿态与动作组的外部修改会拒绝旧草稿提交并保留输入，重新载入后均保存成功，且核对了实际文件；主窗口保存的姿态名称同步出现在独立 Motion。修复后切换 Motion Tab 不再丢失可见内容。未保存姿态草稿完成 12 轮收回＋拆出（24 次迁移）均保留。自动化过程中的焦点切换和 ScreenCaptureKit 中断没有计入通过次数；本轮未完成新的 50 轮连续批次，不代替此前手眼页的 50 轮记录或整体性能验收。测试数据仅位于 `dev.easydebug.multiwindowtest`，正式应用与 Jetson 未替换，未连接真实机械臂。
+
+
+## 离线 Motion 单实例入口
+
+离线姿态库及动作组按钮改用原生 Motion Host；带版本的 Tab 导航保存在 Rust 快照，覆盖懒创建和已拆出页面。姿态编辑在切换 Tab 时保持挂载。连接配置不匹配时保留原编辑并提示先同步连接；完整离线配置切换和其他任务生命周期仍待实现。
+
+
+本阶段验证：`npm test` 全部通过（879 前端 / 134 Rust / 3 运行库测试及全部其余脚本），随后 `npm run build`、`npm run docs:build` 通过；日志 `/tmp/260-offline-motion-final-{tests,build}.log`、`/tmp/260-offline-motion-docs-build.log`。独立 Debug Tauri bundle 构建和签名核验通过（`/tmp/260-offline-motion-bundle.log`）。
+
+实际离线原生窗口验证了两个管理入口聚焦同一 Motion 并选中对应 Tab；未保存姿态名称跨 Tab、返回主窗口、重新进入管理入口及收回后重新进入均保留。测试草稿随后取消，未写入正式姿态库。同一隔离应用还复验了手眼页 1200×900 标定板的放大查看、完整工具栏、原始尺寸及 Esc 返回，返回后保留 100% 缩放。未连接机器人、未替换正式应用；本轮不重复声称此前故障注入和 50 轮迁移是新增验证。全量九窗口、多屏及持续运行验收仍未完成。
+
+
+## 页面偏好写入归属
+
+App 在每个原生 WebView 中运行，因此原来各页面初始化时都会保存 Motion 标签、Topics 分栏等偏好，存在旧状态覆盖。现在 `pagePreferences.ts` 明确分配唯一写入者：Motion 保存自身标签/Controller 侧栏，Topics 保存面板/侧栏/尺寸，主窗口保存全局导航、Motion 下主导航显示及连接后跳转。主窗口即使当前选择 Motion 也不写 Motion 页的标签；页面隐藏或拆收不改变归属。浏览器单窗口保留原行为。
+
+页面内部的 MotionLayout/URDF/动作组/浮动面板和数据采集设置已经只在对应唯一页面组件挂载，继续由本页写入。此处是 UI 偏好归属，不把 localStorage 当作任务锁或控制授权。姿态/动作组/Monitor 共享文档继续使用 Rust 版本校验。完整任务生命周期和多屏验收仍未完成。
+
+
+验证结果：`npm test` 全部通过（884 前端 / 134 Rust / 3 运行库测试及其他完整脚本），`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 与严格 codesign 核验通过；日志 `/tmp/260-preferences-{all-tests,build,docs-build,bundle}.log`。回归覆盖十种页面身份的唯一写入者、旧读者更新/重开不能覆盖、存储错误，以及主窗口和手眼 App 实际挂载不写其他页面偏好。
+
+隔离原生验证：使用备份后的布局 fixture 同时恢复九个功能窗口及主窗口，逐一选择原生窗口菜单并核对真实页面内容。Motion 设为动作组、Topics 收起左侧栏后，其他窗口导航不改变它们；退出并重新启动九窗口后，两项偏好仍保留。九个功能页各完成一次收回＋拆出（18 次迁移），逐次核对页面 URL、工具栏和内容。首次 Status 收回时主窗口还在连接表单，需点击既有“返回已打开页面”才展示嵌入内容；后续八页直接展示。此事实不计为迁移失败，也不宣称离线收回已经自动切离连接表单。测试完成后退出隔离应用并恢复测试前窗口布局，九窗口布局证据保留于 `/tmp/260-preferences-nine-window-verified-layout.json`。
+
+本轮只验证离线窗口恢复、导航及拆收，未验证九窗口连接中的流量/任务、30 分钟内存、外接屏热插拔或真实电机。手眼“前往 Motion 调整姿态”目前只聚焦已有 Motion，显式切至 Robot View 的跨页面导航意图仍需接入；其他原生任务生命周期、完整离线配置切换、发布安装与 CI/PR 合并继续按完整目标推进。
+
+
+## 原生手眼采集与计算任务
+
+`local_tasks.rs` 将离线也可运行的手眼子进程纳入原生任务登记。实际 WebView 身份、请求编号与所属页面心跳关联；任务提交和原生拆收通过 Tasks 的同一互斥锁仲裁。查询者不能续租；取消/超时/原生 future 被丢弃时清理工作、保留有界元数据终态，再释放迁移占用。原始图像与计算结果只返回发起调用。前端统一包装五处采集/计算入口，在来源变化或卸载时取消，串行心跳并拒绝迟到结果。主窗口离线入口也读取状态，成功时隐藏，失败和取消显示。
+
+该阶段覆盖 capture/preview/frames 与 board/detect/solve 子进程；不把文件选择和导出对话框算作已完成原生生命周期，也不把手眼任务锁等同于其他运动任务的原生归属。完整范围仍包含 Motor/直接 JTC/重力、Controller/arm mode/Joint4/数据采集、完整离线配置切换、多屏性能及最终安装合并。
+
+
+本阶段全量 `npm test` 通过（888 前端 / 140 Rust / 3 运行库测试及全部其余脚本）；前端、文档及独立 Debug Tauri bundle 构建、严格 codesign 核验通过。日志 `/tmp/260-handeye-native-{all-tests,build,docs-build,bundle}.log`。新增测试覆盖实际本地 sleep 子进程取消后退出、原生 future 丢弃、过期/旧编号/他页面心跳拒绝、取消终态、锁释放、两线程迁移与任务提交的唯一赢家，以及前端来源切换/卸载取消、迟到结果拒绝、单个在途续租和只读观察者不续租。
+
+原生离线验收：独立手眼页面通过新增 operationId 和真实 WebView 鉴权成功生成 1200×900 标定板；完成后收回成功且图片保留，在嵌入页再次生成成功，再拆出仍正常。快速标定板任务没有用来宣称真实窗口失联/忙态竞态验收；这些路径的证据是上述原生和 React 回归测试。本轮未连接生产 Jetson、未实测远端 SSH 采集取消、未覆盖正式应用，Bridge 无变更。
+
+## 原生 Motor 连续发送任务
+
+Motor 首帧在原生写入前占用全局运动任务及本页迁移锁，发布 ACK 后仅同一 WebView 实例可续发。Rust 监视真实写入的指令流；250 ms 无新指令时在下一轮 250 ms 检查中请求 DISABLE，查询/绘制不延长指令流。窗口关闭、未知发布结果和连接丢失保留任务占用，原生层不重放运动指令。已有 Bridge 负责 DISABLE 清零及每帧新 sequence，未改机器人安全门。
+
+停止完成需要新的 HardwareStatus 同时满足 DISABLE、对应 ACK 序列、源时间推进和原生接收新鲜度。ACK 只表明发布，不是硬件关闭输出证明。Rust 为当前 statusTopic 保留原生订阅，不依赖最后一个 WebView。身份由主机、用户/SSH 端口、Bridge 远端端口、ROS domain 及命令/反馈 Topic 确定；本地转发端口变化可重连核验，另一机器人不能解锁旧任务，也不会自动向它发送 DISABLE。这里核验的是输出关闭，不宣称机械静止。
+
+本阶段全量 `npm test` 通过（889 前端 / 147 Rust / 3 运行库测试及全部其余脚本）；`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 和严格 codesign 核验通过，日志 `/tmp/260-motor-native-{all-tests,build,docs-build,bundle}.log`。实际 loopback WebSocket 集成测试验证所有页面退出后自动 DISABLE、错误序列/模式保持占用、新鲜匹配反馈释放占用，硬件订阅只建立一次且不随页面退出释放。单元测试覆盖首次拒绝、未知发布、旧响应/队列许可、流中断、重连不同机器人及新连接停止证明；前端状态读取不续发控制。
+
+本轮 CUA 仍返回 Mac 锁屏错误，已再次请求解锁；本轮构建没有完成新的真实窗口复验，不能将前序迁移验证算作本轮结果。未连接生产机械臂，未覆盖 `/Applications/Robot Console.app` 或部署 Jetson；Bridge 源码无变化。完整目标仍需直接 JTC/重力/Controller/arm mode/Joint4/采集等任务归属、离线配置切换、显式跨页导航、多屏及持续运行验证、最终发布与 PR/CI 合并。
+
+## 重力辨识原生任务（实现与验证进行中）
+
+当前未提交改动将 Gravity 纳入 Tasks：首帧前占用、实际 page-gravity 身份、编号关联、原生心跳/取消、按完整保留终态恢复。前端生成独立 command_id、拒绝旧任务结果、反馈 DONE/FAILED 不解锁、晚到 ACK 不恢复断开的执行。Bridge 新增 GravityTaskCore，在 ROS 受理前登记、保留尚无 GoalHandle 的取消、只读查询不续租、5 秒租约及连接退出取消。Action 返回后等待新鲜 HOLD/DISABLE 与六个具名关节的低速反馈，终态有界保留；异步发送异常保持未知占用，不返回可被误认为明确拒绝的 error。
+
+最新本机 npm test 通过（891 前端 / 150 Rust / 3 运行库测试及其余脚本；/tmp/260-gravity-final-tests.log）；前端和文档构建通过（/tmp/260-gravity-{build,docs-build}.log）。ROS 首轮失败发生在测试助手等待 hello 的 request_id；实际协议 hello 不带编号，已改为直接发送和读取 hello。本轮不能据此宣称 ROS 行为已经通过。
+
+目前最新 Bridge build ID 为 664d6fea7a4f。仅脚本同步至 damiao 的独立工作区 easy_debug_bridge_260_motion_observe，未重启生产 Bridge。该工作区先前两次单线程 colcon 编译已成功；最新异步异常修正仍需最终验证。当前真实在途句柄：exec 88576（单线程 colcon build 后运行 ROS_DOMAIN_ID=220、ROS_LOCALHOST_ONLY=1 的 test_gravity_task_ros.py，日志 /tmp/260-gravity-verified-ros.log）；exec 3070（独立 Debug Tauri bundle，日志 /tmp/260-gravity-bundle.log）。后续先轮询这些句柄或核验其终态，不因等待无输出重复启动。随后还需完整 colcon test、bundle 签名与代码复查、提交推送，以及前文其余完整目标。未连接真实机械臂、未安装正式应用。
+
+
+重力辨识阶段最终验证：显式 DISABLE 不允许随后 HOLD 解锁，Action 返回后重新发布三帧清零且序列递增的 DISABLE；最多每秒重试一次，核对新的固件序列和低速反馈。纯核心测试及实际隔离 ROS Action 测试覆盖此路径，并核对所有字段清零、每帧序列唯一。ROS 还覆盖受理前的占用/取消、非所属客户端不能续租、只读查询不能阻止租约过期、源时间重放不证明停稳和保留终态查询。
+
+最终 npm test 全部通过（891 前端 / 150 Rust / 3 运行库测试及全部脚本；/tmp/260-gravity-disable-tests.log）。前端由 Tauri beforeBuildCommand 再次构建，独立 Debug bundle 和严格 codesign 核验通过（/tmp/260-gravity-disable-bundle.log），文档构建通过。Jetson 独立工作区完整 colcon build、colcon test、colcon test-result --verbose 通过：24 tests、0 errors、0 failures、0 skipped（/tmp/260-gravity-disable-ros-all.log）。当前 build ID 为 ac78d78d2600，先前列出的构建/测试句柄均已完成，以上最终结果取代之前在途状态。
+
+本轮 Mac 已可操作。退出旧隔离进程、重建并启动最新隔离包后，实际生成 1200×900 标定板，切换到 100%，完成一次拆出和收回，图片及缩放保留；此项只验证离线窗口回归，不能当作实际重力辨识或多屏验收。没有连接生产机械臂，没有覆盖正式应用或重启生产 Bridge。仍待直接 JTC/Controller/arm mode/Joint4/数据采集与 bag 等生命周期、离线配置与跨页导航、多屏性能，以及最终发布、PR/CI/合并；完整目标保持进行中。
+
+
+## 解锁后的原生迁移故障复验
+
+在提交 7e03905 对应的隔离 Debug 应用中重新验证，未连接 Bridge。向独立配置目录写入单次故障 fixture：detach:bounds + rollback:reparent 后，真实原生迁移及向已关闭目标的回滚失败，页面显示“恢复窗口”；再注入 recover:bounds，恢复中途失败仍保留页面及重试入口；随后重试成功，并可再次正常拆出。另注入 dock:bounds，收回失败自动返回原独立窗口，再次收回成功。每步均读取真实原生无障碍树核验，最终回到主窗口嵌入页。
+
+全程保留 12×9、15 mm / 11.25 mm 输入、1200×900 标定板和 100% 缩放。收回失败后仍能打开图片大图，截图确认工具栏及关闭按钮完整可见，Esc 返回原页面并保留缩放。三个 fixture 均已消费，不留待触发故障文件。本轮仅追加验证记录，没有生产行为变更，未重新运行全量测试；前序全量结果不计作本轮新增验证。未覆盖正式应用、未部署或操作机械臂；完整多窗口目标仍在进行中。
+
+
+## Controller 切换原生占用与成功后核验
+
+单个/批量 Controller IPC 现在从真实 WebView 取得页面身份，核对当前 Rust 连接 Profile（本地隧道端口不参与机器人身份），在首次异步预检之前占用 Tasks 的同一运动/迁移锁。命令仅在当前连接、页面仍有效时发送一次。窗口退出前尚未发送的任务撤销；已发送的有限切换由应用层工作继续，页面退出不取消核验，也不借此放开其他执行。
+
+命令成功之后的核验使用公共查询强制刷新，要求所有 Controller 的名称、类型及 active/inactive 目标一致，旧缓存、过期值、重复名称及另一连接均不成立。短期无法核验时 IPC 在 25 秒后返回“仍在核验”，原生工作继续；同机器人/配置重连可恢复查询，其他配置只等待，不发送切换。SSH 失败或 20 秒超时保留未知占用且不重试控制；目前尚缺远端可恢复完成记录，不能将这条路径算作完整故障恢复。arm mode / Joint4 / 直接轨迹及采集等入口依旧待接入，整体目标保持进行中。
+
+本阶段最终 npm test 全部通过（892 前端 / 157 Rust / 3 运行库测试及其余脚本），日志 /tmp/260-controller-final-all-tests.log。前端、文档、独立 Debug Tauri bundle 构建及严格 codesign 核验通过，日志 /tmp/260-controller-final-{build,docs-build,bundle}.log。新增回归覆盖真实 loopback 会话的页面/配置/代次拒绝、调用 future 消失后工作继续持有占用、未发送撤销、未知结果保持锁、旧编号与伪造 Bridge 终态无效、Controller 与迁移两线程竞争，以及类型/目标状态/帧龄/重复名称校验。
+
+退出旧隔离包后启动最新构建，离线 Motion 从管理姿态库入口加载，完成一次拆出和收回，当前 Tab 与姿态库保留，未连接时执行按钮保持禁用。本轮未在真实窗口发起 Controller 切换；任务互斥和结果提示的证据来自上述测试，离线页面检查不等于实机控制验证。未安装正式应用、未部署 Bridge、未操作生产机械臂。
+
+
+## Controller 远端完成记录与 SSH 回复丢失恢复
+
+本阶段补充前一节缺少的远端记录：每个 Controller 任务分配随机编号，固定命令绑定 SHA-256；Rust 提交方法一次性消费命令内容，后续接口只能查询。远端先持久化 reserved，再由脱离 SSH 标准流的有限子进程执行，父进程退出不丢弃结果。原子记录保留 succeeded / 启动前 rejected / uncertain；恢复时核对版本、编号、摘要和结果字段。succeeded 后仍需原机器人同配置连接的新鲜 Controller 目标状态，不能用记录代替状态核验；明确 rejected 且 started=false 可释放未执行任务。
+
+SSH 回复丢失可以通过只读记录查询恢复；CLI 本身失败/超时、记录缺失或不匹配不自动解锁、不重新发送。记录保留容量为 256 项、每项 16 KiB，仅淘汰已完成的成功/启动前拒绝项。Jetson 只读检查了实际安装的 ros2controlcli switch_controllers.py，确认其成功退出来自 ControllerManager response.ok；没有调用该服务。该机制尚不提供整个桌面进程重启后的活跃任务恢复；其他控制入口、全局停止后的控制模式协调及完整性能/发布验收仍在目标范围内。
+
+最终 npm test 通过（892 前端 / 160 Rust / 3 运行库测试及全部其余脚本），日志 /tmp/260-controller-journal-final-tests.log；前端和文档构建通过。一次测试失败来自 macOS Python 在隔离 HOME 下写字节码缓存，现通过测试环境的 PYTHONDONTWRITEBYTECODE 保留“不创建目录”的原断言；定向和最终全量重跑均通过。Python helper 的 7 项进程/文件回归在 Mac 与 Jetson 临时目录均通过（/tmp/260-controller-journal-jetson.log），覆盖回复丢失、父进程退出、重复提交不执行第二次、只读查询、摘要冲突、超时/异常不误判完成、启动前拒绝、落盘先于启动、记录容量及输出边界。
+
+另以两条独立 SSH 连接验证提交回复被丢弃后可读回成功结果，重复查询不重复执行；命令只向专属临时目录写测试文件，验证后目录已清理（/tmp/260-controller-journal-ssh-recovery.log），没有调用 ROS 控制服务。Mac 当前锁屏，已请求解锁；本轮完成 npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json，日志 /tmp/260-controller-journal-native-build.log。现有隔离 .app 尚未更新，不得用于声称本轮原生 UI 已复验；正式应用、Bridge 进程与机械臂未更新或操作。完整目标仍保持进行中。
+
+
+
+## Controller 切换期间的 DISABLE 协调
+
+本阶段新增 Controller 停止意图与远端完成屏障。显式 DISABLE 立即发送，原生看门狗继续串行请求关闭输出；远端结果未知时保留任务。成功记录或明确未执行记录确认有限切换结束之后，再发送新的 DISABLE；仅这次 ACK 对应的新鲜原机器人反馈能解除占用，提前发送及迟到的旧 ACK 无效。目标 Controller 状态成功不覆盖停止意图。结果通过原生 watch 保留，后台调用返回关闭输出提示而非切换成功。支撑确认后的 disable-stop 接入同一意图；正常 safe_stop 的 RETURN 没有被提前 DISABLE 打断，其完整原生生命周期仍待后续实现。
+
+新增测试覆盖完成前后 ACK 乱序、旧动作编号、序列不足、错误模式、源时间重复、换机器人/重连、旧回调不影响后继任务、未发送撤销但用户 DISABLE 许可保留。loopback WebSocket 集成测试覆盖所有页面退出后的持续订阅、提前关闭不足以解锁、远端完成后二次 DISABLE 和新鲜反馈。没有调用真实 ROS 控制服务。
+
+本阶段最终 npm test 全部通过（892 前端 / 166 Rust / 3 运行库测试及全部其余脚本），日志 /tmp/260-controller-stop-all-tests.log。前端、文档和最新独立 Debug Tauri bundle 构建及严格 codesign 核验通过，日志 /tmp/260-controller-stop-{build,docs-build,bundle}.log。本次只有 Mac 原生任务逻辑变更，没有新的 Bridge 修改，因此未重复 ROS colcon 验证。
+
+解锁后退出旧包，重新构建并启动最新隔离应用，离线生成 1200×900 标定板并切换 100% 缩放。实际窗口验证了 detach:bounds + rollback:reparent 双重失败、recover:bounds 恢复中途失败、再次恢复成功，以及 dock:bounds 失败后回到原独立窗口、重试收回成功；每步读取原生无障碍树，图片与 12×9、15 / 11.25 mm 输入及缩放始终保留。截图确认大图工具栏和关闭按钮完整可见，Esc 返回后缩放保留。三个单次 fixture 均消费，最终停在主窗口嵌入的手眼页面。此离线窗口验收不等于实机 Controller 停止验收。
+
+未连接生产机械臂，未覆盖 /Applications/Robot Console.app，未部署或重启生产 Bridge。完整目标仍在进行中：直接 JTC、arm mode / Joint4 / 数据采集等生命周期、应用进程重启恢复、离线配置和跨页导航、多显示器与持续运行验证，以及最终安装部署、PR/CI/合并尚未完成。
+
+
+## 直接 JTC 终态验证器（接线前阶段）
+
+检查真实调用链确认：当前 UrdfViewer 已通过 MoveIt 执行，旧 onSendTrajectory 参数仅以 _onSendTrajectory 接收，App 和 Bridge 仍保留 trajectory_command。该 Topic 接口只有发布 ACK，没有 FollowJointTrajectory 的受理、取消或终态。因此不能把 ACK、名义时长经过、单个 mode=DISABLE、或普通 Controller 列表当作任务完成。
+
+现场只读 dpkg-query 得到 ros-humble-joint-trajectory-controller 2.53.1。核对 [同版本官方源码](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/joint_trajectory_controller.cpp)：validate_trajectory_msg 拒绝空 points；状态中的 time_from_start 会随内部成功保持轨迹重置，不能仅用该字段判断结束。没有向实机发送空轨迹或其他控制命令。
+
+新增 trajectory_task_core.hpp 是后续 ROS 适配器使用的纯状态机，尚未接入生产收发路径或声明 hello 能力。它在发送前预留任务；只允许尚未发送的失败直接释放；租约、反馈中断和到达超时请求关闭输出。正常完成必须在源时间和单调时间均越过末点之后，连续至少 200 ms 收到新的 JTC 末端参考、对应实际值、独立 JointState 和硬件状态。关节按名称匹配，测量 JointState 可包含额外关节，位置/速度阈值由后续适配器从受信任配置提供。发布 ACK 不输入终态判定。有限任务的输入末点必须为零速度，参考速度也必须接近零；不能将较小的持续运动参考误认作保持。
+
+取消路径保留占用，需要新 DISABLE 序列、实际低速反馈以及末点静止参考；仅输出关闭不能证明控制器已经消耗原轨迹，禁止因此解锁后重新使能。源时间重复/倒退、过期、超前、错误关节/数组、非有限值、错误模式及序列均不能证明终态。时钟代次变更保持 uncertain，不通过恢复旧代次自动解锁。保留最近 256 项结构化终态，未知编号不视为结束。
+
+该阶段仅完成确认逻辑及回归接入，未完成直接 JTC 的 ROS 订阅、发布串行化、控制器 active/限位预检、取消下发、断线租约和 Rust/前端协议接线。不能将本节的纯状态机测试称为直接轨迹已实现原生生命周期；这些仍是完整目标的待完成项。
+
+
+## 手眼到 Motion 的明确导航
+
+修复手眼页面只修改自身 Motion Tab、无法切换实际 Motion WebView 的问题。workspace_open_motion 新增 robot 意图，仅主窗口或实际 page-handeye 可发起该目标；目标 Motion 按原版本/连接键保护应用一次。手眼页面、图片和样本不重建。离线手眼入口也改用公共 NativeOfflineWorkspace，避免原固定 handeye 容器在导航后仍显示错误页面区域。测试覆盖调用者白名单、延迟/已打开目标的新旧版本、只改变 Motion、主窗口跟随选中页面和不自动连接。
+
+以上两项本轮最终验证：`npm test` 全部通过（895 前端 / 167 Rust / 3 运行库测试及全部其余脚本），日志 `/tmp/260-trajectory-nav-final-tests.log`。`npm run build`、`npm run docs:build`、独立 Debug Tauri bundle 及严格 codesign 核验通过，日志 `/tmp/260-trajectory-nav-{build,docs,bundle}.log`。Jetson 独立工作区通过完整单线程 `colcon build`、`colcon test` 和 `colcon test-result --verbose`：25 tests、0 errors、0 failures、0 skipped，日志 `/tmp/260-trajectory-core-verified-ros.log`，对应 Bridge build ID `a6e7b37e492e`。初次 GCC 构建发现新头文件依赖隐式 algorithm 引入，已补齐显式标准库头文件；以上结果来自修正及最终测试加强之后的完整重跑。
+
+退出旧隔离应用后启动最新包，实际验证离线手眼首次导航创建 Motion 并选中 Robot View；Motion 切到姿态库并拆出后，从手眼再次导航会聚焦原独立窗口并切回 Robot View。返回手眼时 1200×900 标定板、100% 缩放及 12×9、15 / 11.25 mm 输入保留。最终原生窗口状态确认未连接、Robot View 已选中、执行按钮禁用、运动确认未勾选。此次没有重新进行迁移故障注入，前一节的故障验收仍对应其注明的构建。
+
+没有连接生产机械臂，没有覆盖 `/Applications/Robot Console.app`，没有重启生产 Bridge。新增直接 JTC 验证器仍未接入运行路径；其测试不代表直接 JTC 运行生命周期已经完成。其余原生任务归属、进程重启恢复、离线配置交接、多屏持续运行验收及最终发布与 PR 合并仍在完整目标范围内。
+
+
+## rosbag 共享状态查询
+
+录制与回放从页面启动时各自读取一次，改为 Rust 会话中两个独立、串行且有界的只读源。每源查询后等待 5 秒，8 秒新鲜度包含查询耗时；失败/过期为未知，不作为 idle。实际 Motion/Topics 工具栏和 Monitor 读取同一快照，操作返回后排在旧查询之后复查。共享回放状态驱动 Monitor 的 bag 时间域，失败的停止命令不会把原生已观测的回放状态强制改为 false。
+
+只读 shell 命令不再创建目录，断线/超时取消时终止本机 SSH 探测子进程；录制/回放的变更操作保持既有行为。原生查询测试覆盖九个并发消费者、录制和回放分离、断线清空与迟到响应丢弃；前端覆盖跨窗口更新、过期/错误/恢复，以及 Motion 操作后以新共享查询而非命令返回值决定按钮。此项补齐共享查询，不代表 bag 任务的原生归属、全局并发互斥或远端进程终态恢复已完成。
+
+最终 `npm test` 全部通过：898 前端 / 169 Rust / 3 运行库测试及全部其余脚本，日志 `/tmp/260-bag-shared-final-tests.log`。`npm run build`、文档构建和 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-bag-shared-{build,docs,native-build}.log`。只读 shell 在临时 HOME 中实际执行，确认空目录不产生文件、已有无效 PID 和路径文件不被修改。首次定向 Rust 构建的序列化类型错误及原生工具栏测试定位错误已修正；以上为最终完整重跑结果。
+
+本轮 CUA 返回 Mac 锁屏错误，已请求解锁；尚未退出旧隔离应用、替换隔离 bundle 或完成本轮真实窗口复验，不将前一构建的原生验证计为本轮结果。没有安装正式应用、没有修改或部署 Bridge、没有启动录制/回放或机器人动作。仍需真实窗口复验及完整目标中的其余任务生命周期、多屏性能和最终发布验收。
+
+## rosbag 有限操作的原生归属
+
+本阶段将启动/停止请求移到应用级 worker，并复用一次性远端 journal。发送前登记真实页面/连接/完整 Profile；与迁移共用 local_operation 锁，同类录制或回放操作跨窗口互斥。未发送而页面失效可撤销；已发送后页面 IPC 消失不取消 worker。正常完成需要远端成功记录及原连接新的共享状态；未知结果保留占用且只查询、不重新提交。IPC 等待 25 秒后返回仍在核验，不代表后台任务结束。连接页、离线工作区及功能页显示保留的操作元数据。
+
+同时修复原停止脚本在 TERM 后立即删 PID 并报告 STOPPED 的问题：再次等待并检查记录 PID；仍存在则非零退出并保留文件，不作为停止完成。隔离 shell 测试将 kill / ps / sleep 替换为本地函数，验证进程拒绝退出时标记保留，以及退出后才清理；没有对真实进程发信号。
+
+此阶段尚不接管整段录制/回放运行期、进程组/启动身份或桌面进程重启恢复；有限操作核验结束后页面可迁移，不能据此宣称采集全过程的原生生命周期完成。播放与其他运动任务的完整协调也仍待后续接入。
+
+本阶段最终 `npm test` 全部通过（901 前端 / 174 Rust / 3 运行库测试及全部其余脚本），日志 `/tmp/260-bag-operation-all-tests.log`。`npm run build`、`npm run docs:build` 和独立标识的 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-bag-operation-{build,docs,native-build}.log`。新增 loopback Bridge 回归检查实际页面附着、Profile、连接与页面 incarnation；本地异步测试确认 IPC future 取消后 worker 继续持有迁移许可直至核验结束。前端覆盖共享提示、过期初读不覆盖新终态、查询失败不显示空闲。远端 journal 的既有进程回归随全量测试重跑，本阶段没有在真实 Jetson 发起 bag 操作。
+
+CUA 再次确认 Mac 处于锁屏状态；此前解锁请求仍待回复，没有重复索要。此次尚未替换隔离 .app 或进行新一轮原生窗口验证，正式应用及生产 Bridge 未更新。上述构建是二进制构建，不是安装或部署。完整目标保持进行中。
+
+## rosbag 进程身份与子进程退出确认
+
+固定 SSH helper 现在使用 Python 标准库管理远端 bag 身份。每次启动先持久化待启动标记，再创建独立会话；记录 boot ID、启动时刻、随机继承 token、ROS domain 与路径。录制和回放分别使用文件锁与记录，查询只读且不创建目录。私有目录 `~/.cache/robot-console/bag-processes-v1/` 使用 0700；旧 PID/路径文件保留兼容读取，不作为发送信号的依据。
+
+停止使用 pidfd 绑定进程后再次核验身份，先 INT 后 TERM；扫描继承 token 的进程，即使原 CLI 已退出、子进程另建 session 也不能误报停止。退出后保留身份历史，仍存活或身份未知时报错。启动后落盘失败保留 pending 标记并阻止重复启动。旧版缺少新身份的活动 bag 拒绝自动接管，须由原启动方式停止。此处并非 cgroup 隔离，不保证追踪主动清除继承标识且离开原会话的任意外部进程；桌面重启后的在途操作恢复与回放/运动完整协调仍待完成。
+
+本阶段 `npm test` 全部通过（901 前端 / 174 Rust / 3 运行库测试及其余脚本），日志 `/tmp/260-bag-identity-all-tests.log`；前端与文档构建通过。新增 10 项 Python 回归随 Rust 测试执行，覆盖 PID 重用、启动前落盘、落盘失败、并发启动、只读状态、旧版进程拒绝、回放路径、子进程以及 pidfd 再核验。Jetson 临时目录再次执行 10 项单元测试和 3 项真实 Linux 子进程测试，全部通过，日志 `/tmp/260-bag-identity-linux-final.log`；真实测试仅使用临时 Python 进程，未启动 ROS bag 或连接机械臂。首次远端测试暴露默认 umask 下共享缓存目录为 0775，已改用独立 0700 子目录并完整重跑。
+
+解锁后已退出旧隔离进程，构建并启动最新独立 Debug bundle，严格 codesign 核验通过（`/tmp/260-bag-identity-bundle.log`）。真实窗口重新生成 1200×900 标定板、切到 100%、打开大图并用 Esc 返回；工具栏及关闭按钮完整可见。再次注入 detach:bounds + rollback:reparent、recover:bounds、dock:bounds，确认失败提示、重试恢复及最终收回均正常，图片、缩放与 12×9、15 / 11.25 mm 输入保留。三个单次 fixture 均已消费。一次自动化滚动坐标定位失败后，使用 PageDown 实际滚动，截图确认底部保存按钮、尺寸核对框、图片说明与滚动条完整可见。
+
+本轮未连接 Bridge，未执行真实录制/回放或机械臂动作，没有更新正式 `/Applications/Robot Console.app` 或生产 Jetson。原生窗口回归不等于运动、实时相机或多显示器验收；完整多窗口目标仍在进行中。
+
+## 整栈模式切换的原生任务归属
+
+`start_arm_mode` 已接入 `arm_operation.rs` 应用级 worker，覆盖 Teleop / Trajectory / VLA / Teaching、MoveIt、相机重启及 stop / disable-stop。实际 Status / Motion WebView、当前 Profile 和连接附着必须匹配；Tasks 中新增 arm_mode 类型，与其他运动、Controller 和页面迁移共用占用。未提交前页面失效可撤销，提交后原生工作不随 IPC future 或窗口消失而丢弃。未经过该操作的其他入口（Joint4、Episode 采集、直接 JTC 等）仍按原待办继续接入。
+
+远端复用原子完成记录并使用 arm-mode-* 独立编号策略，命令至多 128 KiB，有限步骤最长等待 600 秒；Controller 原策略仍为 32 KiB / 20 秒。同编号只提交一次，SSH 回复丢失后仅查询。原有 arm 生命周期脚本及现场支撑确认保持不变；进度写入有界记录，原 Channel 与跨窗口共享状态读取进度。ready 标记只能进入本地 verify；远端成功记录之后，还要刷新原机器人模式和相应 Controller。MoveIt 单独启动允许外部启动的轨迹控制栈，不额外要求 Console PID。
+
+DISABLE 复用远端完成后的新确认屏障；成功目标状态不能覆盖停止意图。切换期间的已支撑退出登记关闭输出请求，并明确提示清理尚未执行，防止并发清理与启动竞争。普通 safe_stop 的 RETURN 不被预先 DISABLE 打断；已有其他运动任务时拒绝开始整栈退出。异常或超时保留未知占用，不能以进程退出或普通 idle 状态释放。桌面进程重启后的在途任务恢复、未确认结果的完整恢复，以及其余任务生命周期仍未完成，整体目标保持进行中。
+
+本阶段最终 `npm test` 通过（902 前端 / 185 Rust / 3 运行库测试与其余脚本），日志 `/tmp/260-arm-owned-release-tests.log`。新增回归覆盖真实 loopback Bridge 中的窗口全部退出后继续关闭输出、完成前后 ACK 屏障、来源页面 / Profile / 连接代次拒绝、模式与 Controller 冲突、过期 / 错误状态不释放、远端 ready 不提前完成，以及发起 future 退出后 worker 继续。远端记录 10 项测试在 Mac 和 Jetson 临时目录通过，包含单次执行、进度、不同截止期限和异常 UTF-8 输出大小边界（`/tmp/260-arm-owned-verified-jetson.log`）。全程没有调用真实 ROS 控制服务。
+
+`npm run build`、文档构建以及隔离标识的 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-arm-owned-release-build.log / /tmp/260-arm-owned-docs-final.log / /tmp/260-arm-owned-release-native.log`。本次仅构建原生二进制，没有替换隔离 .app 或正式应用，也没有部署 Bridge；未将上一轮窗口复验记作本次整栈操作实机验收。该层仍需随完整方案完成最终集成与发布验收。
+
+## Episode 采集公共状态与新隔离包复验
+
+采集状态接入第十一项原生观察源 `collection`，共享同一连接 Profile 和递增快照。每次查询结束后间隔 5 秒，查询截止 15 秒，新鲜度 20 秒包含 SSH/服务等待；没有页面时也由原生会话查询。数据采集页不再建立自己的远程定时器，失败或过期保留只读旧内容、禁用操作。启动/保存等返回后以 afterPending 强制重新查询，不直接采用命令结果作为共享当前状态。浏览器旧入口保留原行为。
+
+远端 status 不再创建采集缓存目录/锁文件或修改 manifest。已有锁时使用只读共享锁，变更持有排他锁时返回未知错误而非 idle；操作路径仍保存最后成功摘要，结束后已保存计数可读取。原检查就绪脚本、TRACK/故障/JointState 门禁及丢弃确认保留。本阶段仅接管公共查询，Episode 变更的应用级 worker、整段采集的原生迁移占用和桌面重启恢复仍待完成，不能据此宣称采集任务生命周期已交付。
+
+最终 `npm test` 全部通过（904 前端 / 186 Rust / 3 运行库测试及其余脚本），日志 `/tmp/260-collection-observe-final-tests.log`。首次全量运行出现多项无关页面测试与 worker 启动超时；未改断言或超时，使用 `caffeinate -i npm test` 完整重跑通过。前端、文档及独立 Debug Tauri bundle 构建、严格 codesign 核验通过（`/tmp/260-collection-observe-{build,docs,bundle}.log`）。新增回归覆盖共享查询、断线迟到结果、过期/错误禁用、成功后复查、只读文件路径与锁冲突。18 项 Python helper 测试同时在 Mac 与 Jetson 临时目录通过（`/tmp/260-collection-observe-jetson.log`），使用模拟服务和进程，没有调用实际 ROS 服务。
+
+本轮窗口访问恢复后，退出旧包、构建并启动最新隔离应用。生成 1200×900 标定板，切到 100% 缩放，大图工具栏与关闭按钮完整可见，Esc 返回保留缩放。重新注入 detach:bounds + rollback:reparent、recover:bounds、dock:bounds，验证失败提示、再次恢复及收回重试成功；12×9、15 / 11.25 mm、图片与缩放均保留。PageDown 后截图确认底部按钮、尺寸核对框、说明和右侧滚动条可见。三个单次 fixture 已消费，最终为主窗口嵌入手眼页。此离线回归不等于真实采集或运动验收。
+
+没有安装正式 `/Applications/Robot Console.app`，没有部署生产 Bridge、录制实际数据或发送机械臂命令。直接 JTC 接线、Joint4 / Episode 等任务生命周期、进程重启恢复、完整离线配置、多屏持续运行以及最终 PR/CI/发布仍按完整目标继续。
+
+## Episode 有限操作及录制期间的原生归属
+
+`data_collection_action` 已移除绑定 IPC future 的 AtomicBool，接入 `collection_operation.rs` 应用级 worker。真实 page-collection、Profile、附着代次在提交前校验；原生登记先于就绪检查的第一个 await，发送前再核验原身份。已发送工作不随页面消失而取消，25 秒 IPC 截止只返回“仍在核验”。所有窗口读取保留的任务摘要，未确认时按钮和原生入口都拒绝重复提交。采集任务不占全局机械臂运动槽，遥操作可继续录制。
+
+远端复用一次性 journal 的先落盘后执行规则，使用 collection-* 编号，128 KiB 命令上限和 180 秒截止；包含 shell 引号展开后的最大合法配置已有回归。helper 成功输出不含日志的回执，绑定数据集哈希、PID/启动身份、状态和计数；命令退出零但无回执不算成功。只查询恢复，不重新提交；明确未执行可以释放，非零/超时/缺失记录保留未知占用。状态查询与变更争用远端锁时，变更有限等待短查询结束，避免正常自动查询导致立即拒绝。该身份仍是当前 Linux 启动时刻，不宣称跨 Jetson 重启恢复。
+
+操作成功还需原连接的新鲜共享采集状态与回执匹配，并在当前连接 epoch 下原子确认。Start Episode 成功后继续持有迁移许可；同配置的新页面 incarnation 可以保存或丢弃，完成后释放。发送前失败不会清除前一段仍在录制的占用，旧编号、旧连接或另一个数据集不能释放当前任务。外部启动/外部状态变化的完整采集生命周期、未知结果的进一步恢复和桌面进程重启恢复尚未完成，仍在完整目标范围内。
+
+最终 `npm test` 全部通过：908 前端 / 193 Rust / 3 运行库测试及其余脚本，日志 `/tmp/260-collection-owned-verified-tests.log`。新增真实 loopback 会话测试覆盖页面/连接身份、旧代次完成拒绝，应用 worker 测试覆盖发起 future 退出后继续工作和录制占用；前端测试覆盖迟到快照、未知状态禁用及录制后允许保存。Jetson 临时目录中的 20 项采集 helper 和 13 项 journal 测试通过（`/tmp/260-collection-owned-verified-jetson.log`），包括单次执行、回复丢失恢复、回执边界与共享锁；未调用 ROS 控制或实际采集服务。开发时两项测试因 fixture 缺少完整 Profile 被正确拒绝，已补齐 fixture；最终结果来自修正及参数上限加强后的完整重跑。
+
+前端、文档与独立 Debug bundle 构建通过；最终原生构建的 beforeBuildCommand 完整执行 npm run build，日志 `/tmp/260-collection-owned-verified-bundle.log`，文档日志 `/tmp/260-collection-owned-verified-docs.log`。严格 codesign 核验通过。退出旧隔离进程后启动最新包，离线主窗口及手眼工作区正常载入，无新增任务状态错误；本轮未通过真实原生窗口执行 Episode，也未重复上一轮图片故障注入，将这些限制与测试证据分开记录。
+
+未安装正式应用，未部署生产 Bridge，未录制真实数据或操作机械臂。完整方案仍需直接 JTC 接线、Joint4、外部采集/回放协调、进程重启恢复、离线配置、多屏与持续运行，以及最终 PR/CI/安装部署验收。
+
+## a700961 隔离包的连续迁移与窄窗口验收
+
+2026-11-14 解锁后，通过 CUA 操作 `dev.easydebug.multiwindowtest` 原生应用，离线生成 1200×900 标定板，将格子边长改为测试值 16 mm，切换到原始尺寸 100%。完成 25 轮拆出与收回，共 50 次成功迁移；每一步重新读取原生可访问性树，核对 16 mm、100% 和标定板图像仍在。此计数只覆盖手眼页，不代表九页面或多显示器压力验收。
+
+随后在独立 Debug 标识的配置目录依次写入一次性 `detach:bounds + rollback:reparent`、`recover:bounds`、`dock:bounds` 故障。迁移和回滚失败后页面与恢复入口仍在；首次恢复故障后重试成功；收回失败恢复原独立页面，随后关闭独立窗口可收回主窗口。三个 fixture 已消费，测试输入、生成图和 100% 缩放均保留。
+
+实际拖动窗口边缘，从 2400×1600 截图像素缩小到约 1282×962（Retina 下约 641×481 逻辑尺寸），确认内容改为单列，右侧滚动条可用，滚动可到保存按钮、尺寸确认框、图片和底部说明。窄窗口大图的适应窗口、原始尺寸、缩放与关闭按钮完整可见，Esc 返回正常。最后恢复较大窗口并通过系统关闭按钮收回主窗口，保留全部测试状态。未使用截图结果推断实时相机或硬件行为。
+
+本轮仅补充验收记录，未改功能代码；沿用 a700961 的全量测试与构建证据，不重复声称新一轮单元测试通过。正式应用和生产 Bridge 未更新，没有连接机械臂。Joint4 的源码核对确认 `release_pose` 撤掉软保持但保留重力前馈，后续原生任务归属须分别核验姿态释放与硬件输出关闭；该接入本轮尚未实施。完整目标继续按上列范围推进。
+
+## 直接 JTC 的桌面任务归属与取消接线
+
+直接轨迹现在由 Motion 分配唯一 command_id，并在 Rust Tasks 中登记 trajectory 类型，和其他控制任务、页面迁移共用互斥。仅当前 Motion 页面可以提交；原生入口要求 Bridge hello 显式声明 trajectory_task_supported。当前 Bridge ROS 适配器仍未接入、没有声明此能力，因此开发分支暂时拒绝直接 JTC 下发，不回退到旧的仅发布 ACK 模式。这是未发布分支的中间状态，不能作为完整直接轨迹功能交付；MoveIt 入口保持原有行为。
+
+当对端支持该协议时，只有编号匹配的受理 ACK 才进入执行态；普通错误、超时及旧式 ACK 保留未知结果并请求取消，只有明确未发布的拒绝才可释放尚未受理的任务。窗口失联停止续租并取消；取消具有保留发送容量和队列撤销屏障，不能被旧任务的迟到取消影响后继任务。取消 ACK、DISABLE ACK、缺失 / 不一致终态证据不释放占用。原生终态校验对应 C++ TrajectoryTaskCore 的 target_observed / output_disabled / not_published 证据；未知状态停止续租并请求取消。
+
+所有窗口可查看直接轨迹状态并登记编号匹配的取消意图，IPC 返回不等于已停止。取消按钮防重入，迟到错误不污染后继任务；即使网络看门狗已停止，登记取消也立即通知各窗口。页面不能绕过原生入口直接发送续租或取消。重连只查询保留的完整终态，不重发运动；查询与释放均绑定原机器人、远端端口、ROS domain/setup、命令及反馈 Topic 等身份，本地隧道端口变化不影响核验，其他配置不能解锁或收到控制请求。
+
+最终 npm test 全部通过：911 前端 / 205 Rust / 3 运行库测试及其余脚本，日志 `/tmp/260-direct-native-release-tests.log`。新增真实 loopback WebSocket 回归覆盖能力拒绝、实际页面归属、ACK 后持锁、最后页面退出后取消以及证据终态释放；纯状态机覆盖回复丢失、未知状态、未发送取消、迟到取消、迁移 / 运动冲突和原连接恢复。开发时一个假 Bridge 测试提前丢弃事件 sender 导致 socket 关闭，已修正测试生命周期并全量重跑，没有弱化断言。
+
+前端构建与文档构建通过（`/tmp/260-direct-native-build.log`、`/tmp/260-direct-native-docs.log`）。`npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过（`/tmp/260-direct-native-tauri.log`），这是原生二进制构建，未替换隔离 .app、正式安装包或生产 Bridge。CUA 返回 Mac 锁屏，新增取消按钮本轮仅有组件和原生运行链路测试，没有原生窗口 / ROS 实机验证；前轮的图片迁移验收不冒充本轮证据。
+
+完整目标继续包含直接 JTC ROS 适配器和隔离端到端、Joint4、外部采集 / 回放协调、桌面重启恢复、离线配置交接、多屏及持续运行，最后完成 PR/CI/安装部署。此次没有发布物理控制命令。
+
+
+## 离线配置交接与跨配置草稿保留
+
+主窗口的离线姿态库、动作组和手眼入口先提交 `native_offline_profile`，再导航原有功能页。原生保留完整 Profile（包括 RGBD 字段），维护独立 `profile_revision`，与连接握手串行；离线配置不能覆盖活动 socket。实际变化在 Tasks 同一互斥内检查运动、未确认任务、本地操作和迁移占用。同配置重开不增加版本，功能页离线时也读取共享配置，重复通知不反复清空页面。主窗口提交中禁止重复进入和连接，失败保留表单；“返回已打开页面”不提交新配置。
+
+Motion 保留最新导航，等对应配置到达后再应用，避免通知乱序时消耗导航或误切另一配置。姿态编辑器和已有动作组编辑器均按原有主机、用户名、SSH 端口标识保留本次页面会话的草稿；姿态草稿保留原记录冲突基线，重回配置不恢复删除确认。手眼样本保持既有来源隔离，不复制图像或原始样本到共享配置。未保存内容仍不承诺跨桌面进程重启保留。
+
+最终 `npm test` 全部通过：915 前端 / 208 Rust / 3 运行库测试及其余脚本（`/tmp/260-offline-profile-release-tests.log`）。覆盖离线授权及大小边界、版本、活动连接保护、任务和迁移占用、通知重入及迟到结果、按机器人恢复草稿与原基线、主窗口失败反馈。连接保护测试使用随机 loopback 假 Bridge；原生离线交接未发起连接。开发时新增 App 测试误用了未导入的 fireEvent，改用既有 userEvent 后完整重跑；最终记录来自修正和所有样式修改后的完整运行。
+
+`npm run build`、文档构建和 `npm run tauri build -- --debug --bundles app --config /tmp/260-native-window-candidate.json` 通过；日志 `/tmp/260-offline-profile-build.log`、`/tmp/260-offline-profile-docs.log`、`/tmp/260-offline-profile-bundle.log`。最新隔离包为 `Robot Console Window Test Candidate.app`，仍使用独立标识 `dev.easydebug.multiwindowtest`；严格 codesign 核验通过。旧 `Robot Console Window Test.app` 没有覆盖，启动前已退出旧隔离进程。
+
+窗口访问恢复后，通过真实 CUA 操作将主机改为 `offline-a.invalid`，离线进入手眼页，生成 1200×900 标定板、填写 16 mm、切到 100%，拆为独立窗口。主窗口改为 `offline-b.invalid` 后打开姿态库，确认 Motion 选中姿态库且显示新主机；返回独立手眼窗口，同样显示新主机，图片、输入和缩放均保留。大图截图确认工具栏与关闭按钮完整可见，Esc 返回正常；收回后 PageDown 截图确认底部 Save target、尺寸核对框、图片说明和滚动条可见。最后恢复原 `jetson` 草稿，手眼导航到已有 Motion 的 Robot View，确认未连接、运动确认未勾选、执行禁用，再返回手眼页。此次没有注入迁移故障或重复性能压力测试；姿态草稿的两个配置往返及冲突基线由组件回归验证。
+
+正式 `/Applications/Robot Console.app` 与生产 Bridge 未更新，没有连接机械臂或执行真实动作。完整方案继续包含直接 JTC ROS 适配器、Joint4、外部采集/回放协调、未知任务和桌面重启恢复、多屏与持续运行验收，以及最终 PR/CI/合并和正式安装部署。
+
+## 直接 JTC 的 Bridge ROS 接线
+
+直接轨迹已接入 PositionMotion 的互斥 ROS 回调组，复用模型、Controller Registry、JTC、JointState、HardwareStatus 和时钟监控。仅有可选编译依赖的构建声明 `trajectory_task_supported`；旧发布转发入口已移除。支持 arm/gripper 两个固定控制器、完整关节集合和最多 64 点；拒绝重复/未知字段、非有限值、纳秒量化后不递增时间、过期源时间戳、非零末点速度及超出模型/请求样条界限的输入。夹爪独立反馈按任务保存的标定换算成米。没有调用 MoveIt Action，但模型仍由 `/move_group` 参数提供。
+
+Socket 控制入口串行受理；排队开始也计入 busy，直接发布与排队取消、断连、DISABLE 共用撤销锁。发布前拒绝保存 `not_published` 终态；重复活动/已记录编号不能覆盖旧结果。发布异常只进入取消/结果未确认。租约、停止和最终反馈由已有纯状态机驱动，取消调用现有硬件命令发布器和共享 sequence 分配器发送三帧清零 DISABLE，不发送空 JTC 轨迹。旧轨迹时长未结束、缺失 JTC 静止末点参考、独立测量未停稳或固件序列未确认时均不释放占用。跨连接查询最多保留 256 个完整终态，未知不作为空闲证据。
+
+本阶段的 ROS 集成测试使用 `ROS_DOMAIN_ID=221`、`ROS_LOCALHOST_ONLY=1` 和模拟 ROS 发布者，不是真实 JTC / 硬件。首段校验依赖收到的反馈快照；真实 JTC 在控制更新时选取起始状态/时间，因此这不等于控制器内实时动态限幅，详见协议中的上游源码说明。真实 JTC 首段与接收延迟验证仍属未完成边界。
+
+原生窗口在用户解锁后确认旧隔离候选包的手眼页仍保留 16 mm、1200×900 标定板和 100% 缩放，处于未连接状态。本轮新包构建后准备退出旧包时 CUA 再次报告 Mac 锁屏；没有完成新包重开验证，也没有把此前窗口验收当作新包证据。正式应用和生产 Bridge 均未替换。
+
+最终 `npm test` 通过：915 前端、208 Rust、3 运行库及其余脚本，新增协议边界测试已进入默认测试入口（`/tmp/260-direct-adapter-verified-tests.log`）。前端、文档、独立 Debug `.app` 构建和严格 codesign 核验通过（`/tmp/260-direct-adapter-verified-{build,docs,bundle}.log`）。后续仅补充了注释、文档和对应生成的 build ID，没有新增功能改动；最新隔离包包含最终 build ID。
+
+Jetson 使用部署脚本同步独立 `~/easy_debug_bridge_260_motion_observe`，最终以 `MAKEFLAGS="-j1 -l1" CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1` 构建，完整 `colcon test` 和 `colcon test-result --verbose` 通过：27 tests，0 errors，0 failures，0 skipped（`/tmp/260-direct-adapter-verified-ros.log`）。首轮定向测试因模拟 DISABLE 订阅采用 reliable、与 Bridge best-effort 不兼容而失败；修正模拟订阅后重新测试，没有修改生产 QoS 或放宽断言。新增 ROS 覆盖源时间戳过期、重复编号、限幅拒绝、夹爪单位、缺失末点参考不解锁、断连取消、只读轮询不续租和保留终态。
+
+另起并清理了独立域 221、随机回环端口的临时安装二进制进程，实际 `hello` 返回 build ID `071d637c39f5` 与 `trajectory_task_supported:true`；未知任务保持非终态，白名单拒绝可按编号恢复 `not_published`（`/tmp/260-direct-adapter-hello-smoke.log`）。这不是生产进程重启或部署。完整目标仍包括 Joint4、外部采集/回放协调、未知任务和桌面重启恢复、真实 JTC 边界、多屏及持续运行，以及最终 PR/CI/合并和正式安装部署；当前目标保持进行中。
+
+## Joint4 原生任务归属与服务协议接入
+
+`call_joint4_calibration_service` 已移除 SSH 直调，改为实际 `page-calibration`、当前 Profile / 附着代次校验后登记共享任务，再由应用 worker 发送 Bridge 请求。未发送时取消可撤销写入许可；已发送工作不随 IPC future 退出而丢弃。Begin 的服务 ACK 不释放姿态任务；Capture 必须属于同一页面已受理的 Begin，包含独立操作编号且至多一个在途请求。Release 先登记意图，取消有保留容量并撤销之前排队的 Begin/Capture。页面失联停止续租并请求释放，未知结果不自动重发服务。
+
+原生层区分 `pose_released` 与 `output_disabled`，前者仍保留重力前馈；取消 ACK 不等于上述任一证据。只有动作、编号、连接及证据一致的终态可以解除任务占用；重连只查询原机器人配置的保留结果。前端保留托住/手离开确认，等待 Begin/Capture 时可在托住确认后请求 Release，迟到响应不覆盖释放提示或写入另一 Profile。全局状态显示 Joint4 归属，普通查询不代为续租。
+
+本阶段仅完成桌面发送与消费契约，**当前 Bridge 尚未实现 `joint4_task_supported`、ROS 服务串行/去重和反馈核验适配器**。桌面显式拒绝缺少能力的 Bridge，不回退 SSH；此开发中间状态不能发布为可用的 Joint4 实机功能。完整目标继续包含该 ROS 接线、外部采集/回放协调、未知任务与桌面重启恢复、真实 JTC 边界、多屏及持续运行验收，以及最终 PR/CI/合并和正式安装部署。
+
+最终 `npm test` 通过：919 前端 / 219 Rust / 3 运行库测试与其余脚本（`/tmp/260-joint4-native-verified-tests.log`）。新增回归覆盖实际回环 WebSocket 中的能力/页面/配置拒绝、服务 ACK 后持有姿态、页面退出后取消及证据终态释放；状态机覆盖重复采样、迟到回执、错误动作、旧代次、队列撤销和同机器人重连查询。应用 worker 测试确认调用 future 被取消后仍能处理完成；前端回归验证等待期间 Release、取消前迟到回复隔离以及换配置/断线不写入旧样本。测试不连接真实 ROS 服务或机械臂。
+
+`npm run build`、文档构建及独立 Debug `.app` 构建通过（`/tmp/260-joint4-native-{build,docs,bundle}.log`），严格 codesign 核验通过。再次使用 CUA 选择隔离应用时，系统仍返回 Mac 锁屏；本轮没有启动新包并完成真实窗口复验，未将既有图片迁移验收记作本版本证据。正式 `/Applications/Robot Console.app` 和生产 Bridge 未替换。
+
+## Joint4 Bridge 服务适配与隔离联调
+
+Joint4 的 Begin、Capture、Release、Fit、Reset 已接入 Bridge 固定 Trigger 白名单，并声明 `joint4_task_supported`。每个姿态只有一个在途服务；取消、断线和 5 秒租约失效先登记释放意图，等迟到 Begin/Capture 返回后才调用 Release。未知服务结果不重新提交，也不假定已经释放。重复 Capture 操作编号返回原回执；同一姿态成功采样后拒绝再采。原生层区分排队与 Begin 成功，排队可以续租但不能提前 Capture。
+
+Release 终态要求服务成功后新的状态回调、独立六轴及 HardwareStatus 源时间戳持续推进并停稳 200 ms。显式 DISABLE 则要求在服务收束后重新发出的序列由固件确认；解除软保持不等于关闭重力前馈。Headerless Joint4 状态只能核验接收先后，不能证明源采样时间。直接轨迹被 Joint4/重力辨识占用拒绝时，现在保留 `not_published` 终态，避免普通错误让原生层永久等待未知结果。
+
+开发验证发现两类环境/测试问题并修正：一次增量链接使用了旧三参数对象文件（旧构建完成时间晚于新源码时间），核对源码哈希及符号后执行单线程干净构建；ROS 测试节点改用非只读属性名保存 Trigger，测试 WebSocket 按既有无 request_id 的 hello 协议匹配。没有改变生产 hello 协议或弱化断言。定向真实 Bridge 测试使用模拟服务、隔离域 222、localhost，通过迟到回复、去重、占用拒绝、租约/断线、旧反馈、Release/DISABLE 与 Fit/Reset 核验，日志 `/tmp/260-joint4-adapter-ros-retest.log`。
+
+最终本地 `npm test` 通过：919 前端 / 220 Rust / 3 运行库测试与其余脚本（`/tmp/260-joint4-adapter-final-tests.log`）。前端、文档及独立 Debug `.app` 构建通过（`/tmp/260-joint4-adapter-{build,docs,bundle}.log`），严格 codesign 核验通过。本轮两次 CUA 仍返回 Mac 锁屏；未退出旧隔离进程或重开新包，未把既有图片缩放/迁移验收计为新包证据。正式应用与生产 Bridge 未替换。
+
+隔离安装二进制的实际 hello 已读回 build ID `4df615ad577f`，Joint4 与直接轨迹能力均为 true；未知任务不返回终态，无效轨迹的 `not_published` 拒绝可读回。冒烟使用随机 loopback 端口及独立 ROS 域 223，只清理自己启动的 Bridge（`/tmp/260-joint4-adapter-smoke.log`）。生产 Joint4 状态 Topic 当前没有发布者，未声称核验了生产发布 QoS；模拟发布者 RELIABLE 与适配器 BEST_EFFORT 的实际接收兼容性已验证。
+
+最终远端单线程 `colcon build`、完整 `colcon test` 和 `colcon test-result --verbose` 通过：29 tests，0 errors，0 failures，0 skipped（`/tmp/260-joint4-adapter-colcon-final.log`）。所有 ROS 测试使用各自隔离域和模拟节点，不等于真实 Joint4/JTC 或电机验证。完整 Issue #260 仍在进行：外部采集/回放运行期、未知任务与桌面重启恢复、真实 JTC 接收延迟边界、多显示器/拔屏及九窗口持续运行验收，最终正式安装部署、PR/CI/合并均未完成。
+
+提交前移除测试辅助文件末尾空行，包内容指纹更新为 `66cee9e4c20f`；控制代码没有再改动。该最终源码重新通过全量 `npm test`、前端和独立 Debug bundle 构建、严格 codesign（`/tmp/260-joint4-adapter-publish-{tests,build,bundle}.log`）。远端重新构建后，最终安装二进制再次通过 Joint4 隔离联调和实际 hello/未知查询/拒绝历史冒烟（`/tmp/260-joint4-adapter-publish-{colcon,ros,smoke}.log`）。上述 29 项完整 colcon 测试对应清理空行前的同一控制实现；最终格式及指纹变化后仅重跑受影响的联调与冒烟，没有宣称再次执行完整 colcon 测试。
+
+
+## Bag 进程运行期归属与回放互斥
+
+录制和回放的启动 ACK 不再释放原生任务占用。远端帮助程序为进程实例生成绑定 boot、PID、启动时间及随机 token 的哈希回执；一次性 bag journal 与共享只读状态必须核验同一实例、ROS domain 和路径。运行期间由应用 worker 消费已有共享状态，不另开 SSH 轮询；停止或自然退出得到同实例的新鲜证据后才释放。断线、状态过期、配置不符和同路径替换进程均保留待确认状态，不重发启动。
+
+明确停止可以在授权页面之间转移录制归属，旧监控不能释放后继操作。状态未知时提供尝试停止入口；未提交或已证明拒绝的停止可恢复原运行实例监控，结果未知的停止继续持锁。回放与运动、Controller 切换、在线手眼采样、Episode 采集和录制原子互斥；DISABLE 和停止入口保留，离线标定板生成/求解不受全局回放互斥影响。这一阶段覆盖本桌面启动并持有的 bag 实例，尚未完成外部进程接管和桌面重启恢复。
+
+开发时全量回归发现录制入口仍用了普通本地操作许可，导致未阻止回放；已改用采样许可并保留原断言。最终完整 `npm test` 通过：920 前端 / 226 Rust / 3 运行库测试及其余脚本（`/tmp/260-bag-lifetime-verified-tests.log`）。覆盖实例替换、过期状态、快速自然退出、停止归属转移、迟到监控、并发运动/回放准入、未知状态停止按钮，以及离线计算与在线采样的区分。
+
+Jetson 临时目录中运行 11 项 bag 测试、14 项 journal 测试和 3 项 Linux 真实进程测试，全部通过（`/tmp/260-bag-lifetime-linux.log`）。真实进程用例只启动私有 Python 子进程，验证子进程存活、改变 session 的后代和 PID 身份不匹配，不运行 ROS 或机械臂；临时目录自动清理。前端、文档、独立 Debug `.app` 构建及严格 codesign 核验通过（`/tmp/260-bag-lifetime-{build,docs,bundle}.log`）。
+
+用户解锁后已退出旧隔离应用并启动最新包（实际 PID 23630，标识 `dev.easydebug.multiwindowtest`）。真实 CUA 验证了标定板大图与 Esc 返回；注入拆窗及回滚双重失败后，恢复入口保留；再次注入恢复失败后重试成功。另注入收回 bounds 失败，页面回到独立窗口，重试收回成功。全过程 1200×900 标定板、12×9 / 15 mm / 11.25 mm 参数和 100% 缩放保留。收回后 PageDown 截图确认 Save target、尺寸核对框、图片说明和右侧滚动条完整可见。故障文件已消费，应用保持未连接。当前原生窗口验证不包含真实 RGB、bag 运行或多屏拔插。
+
+正式 `/Applications/Robot Console.app` 和生产 Bridge 没有替换，本阶段没有 Bridge 包源码变更。Issue #260 继续进行：外部采集/回放协调、未知任务和桌面重启恢复、真实 JTC 接收延迟边界、多显示器/拔屏及九窗口持续运行，最终正式安装部署和 PR/CI/合并仍未完成。
+
+
+## 共享外部活动的准入与迁移保护
+
+新增 `session/activity.rs`，把现有共享 bag / Episode 查询接入 Tasks 的运动、Controller/模式切换、在线采样、回放及相关页面迁移准入。即使没有本桌面的 bag 操作记录，已观察到的回放也会阻止新增运动。缺失首帧、过期、查询失败或字段不一致不作为空闲；录制和 Episode 仍允许示教运动，待保存帧、启动/收尾阶段阻止回放。外部未托管 Episode 的 managed=false 不代表空闲。精简快照只复制三个活动源，不复制 Topics 等大对象，不增加 SSH 轮询。
+
+运动发送许可和 SSH 变更提交前再次检查，减少从准入到实际发送之间的状态变化风险。DISABLE、取消、bag 停止和 Episode 收尾入口保留；新的收尾许可允许结束已有活动，同时阻止新的回放进入，结果未知时继续持有许可。离线图片生成和页面编辑不受这项观察门禁限制，本桌面已持有任务的未知状态许可仍独立保留。
+
+新增纯状态回归覆盖活动、缺失、过期、失败、格式不一致、待保存帧及页面选择；原生共享查询测试覆盖排队后发生回放时发送许可撤销、停止可用、恢复空闲后重新准入。真实 loopback WebSocket 回归确认：无本地 bag 任务的外部回放会阻止 position_move 发布，DISABLE 仍实际到达假 Bridge，刷新为空闲后只发送一次新运动。已有 loopback 测试现在显式注入模拟 SSH 活动空闲证据，单有假 Bridge 不再自动代表没有回放；没有删除或弱化原断言。
+
+最终完整 `npm test` 通过：920 前端 / 230 Rust / 3 运行库测试及其余脚本（`/tmp/260-external-activity-final-tests.log`）。前端、文档和隔离 Debug `.app` 构建及严格 codesign 核验通过（`/tmp/260-external-activity-final-{build,docs,bundle}.log`）。新变更是原生准入逻辑，未修改页面布局；本轮没有重新启动最新隔离包进行原生 UI 验证，也未把上一版本的图片/窗口验收计作本轮证据。正式应用、生产 Bridge 和机械臂未操作；无 Bridge 包源码变更，不需本轮 ROS colcon 验证。
+
+这是共享观察准入，不会接管或自动停止外部进程。bag 仍只探测私有身份记录中的实例，任意未登记终端进程不在范围；采集状态沿用 ROS status 服务及托管 PID 的现有发现语义。远端其他客户端可在查询后启动任务，当前门禁不证明全局互斥或即时检测。断线后离线页面可编辑，外部活动的跨连接归属、桌面重启恢复、未知任务恢复、真实 JTC 接收延迟、多屏/拔屏及九窗口持续运行验收、最终安装部署与 PR/CI/合并仍未完成，Issue #260 保持进行中。
+
+## 真实 JTC 接收延迟与首段时间修复
+
+本轮在 Jetson 安装版 JTC 2.53.1 上启动独立 ControllerManager，硬件仅为 mock_components/GenericSystem，使用 ROS_DOMAIN_ID=224、ROS_LOCALHOST_ONLY=1 和临时配置。200 ms 的首段移动 0.002 m：携带发布时绝对时间戳并延迟 150 ms 发送后，测得峰值速度约 0.06549 m/s、加速度约 5.8724 m/s²；零时间戳对应约 0.015 / 0.300。实际控制器证明了绝对时间戳压缩首段的风险，而非只依据模拟发布者推断。
+
+直接轨迹现在发布零时间戳，由 JTC 消费时开始计时，Bridge 单独保留发布时间。完成和取消释放新增 desired.time_from_start 检查：必须达到末点时长，且从 controller_state 的源时间减去轨迹已运行时间推得的起点不得早于本次发布。缺失/负值/过大值、旧轨迹相同末点以及延迟消费均不能提前释放占用。原有新鲜度、独立反馈、DISABLE 序列和 200 ms 停稳检查保留；不把发布时间后的简单等待作为消费完成证据。
+
+新增 test_jtc_receipt_timing_ros.py 已进入默认 ROS CTest，启动和清理的均是自己的模拟控制器进程。Core 新增旧轨迹、延迟消费及取消路径负例；原有 ROS 适配测试明确断言发布的 header 为零，并模拟控制器的消费时间。首次临时探测只在结果 JSON 输出时遇到 ROS array 类型不能序列化，转换为普通列表后重新运行；未修改控制器行为或弱化数值断言。
+
+最终本机完整 npm test 通过：920 前端 / 230 Rust / 3 运行库及其余脚本（/tmp/260-jtc-receipt-all-tests.log）。前端、文档、独立 Debug 应用构建与严格 codesign 核验通过（/tmp/260-jtc-receipt-{build,docs,bundle}.log）。本轮没有重开最新原生包或重复布局视觉验收，不将前轮窗口验证作为当前包的新证据。
+
+通过部署脚本仅同步独立 easy_debug_bridge_260_motion_observe 工作区，随后单线程 colcon build、完整 colcon test 与 colcon test-result --verbose 全部通过：30 tests，0 errors，0 failures，0 skipped（/tmp/260-jtc-receipt-ros.log）。隔离域 223 的安装二进制冒烟核对实际 /proc/PID/exe，并读回 build ID 3de66d6c389e、直接轨迹及 Joint4 能力、未知任务非终态和拒绝历史（/tmp/260-jtc-receipt-smoke.log）；进程已清理。
+
+这一轮补足了安装版真实 JTC 的首段接收延迟验证，硬件为模拟关节，不能据此保证实机最坏调度时延或延迟期间起点不变。正式应用和生产 Bridge 没有更新。完整目标仍包括外部活动跨连接归属、未知任务与桌面重启恢复、多屏/拔屏和九窗口持续运行验收，最终安装部署、PR/CI/合并继续待完成。
+
+
+## Bag 桌面重启恢复与持久化占用
+
+bag 提交前新增 0600、版本 1、最多两个资源/48 KiB 的本地 write-ahead 文件，使用临时文件 fsync、原子 rename 和目录 fsync。记录机器人配置、原页面、原远端查询编号/摘要及已验证进程回执，不保存命令正文。原生启动先恢复占用，再初始化 Workspace；待确认任务仅在显式连接原机器人后查询原编号，不自动连接或重发。已确认运行的实例恢复原有共享状态监控；新鲜同实例退出证据和恢复记录持久化清理均成功后才释放。
+
+显式停止转移归属时保存原进程身份；停止在发送前失败或被远端证明拒绝时恢复运行检查点，重启后不会遗失原运行占用。迟到 worker 无权清理后继记录。落盘失败阻止提交；清理失败保留占用并重试。损坏、过大、版本不符、symlink 或非法字段文件保持原样并显示恢复异常，阻止新运动、在线采样、Controller 切换与 bag 启动，保留 DISABLE、显式停止和离线操作。损坏状态下的显式停止只在当前进程核验，不覆盖文件，也不解除全局恢复错误；未知远端记录仍保持待确认。
+
+完整 npm test 最终通过：921 前端 / 237 Rust / 3 运行库及其余脚本（/tmp/260-bag-recovery-final-tests.log）。新增测试覆盖提交前落盘、序列化票据禁止 submit、重启恢复占用、运行实例恢复、另一 Profile/替换实例不释放、停止失败恢复原实例、迟到终态、落盘/清理失败、私有权限、大小/字段/版本/symlink 负例，以及恢复错误不误显示为“回放停止”。初次全量通过后，真实 UI 发现错误提示前缀不准确，修正并增加前端回归后重新完整运行。最终仅清理了 types.ts 末尾空行，没有后续功能修改。
+
+前端、文档、独立 Debug .app 构建与严格 codesign 核验通过（/tmp/260-bag-recovery-final-{build,docs,bundle}.log）。真实 CUA 重启候选包，使用独立配置中的非执行模拟 ticket（offline-recovery.invalid）验证主窗口显示待恢复且不自动连接；退出后文件内容未改变。另使用明确创建的损坏模拟记录，验证应用仍启动、离线手眼页可生成 1200×900 标定板；最终包显示“任务恢复异常”，不再显示“回放停止”。测试文件移至 /tmp/260-recovery-corrupt-native-fixture.txt 后重新启动，确认无待恢复错误且保持未连接。没有修改或删除真实任务记录，未连接机械臂或运行真实 bag。
+
+前一轮 fe2e547 包在解锁后另完成了原生图片与迁移复验：大图、100% 原始尺寸与 Esc 返回正常；拆窗 bounds 与回滚 reparent 双故障后可恢复，参数/图片/缩放保留，底部保存按钮和滚动条可见（/tmp/260-unlocked-native-verification.txt）。这些是该轮包的证据，不作为本轮 bag 逻辑的实机测试。
+
+正式 /Applications/Robot Console.app 和生产 Bridge 未替换。本轮无 Bridge 包修改，不需重复 colcon 或远端部署；此前真实 JTC 隔离结果仍见上节。完整 Issue #260 仍未完成：Controller/运动/标定/采集等其他任务的桌面重启恢复、外部活动跨连接归属、多屏/拔屏与九窗口持续运行、最终 PR/CI/合并和正式安装部署继续待完成。
+
+
+## Episode 重启恢复与磁盘等待隔离
+
+Episode 变更提交前保存最多 24 KiB、0600 的版本化恢复记录，内容为原 Profile、动作、远端查询票据和运行检查点，不保存可重发命令。应用先恢复采集页迁移及回放占用，再初始化 Workspace；待确认操作只查询原远端记录，已确认运行的检查点复用共享状态。保存核验同实例且计数增加一，丢弃核验计数不变；终态清理失败继续持有占用。损坏文件保持原样并阻止新任务，满足既有条件的收尾、DISABLE 和离线计算仍可用。
+
+采集器身份由 Linux boot ID、PID 和启动计数组合哈希；结束先打开 pidfd，再核对身份和发送 SIGINT，不退回数字 PID kill。旧版启动计数身份及未托管采集器不自动跨桌面重启接管，当前会话仍允许显式操作外部采集器。当前回执尚无独立 Episode UUID，外部同实例丢弃再开始而计数不变的变化不能唯一识别；不能把这部分称为完整跨客户端生命周期协调。
+
+审查发现恢复记录 fsync 和等待记录锁可能连带占用共享连接 Core。现调整为先取得操作锁，再短暂核对连接；持久化期间释放连接锁，结束写盘后重新检查代次再发布完成。新增文件写入注入用例确认断线时仍保留占用；真实 loopback WebSocket 用例在四条记录锁竞争路径下验证 DISABLE 到达模拟 Bridge。原有原子准入、原页面身份与连接代次检查保留。
+
+最终完整 `npm test` 通过：923 前端 / 246 Rust / 3 运行库测试及 Bridge、安装、部署、手眼等其余脚本（`/tmp/260-collection-recovery-verified-tests.log`）。新增测试覆盖查询票据与写前记录、重启恢复与跨配置/实例拒绝、保存计数、未托管实例边界、损坏及落盘失败、迟到操作和记录锁竞争。Jetson 临时目录中 23 项 helper 单测及 3 项 Linux 实进程测试通过（`/tmp/260-collection-recovery-linux.log`），仅用临时 Python 子进程验证 pidfd 与身份，不运行采集器或机械臂；所有临时子进程/目录清理。
+
+`npm run build`、文档构建、隔离 Debug `.app` 构建和严格 codesign 校验通过（`/tmp/260-collection-recovery-verified-{build,docs,bundle}.log`）。用户解锁后，CUA 启动最新候选包，配置中的模拟 `offline-collection.invalid` 查询票据显示“保存 Episode · 结果未确认”，保持未连接且退出后文件内容不变；改为明确创建的损坏测试文件后，显示“任务恢复异常”，离线手眼页仍可生成 1200×900 标定板。原始尺寸 100%、大图、Esc 返回均正常。
+
+在同一候选包注入拆窗 bounds 与回滚 reparent 故障，恢复入口可用，点击恢复后页面回到主窗口；12×9、15 mm / 11.25 mm 参数、图片和 100% 缩放保留。PageDown 后截图确认底部 Save target、尺寸核对框、图片说明和右侧滚动条完整可见。模拟损坏文件已移至 `/tmp/260-collection-native-corrupt-fixture.txt`，故障注入已消费；再次重启确认无恢复错误且未连接。未覆盖真实 RGB、多屏拔插或九窗口持续连接运行。
+
+正式 `/Applications/Robot Console.app` 和生产 Bridge 未替换。本轮无 Bridge 包源码变更；远端验证仅为临时 Python 测试，无 ROS colcon 或生产部署。Issue #260 仍需其他控制任务的桌面重启恢复、外部活动跨连接归属、多屏/拔屏及九窗口持续运行验证，以及最终 PR/CI/合并与正式安装部署。
+
+## Controller 与控制环境切换的重启恢复
+
+Controller 单个/批量切换及 arm_mode 操作在提交前保存最多 24 KiB、0600 的版本化查询记录；不保存可重发命令。重启先恢复任务占用，只在用户连接原配置后查询原远端记录，不自动连接、重发或恢复运动授权。远端结束后仍需用户显式 DISABLE 和新的硬件关闭反馈；普通目标状态、旧关闭帧和 ACK 均不能单独解除恢复占用。
+
+正常终态或关闭证据成立后先冻结任务，持久化清理成功才释放迁移、运动和回放占用。文件写入不持有共享连接或 Tasks 锁；清理失败继续重试。Status 的显式 DISABLE 在等待磁盘清理时仍可发送，界面区分“请求已受理”和“环境清理完成”。损坏记录保留原文件、显示恢复异常并阻止新任务，离线图片操作仍可用。
+
+开发回归发现普通目标核验可能过早完成恢复任务，现已限制为原远端记录的完成证据。真实窗口验证另发现未连接首页和离线主工作区缺少任务提示，补齐显示及两项前端回归。最终完整 `npm test` 通过：926 前端 / 252 Rust / 3 运行库及 Bridge、安装、部署、手眼等其余脚本（`/tmp/260-finite-recovery-final-tests.log`）。新增测试覆盖落盘前提交拒绝、重启不重发、错误机器人、旧反馈、损坏文件、清理失败及迟到释放；loopback WebSocket 验证显式 DISABLE 到达模拟 Bridge，持久化期间连接锁与 Tasks 可访问。远端完成证据和硬件反馈均为模拟，不代表实机控制验证。
+
+`npm run build`、文档构建、隔离 Debug `.app` 构建及严格 codesign 核验通过（`/tmp/260-finite-recovery-final-{build,docs,bundle}.log`）。CUA 启动最终候选包，模拟 offline-finite.invalid 票据在未连接首页显示待确认，退出后文件未改变；明确创建的损坏测试记录在首页及离线工作区显示“任务恢复异常”，离线手眼页可生成 1200×900 标定板。仅该损坏测试文件移至 `/tmp/260-finite-native-corrupt-fixture.txt` 后重新启动，确认提示清除且保持未连接。
+
+正式 `/Applications/Robot Console.app` 和生产 Bridge 未替换，本轮未修改 Bridge 包。其他控制任务重启恢复、外部活动跨连接归属、多屏/拔屏及九窗口持续运行、最终 PR/CI/合并与安装仍待完成。代码审查另发现启动恢复独立窗口与恢复任务迁移占用可能相互影响，尚未完成复现，需继续核验保存的窗口布局在该情况下是否保留；不将普通拆收窗测试视为此组合场景已通过。
+
+## 启动恢复窗口与待恢复任务的协调
+
+在上节最终隔离包中复现：保存 Motion 独立窗口，同时注入自己的非执行有限控制恢复票据，启动时拆窗因任务占用被拒绝；进入“返回已打开页面”后，磁盘布局的 detached 被改为 false。任务迁移门禁正确拒绝了移动，但启动失败处理提前移除了布局保存保护。
+
+现保留待恢复页面集合，由应用工作线程检查 ready/busy 和原有 Tasks 迁移许可。任务阻止期间保留独立偏好和尺寸，在页面工具条显示等待原因；满足原有迁移条件后自动恢复。原生移动失败只尝试一次，保留偏好和手动拆出/恢复入口，避免重复移动或抢焦点。实际迁移全过程持有同一任务许可，不放开执行/采样期间的迁移约束。
+
+新增 Rust 回归验证待恢复任务在多次布局保存及重新读盘后仍保留独立偏好，同时其他页面的布局可以更新；任务结束与采样解除后可取得迁移许可，许可持有期间新控制任务不能抢占，原生失败不循环重试。前端回归覆盖等待提示、手动重试、采样阻止和成功后清除提示。最终 `npm test` 全部通过：927 前端 / 254 Rust / 3 运行库及其余脚本（`/tmp/260-startup-layout-all-tests.log`）；`npm run build`、文档、隔离原生包构建与严格 codesign 核验通过（`/tmp/260-startup-layout-{build,docs,bundle}.log`）。
+
+最终包真实 CUA 验证：同一模拟票据下，主窗口可查看 Motion 及等待原因，手动拆窗被拒绝；读盘确认 detached=true、原尺寸位置未变、任务文件字节未变。退出并移走自己的模拟票据后重启，Motion 自动恢复独立窗口且等待提示清除。另注入一次启动 detach:bounds 失败，页面回滚到主窗口，偏好仍为独立；不发生循环重试，点击“拆出窗口”成功并清除待恢复说明。故障已消费，原隔离布局从备份逐字节恢复，模拟任务文件移至 `/tmp/260-startup-layout-finite-fixture.json`。现场未连接机器人；真实控制任务在同进程完成后的自动迁移只由单元测试覆盖，不把删除模拟文件后的重启计作实机终态核验。
+
+本轮未更新正式应用或 Jetson，没有 Bridge 源码变更。完整 Issue #260 继续进行，剩余范围沿用上节；该组合场景的布局丢失问题已修复。
+
+## 九窗口共享实时数据的原生验证
+
+使用提交 `1d7bf39` 对应的隔离 Debug 候选包，在同一 Mac 恢复全部九个功能窗口和主窗口。测试连接使用 damiao 的独立 ROS_DOMAIN_ID=225、ROS_LOCALHOST_ONLY=1、loopback 28865 端口及已安装的 `easy_debug_bridge_260_motion_observe` 二进制；连接配置关闭 Bridge 自动启动。生产 Bridge PID 8367、8765 端口保持不变，未启动真实 Controller 或发送运动任务。临时发布器仅生成六轴模拟 JointState/关闭模式 HardwareStatus、简单 URDF、静态 TF、640×480 RGB/Depth/CameraInfo，不采集真实相机。
+
+临时发布器约 98 Hz 关节数据、30 Hz RGB。真实 CUA 确认九个独立窗口都在 Window 菜单中；手眼实时画面、Topics Inspector 同时显示同一 RGB，Motion Robot View 显示模型和 76,800 点点云（现场一次读数 8.3 Hz），Monitor 七面板中六个接收有界实时力矩数据，第七个因模拟输入只有六轴而无数据。新增 Topics 图像消费者前后 RGB ROS 订阅数保持 2（RGBD 接收器和普通 Image 接收器）；深度/内参各 1。`ss` 只见一个到测试 Bridge 的 WebSocket TCP 连接，Mac 只有一条对应转发隧道。
+
+通过主窗口原生关闭按钮隐藏主窗口后，Topics 仍显示共享连接及连续递增图像计数，约 30 Hz；诊断快照 `/tmp/260-nine-window-live-diagnostics.json` 已从实际 UI 导出。操作期间没有点击 Agent 重启、控制模式切换、运动授权、采样或录制。存盘对话框曾指向已有测试样本文件，已取消覆盖并核对唯一新文件名后再保存，原样本未覆盖。
+
+持续内存观察使用 `/tmp/260-window-load-sampler.py`，目标 1800 秒，每 10 秒记录候选应用、同次启动的 10 个 WebContent/GPU/Networking 进程、锁屏标记、测试 Bridge/发布器及订阅和连接数。初次发现锁屏字段名称不正确后已停止该采样器，旧记录归档为 warmup；更正 IOConsoleLocked 后启动独立正式计时，未重启应用或数据源。当前只完成前段采样，不能据此声明 30 分钟稳定性通过。RSS 求和会重复计算共享页，不等于物理内存 footprint；Debug 包数据也不等于发布包性能结论。结果文件位于 `/tmp/260-window-load-mac/`，后续必须核验 complete.json、完整采样跨度、进程身份、锁屏状态和末端实际画面，再下结论。
+
+当前只检测到内置 Color LCD，已向用户询问外接屏条件；真实多显示器和拔屏仍未验证。本轮没有生产代码变更；继续采样期间保留测试连接和临时发布器，结束后需断开测试会话、停止自己的发布器/Bridge，并从 `/tmp/260-load-original-layout.json` 恢复隔离应用原布局。正式应用、生产 Bridge 和硬件未更新。
+
+## 租约任务断线恢复的机器人身份隔离
+
+继续检查九窗口断线边界时发现，直接轨迹和 Joint4 已核验原机器人身份，但 Position/动作组、视觉抓取和重力辨识仍只依赖 command_id 与连接代次。现在统一保存提交时的连接身份，查询和终态接收都要求原主机、SSH 配置、Bridge 端口、ROS 图及命令/反馈配置匹配；本地隧道端口变化不影响恢复。排队发送前再次检查，旧任务的执行、查询、续租与取消不能流向新配置。显式 DISABLE 仍可对当前连接发送，ACK 不解除旧任务占用。
+
+新增纯状态回归覆盖三类任务与十个身份字段、缺失/旧代次身份、同编号异源终态、迟到回复、排队后换源及原配置恢复。真实 loopback WebSocket 回归先连另一模拟机器人，确认没有旧任务查询/取消/续租且 DISABLE 实际到达；再连原配置取得完整终态并解除占用。现有测试补齐显式模拟连接配置，没有删除或弱化原断言。首次全量测试有三处旧 loopback 用例缺少配置，修正测试夹具后重新完整执行通过。
+
+最终 `npm test` 通过：927 前端 / 256 Rust / 3 运行库及 Bridge、安装、部署、motion、handeye 等全部脚本（`/tmp/260-leased-identity-final-tests.log`）。前端、文档、Debug 原生编译和独立 `.app` 构建、严格 codesign 核验通过（`/tmp/260-leased-identity-{build,docs,native-compile,bundle}.log`）。新包名为 Robot Console Window Identity Test，仍使用隔离 bundle ID；尚未启动，不把正在运行旧候选包的视觉测试算作新代码的原生验证。正式应用与生产 Bridge 没有替换，本轮无 Bridge 源码变更。
+
+九窗口持续采样保持运行，旧候选包与模拟源均未重启。期间 CUA 验证实时图片的原始尺寸、大图与 Esc 返回，缩放保留；返回 Topics 后图像仍约 30 Hz。完整测试和构建与后半段采样并行，额外工作负载时段记录在 `/tmp/260-window-load-mac/workload-events.jsonl`，因此这段数据不能解释为无其他负载下的 CPU/延迟性能。完整 1800 秒结果、末端画面及临时进程清理仍待完成。用户已说明暂时没有外接屏，先完成其他验证；真实多屏/拔屏明确保留为未验证项，不再等待接屏。
+
+此修复补齐同一桌面进程的跨配置恢复隔离，不增加运动任务的跨桌面进程持久化恢复。Issue #260 继续进行，尚未按完整多窗口功能交付或安装。
+
+## 九窗口持续运行、慢消费者与渲染进程异常验证
+
+前述旧候选包（功能提交 `1d7bf39`）完成连续 1800 秒观察：174 次采样均保留原 13 个应用/WebKit 进程身份，锁屏标记均为 No，SSH 采样无错误，测试 Bridge 始终只有一个 TCP 连接，ROS 订阅数未增加。模拟源平均 RGB 29.9998 Hz、关节 97.8702 Hz；末端实际 Topics 窗口仍约 30 Hz，Motion 显示 76,800 点及约 12–15 Hz 的现场读数。结果见 `/tmp/260-window-load-mac/{complete,summary}.json`；分析脚本同时检查了 PID、启动时间、进程路径、订阅、连接及源计数单调递增。
+
+进程 RSS 合计从 3538.77 MiB 增至 4132.34 MiB，最后五分钟范围 4128.34–4132.53 MiB，说明本次有限时段的后段趋于平稳，不能据此证明长期无泄漏。RSS 合计会重复统计共享页，不是物理内存 footprint；这是 Debug 包、合成 RGB/Depth 和简单 URDF，也不是复杂模型或发布包基准。后半段同时运行过单元测试和编译，额外负载时间见 workload-events.jsonl，不把 CPU/延迟读数当作空闲机器基准。
+
+实际 Topics 的五次原生无障碍快照记录了所显示图像的源时间戳。先以持久 SSH 往返校验两端时钟，Jetson 比 Mac 快约 128.77–133.80 ms；校正后五个元数据可见帧龄区间的上界分别为 126.47、89.17、143.56、126.16、122.07 ms。快照调用前后时间共同给出区间，而不是把调用结束当作精确绘制时刻。证据 `/tmp/260-native-frame-age.json` 与 `/tmp/260-clock-comparison-persistent.json`；这不是图像像素呈现延迟，也不代表 p95 或最坏情况保证。
+
+持续观察完成后，严格核对同次启动的 WebContent PID 19625，再进行两次各 45 秒 SIGSTOP/SIGCONT 测试。首次前台为 Topics，其 AX 观察超时；采样和进程仍正常，自动 SIGCONT 后 Topics 恢复约 30 Hz。第二次先把手眼窗口置前台，再暂停同一进程：手眼大图打开、Esc 退出均响应，两次截图中的 RGB 颜色变化证明另一消费者继续更新。两段 Rust 主进程 RSS 分别为 208.30–209.13 MiB、209.47–210.17 MiB，没有随输入帧数积压增长。记录分别位于 `/tmp/260-slow-renderer/` 与 `/tmp/260-slow-renderer-handeye-foreground/`，均有 resumed.json，未留下暂停进程。
+
+随后对相同隔离渲染进程发送 SIGTERM，复现尚未修复的恢复缺陷：Topics 在 WebKit 重新加载后显示“窗口已注册”，无法重新附着原生共享连接。主窗口仍显示 SSH/Bridge 正常，其他窗口保留；这不是整条连接断开。源码核对发现 Runtime::attach 拒绝残留 WindowRegistry 注册，当前没有页面加载/渲染进程终止时的旧注册清理。修复必须使旧 incarnation 的请求和任务续租失效，保留取消及未确认任务占用，按顺序清理旧订阅，再允许新页面注册；不能简单复用旧 token 或无条件解除任务。
+
+通过主窗口明确断开后，手眼窗口显示“连接已断开”，旧 RGB 清除，图片操作禁用，离线标定板配置仍在。已恢复隔离应用原连接设置，保持未连接；退出候选包后从备份逐字节恢复原窗口布局。仅向已核对身份的临时发布器 PID 85912 发送 TERM，由其 finally 清理测试 Bridge 85918；复核二者及 28865 监听均消失，生产 Bridge PID 8367 / 127.0.0.1:8765 未改变，Mac 测试隧道也已退出。
+
+本轮为验证与记录，没有生产代码变更。渲染进程退出后的重新注册问题已被实测证实，必须修复并复测，完整目标仍未完成。外接屏拔插按用户说明暂未验证；新构建的 `4f30a5c` 隔离包仍未启动，不能把旧包的测试作为其新运行证据。
+
+## 渲染进程重载的身份清理修复（原生复测待解锁）
+
+针对上节实际复现的“窗口已注册”，新增原生页面加载与 WebKit 进程退出处理：旧窗口的请求立即失效；新页面等候旧订阅串行清理，再获得新 incarnation。连续导航或连接 epoch 改变会拒绝等待中的旧注册。其他消费者和共享连接保留；旧运动任务停止续租、请求取消，仍等待原任务的停止证据。本地标定计算没有 Bridge attachment，也会停止其子进程并等待退出后释放原生占用。
+
+特别核对了 vendor `tauri-runtime-wry` 的终止回调：自定义处理器会取代运行库默认 reload，因此应用在封锁旧文档后显式调用 `view.reload()`，保留自动重载行为。仅检查 Wry 底层回调不足以发现这个默认行为，不能据此假定系统会自行恢复页面。
+
+新增回归覆盖同源图像双消费者（旧页面失效、新身份恢复、其他窗口继续收帧、上游订阅仍去重）、连续导航与断连竞争、运动取消 ACK 不解除占用/新文档不得恢复租约，以及离线子进程退出前保留占用。定向回归初次因测试提前丢弃模拟服务器的事件发送端失败，保留该发送端生命周期后通过，未修改产品校验或弱化断言。
+
+新隔离包名为 `Robot Console Window Recovery Test.app`，使用 `dev.easydebug.multiwindowtest` 标识。真实窗口启动被 macOS 锁屏阻止，已请求解锁；修复后的 SIGTERM 恢复、实际画面及原生窗口交互尚未复测，不把构建和单元测试作为这些验收的替代。外接屏按用户说明暂不可用，拔屏恢复仍未验证。生产应用未安装更新，生产 Bridge 未部署或重启。
+
+最终代码通过 `npm test`（927 前端、260 Rust、3 运行库测试，以及 Bridge/安装/部署/运动诊断/手眼测试）、`npm run build`、`npm run docs:build`、隔离配置的 `npm run tauri build -- --debug --bundles app` 和 `codesign --verify --deep --strict`。日志位于 `/tmp/260-page-reload-{full-tests,build,docs,bundle}.log`。测试及构建过程没有修改生产应用。
+
+锁屏等待期间已清理本次 DOMAIN 225 的临时发布器 211238，由其退出处理清理 Bridge 211244；复核二者及 28866 监听消失，生产 PID 8367 / 8765 保持不变。临时源首次启动因未 source 隔离 Bridge overlay 导致 package not found；补齐 overlay 后监听正常，尚未有桌面连接，故不计作原生功能通过。
+
+## Motor 连续指令的桌面进程重启恢复
+
+原生 Motor 首条非 DISABLE 帧现在需要先持久化原连接 Profile 和任务编号，文件为 `motor-recovery-v1.json`，复用有大小限制、0600 权限、临时文件原子替换及 fsync 的恢复存储。不保存位置、速度、增益或发送授权；同一连续流后续帧不重复写盘。磁盘 I/O 在 blocking worker 中执行，不持有 Core/Tasks 锁，错误快照读取也不等待恢复文件锁。
+
+启动在 Workspace 之前恢复未确认 Motor 占用，不自动连接。用户显式连接原机器人后，仅沿用 DISABLE 关闭输出与新鲜 HardwareStatus 的确认流程；原身份不匹配时不发送自动控制。发送队列中的 Motor 帧和自动 DISABLE 在真正写出前再次核对连接身份及操作编号，显式用户 DISABLE 仍可用。核验终态后冻结任务，持久化清理成功才释放运动/迁移占用；损坏文件、落盘失败或清理失败均保留占用和可读原因。连续旧反馈不能覆盖磁盘清理错误提示。
+
+新增回归覆盖记录落盘前不能发送、重启不重发运动、七个身份字段分别变化、排队期间换连接、DISABLE ACK/旧时间戳/旧序列不释放占用、取消与落盘竞争、写入/清理失败、损坏版本/格式保留原文件、错误快照读取与 DISABLE 不被磁盘锁阻塞。真实 loopback WebSocket 验证恢复记录锁被占用时 DISABLE 到达模拟 Bridge，被取消的非 DISABLE 帧从未发布；原 Motor 端到端回归也改为经过生产持久化路径，直到反馈确认和记录清理后才解除占用。
+
+最终 `npm test` 通过：927 前端、265 Rust、3 运行库以及 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build` 与 `npm run docs:build` 通过。日志 `/tmp/260-motor-recovery-{full-tests,build,docs}.log`。模拟 WebSocket 与磁盘错误注入不是实机电机验证。本轮 CUA 确认 Mac 仍锁屏，未重复索要解锁，也未替换生产应用；原生重载恢复的真实窗口复测仍待完成。
+
+完整目标继续进行。Motor 的桌面重启恢复已接入；Position/Pick/Gravity/直接轨迹/Joint4 的进程重启恢复、外部活动跨连接归属、外接屏拔插及最终发布验收等仍需完成，不把本阶段作为整个 Issue #260 的交付。
+
+本轮隔离配置 `npm run tauri build -- --debug --bundles app --config /tmp/260-native-motor-recovery.json` 及 `codesign --verify --deep --strict` 通过，产物 `Robot Console Motor Recovery Test.app`（标识仍为 `dev.easydebug.multiwindowtest`），构建日志 `/tmp/260-motor-recovery-bundle.log`。该包未启动、未安装到 `/Applications`；不能据此宣称原生恢复交互已验收。
+
+## 其余 Bridge 运动任务的桌面进程重启恢复
+
+Position/动作组、Pick、Gravity、直接 Trajectory 和 Joint4 接入 `leased-recovery-v1.json`。首次提交前保存原页面、原连接 Profile、任务种类和编号，Joint4 另存核验终态所需的 action；不保存目标、轨迹、动作组内容、采样正文或授权。普通 Bridge IPC 和 Joint4 的应用级 Job 都必须经过持久化许可，Capture 沿用原姿态任务记录。落盘期间页面丢失或取消会使待发送指令失效；预发送失败也先清理可能已落盘的记录。
+
+启动在 Workspace 前恢复未知占用，仅在用户显式连接原配置后查询原编号，不重发动作、不恢复续租或动作组 resume。十个连接身份字段逐项隔离；直接轨迹和 Joint4 仍核对原有 evidence，嵌套结果编号、阶段和动作类型不符也不释放。通过终态核验后先冻结任务，持久化清理完成才允许新任务和迁移；迟到状态或停止错误不能覆盖清理失败。损坏、未知版本或与其他恢复记录冲突时保留文件并禁止新运动，显式 DISABLE 保持可用。
+
+新增回归覆盖五类任务及 Joint4 四种 action、动作组、首帧写前门禁、重启仅查询、错误连接与排队期间变更、旧编号/不足终态证据、磁盘写入/清理失败、取消落盘竞争及损坏/冲突记录。真实 loopback WebSocket 核验各类恢复只查询、Position 历史终态清理、未知状态继续占用，以及记录锁等待时 DISABLE 到达但已取消 Position 未发布。原 Joint4 loopback 用例现在走生产持久化路径，确认 Trigger/Capture 回执不释放姿态，原记录不被 Capture 替换，释放证据和文件清理完成后才解除占用。
+
+最终 `npm test` 通过：927 前端、272 Rust、3 运行库，以及 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build`、`npm run docs:build`、`npm run tauri build -- --debug --bundles app --config /tmp/260-native-leased-recovery.json` 和严格 codesign 校验通过。日志 `/tmp/260-leased-recovery-{full-tests,build,docs,bundle}.log`。产物 `Robot Console Leased Recovery Test.app` 使用隔离标识 `dev.easydebug.multiwindowtest`，未启动或安装到生产位置；本轮没有 Bridge 源码或 Jetson 部署变更。
+
+原生启动检查仍被 Mac 锁屏阻止，真实渲染进程退出恢复尚待解锁复测；没有重复请求解锁或等待外接屏。任务历史若已被 Bridge 丢弃，查询的普通 idle/unknown 仍不足以核验旧动作结束，当前会保留未知占用，这不是完整未知结果恢复的证明。外部活动跨连接归属、外接屏拔插、上述边界及最终 PR/CI/合并/正式安装仍需后续完成；完整 Issue #260 保持进行中。
+
+## 视觉抓取取消的原任务编号核验
+
+检查共享连接的取消路径时发现，视觉 Pick 原取消消息没有携带任务编号，迟到的旧页面请求可能取消同一共享连接上的后继任务。前端退出、开始请求异常清理及取消按钮现在都发送自身持有的 command_id；原生层在修改任务状态前核对编号，最终发送许可继续隔离后继任务。Bridge 在同一锁内核对任务编号、连接归属和登记取消；匹配已结束任务的请求不清除后续预览。开始任务时的 active/canceled 初始化也放入同一临界区。
+
+hello 新增 `visual_pick_cancel_id_supported`；原生桌面在旧 Bridge 上拒绝开始和取消 Pick，并提示升级。内部断线/DISABLE 的停止路径保留。新增回归验证旧编号、缺失/无效编号及外部连接不能取消当前模拟抓取、排队取消不能影响后继任务、旧 Bridge 不预留或发布抓取。前端测试核验按钮和离开页面均携带原编号。
+
+本机完整 `npm test` 通过：927 前端、274 Rust、3 运行库以及其余 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build`、`npm run docs:build`、隔离配置原生 bundle 构建及严格 codesign 校验通过。日志 `/tmp/260-pick-cancel-{full-tests,build,docs,bundle}.log`。产物 `Robot Console Pick Cancel Test.app` 使用隔离标识，未安装至 `/Applications`。本轮再次检查确认 Mac 锁屏，因此尚未完成新包真实窗口重载恢复复测；外接屏验证按用户说明留待设备可用时进行。
+
+通过统一部署脚本 dry-run、backup、build、verify 更新 damiao 的 `easy_debug_bridge_260_motion_observe` 独立工作区，未传 `--restart`。临时 ROS overlay 设置 `CMAKE_BUILD_PARALLEL_LEVEL=1`、`MAKEFLAGS=-j1`，以单线程完成完整构建。备份为该工作区 `backup/easy_debug_bridge-20261114-221910.tar.gz`；部署日志 `/tmp/260-pick-cancel-deploy.log`。随后完整执行 `colcon test --packages-select easy_debug_bridge --event-handlers console_direct+` 与 `colcon test-result --verbose`，30 项全部通过，0 errors / failures / skipped；日志 `/tmp/260-pick-cancel-colcon-test.log`。各 ROS 用例使用 CMake 指定的隔离域与模拟数据。
+
+实际安装路径烟测使用 ROS_DOMAIN_ID=226、ROS_LOCALHOST_ONLY=1、127.0.0.1:28867。核验 `/proc/237872/exe` 与 install 符号链接解析到同一构建二进制；hello 返回构建 ID `f2339e317dd4` 和新取消能力。仅请求 hello、observe 和缺失/错误/非法/超长编号的取消，全部负例返回 error，前后均保持相同 idle 状态；没有请求开始抓取或发送硬件命令。活动任务不受旧编号影响由前述 C++ 模拟用例覆盖，此烟测不冒充实机抓取验证。证据 `/tmp/260-pick-cancel-smoke.log`；自己的测试进程 237872 经 SIGINT 正常退出，复核端口 28867 消失，生产 PID 8367 / 8765 未变。
+
+本轮只更新隔离工作区和候选包，不代表生产部署、原生窗口全部验收或整个 Issue #260 完成；剩余边界沿用上节。
+
+## 外部活动换连接回归与 Release 候选包
+
+复核共享观察的实际语义：reader 捕获其原连接 Profile，关闭/换连接丢弃旧 epoch 的观察；新连接必须重新查询。外部活动只参与当前来源的准入，不自动创建本桌面 bag/Episode 所有权记录，也不因换连接停止远端进程。本桌面实际提交过的任务仍通过各自持久化记录绑定原机器人，不能与只读外部观察混淆。
+
+新增双 loopback 连接回归，A 的录制/回放/采集均活跃，挂起一条将返回空闲的旧查询后切换到 B。验证 B 首帧前拒绝相关迁移，B 活跃状态不会被 A 的迟到查询或旧断线通知清除，旧页面不能向 B 发送 DISABLE，而当前页面显式 DISABLE 可以到达；只有 B 的新鲜空闲状态恢复迁移。全程不创建本桌面 bag/采集/运动所有权、不自动发布运动/抓取取消。这补强跨连接隔离证据，未新增外部进程接管能力，也不证明独立客户端之间的全局互斥。
+
+`npm test` 完整通过：927 前端、275 Rust、3 运行库及其余脚本；`npm run build` 通过。日志 `/tmp/260-activity-connection-{test,full-tests,build}.log`。本轮产品源码未变，仅新增 Rust 回归及验收记录；Bridge 构建 ID 仍为 `f2339e317dd4`，沿用前一节同源码的完整 ROS 测试证据，没有重复部署。
+
+首次为当前候选代码执行非 Debug 的 `npm run tauri build -- --bundles app --config /tmp/260-native-window-release.json`，完成 Release 构建，日志 `/tmp/260-window-release-bundle.log`。产物 `src-tauri/target/release/bundle/macos/Robot Console Window Release Test.app` 通过严格 codesign 校验，Info.plist 的标识确认为 `dev.easydebug.multiwindowtest`。未启动、未安装至生产位置；不能将此前 Debug 包的实际窗口或性能数据当作此 Release 包的验收结果。
+
+本轮 CUA 再次确认 Mac 锁屏。原生渲染进程退出后重新注册、最新恢复记录与窗口布局的组合交互、Release 实际运行仍缺少证据；外接屏拔插按用户说明延期。全量自动测试和构建不能替代这些原生验收，PR/CI/合并及正式安装仍未完成，Issue #260 不宣称完成。
+
+## 解锁后的 Release 原生恢复复测与主窗口修复
+
+先使用 `505bda1` 的 Release 隔离包（应用 PID 6737）连接测试域 225、loopback 28865。临时发布器 274448 / Bridge 274462 仅提供模拟图像、关节、关闭模式 HardwareStatus 和简单 URDF，日志独立保存在远端 `/tmp/260-release-recovery/`。生产 Bridge 8367 / 8765 未替换。
+
+在创建 Topics 前记录仅主窗口和 Status 的 WebContent，确定新增 Topics 渲染进程 7409 后发送 SIGTERM。手眼另一窗口的 RGB 颜色继续变化，大图与 Esc 响应；Topics 自动重载显示“共享连接已就绪”，不再出现“窗口已注册”。其本页临时 Topic 选择被重置，重新选择后显示约 30 Hz 图像。前后同一 TCP 四元组、RGB 上游订阅数仍为 1，应用与 Bridge 进程不变。记录 `/tmp/260-release-recovery-{before,after,kill}.txt`；此验证证明页面重新附着及其他消费者存活，不声称崩溃前全部临时 UI 状态被持久化。
+
+进一步结束主 WebContent 6742，复现主窗口显示“未连接”而 Topics 仍约 30 Hz 的问题。根因是原有 `useNativePageSession` 仅用于功能页面。新增主文档一次性恢复入口：先读 native context，仅在原生会话仍连接时 attach，读取 Topics 后复核 epoch/profile_revision，再恢复 UI；不重新执行 SSH 检查/建隧道/Bridge 启动，不重放动作。恢复期间禁用新连接，失败保留明确重试入口；没有原生连接的新进程仍保持离线。主页面和功能页共用连接状态应用函数。
+
+修复后 Release 包的实际主进程为 64847，初始只创建主 WebContent 64850，随后手动连接并拆出手眼。结束 64850 后，主窗口自动恢复“已连接”和实际端口 63722，无须点击连接；SSH 子进程 64954、远端 TCP 四元组 127.0.0.1:45842 → 28865、Bridge PID 274462 和图像订阅数不变。证据 `/tmp/260-main-fixed-{initial-processes,before-kill,after-kill,kill}.txt`。工具栏 `jetson` 核对为原配置显示名，实际 SSH 主机为 damiao，不是连接串线。
+
+再在隔离配置目录放入只含虚构来源/编号的 leased Position 恢复记录，保存 Motion 独立窗口偏好后启动。实际 UI 保持未连接，显示“停止未确认、不重发、不恢复续租”；进入已打开页面后显示等待恢复原因，手动拆出被拒绝。读盘确认恢复记录字节未变、detached=true 未被失败覆盖。测试结束退出应用，将自己的模拟文件归档到 `/tmp/260-release-leased-fixture-consumed.json`，恢复原隔离布局；清理测试文件不计作真实任务终态核验。
+
+退出旧候选包时还发现 SSH PID 7088 被遗留，父进程变为 1，继续占用 18765。`kill_on_drop` 不足以保证 Tauri 退出时释放托管状态；现在 Exit 回调保存布局、关闭 Runtime，并通过当前 Child 句柄同步结束自己的隧道，不匹配进程名、不停止远端 Bridge。新增真实短期子进程回归验证清理幂等、管道 EOF 和无关子进程存活。旧孤儿仅在核对启动时间、目标端口和主机后清理，证据 `/tmp/260-orphan-tunnel-evidence.txt`。
+
+最终 `npm test` 全部通过：935 前端、276 Rust、3 运行库及其余脚本；`npm run build`、Release bundle 构建及严格 codesign 校验通过，日志 `/tmp/260-main-lifecycle-{full-tests,build,bundle}.log`。早一轮构建发现新增测试误用了查询选项 exact，修正后重新完整执行测试与构建，未删除或弱化断言。Bridge 包未改，沿用 build ID f2339e317dd4 的 ROS 验证。
+
+最终退出清理候选已实际启动并连接（应用 11159、SSH 11211，127.0.0.1:18765 → 28865），但点击 Quit 前 Mac 再次锁屏，最后这项原生退出核验仍待完成；不能把子进程单测称为原生 Quit 已通过。生产应用未安装，PR/CI/合并未完成，外接屏仍按用户说明延期。
+
+## 最终原生 Quit 清理验收（2026-11-15）
+
+对 `222482c` Release 隔离包进行实际菜单退出：退出前应用 PID 11159、所属 SSH PID 11211，连接 `127.0.0.1:18765 → damiao:28865`，页面显示 Bridge `f2339e317dd4`、域 225。点击原生应用菜单的 Quit 后，CUA 确认应用不再运行；`ps` 确认两个进程均消失，`lsof` 确认 18765 无监听。没有手动结束 SSH。证据 `/tmp/260-main-exit-before.txt` 与 `/tmp/260-main-exit-after.json`。
+
+退出之后隔离 Bridge 274462 / 发布器 274448 和生产 Bridge 8367 仍在，证明应用退出未停止远端服务。随后只对已核对完整命令的测试发布器 274448 发送 TERM，由其 finally 清理隔离 Bridge；复核两进程和 28865 监听消失，生产 8367 / 8765 保持不变。应用停止后从 `/tmp/260-load-original-layout.json` 恢复隔离配置原布局。
+
+本轮只补充实际验收证据，产品代码与上一节全量测试及 Release 构建一致。外接屏拔插按用户明确要求延期；PR/CI/合并、正式应用安装与生产 Bridge 更新仍需按实际结果记录。
+
+## 正式应用安装与发布流程
+
+`npm run install:mac` 成功完成正式 Release 构建及 `/Applications/Robot Console.app` 安装；标识为 `dev.easydebug.desktop`，严格 codesign 通过，安装包与构建产物的主二进制 SHA-256 均为 `33c0efb410e9f85668b34e7b542d6b0cb1590bc3bfd4208bf2eab858d3fbfb72`。实际启动正式应用，保持未连接，打开手眼标定页，确认页面工具栏和图片工具完整加载；未发出运动请求。安装日志 `/tmp/260-production-install.log`。
+
+PR [#269](https://github.com/phamstered/rebotarm-debug-desk/pull/269) 已建立，等待 CI 和仓库自动合并检查。生产 Bridge 更新前只读核验得到连续递增时间戳的 mode=DISABLE / fault_code=0，未发现运动控制进程或其他 Bridge 连接。统一脚本已完成 dry-run，并备份至 `easy_debug_bridge/backup/easy_debug_bridge-20261115-004646.tar.gz`，正在单线程构建。现场 `visual_pick.json` 的 0 mm 下探、抓取偏移及 `plane_verified=false` 从该备份逐字节保留，配置 SHA-256 为 `d848bb15a982f4064f61dd34d400b9076b76edb77823e15d7f66e00cd4421cd8`；不以仓库默认值替代现场标定。编译完成不代表运行进程已替换，后续须单独核验重启、安装二进制及 hello。
+
+生产构建已完成，随后重新读取新鲜 DISABLE 反馈，再通过统一脚本 `--skip-sync --skip-build --restart` 更新运行进程。首次参数核验发现脚本默认 status Topic 与现场不同，因此显式传入 `--ros-domain-id 0 --joint-state-topic /stm32/joint_states --command-topic /stm32/joint_commands --status-topic /stm32/status` 完成纠正。最终 PID 395235、127.0.0.1:8765，`/proc/<pid>/exe` 与安装路径解析到同一新二进制；hello 返回 `f2339e317dd4` 及全部新增任务能力。现场配置哈希保持一致。
+
+新进程实际接受 `position_motion_observe`、`visual_pick_observe` 和 `gravity_id_status`；Pick 空闲，Position 无任务并正确报告 MoveIt 尚未启动。收到三帧递增源时间戳的 HardwareStatus，mode=DISABLE、fault_code=0。验证只连接只读临时隧道，结束后关闭自己的隧道，没有启动控制器或下发运动。正式应用保持离线手眼页。证据 `/tmp/260-production-{deploy,restart-corrected,final-readonly}.log`、`/tmp/260-production-final-readonly.json` 与 `/tmp/260-production-final-process.txt`。
+
+### 现场配置与 ROS 测试隔离修正
+
+生产工作区的首次完整 `colcon test` 为 30 项中 29 项通过、1 项失败，不能计为全量通过。`object_detection_ros` 默认读取安装目录中的现场 `visual_pick.json`，却断言未标定预览；现场抓取偏移和已标定状态使合成桌面被正确拒绝。未修改现场配置或产品校验，改为物体检测与 RGB 跟踪两个测试显式传入独立 `test/fixtures/visual_pick_unverified.json`。该配置仅用于隔离域的模拟 Bridge。
+
+修正后两个 ROS 定向测试全部通过（23.06 秒），同一工作区仍保留原现场配置；日志 `/tmp/260-fixture-targeted-ros.log`。完整 `npm test` 再次通过：935 前端、276 Rust、3 运行库及所有其余脚本；`npm run build` 通过。日志 `/tmp/260-test-fixture-{full-tests,build}.log`。测试源码参与版本哈希，因此配套版本更新为 `5013e4e77e4f`，需要重新打包并更新运行进程；上节 `f2339e317dd4` 为此前实际验收版本，不冒充最终版本。完整 ROS 复测及最终部署继续按真实结果核验。

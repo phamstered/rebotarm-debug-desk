@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GravityIdentificationPage } from "./GravityIdentificationPage";
 
 const doubles = vi.hoisted(() => ({
@@ -17,6 +17,14 @@ const bridge = {
     return () => undefined;
   },
 } as never;
+
+beforeEach(() => {
+  doubles.request.mockReset();
+  doubles.request.mockImplementation(async (message: {op:string; command_id?:string}) =>
+    message.op==="gravity_id_status" ? {op:message.op,busy:false} :
+    {op:message.op+"_ack",accepted:true,command_id:message.command_id});
+});
+const currentCommand = () => (doubles.request.mock.calls.find(([m]) => m.op==="gravity_id_send_goal")![0] as {command_id:string}).command_id;
 
 describe("GravityIdentificationPage", () => {
   it("gates Start behind ARMED and sends gravity_id_send_goal", async () => {
@@ -35,7 +43,7 @@ describe("GravityIdentificationPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => expect(doubles.request).toHaveBeenCalled());
-    const payload = doubles.request.mock.calls[0][0] as Record<string, unknown>;
+    const payload = doubles.request.mock.calls.find(([m]) => m.op==="gravity_id_send_goal")![0] as Record<string, unknown>;
     expect(payload.op).toBe("gravity_id_send_goal");
     expect(payload.confirmation).toBe("ARMED");
     expect(payload.joint_mask).toBe(0x3f);
@@ -52,9 +60,11 @@ describe("GravityIdentificationPage", () => {
       />,
     );
 
+    await user.click(screen.getByRole("checkbox", {name:"安全确认"}));
+    await user.click(screen.getByRole("button", {name:"Start"}));
     act(() => {
       doubles.listener?.({
-        op: "gravity_id_feedback",
+        op: "gravity_id_feedback", command_id:currentCommand(),
         phase: 5,
         pose_index: 2,
         pose_count: 8,
@@ -81,7 +91,7 @@ describe("GravityIdentificationPage", () => {
 
     act(() => {
       doubles.listener?.({
-        op: "gravity_id_result",
+        op: "gravity_id_result", command_id:currentCommand(), terminal:true, task_phase:"succeeded",
         success: true,
         fault_code: 0,
         gravity_scales: [1, 1, 1, 1, 1, 1],
@@ -111,4 +121,37 @@ describe("GravityIdentificationPage", () => {
     await user.click(screen.getByRole("button", { name: "打开 Joint4 标定" }));
     expect(doubles.onCalib).toHaveBeenCalled();
   });
+});
+
+
+it("ignores an old task result and does not release on early DONE feedback", async () => {
+  const user=userEvent.setup();
+  render(<GravityIdentificationPage bridge={bridge} onNavigateCalibration={doubles.onCalib} />);
+  await user.click(screen.getByRole("checkbox",{name:"安全确认"}));
+  await user.click(screen.getByRole("button",{name:"Start"}));
+  act(() => doubles.listener?.({op:"gravity_id_result",command_id:"old",terminal:true,task_phase:"succeeded",success:true}));
+  expect(screen.getByRole("button",{name:"Start"})).toBeDisabled();
+  act(() => doubles.listener?.({op:"gravity_id_feedback",command_id:currentCommand(),phase:8,pose_index:1,pose_count:1,active_joint_mask:63,rmse_running:0,fault_code:0}));
+  expect(screen.getByRole("button",{name:"Start"})).toBeDisabled();
+  act(() => doubles.listener?.({op:"gravity_id_result",command_id:currentCommand(),terminal:false,task_phase:"succeeded",success:true}));
+  expect(screen.getByRole("button",{name:"Start"})).toBeDisabled();
+  act(() => doubles.listener?.({op:"gravity_id_result",command_id:currentCommand(),terminal:true,task_phase:"succeeded",success:true}));
+  expect(screen.getByRole("button",{name:"Start"})).toBeEnabled();
+});
+
+it("keeps a matching pending task abortable across connection loss without late ACK resuming it", async () => {
+  const user=userEvent.setup();let resolve!: (value:unknown)=>void;
+  doubles.request.mockImplementation(async (message:{op:string;command_id?:string}) => {
+    if(message.op==="gravity_id_send_goal") return new Promise(done => {resolve=done;});
+    return {op:message.op,busy:false};
+  });
+  const view=render(<GravityIdentificationPage connected bridge={bridge} onNavigateCalibration={doubles.onCalib} />);
+  await user.click(screen.getByRole("checkbox",{name:"安全确认"}));
+  await user.click(screen.getByRole("button",{name:"Start"}));
+  act(() => doubles.listener?.({op:"disconnected"}));
+  view.rerender(<GravityIdentificationPage connected={false} bridge={bridge} onNavigateCalibration={doubles.onCalib} />);
+  await act(async () => resolve({op:"gravity_id_send_goal_ack",accepted:true,command_id:currentCommand()}));
+  expect(screen.getByRole("button",{name:"Start"})).toBeDisabled();
+  expect(screen.getByText("连接中断，停止未确认")).toBeVisible();
+  expect(screen.queryByText("Goal 已发送，等待 Feedback…")).toBeNull();
 });

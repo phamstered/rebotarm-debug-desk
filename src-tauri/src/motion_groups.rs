@@ -1,13 +1,15 @@
 use serde_json::Value;
+use std::collections::BTreeSet;
+#[cfg(test)]
 use std::{
-    collections::BTreeSet,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use tauri::{AppHandle, Manager};
+#[cfg(test)]
 static STORE_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(test)]
 const EMPTY: &str = r#"{"schemaVersion":1,"profiles":{}}"#;
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 fn object<'a>(v: &'a Value, keys: &[&str]) -> Result<&'a serde_json::Map<String, Value>, String> {
@@ -266,9 +268,11 @@ pub fn validate_motion_groups_json(raw: &str) -> Result<(), String> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub fn motion_groups_file(dir: &Path) -> PathBuf {
     dir.join("motion-groups.v1.json")
 }
+#[cfg(test)]
 fn read_unlocked(path: &Path) -> Result<String, String> {
     let metadata = match fs::metadata(path) {
         Ok(m) => m,
@@ -282,10 +286,12 @@ fn read_unlocked(path: &Path) -> Result<String, String> {
     validate_motion_groups_json(&raw)?;
     Ok(raw)
 }
+#[cfg(test)]
 pub fn read_motion_groups_file(path: &Path) -> Result<String, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "动作组存储锁无效")?;
     read_unlocked(path)
 }
+#[cfg(test)]
 pub fn write_motion_groups_file(path: &Path, raw: &str) -> Result<(), String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "动作组存储锁无效")?;
     validate_motion_groups_json(raw)?;
@@ -315,19 +321,6 @@ pub fn write_motion_groups_file(path: &Path, raw: &str) -> Result<(), String> {
         let _ = fs::remove_file(temporary);
     }
     result
-}
-fn path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(motion_groups_file(
-        &app.path().app_data_dir().map_err(|e| e.to_string())?,
-    ))
-}
-#[tauri::command]
-pub fn motion_groups_load(app: AppHandle) -> Result<String, String> {
-    read_motion_groups_file(&path(&app)?)
-}
-#[tauri::command]
-pub fn motion_groups_save(app: AppHandle, content: String) -> Result<(), String> {
-    write_motion_groups_file(&path(&app)?, &content)
 }
 #[cfg(test)]
 mod tests {

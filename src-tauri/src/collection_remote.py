@@ -2,6 +2,7 @@
 import contextlib
 import fcntl
 import json
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -36,14 +37,34 @@ def recorder_environment(python):
 
 def process_identity(pid):
     try:
-        # The comm field can contain spaces; fields after the last ')' start at state.
-        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-        if fields[0] == "Z" or b"rebotarm_vla.lerobot_recorder" not in cmdline:
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
             return None
-        return fields[19]
-    except (OSError, IndexError):
+        boot = str(uuid.UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip()))
+        # The comm field can contain spaces; fields after the last ')' start at state.
+        stat = Path(f"/proc/{pid}/stat")
+        fields = stat.read_text().rsplit(")", 1)[1].split()
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        after = stat.read_text().rsplit(")", 1)[1].split()
+        if fields[0] == "Z" or after[0] == "Z" or fields[19] != after[19] or not fields[19].isdigit() \
+                or b"rebotarm_vla.lerobot_recorder" not in cmdline:
+            return None
+        return hashlib.sha256(json.dumps([boot, pid, fields[19]], separators=(",", ":")).encode()).hexdigest()
+    except (OSError, IndexError, ValueError):
         return None
+
+
+@contextlib.contextmanager
+def recorder_pidfd(pid, identity):
+    """Pin the process before checking identity; never fall back to kill(PID)."""
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError("结束采集器需要 Linux/Python pidfd 支持；未发送信号")
+    fd = os.pidfd_open(pid)
+    try:
+        if not identity or process_identity(pid) != identity:
+            raise RuntimeError("采集器进程身份已改变；未发送信号")
+        yield fd
+    finally:
+        os.close(fd)
 
 
 class RosServices:
@@ -80,7 +101,6 @@ class RecorderControl:
     def __init__(self, services, cache=None):
         self.services = services
         self.cache = Path(cache) if cache else default_cache()
-        self.cache.mkdir(parents=True, exist_ok=True)
         self.manifest = self.cache / "lerobot-recorder.json"
         self.log_path = self.cache / "lerobot-recorder.log"
 
@@ -107,7 +127,7 @@ class RecorderControl:
         except OSError:
             return ""
 
-    def status(self):
+    def status(self, persist=False):
         metadata = self.metadata()
         owned = self.owned(metadata)
         raw = None if metadata.get("finalizing") and owned else self.services.call("status", timeout=8)
@@ -121,12 +141,13 @@ class RecorderControl:
             state = "finalizing" if metadata.get("finalizing") else "starting"
         if data is not None:
             state = "recording" if data.get("recording") else "idle"
-            if owned:
+            if owned and persist:
                 metadata["lastStatus"] = data
                 self.manifest.write_text(json.dumps(metadata))
         saved = data.get("saved_episodes", 0) if data else summary.get("saved_episodes", 0)
         return {
             "state": state, "managed": owned, "pid": metadata.get("pid", 0) if owned else 0,
+            "processIdentity": str(metadata.get("identity", "")) if owned else "",
             "recording": bool(data and data.get("recording")),
             "pendingFrames": int(data.get("pending_frames", 0)) if data else 0,
             "savedEpisodes": int(saved),
@@ -142,6 +163,7 @@ class RecorderControl:
         return path if path.is_absolute() else Path.home() / path
 
     def launch(self, config):
+        self.cache.mkdir(parents=True, exist_ok=True)
         before = self.status()
         if before["state"] != "stopped":
             raise RuntimeError("已有采集器运行，请先使用或结束现有采集器")
@@ -192,7 +214,7 @@ class RecorderControl:
         metadata = {"pid": child.pid, "identity": identity, "config": dict(config, root=str(root))}
         self.manifest.write_text(json.dumps(metadata))
         for _ in range(10):
-            result = self.status()
+            result = self.status(persist=True)
             if result["state"] == "idle":
                 result["message"] = "采集器已就绪，点击开始 Episode 录入数据"
                 return result
@@ -203,21 +225,22 @@ class RecorderControl:
         return result
 
     def finish(self):
-        before = self.status()
+        before = self.status(persist=True)
         metadata = self.metadata()
         if not self.owned(metadata):
             raise RuntimeError("仅能结束由本应用启动且进程身份匹配的采集器")
         if before["state"] != "idle" or before["recording"] or before["pendingFrames"]:
             raise RuntimeError("请先保存或丢弃当前 Episode，待采集器空闲后再结束")
-        metadata["finalizing"] = True
-        self.manifest.write_text(json.dumps(metadata))
-        # Signal only the recorder. Its video workers must be allowed to finalize.
-        os.kill(metadata["pid"], signal.SIGINT)
+        with recorder_pidfd(metadata["pid"], metadata["identity"]) as fd:
+            metadata["finalizing"] = True
+            self.manifest.write_text(json.dumps(metadata))
+            # Signal only the pinned recorder. Its video workers finalize normally.
+            signal.pidfd_send_signal(fd, signal.SIGINT)
         for _ in range(240):
             if not self.owned(metadata):
                 if before["savedEpisodes"] and "Dataset finalized" not in self.log():
                     raise RuntimeError("采集器已退出，但未确认 finalize 成功，请检查日志：" + self.log())
-                result = dict(before, state="stopped", managed=False, pid=0, log=self.log())
+                result = dict(before, state="stopped", managed=False, pid=0, processIdentity="", log=self.log())
                 result["message"] = "数据集已完成，采集器已退出" if before["savedEpisodes"] else "采集器已退出；尚未保存 Episode，未创建数据集"
                 return result
             time.sleep(0.25)
@@ -238,9 +261,37 @@ class RecorderControl:
         message = self.services.call(action)
         if message is None:
             raise RuntimeError("采集器服务不可用")
-        result = self.status()
+        result = self.status(persist=True)
         result["message"] = message
         return result
+
+
+@contextlib.contextmanager
+def operation_lock(cache, readonly, wait_seconds=0):
+    """Status neither creates files nor writes metadata; mutations exclude readers."""
+    path = cache / "lerobot-recorder.lock"
+    if readonly:
+        try:
+            lock = path.open("r")
+        except FileNotFoundError:
+            # No managed operation has started. A subsequent launch may race this
+            # snapshot, so callers must refresh after every mutation.
+            yield
+            return
+    else:
+        cache.mkdir(parents=True, exist_ok=True)
+        lock = path.open("a")
+    with lock:
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(lock, (fcntl.LOCK_SH if readonly else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("另一项采集操作正在执行，请稍后刷新")
+                time.sleep(0.05)
+        yield
 
 
 def main():
@@ -249,15 +300,12 @@ def main():
         action, config_json = sys.argv[1:3]
         config = json.loads(config_json)
         cache = default_cache()
-        cache.mkdir(parents=True, exist_ok=True)
-        with (cache / "lerobot-recorder.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise RuntimeError("另一项采集操作正在执行，请稍后刷新")
+        with operation_lock(cache, readonly=action == "status", wait_seconds=0 if action == "status" else 15):
             services = RosServices()
             result = RecorderControl(services, cache).execute(action, config)
         print(PREFIX + json.dumps(result, ensure_ascii=False), flush=True)
+        if len(sys.argv) > 3 and sys.argv[3] == "receipt" and action != "status":
+            print("ROBOT_CONSOLE_COLLECTION_RECEIPT=" + json.dumps(completion_receipt(result)), flush=True)
     except Exception as error:
         print(PREFIX + json.dumps({"error": str(error)}, ensure_ascii=False), flush=True)
         sys.exit(1)
@@ -265,6 +313,12 @@ def main():
         if services:
             with contextlib.suppress(Exception):
                 services.close()
+
+
+def completion_receipt(result):
+    receipt = {key: result[key] for key in ("state", "managed", "pid", "recording", "pendingFrames", "savedEpisodes", "processIdentity")}
+    receipt["datasetHash"] = hashlib.sha256((result["root"] + "\0" + result["repoId"]).encode()).hexdigest()
+    return receipt
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DataGraph } from "./DataGraph";
@@ -16,6 +16,42 @@ const series: DataSeries[] = [
 ];
 
 describe("DataGraph", () => {
+  it("stops drawing and crosshair input while hidden, then resumes with current data", () => {
+    vi.useFakeTimers();
+    const context = {
+      setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(),
+      lineTo: vi.fn(), stroke: vi.fn(), strokeRect: vi.fn(), fillText: vi.fn(), arc: vi.fn(), fill: vi.fn(),
+      setLineDash: vi.fn(), measureText: vi.fn(() => ({ width: 10 })),
+    };
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    const onCrosshairChange = vi.fn();
+    const props = { seriesList: series, liveUpdates: true, onCrosshairChange, onRemoveSeries: vi.fn(), onClearSeries: vi.fn() };
+    const view = render(<DataGraph {...props} />);
+    try {
+      expect(context.clearRect).toHaveBeenCalled();
+      view.rerender(<DataGraph {...props} active={false} />);
+      context.clearRect.mockClear();
+      const canvas = screen.getByLabelText("DataGraph 实时曲线");
+      act(() => { vi.advanceTimersByTime(2000); });
+      fireEvent(window, new Event("resize"));
+      fireEvent.pointerLeave(canvas);
+      view.rerender(<DataGraph {...props} active={false} seriesList={[{ ...series[0]!, points: [{ t: 2000, value: 20 }] }]} />);
+      expect(context.clearRect).not.toHaveBeenCalled();
+      expect(onCrosshairChange).not.toHaveBeenCalled();
+      view.rerender(<DataGraph {...props} active />);
+      expect(context.clearRect).toHaveBeenCalled();
+      context.clearRect.mockClear();
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(context.clearRect).toHaveBeenCalled();
+      fireEvent.pointerLeave(canvas);
+      expect(onCrosshairChange).toHaveBeenLastCalledWith(null);
+    } finally {
+      view.unmount();
+      getContext.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("draws point and time-bar styles using their canvas primitives", () => {
     const context = {
       setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(),

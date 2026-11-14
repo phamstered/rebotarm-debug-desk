@@ -12,6 +12,7 @@
 #include "easy_debug_bridge/controller_registry_core.hpp"
 
 #include "easy_debug_bridge/motion_log.hpp"
+#include "easy_debug_bridge/task_observation_core.hpp"
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,31 @@ using easy_debug_bridge::CommandFields;
 using easy_debug_bridge::CommandValidation;
 
 int main() {
+  {
+    using namespace easy_debug_bridge;
+    MotionTerminalHistory history;
+    assert(!history.find("missing"));
+    bool rejected = false;
+    try { history.record("pending", "stop_failed"); } catch (...) { rejected = true; }
+    assert(rejected && !history.find("pending"));
+    history.record("first", "succeeded");
+    for (int i = 0; i < 256; ++i) history.record("task-" + std::to_string(i), "canceled");
+    assert(!history.find("first") && history.find("task-0") == "canceled");
+    history.record("task-0", "failed");
+    assert(history.find("task-0") == "failed");
+    assert(history.find("task-1") == "canceled");
+    MotionTerminalHistory restarted;
+    assert(!restarted.find("task-0"));
+    assert(!valid_motion_command_id("") && !valid_motion_command_id("bad/id") && !valid_motion_command_id(std::string(81, 'a')));
+    const std::string state = "{\"op\":\"position_motion\",\"command_id\":\"proof\",\"motion_phase\":\"canceled\",\"group_index\":2}";
+    history.record("proof", "canceled", state);
+    assert(history.state("proof") == state && history.state("missing") == "null");
+    for (int i = 0; i < 9; ++i) history.record("large-" + std::to_string(i), "failed", std::string(256 * 1024, 'x'));
+    assert(!history.find("large-0") && history.find("large-1") == "failed");
+    assert(!history.find("proof"));
+    history.record("oversize", "failed", std::string(256 * 1024 + 1, 'x'));
+    assert(!history.find("oversize"));
+  }
   {
     using namespace easy_debug_bridge;
     const auto names = arm_motion_joints();

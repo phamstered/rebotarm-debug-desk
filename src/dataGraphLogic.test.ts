@@ -18,6 +18,7 @@ import {
   seriesId,
   timestampFromPlotX,
   updateSeriesFromMessage,
+  updateSeriesFromMessages,
 } from "./dataGraphLogic";
 
 const jointState = {
@@ -242,3 +243,12 @@ describe("dataGraphLogic crosshair mapping", () => {
   });
 });
 
+
+it("batch history preserves sequential pruning, missing values, backward clocks and point caps", () => {
+  const original=[{...createSeries('/js','effort[0]',0),points:Array.from({length:DATA_GRAPH_MAX_POINTS},(_,i)=>({t:i,value:i}))},createSeries('/other','data',1)];
+  const frames=Array.from({length:300},(_,i)=>({topic:i%3?'/js':'/other',data:i%7?{effort:[i],data:i}:{},at:i<150?31000+i*10:15000+i*10}));
+  let sequential=original;for(const f of frames)sequential=updateSeriesFromMessage(sequential,f.topic,f.data,f.at);
+  expect(updateSeriesFromMessages(original,frames)).toEqual(sequential);
+  expect(original[0]!.points).toHaveLength(DATA_GRAPH_MAX_POINTS);
+  expect(updateSeriesFromMessages(original,[])).toBe(original);
+});

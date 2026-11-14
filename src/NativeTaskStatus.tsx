@@ -1,0 +1,63 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useRef, useState } from "react";
+import { PAGE_TITLES } from "./nativeWorkspaceLogic";
+import type { NativeTaskSnapshot } from "./types";
+const PHASES = { submitting: "等待受理", running: "执行中", stopping: "等待停止确认", uncertain: "停止未确认" };
+
+export function NativeTaskStatus() {
+  const [task, setTask] = useState<NativeTaskSnapshot | null>(null);
+  const [error, setError] = useState("");
+  const [canceling, setCanceling] = useState("");
+  const [cancelError, setCancelError] = useState({ key: "", message: "" });
+  const pendingCancel = useRef("");
+  const currentKey = useRef("");
+  const taskKey = task ? `${task.id}:${task.command_id}` : "";
+  currentKey.current = taskKey;
+  async function cancelTrajectory() {
+    if (!task || task.kind !== "trajectory" || error || pendingCancel.current === taskKey) return;
+    const key = taskKey;
+    pendingCancel.current = key; setCanceling(key); setCancelError({ key, message: "" });
+    try {
+      await invoke("native_trajectory_cancel", { id: task.id, commandId: task.command_id });
+      // A successful IPC records intent only; retain the task until a terminal
+      // snapshot arrives, including across window loss and reconnection.
+    } catch (reason) {
+      if (currentKey.current === key) {
+        setCancelError({ key, message: `取消请求失败：${String(reason)}` });
+        setCanceling("");
+      }
+      if (pendingCancel.current === key) pendingCancel.current = "";
+    }
+  }
+  useEffect(() => {
+    let disposed = false, running = false, pending = false;
+    let unlisten: (() => void) | undefined;
+    const refresh = async () => {
+      pending = true;
+      if (running) return;
+      running = true;
+      try {
+        while (pending && !disposed) {
+          pending = false;
+          const value = await invoke<NativeTaskSnapshot | null>("native_task_snapshot");
+          if (!disposed) { setTask(value); setError(""); }
+        }
+      } catch (reason) { if (!disposed) setError(`原生任务状态查询失败：${String(reason)}`); }
+      finally { running = false; }
+    };
+    void listen("native-tasks-changed", () => void refresh()).then(stop => {
+      if (disposed) stop(); else { unlisten = stop; void refresh(); }
+    }).catch(reason => { if (!disposed) setError(`原生任务状态监听失败：${String(reason)}`); });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+  if (!task && !error) return null;
+  const page = task?.window.replace(/^page-/, "") as keyof typeof PAGE_TITLES;
+  return <div className="global-motion-status" role="status" aria-label="原生共享运动任务">
+    {error || (task?.recovery_error ? `任务恢复异常 · ${task.message}` : `${PAGE_TITLES[page] || task!.window} · ${task!.kind === "joint4" ? "Joint4 标定" : task!.kind === "trajectory" ? "直接 JTC 轨迹" : task!.kind === "arm_mode" ? "控制环境切换" : task!.kind === "controller" ? "Controller 切换" : task!.kind === "gravity" ? "重力辨识" : task!.kind === "motor" ? "Motor 连续发送" : task!.kind === "pick" ? "视觉抓取" : "点位 / 动作组"} · ${["controller", "arm_mode", "joint4"].includes(task!.kind) && task!.phase === "uncertain" ? "结果未确认" : PHASES[task!.phase]} · ${task!.message}`)}
+    {!error && task?.kind === "trajectory" && <button type="button"
+      disabled={canceling === taskKey || task.phase === "stopping" || task.phase === "uncertain"}
+      onClick={() => void cancelTrajectory()}>取消直接轨迹</button>}
+    {cancelError.key === taskKey && cancelError.message && <span role="alert">{cancelError.message}</span>}
+  </div>;
+}

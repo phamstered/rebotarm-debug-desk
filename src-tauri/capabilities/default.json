@@ -3,5 +3,6 @@
   "identifier": "default",
   "description": "Default desktop capability",
   "windows": ["main"],
+  "webviews": ["page-status", "page-dashboard", "page-motion", "page-monitor", "page-collection", "page-handeye", "page-motor", "page-calibration", "page-gravity"],
   "permissions": ["core:default", "dialog:default"]
 }

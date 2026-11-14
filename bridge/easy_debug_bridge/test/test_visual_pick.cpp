@@ -181,6 +181,10 @@ int main() {
         Tree r;
         r.put("op", "visual_pick_status");
         pick.request(1, r, [](const std::string &) {});
+      } else {
+        // Same-owner read-only observations cannot keep a lost owner alive.
+        Tree r; r.put("op", "visual_pick_observe");
+        pick.request(1, r, [](const std::string &) {});
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
@@ -233,12 +237,27 @@ int main() {
   while (moves == before_cancel) std::this_thread::sleep_for(std::chrono::milliseconds(10));
   reject = false;
   try {
-    pick.request(2, parse("{\"op\":\"visual_pick_cancel\"}"), capture);
+    pick.request(2, parse("{\"op\":\"visual_pick_cancel\",\"command_id\":\"cancel-test\"}"), capture);
   } catch (...) {
     reject = true;
   }
   assert(reject);
-  pick.cancel(1);
+  const int cancels_before_invalid = cancel_requests;
+  for (const auto &id : {std::string(""), std::string("test"), std::string("wrong-id"), std::string(61, 'a'), std::string("bad/id")}) {
+    Tree cancel; cancel.put("op", "visual_pick_cancel");
+    if (!id.empty()) cancel.put("command_id", id);
+    reject = false;
+    try { pick.request(1, cancel, capture); } catch (...) { reject = true; }
+    assert(reject);
+  }
+  const auto unchanged_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(120);
+  while (std::chrono::steady_clock::now() < unchanged_until) {
+    pick.request(1, status, capture);
+    assert(reply.get<bool>("busy") && reply.get<std::string>("command_id") == "cancel-test");
+    assert(cancel_requests == cancels_before_invalid);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  pick.request(1, parse("{\"op\":\"visual_pick_cancel\",\"command_id\":\"cancel-test\"}"), capture);
   const auto stop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   do {
     pick.request(1, status, capture);

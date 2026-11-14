@@ -58,7 +58,7 @@ describe("Joint4CalibrationPage", () => {
     await user.click(screen.getByRole("button", { name: "Capture Pose" }));
     expect(await screen.findByText("0.4100")).toBeVisible();
     expect(doubles.invoke).toHaveBeenCalledWith("call_joint4_calibration_service", {
-      profile: defaultProfile, action: "capture_pose",
+      profile: defaultProfile, action: "capture_pose", confirmation: "HANDS_CLEAR",
     });
 
     emitStatus({ 8: 4, 9: 0, 11: 0 });
@@ -106,4 +106,57 @@ describe("Joint4CalibrationPage", () => {
       content: expect.stringContaining('"advisoryOnly": true'),
     }));
   });
+  it("can request supported Release while Begin is waiting and ignores its late success", async () => {
+    const user = userEvent.setup();
+    let finish!: (value: unknown) => void;
+    doubles.invoke.mockImplementation((_command, args) => args.action === "begin_pose"
+      ? new Promise(resolve => { finish = resolve; })
+      : Promise.resolve({ success: true, pending: true, message: "已登记释放姿态请求，等待核验" }));
+    render(<Joint4CalibrationPage profile={defaultProfile} bridge={bridge} controllerState="active" onRefreshControllers={vi.fn()} />);
+    emitStatus({ 1: 0, 9: 0 });
+    await user.click(screen.getByLabelText(/我已托住机械臂/));
+    await user.click(screen.getByRole("button", { name: "Begin Pose" }));
+    expect(screen.getByRole("button", { name: "正在开始…" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "安全停止 · Release" }));
+    expect(doubles.invoke).toHaveBeenCalledWith("call_joint4_calibration_service", {
+      profile: defaultProfile, action: "release_pose", confirmation: "SUPPORTED",
+    });
+    expect(await screen.findByText("已登记释放姿态请求，等待核验")).toBeVisible();
+    await act(async () => finish({ success: true, message: "late holding" }));
+    expect(screen.queryByText("late holding")).not.toBeInTheDocument();
+    expect(screen.getByText("已登记释放姿态请求，等待核验")).toBeVisible();
+  });
+
+  it("does not duplicate in-flight capture or apply its sample to another profile", async () => {
+    const user = userEvent.setup();
+    let finish!: (value: unknown) => void;
+    doubles.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const props = { bridge, controllerState: "active", onRefreshControllers: vi.fn() };
+    const view = render(<Joint4CalibrationPage {...props} profile={defaultProfile} />);
+    emitStatus();
+    await user.click(screen.getByLabelText("手部支撑已逐渐撤掉，当前没有人为外力"));
+    await user.dblClick(screen.getByRole("button", { name: "Capture Pose" }));
+    expect(doubles.invoke).toHaveBeenCalledTimes(1);
+    view.rerender(<Joint4CalibrationPage {...props} profile={{ ...defaultProfile, host: "other.invalid" }} />);
+    await act(async () => finish({ success: true, message: "captured sample 4: q4=0.41000" }));
+    expect(screen.queryByText("0.4100")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/我已托住机械臂/)).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Capture Pose" })).toBeDisabled();
+  });
+
+  it("ignores a late service failure after disconnect", async () => {
+    const user = userEvent.setup();
+    let fail!: (error: Error) => void;
+    doubles.invoke.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const props = { bridge, profile: defaultProfile, controllerState: "active", onRefreshControllers: vi.fn() };
+    const view = render(<Joint4CalibrationPage {...props} />);
+    emitStatus({ 1: 0, 9: 0 });
+    await user.click(screen.getByLabelText(/我已托住机械臂/));
+    await user.click(screen.getByRole("button", { name: "Begin Pose" }));
+    view.rerender(<Joint4CalibrationPage {...props} connected={false} />);
+    await act(async () => fail(new Error("late failure")));
+    expect(screen.queryByText("late failure")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Begin Pose" })).toBeDisabled();
+  });
+
 });

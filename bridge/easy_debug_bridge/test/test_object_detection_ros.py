@@ -2,6 +2,7 @@
 """Synthetic tabletop RGBD through the real worker; isolated domain 215 only."""
 import array
 import os
+from pathlib import Path
 import signal
 import socket
 import subprocess
@@ -63,7 +64,11 @@ def main(binary):
     with socket.socket() as reserve:
         reserve.bind(('127.0.0.1', 0));port = reserve.getsockname()[1]
     with tempfile.TemporaryFile(mode='w+') as log:
-        process = subprocess.Popen([binary,'--ros-args','-p',f'port:={port}','-p','status_topic:=/stm32/status'],stdout=log,stderr=log)
+        # The site may have calibrated geometry. This test deliberately checks
+        # the uncalibrated preview/start gate, never the installed site config.
+        pick_config = Path(__file__).parent / 'fixtures' / 'visual_pick_unverified.json'
+        process = subprocess.Popen([binary,'--ros-args','-p',f'port:={port}','-p','status_topic:=/stm32/status',
+                                    '-p',f'visual_pick_config:={pick_config}'],stdout=log,stderr=log)
         ws = None
         try:
             def connect():

@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default desktop capability","local":true,"windows":["main"],"permissions":["core:default","dialog:default"]}}
+{"default":{"identifier":"default","description":"Default desktop capability","local":true,"windows":["main"],"webviews":["page-status","page-dashboard","page-motion","page-monitor","page-collection","page-handeye","page-motor","page-calibration","page-gravity"],"permissions":["core:default","dialog:default"]}}

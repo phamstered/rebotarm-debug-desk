@@ -8,6 +8,8 @@ import { COLLECTION_STORAGE_KEY, defaultCollectionConfig, type CollectionStatus 
 import { defaultProfile, type HardwareStatus } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
+const nativeOperation = vi.hoisted(() => ({ ready: true, task: null as null | { busy: boolean; phase: string; recovery_error?: boolean }, error: "" }));
+vi.mock("./NativeCollectionOperationStatus", () => ({ useNativeCollectionOperation: () => nativeOperation }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const config = { ...defaultCollectionConfig, repoId: "robot/demo", task: "pick cube" };
 const stopped: CollectionStatus = { state: "stopped", managed: false, pid: 0, recording: false, pendingFrames: 0, savedEpisodes: 0, fps: 0, task: "", repoId: "", root: "", message: "", log: "" };
@@ -43,7 +45,7 @@ function renderPage(overrides: Partial<ComponentProps<typeof DataCollectionPage>
   return { ...render(<DataCollectionPage {...props} />), props };
 }
 
-beforeEach(() => { localStorage.clear(); localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(config)); invoke.mockReset(); });
+beforeEach(() => { nativeOperation.ready = true; nativeOperation.task = null; nativeOperation.error = ""; localStorage.clear(); localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(config)); invoke.mockReset(); });
 afterEach(() => vi.useRealTimers());
 
 describe("DataCollectionPage", () => {
@@ -217,4 +219,98 @@ describe("DataCollectionPage", () => {
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeEnabled();
     expect(screen.getByLabelText("机械臂与时间戳")).toHaveTextContent("时间戳可用");
   });
+});
+
+it("does not start SSH polling while its persistent window is disconnected, and preserves drafts on reconnect", async () => {
+  invoke.mockResolvedValue(stopped);
+  const { rerender, props } = renderPage({ connected: false });
+  fireEvent.change(screen.getByLabelText("任务描述"), { target: { value: "unsaved draft" } });
+  expect(invoke).not.toHaveBeenCalled();
+  rerender(<DataCollectionPage {...props} connected />);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("data_collection_action", expect.objectContaining({ action: "status" })));
+  expect(screen.getByLabelText("任务描述")).toHaveValue("unsaved draft");
+});
+
+it("reports an active episode as blocking window migration", async () => {
+  invoke.mockResolvedValue(recording); const onBusyChange = vi.fn();
+  renderPage({ onBusyChange });
+  await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith("正在采集或保存，请完成 Episode 后移动页面"));
+});
+
+function sharedCollection(value: CollectionStatus, sequence = 1, options: { expired?: boolean; error?: string } = {}) {
+  return {
+    enabled: true, connected: true, epoch: 1, revision: sequence,
+    entries: { collection: { sequence, value, error: options.error ?? null, age_ms: 0,
+      ttl_ms: 20000, receivedAt: performance.now(), expired: options.expired ?? false } },
+    refresh: vi.fn(),
+  };
+}
+
+it("uses application collection snapshots without per-page SSH polling, and fails closed on expiry", async () => {
+  vi.useFakeTimers();
+  const observations = sharedCollection(recording);
+  const { rerender, props } = renderPage({ observations });
+  expect(screen.getByText("正在采集", { selector: ".collection-state" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeEnabled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(invoke).not.toHaveBeenCalled();
+  expect(observations.refresh).not.toHaveBeenCalled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(recording, 1, { expired: true })} />);
+  expect(screen.getByText("状态待确认")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle, 2, { error: "SSH gone" })} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("SSH gone");
+  expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeDisabled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle, 3)} />);
+  expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeEnabled();
+  rerender(<DataCollectionPage {...props} connected={false} />);
+  expect(screen.getByText("状态待确认")).toBeInTheDocument();
+});
+
+it("verifies mutations through a post-action shared query instead of adopting their returned status", async () => {
+  const observations = sharedCollection(recording);
+  let finish!: () => void;
+  observations.refresh.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+  invoke.mockResolvedValue(idle);
+  const { rerender, props } = renderPage({ observations });
+  fireEvent.click(screen.getByRole("button", { name: "保存成功 Episode" }));
+  await waitFor(() => expect(observations.refresh).toHaveBeenCalledWith("collection", true));
+  expect(screen.getByText("正在采集", { selector: ".collection-state" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+  await act(async () => finish());
+  const fresh = sharedCollection(idle, 2); fresh.refresh = observations.refresh;
+  rerender(<DataCollectionPage {...props} observations={fresh} />);
+  expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeEnabled();
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
+
+it("keeps Episode commands blocked while native work outlives the page request, but permits saving an owned recording", () => {
+  const observations = sharedCollection(recording);
+  nativeOperation.task = { busy: true, phase: "uncertain" };
+  const { rerender, props } = renderPage({ observations });
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "丢弃 Episode" })).toBeDisabled();
+  nativeOperation.task = { busy: true, phase: "recording" };
+  rerender(<DataCollectionPage {...props} />);
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "丢弃 Episode" })).toBeEnabled();
+  nativeOperation.ready = false; nativeOperation.error = "IPC unavailable";
+  rerender(<DataCollectionPage {...props} />);
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+});
+
+it("blocks new collection on journal corruption while preserving fresh explicit save and finish gates", () => {
+  nativeOperation.task={busy:false,phase:"uncertain",recovery_error:true};
+  const {rerender,props}=renderPage({observations:sharedCollection(recording)});
+  expect(screen.getByRole("button",{name:"保存成功 Episode"})).toBeEnabled();
+  expect(screen.getByRole("button",{name:"丢弃 Episode"})).toBeEnabled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle)}/>);
+  expect(screen.getByRole("button",{name:"开始 Episode"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"结束并完成数据集"})).toBeEnabled();
+  nativeOperation.task.busy=true;
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle)}/>);
+  expect(screen.getByRole("button",{name:"结束并完成数据集"})).toBeDisabled();
+  nativeOperation.task.busy=false;
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(recording,2,{expired:true})}/>);
+  expect(screen.getByRole("button",{name:"保存成功 Episode"})).toBeDisabled();
 });

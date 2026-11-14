@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { parseClockSyncInfo, useClockSync } from "./clockSyncLogic";
+import type { SharedObservations } from "./nativeObservationsLogic";
 import type { BridgeEnvelope } from "./types";
 const valid = (): BridgeEnvelope => ({ op: "clock_sync_info", supported: true, state: "synchronized", message: "反馈时间已对齐", source_topic: "/stm32/joint_states", source_offset_ms: -3, feedback_age_ms: 2, generation: 1 });
 afterEach(() => vi.useRealTimers());
@@ -62,5 +63,20 @@ it("ignores abort rejection after reconnecting the same profile", async () => {
   expect(hook.result.current.state).toBe("synchronized");
   await act(async () => reject(new Error("已取消请求")));
   expect(hook.result.current.state).toBe("synchronized");
+  hook.unmount();
+});
+
+it("consumes shared clock diagnostics without a separate remote timer and rejects expired snapshots", async () => {
+  vi.useFakeTimers();
+  const bridge = { request: vi.fn() };
+  const entry = { sequence: 1, value: valid(), error: null, age_ms: 100, ttl_ms: 2500, receivedAt: performance.now(), expired: false };
+  const shared = { enabled: true, connected: true, epoch: 1, revision: 1, entries: { clock: entry }, refresh: vi.fn() } as SharedObservations;
+  const hook = renderHook((value: SharedObservations) => useClockSync(bridge, true, "robot", value), { initialProps: shared });
+  expect(hook.result.current.state).toBe("synchronized");
+  expect(hook.result.current.feedback_age_ms).toBeGreaterThanOrEqual(102);
+  await act(async () => vi.advanceTimersByTimeAsync(3000));
+  expect(bridge.request).not.toHaveBeenCalled();
+  hook.rerender({ ...shared, entries: { clock: { ...entry, expired: true } } });
+  expect(hook.result.current.state).toBe("stale");
   hook.unmount();
 });

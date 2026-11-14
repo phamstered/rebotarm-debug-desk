@@ -60,8 +60,8 @@ export type MotionGroupsPageProps = {
   error: string;
   urdfXml: string;
   homePositions?: number[];
-  onSave(group: MotionGroup): Promise<void>;
-  onDelete(id: string): Promise<void>;
+  onSave(group: MotionGroup, expected: string): Promise<void>;
+  onDelete(id: string, expected: string): Promise<void>;
   onBack?(): void;
   onOpenPoseLibrary?(id?: string, intent?: "edit" | "delete"): void;
   motion: PositionMotionControls;
@@ -427,7 +427,7 @@ function Editor({
     setNotice("");
     const copy = cloneMotionGroup({ ...draft, updatedAt: Date.now() });
     try {
-      await onSave(copy);
+      await onSave(copy, history.base);
       if (!live.current) return;
       setGroupEditorHistory((current) => ({
         ...current,
@@ -741,7 +741,7 @@ function Editor({
       locked.current = true;
       setWorking(true);
       try {
-        await onSave(copy);
+        await onSave(copy, history.base);
         if (!live.current) return;
         setGroupEditorHistory((c) => ({ ...c, base: JSON.stringify(copy) }));
       } catch (e) {
@@ -2330,7 +2330,7 @@ function Editor({
               disabled={working}
               onClick={() =>
                 void action(async () => {
-                  await onDelete(draft.id);
+                  await onDelete(draft.id, history.base);
                   if (live.current) {
                     setGroupEditorHistory(empty());
                     setDeleting(false);

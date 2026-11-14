@@ -1,4 +1,5 @@
 """No ROS or hardware required; exercised from cargo test."""
+import contextlib
 import importlib.util
 import json
 from pathlib import Path
@@ -29,8 +30,83 @@ class RecorderTests(unittest.TestCase):
                            pythonPath=str(Path(self.temp.name) / "python"), resume=False)
         Path(self.config["pythonPath"]).touch()
 
+    @contextlib.contextmanager
+    def pidfd(self):
+        with patch.object(remote.os, "pidfd_open", return_value=91, create=True) as opened, \
+                patch.object(remote.signal, "pidfd_send_signal", create=True) as sent, \
+                patch.object(remote.os, "close") as closed, patch.object(remote.os, "kill") as numeric:
+            yield opened, sent, closed
+            numeric.assert_not_called()
+
     def owned(self, finalizing=False):
+        self.control.cache.mkdir(parents=True, exist_ok=True)
         self.control.manifest.write_text(json.dumps(dict(pid=123, identity="old-start", config=self.config, finalizing=finalizing)))
+
+    def test_status_does_not_create_files_or_rewrite_owned_metadata(self):
+        with remote.operation_lock(self.control.cache, readonly=True):
+            self.control.execute("status")
+        self.assertFalse(self.control.cache.exists())
+        self.owned()
+        before = self.control.manifest.read_bytes()
+        with patch.object(remote, "process_identity", return_value="old-start"):
+            with remote.operation_lock(self.control.cache, readonly=True):
+                result = self.control.execute("status")
+        self.assertTrue(result["managed"])
+        self.assertEqual(self.control.manifest.read_bytes(), before)
+        self.assertEqual(list(self.control.cache.iterdir()), [self.control.manifest])
+
+    def test_status_lock_excludes_mutations_and_never_reports_idle_on_contention(self):
+        with remote.operation_lock(self.control.cache, readonly=False):
+            with self.assertRaisesRegex(RuntimeError, "正在执行"):
+                with remote.operation_lock(self.control.cache, readonly=True):
+                    self.fail("status entered a mutation")
+        with remote.operation_lock(self.control.cache, readonly=True):
+            with remote.operation_lock(self.control.cache, readonly=True):
+                pass
+            with self.assertRaisesRegex(RuntimeError, "正在执行"):
+                with remote.operation_lock(self.control.cache, readonly=False):
+                    self.fail("mutation entered active status")
+
+    def test_saved_episode_keeps_summary_without_status_writes(self):
+        self.owned()
+        self.services.call.side_effect = [sample(True, 10), "saved", sample(False, 0, 3)]
+        with patch.object(remote, "process_identity", return_value="old-start"):
+            self.control.execute("save_episode")
+        self.services.call.side_effect = None
+        self.services.call.return_value = None
+        self.assertEqual(self.control.status()["savedEpisodes"], 3)
+
+    def test_completion_receipt_omits_logs_and_binds_dataset_and_process(self):
+        self.owned()
+        with patch.object(remote, "process_identity", return_value="old-start"):
+            result = self.control.status()
+        receipt = remote.completion_receipt(dict(result, log="x" * 50000))
+        self.assertNotIn("log", receipt)
+        self.assertEqual(receipt["processIdentity"], "old-start")
+        changed = remote.completion_receipt(dict(result, root="/other"))
+        self.assertNotEqual(changed["datasetHash"], receipt["datasetHash"])
+        self.assertLess(len(json.dumps(receipt)), 1024)
+
+    def test_mutation_waits_for_short_shared_status_without_repeating_action(self):
+        # An automatic read must not cause a common start/save click to be
+        # classified as an unknown mutation; wait a bounded time for its lock.
+        with remote.operation_lock(self.control.cache, readonly=False):
+            pass
+        import threading
+        release = threading.Event()
+        entered = threading.Event()
+        def reader():
+            with remote.operation_lock(self.control.cache, readonly=True):
+                entered.set()
+                release.wait(2)
+        worker = threading.Thread(target=reader)
+        worker.start(); self.assertTrue(entered.wait(1))
+        timer = threading.Timer(0.05, release.set); timer.start()
+        try:
+            with remote.operation_lock(self.control.cache, readonly=False, wait_seconds=1):
+                self.assertTrue(release.is_set())
+        finally:
+            release.set(); worker.join(); timer.join()
 
     def test_external_recorder_has_no_process_ownership(self):
         result = self.control.status()
@@ -86,17 +162,20 @@ class RecorderTests(unittest.TestCase):
     def test_finish_signals_only_owned_recorder_and_confirms_finalization(self):
         self.owned()
         self.control.log_path.write_text("Dataset finalized\n")
-        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", None]), patch.object(remote.os, "kill") as kill:
+        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", "old-start", None]), self.pidfd() as (opened, sent, closed):
             result = self.control.finish()
-        kill.assert_called_once_with(123, signal.SIGINT)
+        opened.assert_called_once_with(123)
+        sent.assert_called_once_with(91, signal.SIGINT)
+        closed.assert_called_once_with(91)
         self.assertEqual(result["state"], "stopped")
+        self.assertEqual(result["processIdentity"], "")
         self.assertEqual(result["savedEpisodes"], 2)
         self.services.call.return_value = None
         self.assertEqual(self.control.status()["savedEpisodes"], 2)
 
     def test_finish_does_not_claim_success_without_finalize_marker(self):
         self.owned()
-        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", None]), patch.object(remote.os, "kill"):
+        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", "old-start", None]), self.pidfd():
             with self.assertRaisesRegex(RuntimeError, "未确认 finalize"):
                 self.control.finish()
 
@@ -169,17 +248,63 @@ class RecorderTests(unittest.TestCase):
 
     def test_finalization_timeout_never_escalates_to_force_kill(self):
         self.owned()
-        with patch.object(remote, "process_identity", return_value="old-start"), patch.object(remote.os, "kill") as kill, patch.object(remote.time, "sleep"):
+        with patch.object(remote, "process_identity", return_value="old-start"), self.pidfd() as (opened, sent, closed), patch.object(remote.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "未强制终止"):
                 self.control.finish()
-            kill.assert_called_once_with(123, signal.SIGINT)
+            sent.assert_called_once_with(91, signal.SIGINT)
+            closed.assert_called_once_with(91)
 
-    def test_process_identity_checks_module_and_linux_start_time(self):
-        fields = ["S"] + ["0"] * 18 + ["start-123"] + ["0"] * 5
-        with patch.object(Path, "read_text", return_value="123 (python worker) " + " ".join(fields)), patch.object(Path, "read_bytes", return_value=b"python\0-m\0rebotarm_vla.lerobot_recorder\0"):
-            self.assertEqual(remote.process_identity(123), "start-123")
-        with patch.object(Path, "read_text", return_value="123 (python) " + " ".join(fields)), patch.object(Path, "read_bytes", return_value=b"python\0other_module\0"):
+    def test_process_identity_binds_boot_pid_start_and_checks_races_and_module(self):
+        boot = "11111111-2222-4333-8444-555555555555"
+        fields = ["S"] + ["0"] * 18 + ["12345"] + ["0"] * 5
+        stat = "123 (python worker) " + " ".join(fields)
+        args = b"python\0-m\0rebotarm_vla.lerobot_recorder\0"
+        def identity(pid=123, boot_id=boot, after=stat, cmdline=args):
+            with patch.object(Path, "read_text", side_effect=[boot_id, stat, after]), patch.object(Path, "read_bytes", return_value=cmdline):
+                return remote.process_identity(pid)
+        expected = remote.hashlib.sha256(json.dumps([boot, 123, "12345"], separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(identity(), expected)
+        self.assertNotEqual(identity(pid=124), expected)
+        self.assertNotEqual(identity(boot_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), expected)
+        self.assertIsNone(identity(after=stat.replace("12345", "12346")))
+        self.assertIsNone(identity(after=stat.replace(") S", ") Z")))
+        self.assertIsNone(identity(cmdline=b"python\0other_module\0"))
+        self.assertIsNone(identity(boot_id="missing boot id"))
+        for pid in [0, 1, -1, True, "123"]:
+            self.assertIsNone(remote.process_identity(pid))
+        with patch.object(Path, "read_text", side_effect=OSError("missing proc")):
             self.assertIsNone(remote.process_identity(123))
+
+    def test_reboot_or_legacy_identity_cannot_claim_existing_recorder(self):
+        self.owned()
+        metadata = self.control.metadata()
+        for old in ["12345", "a" * 64]:
+            metadata["identity"] = old
+            with patch.object(remote, "process_identity", return_value="b" * 64):
+                self.assertFalse(self.control.owned(metadata))
+
+    def test_pid_reuse_after_open_refuses_signal_and_does_not_mark_finalizing(self):
+        self.owned()
+        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", "new-start"]), self.pidfd() as (opened, sent, closed):
+            with self.assertRaisesRegex(RuntimeError, "进程身份已改变"):
+                self.control.finish()
+            opened.assert_called_once_with(123)
+            sent.assert_not_called()
+            closed.assert_called_once_with(91)
+            self.assertFalse(self.control.metadata().get("finalizing"))
+
+    def test_missing_pidfd_or_signal_failure_never_falls_back_to_numeric_kill(self):
+        self.owned()
+        with patch.object(remote, "process_identity", return_value="old-start"), patch.object(remote, "os", Mock(spec=[])):
+            with self.assertRaisesRegex(RuntimeError, "pidfd"):
+                self.control.finish()
+        self.assertFalse(self.control.metadata().get("finalizing"))
+        with patch.object(remote, "process_identity", return_value="old-start"), self.pidfd() as (_, sent, closed):
+            sent.side_effect = ProcessLookupError("already exited")
+            with self.assertRaises(ProcessLookupError):
+                self.control.finish()
+            closed.assert_called_once_with(91)
+        self.assertTrue(self.control.metadata()["finalizing"])
 
 
 if __name__ == "__main__":

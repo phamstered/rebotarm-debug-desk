@@ -1,10 +1,13 @@
 use serde_json::Value;
+#[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
 
 // Keep the existing path so v1 data is migrated in place by the frontend.
+#[cfg(test)]
 const FILE_NAME: &str = "positions.v1.json";
+#[cfg(test)]
 const EMPTY: &str = r#"{"schemaVersion":2,"profiles":{}}"#;
 
 pub fn validate_positions_json(text: &str) -> Result<(), String> {
@@ -21,10 +24,14 @@ pub fn validate_positions_json(text: &str) -> Result<(), String> {
         }
         let positions = profile.get("positions").and_then(Value::as_array).ok_or("positions 必须是数组")?;
         let mut names = std::collections::BTreeSet::new();
+        let mut ids = std::collections::BTreeSet::new();
         for item in positions {
             let id = item.get("id").and_then(Value::as_str).unwrap_or("");
             if id == "builtin:home" {
                 return Err("不能保存 HOME".into());
+            }
+            if id.trim().is_empty() || id.len() > 512 || id.chars().any(|ch| ch.is_control()) || !ids.insert(id) {
+                return Err("点位 ID 无效或重复".into());
             }
             let name = item.get("name").and_then(Value::as_str).unwrap_or("").trim();
             if name.is_empty() || name == "HOME" {
@@ -59,10 +66,12 @@ pub fn validate_positions_json(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn positions_file(dir: &Path) -> PathBuf {
     dir.join(FILE_NAME)
 }
 
+#[cfg(test)]
 pub fn read_positions_file(path: &Path) -> Result<String, String> {
     if !path.exists() {
         return Ok(EMPTY.into());
@@ -72,6 +81,7 @@ pub fn read_positions_file(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
+#[cfg(test)]
 pub fn write_positions_file(path: &Path, text: &str) -> Result<(), String> {
     validate_positions_json(text)?;
     if let Some(parent) = path.parent() {
@@ -81,21 +91,6 @@ pub fn write_positions_file(path: &Path, text: &str) -> Result<(), String> {
     fs::write(&temporary, text).map_err(|error| format!("无法写入点位文件：{error}"))?;
     fs::rename(&temporary, path).map_err(|error| format!("无法保存点位文件：{error}"))?;
     Ok(())
-}
-
-fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|error| format!("无法定位应用数据目录：{error}"))?;
-    Ok(positions_file(&dir))
-}
-
-#[tauri::command]
-pub fn positions_load(app: AppHandle) -> Result<String, String> {
-    read_positions_file(&store_path(&app)?)
-}
-
-#[tauri::command]
-pub fn positions_save(app: AppHandle, content: String) -> Result<(), String> {
-    write_positions_file(&store_path(&app)?, &content)
 }
 
 #[cfg(test)]
@@ -145,6 +140,19 @@ mod tests {
         store["schemaVersion"] = serde_json::json!(1);
         assert!(validate_positions_json(&store.to_string()).is_err());
         store["profiles"]["jetson|robot|22"]["positions"][0].as_object_mut().unwrap().remove("gripperPosition");
+        assert!(validate_positions_json(&store.to_string()).is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_or_duplicate_record_identity() {
+        let point = serde_json::json!({"id":"p","name":"P","positions":[0,0,0,0,0,0]});
+        let mut other = point.clone();
+        other["name"] = serde_json::json!("Another");
+        let mut store = serde_json::json!({"schemaVersion":2,"profiles":{"robot":{"positions":[point,other]}}});
+        assert!(validate_positions_json(&store.to_string()).unwrap_err().contains("ID"));
+        store["profiles"]["robot"]["positions"][1]["id"] = serde_json::json!("");
+        assert!(validate_positions_json(&store.to_string()).is_err());
+        store["profiles"]["robot"]["positions"][1]["id"] = serde_json::json!("q");
         assert!(validate_positions_json(&store.to_string()).is_ok());
     }
 

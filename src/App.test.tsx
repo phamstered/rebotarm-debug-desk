@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultProfile } from "./types";
 import { EXPECTED_BRIDGE_BUILD_ID } from "./bridgeVersion";
 import type { MotionGroup } from "./motionGroupsLogic";
 
@@ -45,6 +46,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ save: doubles.save }));
 vi.mock("./bridge", () => ({
   BridgeClient: class {
     connect = doubles.connect;
+    attach = doubles.connect;
     listTopics = doubles.listTopics;
     getGraph = doubles.getGraph;
     getTopicInfo = doubles.getTopicInfo;
@@ -150,7 +152,17 @@ describe("App workflow", () => {
         ],
         message: "",
       });});
-    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string }) => {
+    const documents = new Map<string, {revision: number; content: string | null}>();
+    doubles.invoke.mockImplementation((command: string, args?: { controllerName?: string; action?: string; bagPath?: string; key?: string; expected?: number; content?: string }) => {
+      if (command === "editor_document_read" || command === "editor_document_commit") {
+        const key = args!.key!, before = documents.get(key) ?? {revision: 0, content: null};
+        if (command === "editor_document_read") return Promise.resolve(before);
+        if (args!.expected !== before.revision) return Promise.resolve({accepted: false, snapshot: before});
+        const snapshot = {revision: before.revision + 1, content: args!.content!}; documents.set(key, snapshot);
+        return Promise.resolve({accepted: true, snapshot});
+      }
+      if (command === "native_collection_operation_snapshot") return Promise.resolve(null);
+      if (command === "native_bag_operation_snapshot") return Promise.resolve([]);
       if (command === "check_ssh") return Promise.resolve("ready");
       if (command === "data_collection_action") return Promise.resolve({
         state: "stopped", managed: false, pid: 0, recording: false, pendingFrames: 0, savedEpisodes: 0,
@@ -182,9 +194,252 @@ describe("App workflow", () => {
       if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
       if (command === "start_rosbag_playback") return Promise.resolve({ playing: true, pid: 9, bagPath: args?.bagPath || "", message: "rosbag 回放已开始" });
       if (command === "stop_rosbag_playback") return Promise.resolve({ playing: false, pid: 0, bagPath: "robot-console-bags/demo", message: "rosbag 回放已停止" });
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
+  });
+
+  it.each([false, true])("shows retained control recovery on login and offline workspace without auto-connecting (corrupt=%s)", async corrupt => {
+    const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
+    const resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{}, configurable:true});
+    globalThis.ResizeObserver = class {observe(){} unobserve(){} disconnect(){}};
+    const task = {id:1,epoch:0,window:"page-motion",command_id:"controller-fixture",kind:"controller",phase:"uncertain",
+      message:corrupt ? "控制恢复记录不可用" : "桌面已重启，等待原连接查询控制结果",recovery_error:corrupt};
+    doubles.invoke.mockImplementation((command, args) => {
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"monitor",pages:{monitor:{detached:false,ready:true,visible:false,busy_reason:""}}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command === "native_task_snapshot") return Promise.resolve(task);
+      return base(command,args);
+    });
+    const view = render(<App />);
+    const expected = corrupt ? "任务恢复异常" : "Controller 切换 · 结果未确认";
+    try {
+      expect(await screen.findByRole("status", {name:"原生共享运动任务"})).toHaveTextContent(expected);
+      await user.click(await screen.findByRole("button", {name:"返回已打开页面"}));
+      expect(await screen.findByRole("status", {name:"原生共享运动任务"})).toHaveTextContent(expected);
+      expect(screen.getByRole("combobox", {name:"已打开页面"})).toHaveValue("monitor");
+      expect(doubles.connect).not.toHaveBeenCalled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("start_session", expect.anything());
+    } finally {
+      view.unmount(); delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver = resize; doubles.invoke.mockImplementation(base);
+    }
+  });
+
+  it("restores a reloaded main window from the native connection without creating or stopping SSH", async () => {
+    const base = doubles.invoke.getMockImplementation()!, resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{}, configurable:true});
+    globalThis.ResizeObserver = class {observe(){} unobserve(){} disconnect(){}};
+    const profile = {...defaultProfile, host:"retained-host",name:"Retained session",localPort:19444};
+    doubles.connect.mockResolvedValueOnce({bridge_version:"0.1.0",bridge_build_id:EXPECTED_BRIDGE_BUILD_ID,ros_distro:"humble",controllers_info_supported:true});
+    doubles.invoke.mockImplementation((command,args) => {
+      if(command === "native_bridge_context") return Promise.resolve({epoch:9,profile_revision:3,connected:true,profile,error:null});
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"dashboard",pages:{dashboard:{detached:true,ready:true,visible:true,busy_reason:""}}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:9,revision:0,connected:true,entries:{}});
+      return base(command,args);
+    });
+    const view=render(<App/>);
+    try {
+      expect(await screen.findByRole("button",{name:"断开"})).toBeEnabled();
+      expect(screen.getByText("Retained session")).toBeInTheDocument();
+      expect(screen.getByText("localhost:19444")).toBeInTheDocument();
+      expect(screen.queryByRole("button",{name:"连接 Jetson"})).not.toBeInTheDocument();
+      expect(doubles.connect.mock.calls).toEqual([[]]);
+      expect(doubles.send.mock.calls.every(([message])=>message.op==="subscribe")).toBe(true);
+      expect(doubles.invoke.mock.calls.some(([command])=>["check_ssh","start_session","stop_session"].includes(command))).toBe(false);
+    } finally {
+      view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);
+    }
+  });
+
+  it("returns from the disconnected form to an existing native Monitor without connecting", async () => {
+    const user = userEvent.setup();
+    const originalInvoke = doubles.invoke.getMockImplementation()!;
+    const previousResizeObserver = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    doubles.invoke.mockImplementation((command: string, args: unknown) => {
+      if (command === "workspace_snapshot") return Promise.resolve({ selected: "monitor", pages: {
+        monitor: { detached: false, ready: true, visible: false, busy_reason: "" },
+      } });
+      if (command === "native_observation_snapshot") return Promise.resolve({ epoch: 0, revision: 0, connected: false, entries: {} });
+      if (command === "native_task_snapshot") return Promise.resolve(null);
+      return originalInvoke(command, args);
+    });
+    const view = render(<App />);
+    try {
+      await user.click(await screen.findByRole("button", { name: "返回已打开页面" }));
+      expect(screen.getByRole("combobox", { name: "已打开页面" })).toHaveValue("monitor");
+      await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("workspace_select", { page: "monitor" }));
+      expect(doubles.connect).not.toHaveBeenCalled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("start_session", expect.anything());
+      await user.click(screen.getByRole("button", { name: "返回连接" }));
+      expect(screen.getByRole("button", { name: "连接 Jetson" })).toBeVisible();
+      expect(doubles.invoke).toHaveBeenCalledWith("workspace_cover", { covered: true });
+    } finally {
+      view.unmount();
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver = previousResizeObserver;
+      doubles.invoke.mockImplementation(originalInvoke);
+    }
+  });
+
+  it("keeps another page's preferences unchanged when native main and handeye mount", async () => {
+    const base = doubles.invoke.getMockImplementation()!;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{},configurable:true});
+    doubles.invoke.mockImplementation((command, args) => {
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command === "native_task_snapshot") return Promise.resolve(null);
+      if(command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
+      return base(command,args);
+    });
+    localStorage.setItem("robot-console-page", "status");
+    const writes = vi.spyOn(localStorage, "setItem");
+    const main = render(<App />);
+    const handeye = render(<App hostedPage="handeye" />);
+    try {
+      await screen.findByRole("region", {name:"手眼标定内容"});
+      for (const key of ["robot-console-motion-tab", "robot-console-motion-controllers", "easy-debug-panels", "easy-debug-sidebars", "easy-debug-layout"]) {
+        expect(writes.mock.calls.filter(([written]) => written === key)).toHaveLength(0);
+      }
+      for (const key of ["robot-console-page", "robot-console-nav-expanded", "robot-console-workspace-motion-nav", "easy-debug-navigate-status-on-connect"]) {
+        expect(writes.mock.calls.filter(([written]) => written === key)).toHaveLength(1);
+      }
+    } finally {
+      main.unmount(); handeye.unmount(); writes.mockRestore();
+      delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+      doubles.invoke.mockImplementation(base);
+    }
+  });
+
+  it("keeps offline handeye in the common host so a native Motion selection updates main", async () => {
+    const user=userEvent.setup(), base=doubles.invoke.getMockImplementation()!, baseListen=doubles.listen.getMockImplementation()!;
+    const resize=globalThis.ResizeObserver;
+    let workspaceEvent: ((message:{payload:unknown})=>void) | undefined;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    globalThis.ResizeObserver=class {observe(){} unobserve(){} disconnect(){}};
+    doubles.listen.mockImplementation((name,handler) => {
+      if(name==="workspace-state") workspaceEvent=handler;
+      return baseListen(name,handler);
+    });
+    doubles.invoke.mockImplementation((command,args) => {
+      if(command==="workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if(command==="native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command==="native_task_snapshot") return Promise.resolve(null);
+      return base(command,args);
+    });
+    const view=render(<App />);
+    try {
+      await user.click(screen.getByRole("button",{name:"手眼标定 / 离线样本"}));
+      expect(await screen.findByLabelText("手眼标定 页面区域")).toBeVisible();
+      expect(screen.getByRole("combobox",{name:"已打开页面"})).toHaveValue("handeye");
+      await waitFor(()=>expect(workspaceEvent).toBeDefined());
+      act(()=>workspaceEvent!({payload:{selected:"motion",pages:{handeye:{ready:true,visible:false},motion:{ready:true,visible:true}},motion_navigation:{revision:1,tab:"robot",profile_key:"jetson||22"}}}));
+      expect(await screen.findByLabelText("Motion 页面区域")).toBeVisible();
+      expect(screen.getByRole("combobox",{name:"已打开页面"})).toHaveValue("motion");
+      expect(screen.queryByLabelText("手眼标定 页面区域")).not.toBeInTheDocument();
+      expect(doubles.connect).not.toHaveBeenCalled();
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);doubles.listen.mockImplementation(baseListen);}
+  });
+
+  it("requests Robot View in the existing native Motion page from handeye", async () => {
+    const user=userEvent.setup(), base=doubles.invoke.getMockImplementation()!;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    doubles.invoke.mockImplementation((command,args) => {
+      if(command==="workspace_snapshot") return Promise.resolve({selected:"handeye",pages:{handeye:{ready:true,visible:true,detached:true,busy_reason:""}}});
+      if(command==="native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command==="native_task_snapshot") return Promise.resolve(null);
+      if(command==="native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
+      return base(command,args);
+    });
+    const view=render(<App hostedPage="handeye" />);
+    try {
+      await user.click(await screen.findByRole("button",{name:"前往 Motion 调整姿态"}));
+      await waitFor(()=>expect(doubles.invoke).toHaveBeenCalledWith("workspace_open_motion",{tab:"robot",profileKey:"jetson||22"}));
+      expect(screen.getByRole("region",{name:"手眼标定内容"})).toBeVisible();
+      expect(doubles.connect).not.toHaveBeenCalled();
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;doubles.invoke.mockImplementation(base);}
+  });
+
+  it("opens offline pose and group management in the single native Motion host", async () => {
+    const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
+    const resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{},configurable:true});
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    doubles.invoke.mockImplementation((command, args) => {
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command === "native_task_snapshot") return Promise.resolve(null);
+      return base(command,args);
+    });
+    const view = render(<App />);
+    try {
+      for (const [label,tab] of [["管理姿态库","positions"],["管理动作组","groups"]]) {
+        await user.click(screen.getByRole("button", {name:label}));
+        await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("workspace_open_motion",{tab,profileKey:"jetson||22"}));
+        const calls = doubles.invoke.mock.calls;
+        const handoff = calls.findIndex(([command]) => command === "native_offline_profile");
+        const navigation = calls.findIndex(([command,args]) => command === "workspace_open_motion" && (args as {tab:string})?.tab === tab);
+        expect(handoff).toBeGreaterThanOrEqual(0);
+        expect(handoff).toBeLessThan(navigation);
+        expect(screen.getByLabelText("Motion 页面区域")).toBeVisible();
+        expect(screen.queryByRole("region",{name:"姿态库"})).not.toBeInTheDocument();
+        expect(screen.queryByRole("region",{name:"动作组编辑器"})).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button",{name:"返回连接"}));
+      }
+      expect(doubles.connect).not.toHaveBeenCalled();
+    } finally {view.unmount(); delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__; globalThis.ResizeObserver=resize; doubles.invoke.mockImplementation(base);}
+  });
+
+  it("waits for offline profile handoff and keeps the connection form on rejection without connecting", async () => {
+    const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    let reject!: (reason: Error) => void;
+    const pending = new Promise((_resolve, fail) => {reject=fail;});
+    doubles.invoke.mockImplementation((command,args) => {
+      if (command === "native_offline_profile") return pending;
+      if (command === "workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if (command === "native_task_snapshot") return Promise.resolve(null);
+      return base(command,args);
+    });
+    const view = render(<App />);
+    try {
+      await user.clear(screen.getByLabelText("SSH 主机"));
+      await user.type(screen.getByLabelText("SSH 主机"),"second-robot");
+      await user.click(screen.getByRole("button",{name:"管理姿态库"}));
+      expect(doubles.invoke).toHaveBeenCalledWith("native_offline_profile",{profile:expect.objectContaining({host:"second-robot"})});
+      expect(screen.getByText("正在同步离线配置…")).toBeVisible();
+      expect(screen.getByRole("button",{name:"连接 Jetson"})).toBeDisabled();
+      expect(screen.getByRole("button",{name:"管理动作组"})).toBeDisabled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("workspace_open_motion",expect.anything());
+      await act(async () => reject(new Error("任务尚未结束，不能切换离线配置")));
+      expect(await screen.findByText(/任务尚未结束，不能切换离线配置/)).toBeVisible();
+      expect(screen.getByLabelText("SSH 主机")).toHaveValue("second-robot");
+      expect(screen.getByRole("button",{name:"连接 Jetson"})).toBeEnabled();
+      expect(doubles.connect).not.toHaveBeenCalled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("check_ssh",expect.anything());
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;doubles.invoke.mockImplementation(base);}
+  });
+
+  it("keeps an unsaved pose draft while switching Motion tabs", async () => {
+    const base=doubles.invoke.getMockImplementation()!;
+    doubles.invoke.mockImplementation((command,args)=>command === "editor_document_read" && args?.key === "positions"
+      ? Promise.resolve({revision:1,content:JSON.stringify({schemaVersion:2,profiles:{"jetson||22":{positions:[{id:"p",name:"Keep pose",positions:[0,0,0,0,0,0]}]}}})}) : base(command,args));
+    const user=userEvent.setup(); render(<App />);
+    await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
+    await user.click(await screen.findByRole("button",{name:"Motion"}));
+    await user.click(screen.getByRole("tab",{name:"姿态库"}));
+    await user.click(screen.getByRole("button",{name:"Keep pose更多操作"}));
+    await user.click(screen.getByRole("menuitem",{name:"编辑姿态"}));
+    await user.clear(screen.getByLabelText("点位名称")); await user.type(screen.getByLabelText("点位名称"),"Unsaved pose");
+    await user.click(screen.getByRole("tab",{name:"动作组"}));
+    await user.click(screen.getByRole("tab",{name:"姿态库"}));
+    expect(screen.getByLabelText("点位名称")).toHaveValue("Unsaved pose");
+    expect(doubles.invoke.mock.calls.some(([op])=>op === "editor_document_commit")).toBe(false);
   });
 
   it("provides a keyboard-focusable hand-eye content region only on its connected page", async () => {
@@ -288,6 +543,7 @@ describe("App workflow", () => {
 
       if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
       if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       if (command === "deploy_bridge") return Promise.resolve({ ok: true, message: "Bridge 已同步、编译并重启", log: "[done]" });
       if (command === "stop_session") return Promise.resolve(undefined);
@@ -393,6 +649,7 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
 
       if (command === "probe_jetson_usb") return Promise.resolve({
@@ -599,6 +856,7 @@ describe("App workflow", () => {
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
 
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -847,6 +1105,7 @@ describe("App workflow", () => {
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
 
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -884,6 +1143,7 @@ describe("App workflow", () => {
     await user.click(screen.getByTestId("send-trajectory"));
     await waitFor(() => expect(doubles.request).toHaveBeenCalledWith({
       op: "trajectory_command",
+      command_id: expect.any(String),
       topic: "/arm/trajectory_controller/joint_trajectory",
       joint_names: ["joint1", "joint2"],
       trajectory_points: [
@@ -993,6 +1253,39 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: /停止录制/ }));
     expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording", { profile: expect.any(Object) });
     expect(await screen.findByRole("button", { name: /开始录制/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("uses shared native recording truth and verifies again after a toolbar command", async () => {
+    const user=userEvent.setup(), base=doubles.invoke.getMockImplementation()!, originalListen=doubles.listen.getMockImplementation()!;
+    const resize=globalThis.ResizeObserver;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    globalThis.ResizeObserver=class {observe(){} unobserve(){} disconnect(){}};
+    let changed:(()=>void)|undefined, recording=false, failure=false, revision=1;
+    const snapshot=()=>({epoch:1,revision,connected:true,entries:{bag_record:{sequence:revision,value:{recording,pid:recording?42:0,outputPath:"bags/test",message:"observed"},error:failure?"SSH unavailable":null,age_ms:0,ttl_ms:8000}}});
+    doubles.listen.mockImplementation((name,handler)=>{if(name==="native-observations-changed")changed=()=>handler({payload:null});return originalListen(name,handler);});
+    doubles.invoke.mockImplementation((command,args)=>{
+      if(command==="workspace_snapshot")return Promise.resolve({selected:"motion",pages:{motion:{ready:true,visible:true,detached:true}}});
+      if(command==="native_bridge_context")return Promise.resolve({epoch:1,connected:true,profile:defaultProfile,error:null});
+      if(command==="native_task_snapshot")return Promise.resolve(null);
+      if(command==="native_observation_snapshot")return Promise.resolve(snapshot());
+      if(command==="start_rosbag_recording")return Promise.resolve({recording:false,pid:0,outputPath:"",message:"command returned"});
+      if(command==="native_observation_refresh") {recording=true;revision++;return Promise.resolve(snapshot());}
+      return base(command,args);
+    });
+    const view=render(<App hostedPage="motion" />);
+    try {
+      await user.click(await screen.findByRole("button",{name:"更多工具"}));
+      const start=await screen.findByRole("button",{name:/开始录制/});
+      await waitFor(()=>expect(start).toBeEnabled());await user.click(start);
+      expect(await screen.findByRole("button",{name:/停止录制/})).toBeEnabled();
+      expect(doubles.invoke).toHaveBeenCalledWith("native_observation_refresh",{source:"bag_record",epoch:1,afterPending:true});
+      expect(doubles.invoke).not.toHaveBeenCalledWith("get_rosbag_status",expect.anything());
+      expect(doubles.invoke).not.toHaveBeenCalledWith("get_rosbag_play_status",expect.anything());
+      failure=true;revision++;await act(async()=>changed!());
+      expect(await screen.findByRole("button",{name:/录制状态待确认/})).toBeDisabled();
+      await user.click(screen.getByRole("button",{name:"尝试停止录制"}));
+      expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording",{profile:expect.any(Object)});
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);doubles.listen.mockImplementation(originalListen);}
   });
 
   it("saves diagnostics, resets layout and persists connection and toolbar settings", async () => {
@@ -1373,6 +1666,7 @@ describe("App workflow", () => {
       });});
     doubles.invoke.mockImplementation((command: string) => {
       if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       if (command === "check_micro_ros_agent") return Promise.resolve({
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
@@ -1444,7 +1738,7 @@ describe("App workflow", () => {
     doubles.controllers.mockImplementation(() => {return Promise.resolve({ manager: "/controller_manager", fresh: true, available: true,
         controllers: [{ name: "arm_trajectory_controller", typeName: "joint_trajectory_controller/JointTrajectoryController", state: "active" }], message: "" });});
     doubles.invoke.mockImplementation((command, args) => {
-      if (command === "motion_groups_load") return Promise.resolve(JSON.stringify({ schemaVersion: 1, profiles: { "group-robot|operator|22": { groups: [group] } } }));
+      if (command === "editor_document_read" && args?.key === "motion_groups") return Promise.resolve({revision: 0, content: JSON.stringify({ schemaVersion: 1, profiles: { "group-robot|operator|22": { groups: [group] } } })});
 
       return baseInvoke(command, args);
     });

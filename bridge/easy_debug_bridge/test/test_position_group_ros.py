@@ -461,12 +461,29 @@ def main(binary):
             wait_for(lambda: event('paused', 0))
             before = len(robot.groups)
             robot.running_velocity = .04
-            time.sleep(5.6)
+            until = time.monotonic() + 5.6
+            while time.monotonic() < until:
+                # Shared observers and wrong-owner heartbeats must not renew
+                # this lease, even though its WebSocket is still connected.
+                assert ws.request('position_motion_observe')['op'] == 'position_motion_info'
+                assert other.request('position_motion_heartbeat', command_id=ws.command_id)['renewed'] is False
+                time.sleep(.1)
             assert info()['busy'] is True
             robot.running_velocity = 0.
             expired = wait_for(lambda: terminal('canceled'))
             assert 'hold_failure' not in expired
             assert len(robot.groups) == before
+
+            # Correlated terminal proof is readable by a new connection, and
+            # preserves group metadata after another task replaces current.
+            expired_id = ws.command_id
+            proof = other.request('position_task_status', command_id=expired_id)
+            assert proof['known'] is True and proof['terminal'] is True
+            assert proof['motion_phase'] == 'canceled'
+            assert proof['motion_state']['command_id'] == expired_id
+            assert proof['motion_state']['group_id'] == 'test-group'
+            assert other.request('position_task_status', command_id='unknown')['known'] is False
+            assert ws.request('position_motion_heartbeat', command_id=expired_id)['renewed'] is False
 
             # An unconfirmed Action cancellation remains locked in stop_failed,
             # including against a new command from the same owner.
@@ -475,6 +492,8 @@ def main(binary):
             assert start()['accepted'] is True
             wait_for(lambda: robot.executing)
             command = ws.command_id
+            assert ws.request('position_motion_heartbeat', command_id=command)['renewed'] is True
+            assert other.request('position_task_status', command_id=expired_id)['motion_state']['motion_phase'] == 'canceled'
             before = len(robot.groups)
             ws.request('position_cancel', command_id=command)
             wait_for(lambda: event('stop_failed'), timeout=8)
@@ -493,6 +512,8 @@ def main(binary):
             before = len(robot.groups)
             ws.socket.close()
             wait_for(lambda: not info(other)['busy'])
+            proof = other.request('position_task_status', command_id=ws.command_id)
+            assert proof['known'] is True and proof['terminal'] is True and proof['motion_phase'] == 'canceled', proof
             robot.hold_execution = False
             time.sleep(.3)
             assert len(robot.groups) == before

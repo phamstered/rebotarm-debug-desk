@@ -50,7 +50,8 @@ const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () =
   { page: "gravity", label: "重力辨识", title: "重力辨识 /StartGravityID", icon: GravityIcon },
 ];
 
-export function AppNav({ page, expanded, iconRail = false, rosReady = true, onSelect, onToggle }: {
+export function AppNav({ page, expanded, iconRail = false, rosReady = true, detachedPages, onSelect, onToggle }: {
+  detachedPages?: Partial<Record<AppPage, { detached: boolean }>>;
   iconRail?: boolean;
   page: AppPage;
   expanded: boolean;
@@ -77,14 +78,14 @@ export function AppNav({ page, expanded, iconRail = false, rosReady = true, onSe
                   aria-label={ariaLabel}
                   aria-disabled={disabled || undefined}
                   disabled={disabled}
-                  title={disabled ? reason : item.title}
+                  title={disabled ? reason : detachedPages?.[item.page]?.detached ? `${item.title} · 前往独立窗口` : item.title}
                   onClick={() => {
                     if (disabled) return;
                     onSelect(item.page);
                   }}
                 >
                   <item.icon />
-                  <span>{item.label}</span>
+                  <span>{item.label}{detachedPages?.[item.page]?.detached && <small aria-label="独立窗口"> ↗</small>}</span>
                 </button>
                 {disabled && reason && (
                   <p className="app-nav-disabled-hint" data-testid={`nav-disabled-${item.page}`}>

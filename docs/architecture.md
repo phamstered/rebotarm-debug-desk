@@ -22,7 +22,7 @@ The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `
 
 1. React / Three.js UI 通过 Tauri `invoke` 驱动 Rust SSH session manager。
 2. Rust 建立本地端口转发：本机端口 → Jetson `127.0.0.1:8765`。
-3. WebView 连接本地转发端口上的 WebSocket。
+3. 安装版由 Rust 会话管理器连接本地转发端口上的 WebSocket，WebView 使用原生 IPC 请求和有界二进制拉取。纯浏览器开发环境保留直接 WebSocket 适配器。
 4. Jetson 上的 `easy_debug_bridge`（C++ / Boost.Beast / rclcpp）接入 ROS 2 Humble graph（含 Micro XRCE-DDS Agent 暴露的实体）。
 
 ## Connection sequence
@@ -31,7 +31,7 @@ The npm package is `rebotarm-debug-desk`; Tauri `productName` / window title / `
 2. Desktop sources `/opt/ros/humble/setup.bash`, the configured robot overlay, and the Bridge overlay.
 3. Desktop starts the Bridge if its configured loopback port is not listening.
 4. Desktop starts `ssh -N -L` local forwarding.
-5. WebView opens a WebSocket to the local forwarded port.
+5. The native session runtime opens one WebSocket to the actual SSH-forwarded port; the main WebView attaches using its native window identity and connection epoch.
 6. UI requests Topic discovery and the node/topic endpoint graph, then subscribes to URDF and JointState topics.
 7. Topic Graph applies a deterministic force layout before rendering publisher → topic → subscriber SVG edges. A Node is a rounded rectangle and a Topic is an ellipse. Selecting a Topic creates a read-only Bridge subscription and focuses the graph; selecting a Node opens its details in Inspector.
 8. Inspector requests `topic_info` / `node_info` from Bridge on demand. The Bridge reads current ROS graph endpoint metadata, including GID and QoS, without running remote CLI commands. Monitor Panels accept numeric fields picked from Inspector, including multiple fields per Panel; time-series charts plot a 30s sliding window, while bar, pie, and gauge charts use the latest value per field.
@@ -68,6 +68,10 @@ Agents and developers should deploy the Jetson package with `npm run deploy:brid
 Native deployment resolves Node before launching the fixed repository script: an explicit `NODE_BINARY` wins, followed by the inherited PATH and macOS Homebrew install locations. Invalid explicit overrides fail without fallback. The selected executable is passed directly to the process API, with a child-scoped PATH for helper tools; no login shell or shell startup file is evaluated and no global environment is changed. The existing SSH/deployment stages and loopback-only Bridge listener remain unchanged.
 
 ## Current limits
+
+多窗口开发分支的 Monitor 有独立原生采集路径：`runtime::route → monitor::History → native_monitor_history → MonitorReplay → Monitor charts`。采集在每窗口预览最新帧覆盖前完成，订阅归原生会话所有；隐藏 WebView 不读取或绘制历史，但不会停止采集。历史按单调接收时间保留有界原始 JSON 字节，每次 IPC 分批解码；历史回放不会重新进入实时消息监听器。断线、截断和 Live/bag 时间域切换明确重置，诊断配对在暂停/配置边界清除。具体预算与游标字段见[协议](./protocol#原生-monitor-历史多窗口开发分支)。
+
+Monitor 编辑配置使用独立 `documents::Documents` 原生写入器，以应用数据目录文件为准，互斥内比较 revision 并原子替换。Topics 和 Monitor 持有只含布局/曲线定义的配置副本，用小型失效通知按需重新读取；采样点保留在 Monitor 展示状态中，原始消息历史保留在 Rust 连接中，二者都不进入配置文件。旧 localStorage 只作为首次迁移来源，所有原生 App 实例不再持续写回该键。版本不符和文件错误不会转为默认空配置并覆盖原文件。姿态库与动作组同样使用版本化原生写入器，保留旧文件路径，并以记录基线防止陈旧草稿覆盖。离线管理入口复用唯一 Motion WebView；带版本的标签导航保存在原生快照中，供懒创建或独立窗口接收。离线入口先经原生会话串行交接完整 Profile，再导航已有页面；Profile 带独立递增版本，页面离线时也应用配置。原生任务或迁移未结束时拒绝切换，连接中的配置不能由离线入口覆盖；导航等待匹配的配置后应用。姿态与动作组草稿按机器人标识保留在唯一 Motion 页面中，原始样本和图像不随配置广播。
 
 - One desktop session profile at a time.
 - Non-image Bridge subscriptions are shared by all connected WebSocket clients; Image delivery is scoped to interested clients.
@@ -226,6 +230,79 @@ Continuous raw RGB uses the existing binary WebSocket path. A user-requested sam
 
 Local vision calls have a single-operation semaphore, size limits and a deadline. Detector output and the original synchronized sample are committed together; failed detection cannot append a partial record. Connection/profile/page changes invalidate pending results. Sample data stays in page memory across navigation and can be explicitly saved/imported; application restart does not silently restore large images. Calibration configuration changes are locked once samples exist. Exported results are reviewable files only, not a production configuration change.
 
+
+## 原生页面承载（开发中）
+
+桌面主 WebView 负责连接和导航。功能页按白名单 URL 懒创建独立的子 WebView，在主窗口区域和独立 macOS Window 之间 reparent。页面 JS 堆与图像、模型视图不会因拆收被复制；每个页面只有一个实例。IPC 以原生调用 WebView label 和 incarnation 鉴权，重新挂到另一 Window 不改变页面身份。页面在共享 Rust 会话中独立附着消费者，主窗口不转发其数据。
+
+页面导航和 WebKit 渲染进程退出由原生生命周期回调处理：立即封锁旧消费者，串行释放其订阅，再允许新文档注册新 incarnation。此过程保留共享连接和其他页面，旧任务只走取消及终态核验，不转移续租权；离线计算的子进程也需结束后才释放占用。连续导航与断连使用加载代次及连接 epoch 拒绝迟到注册。
+
+原生页以 Rust 的窗口可见状态决定绘制/查询活跃状态，浏览器预览使用 document visibility；不把 reparent 后 WebKit 可能过期的 `document.hidden` 用于否决原生窗口。Motion 表单的路由显示与绘制活跃状态分离。主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。关闭主窗口保留其 WebView 与原生会话，只隐藏嵌入页；独立页和 Dock 可恢复主窗口。`layout.rs` 以最多 32 KiB 的版本化配置保存窗口偏好，临时文件写入后原子替换；不序列化连接、任务或授权。后台检查显示器工作区变化，恢复普通窗口到可见范围。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。
+
+`migration.rs` / `workspace_migration.rs` 将拆收作为可恢复的事务执行，失败恢复不重建 WebView。使用仓库内补丁版 `tauri 2.11.5` 与 `tauri-runtime-wry 2.11.4`：原生 reparent 成功前保留源窗口对 WebView 的持有及父窗口元数据，失败或目标消失时返回错误，防止目标销毁事件误删存活页面的 IPC 注册。等待迁移 ACK 的线程不持有父窗口 ID 锁，主线程成功迁移后先提交新路由 ID 再回复，避免页面就绪事件与启动时恢复窗口相互等待。详情及许可证见两个 vendor 目录的 `PATCHES.md`。`npm run test:rust` 同时执行运行库迁移和页面注册回归测试。真实错误注入仅允许独立标识的 Debug 测试应用消费一次性配置文件，正式应用和 Release 构建没有故障注入入口。
+
+Position/动作组/Pick 的任务占用已进入 Rust 原生会话。实际 WebView 身份、连接代次和任务编号在提交、发送前许可、迁移和终态处理间保持关联；窗口存活只由新的 IPC 入口调用刷新。Rust 看门狗处理所属窗口失联，其他窗口不能通过 Bridge 查询代为续租。传输队列另外维护停止代次，撤销停止之前尚未发送的执行指令。Position 已接入 Bridge 进程内有界终态记录与按编号恢复；未知记录不解锁。完整的非 Position/Pick 生命周期仍未接齐，不能将此机制视作完整多窗口控制安全验收。
+
+### 多窗口公共状态查询（开发分支）
+
+Rust 会话以固定来源调度 Agent、USB、arm mode、Controller、Topics、时钟诊断及 Motion/Pick 只读观察，各来源只有一个在途查询。主窗口和功能窗口通过事件失效通知读取有界快照，主 WebView 不负责中转或定时驱动。手动刷新与自动查询共用串行锁；用于操作后核验的请求在已有请求完成后重新发起。窗口接收端保留源帧龄并独立过期，连接代次和递增快照版本隔离旧响应。运动日志在 Rust 保存有界历史，窗口独立读取游标；只读观察不续租运动，原生任务看门狗按所属窗口存活独立续租。Monitor、姿态库和动作组的持久化配置由 `session/documents.rs` 统一版本化写入，事件只通知版本，功能页按需读取；UI 草稿仍属于页面本身。旧姿态/动作组直接写文件 IPC 已移除，编辑与删除比较记录基线并通过原生文件版本 CAS 提交。rosbag、其他本地偏好的单写者归属仍待迁移；完整范围见多窗口实现记录。
+
+模型和纹理的连接级字节缓存也由 Rust 持有，按 URI/编码合并在途读取并使用 LRU 限制为 128 MiB / 512 项。每个 WebView 仍需接收当前展示所需的 IPC 字节并创建自己的 GPU 场景，但不再长期保存重复的原始字节缓存。断线取消在途资源读取；资源缓存不承载控制 ACK 或改变路径边界校验。
+
 ## Docker runtime
 
 Humble 容器使用 host 网络及独立 PID 命名空间，构建目录与 host 分离。部署与权限边界见 [Docker 运行说明](docker.md)。
+
+
+多窗口开发分支的 Motor 指令流由原生 Tasks 登记所属 WebView，HardwareStatus 使用与页面共享的原生常驻订阅；在 UI 预览合并前验证停止反馈。其他窗口读取任务状态，不代替控制窗口续发指令。任务与停止结果限定在同一机器人连接身份，发布 ACK 和固件输出关闭确认分开处理。此路径未改变 Bridge 的安全校验或 Mac 不加入 DDS 的边界。
+
+重力辨识在多窗口开发分支中由 Rust 管理所属页面与心跳，Bridge 管理 ROS Action 受理前占用、连接租约和有界终态记录。只读观察不续租；页面失联或 Bridge 客户端断开请求取消。Action 返回和固件停稳分别确认；显式 DISABLE 还需要新的关闭输出序列反馈，不能由 HOLD 代替。现有 ROS Action 的目标参数与安全确认保持不变，测试只在隔离 ROS 域运行。
+
+直接 JTC 任务复用 PositionMotion 的互斥 ROS 回调组、模型、Controller Registry、时钟及反馈订阅，不依赖 MoveIt Action 服务。Socket 线程只排队并撤销待执行许可；跨客户端的控制入口串行受理，排队任务也占用运动锁。发布前在撤销锁内标记发送状态，随后异常只允许进入取消/结果未确认，不能退回“未发布”。取消通过 Bridge 现有硬件命令发布器及共享序列分配器发送 DISABLE，独立关节反馈、JTC reference/actual 和固件回执共同形成终态。原生桌面只消费带编号和证据的终态；Bridge 重启丢失记录仍为未知，不自动重放轨迹。
+
+
+开发分支的 Controller 单个/批量切换由 Rust 任务管理器预留全局运动及页面迁移占用，再以既有固定 SSH 命令执行。工作由应用层持有，WebView 的销毁或 IPC 超时不会终止成功后核验；成功后的公共 Controller 强制查询只在原机器人相同配置的当前会话中进行。未知 SSH 结果通过远端任务记录恢复，不根据普通空闲快照猜测完成，也不重放切换。整栈模式切换及有限控制的桌面重启恢复见下文。
+
+Controller SSH helper 仅使用 Python 标准库，通过现有 SSH 传入固定 helper 及结构化请求，不安装额外守护进程。提交先在 `~/.cache/rebotarm-debug-desk/controller-operations-v1` 的私有目录持久化记录，再启动脱离 SSH 标准流的有限子进程。记录使用原子替换和 fsync；输出仅保留尾部 2048 字节。每条记录最多 16 KiB、至多保留 256 条，满时仅淘汰成功/启动前拒绝记录，未确认记录不自动淘汰。保留期内同编号同摘要的重复提交返回原记录；Mac 的恢复路径始终只查询，因此淘汰或记录丢失不会导致重新执行。CLI 自身最多等待 20 秒（既有 ROS 命令内部另有 10 秒 timeout）；超时停止本次 CLI 进程组，但不能据此宣称已取消 ROS 服务，故记录为 uncertain。目录和记录不是跨用户认证机制；访问仍由 SSH 用户权限控制。
+
+
+Controller 停止证明由 session/controller_stop.rs 持有，与远端完成记录分开。Tasks 在同一互斥锁内登记停止意图和远端完成时的动作编号；运行中提前发送的 DISABLE 不能作为最终证明，完成后需重新发送，并由持续存在的原生 HardwareStatus 订阅确认。watch 结果保留最终状态，使后台 Controller 工作在任务锁释放后仍可获知“输出已关闭”，避免向原调用者返回切换成功。此协调覆盖显式 DISABLE 和已确认支撑的 disable-stop；正常 RETURN 停止流程保留，其他 arm mode 工作由下文的 arm_operation 管理。
+
+
+rosbag 录制与回放的只读状态也由 `session/observations.rs` 调度，分别通过固定 SSH status 命令读取，所有 WebView 只消费带连接代次和帧龄的快照。窗口不发起启动时的重复 bag 查询，手动刷新及操作后复查走相同的串行源。查询不依赖主窗口存活；断开会话取消查询，不把取消只读探测等同于停止远端录制或回放。
+
+rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 worker 持有，与原生页面迁移使用同一页面操作锁，并按录制/回放分别互斥。提交前核对原始 WebView incarnation 与共享连接；提交后不依赖发起 IPC future。远端 journal 持久化有界进程身份回执，成功后原机器人连接的共享状态源排在旧查询之后核验同实例。启动成功仍持有页面迁移许可；回放与运动在 Tasks 同一互斥内抢占。应用级监视消费已有公共状态，只有同实例进程组退出才解除占用，断线、旧状态及同路径替换进程不解锁。不同机器人连接不参与该任务恢复。后台 worker 的桌面重启恢复由下文有界本地查询票据及进程检查点接入。固定 SSH 命令携带标准库 Python helper，使用远端私有目录中的原子身份记录与文件锁管理 bag 进程；只读 status 不创建目录或清理历史。boot ID、启动时刻与继承 token 约束进程归属，pidfd 发送信号避免数字 PID 重用竞态；不增加网络监听或 ROS 控制接口。未知身份和遗留无身份活动进程拒绝自动接管。
+
+整栈控制切换由 `session/arm_operation.rs` 负责，复用 Tasks 全局控制占用与完成后 DISABLE 屏障。命令记录使用独立 `arm-mode-` 编号，固定策略允许至多 128 KiB 命令和 600 秒远端步骤等待；原 Controller 策略仍为 32 KiB / 20 秒。两类共享原子记录容量上限和命令摘要核验，只能提交一次。远端进度是有界元数据，不转发完整持续日志。600 秒超时不会被解释为 ROS 服务停止；异常结果保留占用。该层不替换已有 arm 生命周期脚本的输出确认、进程归属、示教支撑确认及自检条件。
+
+Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。Episode 桌面重启恢复通过单独的持久化查询票据/进程检查点接入；任意外部客户端的完整生命周期不由本桌面接管。
+
+多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。Bridge 的 `joint4_calibration.cpp` 持有互斥服务调用、姿态租约和有界回执/终态记录，复用 Controller Registry 与底层独立反馈及 DISABLE 序列分配。服务未返回时不允许 Release 越过它；状态和硬件证据确认后才释放任务。桌面拒绝旧能力入口；开发分支尚未作为已发布的实机控制链路验收。
+
+
+共享外部活动准入由 `session/activity.rs` 解析已有 observations 的三个状态源，Tasks 在与任务/迁移互斥相同的临界区内检查；原生发送许可和 SSH 提交前复查。只复制 bag/collection 快照，不复制完整 Topics 等大对象，不增加 SSH 查询。此层不发出停止命令、不把外部活动收编成本桌面的任务；原有任务的进程回执及终态证据继续独立核验。远端状态是有时效的观察，不是所有 ROS 客户端共用的远端互斥锁，任意未登记 bag 进程和外部跨连接恢复仍属边界。
+
+
+### Bag ownership across desktop restarts
+
+The native session restores rosbag ownership from a bounded private write-ahead journal before creating functional workspaces. Only remote query tickets and process receipts persist; command text never does. Recovery uses the existing shared observations and requires an explicitly established connection to the original Profile. It does not auto-connect or replay controls. Durable terminal cleanup precedes releasing native occupancy. Corrupt recovery records keep a visible admission barrier with stop/DISABLE and offline editing available. This section applies to bag operations; Episode recovery follows below. Restart recovery for the other task kinds is described in their respective sections below.
+
+
+Episode tasks restore from `collection-recovery-v1.json` before Workspace startup, using the same private atomic-file utility as bag recovery. Pending remote work is query-only; running checkpoints consume existing shared status and never renew a robot-motion lease. Native ownership remains until matched completion and durable cleanup. Recorder process identity includes boot ID, PID and start ticks; finalization pins the process with pidfd before checking identity and signaling. Legacy or unmanaged processes are not automatically adopted across desktop restarts. Samples and dataset files remain on Jetson and are not serialized into this local recovery journal.
+
+Journal operation locks precede the shared connection lock. Durable I/O never retains the connection lock; Episode completion revalidates the current connection after persistence before publishing completion and releasing occupancy. A blocked journal writer therefore does not serialize incoming feedback or DISABLE behind fsync.
+
+
+Finite Controller and arm-environment operations use a separate one-record native recovery journal. Write-ahead persistence occurs outside Core/Tasks; submission admission requires its durable marker. A terminal task remains reserved while the app-owned cleanup worker atomically clears the file, including pre-send cancellation and hardware-confirmed DISABLE. New tasks cannot overtake that cleanup. On desktop restart only the original remote query ticket is recovered; there is no command replay or restored actuation authorization. After bound remote completion, a new explicit DISABLE and post-completion firmware proof are required. Ordinary controller state matching cannot stand in for remote completion. Corrupt records fail closed for new actuation while leaving DISABLE and offline editing available.
+
+### Motor 连续流的桌面重启恢复
+
+Motor 首条使能指令发送前，Rust 在阻塞工作线程持久化原连接身份及任务编号；记录不包含运动参数。原生发送许可与任务占用采用同一锁，磁盘返回后重新检查任务是否已撤销。关流终态先冻结任务，再由应用级清理线程持久化移除记录；磁盘等待不持有共享 Core/Tasks 锁。启动恢复先于页面布局初始化，保持旧任务占用且不恢复发送许可；显式重连原机器人后沿用 DISABLE 序列与新鲜 HardwareStatus 的确认路径。
+
+### Bridge 租约任务的桌面重启恢复
+
+Position（含动作组）、Pick、Gravity、直接 Trajectory 和 Joint4 共享 `leased_recovery` 持久化门禁。原生任务状态与真正写入 Bridge 的许可串行；提交前落盘及终态后清理在独立阻塞线程完成，不持有 Core/Tasks 锁。Joint4 的应用级 worker 与普通 Bridge IPC 均使用该入口，Capture 沿用原姿态任务记录。重启恢复仅保留原编号和来源，按已有查询协议核验终态；不恢复页面授权、任务续租或动作参数。Bridge 历史不可用时继续显示未知结果，普通空闲状态不能释放旧任务。
+
+主 WebView 的重载恢复由 `useNativeMainRecovery` 在文档初始化时执行：读取 Runtime context，只在现有原生会话 connected 时调用无 port/profile 的 attach，读取 Topics 后再次核对 epoch 与 profile_revision，再恢复 UI。它不调用 `check_ssh`、`start_session` 或 `stop_session`，也不监听后续正常连接流程以免与用户主动连接竞争。恢复失败只释放自身 attachment，保留共享 transport 与其他消费者；原生进程重启后的离线行为不变。
+
+Tauri `RunEvent::Exit` 在保存布局后关闭 Runtime，并同步向 `SessionState` 持有的 SSH 子进程发出结束信号、清空本地端口记录。不能依赖托管状态 Drop 或在退出回调中另起异步清理任务：事件循环退出可能使两者都不执行。清理只使用该 Child 句柄，既不扫描进程名，也不停止远端 Bridge。

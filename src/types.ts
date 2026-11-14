@@ -48,6 +48,15 @@ export type TopicInfo = {
   types: string[];
 };
 
+/** Desktop IPC only; Monitor history never feeds control freshness checks. */
+export type NativeMonitorConfig = { topics: Record<string, string>; paused: boolean; bag_playing: boolean };
+export type NativeMonitorPage = {
+  epoch: number; reset: number; now_ms: number; cursor: number; tail: number; lost: number; skipped: number;
+  config: NativeMonitorConfig;
+  rows: Array<{ sequence: number; received_ms: number; segment: number; topic: string; data: unknown }>;
+};
+export type MonitorHistoryPage = NativeMonitorPage & { localOffset: number };
+
 export type RosGraphNode = {
   id: string;
   label: string;
@@ -133,7 +142,17 @@ export type RosControlStatus = {
   message: string;
 };
 
+export type RosbagProcessReceipt = {
+  kind: "record" | "play";
+  active: boolean;
+  pid: number;
+  domain: number | null;
+  processIdentity: string;
+  pathHash: string;
+};
+
 export type RosbagStatus = {
+  receipt?: RosbagProcessReceipt | null;
   recording: boolean;
   pid: number;
   outputPath: string;
@@ -141,6 +160,7 @@ export type RosbagStatus = {
 };
 
 export type RosbagPlayStatus = {
+  receipt?: RosbagProcessReceipt | null;
   playing: boolean;
   pid: number;
   bagPath: string;
@@ -199,6 +219,8 @@ export type MotionArrivalError = {
 };
 
 export type BridgeEnvelope = {
+  /** Desktop-only receipt time in this WebView's performance clock; not sent to ROS. */
+  desktop_received_at_ms?: number;
   controllers_info_supported?: boolean;
   refresh?: boolean;
   manager?: string;
@@ -217,6 +239,7 @@ export type BridgeEnvelope = {
   rgbd_subscription_id_supported?: boolean;
   object_detection_supported?: boolean;
   visual_pick_supported?: boolean;
+  visual_pick_cancel_id_supported?: boolean;
   rgb_target_tracking_supported?: boolean;
   tracking?: RgbTargetState | null;
   target_id?: string;
@@ -322,6 +345,15 @@ export type BridgeEnvelope = {
   /** Present on Bridge `hello` replies. */
   bridge_version?: string;
   bridge_build_id?: string;
+  motion_observation_supported?: boolean;
+  gravity_task_supported?: boolean;
+  trajectory_task_supported?: boolean;
+  joint4_task_supported?: boolean;
+  task_phase?: string;
+  known?: boolean;
+  terminal?: boolean;
+  renewed?: boolean;
+  motion_state?: BridgeEnvelope | null;
   ros_distro?: string;
   /** GravityIdentification Bridge ops (stack PR #23). */
   joint_mask?: number;
@@ -421,6 +453,15 @@ export type UsbProbeStatus = {
   error?: string;
 };
 
+/** Desktop-only native task ownership; not a ROS/Bridge input. */
+export type NativeTaskSnapshot = {
+  id: number; epoch: number; window: string; command_id: string;
+  kind: "position" | "pick" | "motor" | "gravity" | "controller" | "arm_mode" | "trajectory" | "joint4";
+  phase: "submitting" | "running" | "stopping" | "uncertain";
+  message: string;
+  recovery_error?: boolean;
+};
+
 export type ArmModeKind = "teleop" | "trajectory" | "teaching" | "realsense" | "idle" | "unknown";
 
 export type ArmModeStatus = {
@@ -462,4 +503,21 @@ export type ControlLogSnapshot = {
 export type MotionLogEntry = {
   seq: number; timestamp_ms: number; command_id: string; phase: string;
   level: "info" | "warn" | "error"; message: string;
+};
+export interface NativeBagOperation {
+  id: number;
+  kind: "record" | "play";
+  window: string;
+  host: string;
+  starting: boolean;
+  phase: "submitting" | "verifying" | "uncertain" | "running" | "succeeded" | "failed";
+  message: string;
+  recovery_error?: boolean;
+}
+
+export type NativeCollectionOperation = {
+  id: number; action: "launch" | "start_episode" | "save_episode" | "discard_episode" | "finish";
+  phase: "preparing" | "verifying" | "uncertain" | "recording" | "succeeded" | "failed";
+  host: string; message: string; busy: boolean;
+  recovery_error?: boolean;
 };

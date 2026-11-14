@@ -183,6 +183,25 @@ export function updateSeriesFromMessage(
   return changed ? next : seriesList;
 }
 
+export type SeriesMessage = {topic:string;data:unknown;at:number};
+/** Same append/prune semantics as sequential delivery, with one copy per series. */
+export function updateSeriesFromMessages(seriesList: DataSeries[], frames: SeriesMessage[]): DataSeries[] {
+  if (!frames.length) return seriesList;
+  let changed=false;
+  const next=seriesList.map(series=>{
+    let points=series.points, start=0, copied=false;
+    for(const frame of frames){
+      const value=frame.topic===series.topic?getNumericAtPath(frame.data,series.fieldPath):undefined;
+      if(value!==undefined){if(!copied){points=[...points];copied=true;}points.push({t:frame.at,value});}
+      while(start<points.length && points[start]!.t<frame.at-DATA_GRAPH_WINDOW_MS)start++;
+      start=Math.max(start,points.length-DATA_GRAPH_MAX_POINTS);
+    }
+    if(!copied && !start)return series;
+    changed=true;return {...series,points:start?points.slice(start):points};
+  });
+  return changed?next:seriesList;
+}
+
 export function createSeries(
   topic: string,
   fieldPath: string,

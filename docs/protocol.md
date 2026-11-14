@@ -83,16 +83,17 @@ JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint
 {
   "op":"trajectory_command",
   "request_id":"uuid",
-  "topic":"/arm/trajectory_controller/joint_trajectory",
-  "joint_names":["joint1","joint2"],
+  "command_id":"trajectory-uuid",
+  "topic":"/arm_trajectory_controller/joint_trajectory",
+  "joint_names":["joint1","joint2","joint3","joint4","joint5","joint6"],
   "trajectory_points":[
-    {"positions":[0.1,0.2],"velocities":[],"time_from_start":0.1},
-    {"positions":[0.5,-0.2],"velocities":[],"time_from_start":1.2}
+    {"positions":[0,0,0,0,0,0],"velocities":[0,0,0,0,0,0],"time_from_start":0.1},
+    {"positions":[0.1,0,0,0,0,0],"velocities":[0,0,0,0,0,0],"time_from_start":2}
   ]
 }
 ```
 
-`topic` 必须以 `/joint_trajectory` 结尾且只含字母数字下划线斜杠，否则拒绝。`trajectory_points` 最多 64 个点，`joint_names` 最多 32 个且不允许重复或空白；每个点的 `positions` 长度必须等于 `joint_names`，`velocities` 可为空数组，`time_from_start` 必须为正且严格递增。所有数值必须有限。Topic 上没有订阅者时返回 error。
+`topic` 仅支持已核验的 arm/gripper 两个控制器，详见下文直接 JTC 任务协议。`trajectory_points` 最多 64 个点，`joint_names` 最多 32 个且不允许重复或空白；每个点的 `positions` 长度必须等于 `joint_names`，机械臂的 `velocities` 可为空数组，夹爪必须提供速度；`time_from_start` 必须为正且在转换为纳秒后严格递增。所有数值必须有限，末点提供的速度必须为零。没有订阅者时拒绝发布。
 
 桌面端通过现有通用 `subscribe` 读取 active 控制器的 `control_msgs/msg/JointTrajectoryControllerState`（`~/controller_state`，旧版兼容 `~/state`），按其中的 `joint_names` 构造完整关节集合和顺序，不能直接复制可能含夹爪等额外关节的 JointState。下发前要求 JointState 与控制器反馈均在 1 秒内。`trajectory_command_ack` 仅确认 Bridge 已发布消息，不是 FollowJointTrajectory action 的接受/执行结果。
 
@@ -127,6 +128,7 @@ Send goal（**必须** `confirmation: "ARMED"`）：
 ```json
 {
   "op": "gravity_id_send_goal",
+  "command_id": "uuid",
   "request_id": "uuid",
   "confirmation": "ARMED",
   "joint_mask": 63,
@@ -151,7 +153,7 @@ Send goal（**必须** `confirmation: "ARMED"`）：
 Cancel：
 
 ```json
-{"op":"gravity_id_cancel","request_id":"uuid"}
+{"op":"gravity_id_cancel","request_id":"uuid","command_id":"goal-uuid"}
 ```
 
 可选状态查询：
@@ -261,7 +263,7 @@ Command acknowledgement:
 Trajectory command acknowledgement:
 
 ```json
-{"op":"trajectory_command_ack","request_id":"uuid","joints":2,"points":2}
+{"op":"trajectory_command_ack","request_id":"uuid","command_id":"trajectory-uuid","accepted":true}
 ```
 
 Gravity ID feedback（Bridge → Desk，节流 ≤10 Hz）：
@@ -353,6 +355,9 @@ Jetson 侧从各最多三帧的队列按时间戳配对 RGB/Depth（默认容差
 固定组为 `arm`（joint1–joint6）、`gripper`（独立夹爪）或 `arm_with_gripper`（联合七自由度）。固定 MoveIt Action `/move_action`，执行仅允许真实 `arm_trajectory_controller` 和可选 `gripper_trajectory_controller`；客户端不能指定组名或任意 Action/Topic。
 
 - `{"op":"position_motion_info","request_id":"..."}` 返回 `available`、门禁失败 `message`、当前 SRDF `home_positions`（未同步为空）、全局 `busy` 和本会话拥有的 `command_id`。连接期间每秒轮询该操作续约会话心跳（5 秒超时取消）。若本会话有运动，随后发送其最新状态。
+- `hello.motion_observation_supported:true` 广告无续租观察及按编号查询能力。新增 `position_motion_observe {motion_log_session?, motion_log_after?}` 返回同样的 `position_motion_info`（以及本 owner 当前运动事件），但不会刷新任务租约；`visual_pick_observe` 返回 `visual_pick_state`，同样不续租。旧 info/status 仍保留原行为，供旧客户端使用。
+- `position_motion_heartbeat {command_id}` 仅在同一 WebSocket owner、相同当前 command_id、任务未结束时续租；返回 `position_motion_heartbeat_ack {command_id, renewed}`，不以普通观察代替心跳。
+- `position_task_status {command_id}` 是跨连接只读查询，返回 `{command_id, known, terminal, motion_phase, motion_log_session, motion_state}`；`motion_state` 为完整的 `position_motion` 事件（含动作组元数据）或 null。编号限定 1–80 位 ASCII 字母、数字及连字符，未知/重复/非标量字段拒绝。当前任务优先；最近 256 个明确终态保留在 Bridge 进程内，总状态文本至多 2 MiB、每项至多 256 KiB。进程重启、淘汰或未知编号返回 `known:false, terminal:false, motion_phase:"unknown"`，不能据此确认停机。`stop_failed` 不进入终态缓存。
 - `{"op":"position_move","request_id":"...","command_id":"UUID","label":"取料位","confirmation":"ARMED","home":false,"positions":[0,-0.2,-0.3,0,0,0]}`。positions 固定按 joint1–joint6，目标为点击时快照。`home:true` 时在 Bridge 读取当前 SRDF HOME，忽略客户端 positions。
 - `position_motion_info` 另返回 `joint_rotation_supported:true` 表示支持单关节目标。字段缺失时客户端必须禁用此功能，不能回退为普通点位请求。
 - 单关节请求：`{"op":"position_move","request_id":"...","command_id":"UUID","label":"joint2 旋转","confirmation":"ARMED","joint_name":"joint2","joint_position":-0.3}`，角度单位 rad。`joint_name` 支持 joint1–joint6（rad）及具备夹爪能力时的 `gripper_finger_left_joint`（m），`joint_position` 必须有限且在有效模型/标定限位内。不能与 `home:true` 或任何 `positions` 字段混用；缺少配对字段时拒绝。
@@ -519,7 +524,7 @@ Action ID 为至多 128 字节的 ASCII 字母、数字、下划线或连字符�
 - 预览：`{"op":"visual_pick_preview","request_id":"uuid","subscription_id":"RGBD-token","object_id":1}`。首次绑定要求同一客户端正在订阅带检测的 `base_link` RGBD，目标当前可见，源帧龄小于 500 ms，时钟代次匹配；绑定后使用同一目标 UUID 的跟踪观测。返回 `visual_pick_preview`，包含原令牌/编号、`frame_seq`、`calibrated`、`execution_ready`、`grasp/pregrasp`（各含三个米制 position 和 xyzw orientation）、`opening_m`（单指行程）、`message`。未标定的姿态是抓取坐标系几何候选，不是可执行 TCP。
 - 开始：`{"op":"visual_pick_start","request_id":"uuid","subscription_id":"RGBD-token","object_id":1,"preview_frame_seq":12,"target_id":"selected-target-UUID","command_id":"UUID","confirmation":"ARMED"}`。command_id 仅允许字母、数字、连字符，最长 60 字符，最近 256 个受理 ID 去重。要求最近 1 秒内同一客户端生成的可执行预览，当前目标/时间代次一致、中心偏移不超过 2 cm、每轴尺寸变化不超过 1 cm、抓取配置一致，且标定/场景核验均通过；后台再核验 MoveIt TCP、夹爪可用性与标定开度。返回关联 request_id 的 `visual_pick_state`，busy:true 表示任务已受理，不代表规划或抓取成功。
 - 状态/心跳：`{"op":"visual_pick_status","request_id":"uuid"}`。只有任务所属客户端刷新其 3 秒心跳；建议 500 ms 查询一次。返回 `visual_pick_state`，含 `command_id`、`pick_phase`、`message`、`busy`。`pick_phase` 不复用重力辨识的数字 `phase` 字段。
-- 取消：`{"op":"visual_pick_cancel","request_id":"uuid"}`。只有所属客户端可以取消在执行任务；返回当前状态。不会把取消受理当作停稳。会话断开、DISABLE、取消和错误都禁止继续下发后续段。
+- 取消：`{"op":"visual_pick_cancel","command_id":"原抓取任务编号","request_id":"uuid"}`。任务编号必须匹配当前抓取，且只有所属客户端可以取消执行中任务；Bridge 在同一临界区核对编号和登记取消，返回当前状态。缺少、无效或过期编号拒绝执行。不会把取消受理当作停稳。会话断开、DISABLE、取消和错误都禁止继续下发后续段。
 
 阶段为 idle / validating / opening / approaching / descending / closing / lifting / holding / canceling / stop_failed / failed / canceled。异步状态也使用 `visual_pick_state`。holding 表示抬升运动完成并保持，不构成夹持成功证明。规划/执行通过既有 `PositionMotion` 的受限 TCP/夹爪接口，保留其碰撞、模型、时序、反馈、控制器及停稳确认。停止未确认时 busy 保持 true；正常终态才释放视觉运动锁。期间普通 position_move、动作组启动/继续、非 DISABLE 直接命令、轨迹发布及重力辨识被拒绝。未知、重复、非标量请求字段返回 error。
 
@@ -558,3 +563,198 @@ A successful single-point gripper-only MoveIt plan can enter `verifying` without
 - `handeye_save {path, content}` writes an explicitly selected JSON/YAML report or PNG board file, with extension and size validation. Dataset schema `version:1` stores board/context/source configuration and samples with original capture metadata, board detection, and `training | validation | excluded` role. Import invalidates any previous solve.
 
 These IPC commands do not alter Bridge motion capabilities or remove any execution/calibration gate. Export uses `T_parent_body = T_parent_sensor * inverse(T_body_sensor)` and marks `applied:false`, `plane_verified:false` independently of the numerical hand-eye validation result.
+
+## Native shared Bridge IPC (desktop only)
+
+- `native_bridge_attach {port?}` returns `{attachment:{epoch,window:{label,incarnation}},hello}`. The Tauri caller's actual window label is authoritative. Only `main` may supply a port, and it must equal the established SSH tunnel's selected port. Other approved page windows attach to an existing session; no frontend URL or hostname is accepted.
+- Native navigation and WebKit process-termination events invalidate the previous document immediately. A replacement `native_bridge_attach` waits for serialized subscription cleanup, receives a new window incarnation, and rejects pending registration if another navigation or connection epoch change intervenes. Motion ownership remains with the old incarnation until terminal evidence; a replacement document cannot renew its lease. Offline local work is cancelled and retains its reservation until exit.
+- `native_bridge_request {attachment,consumer,message,timeoutMs}` uses the shared socket with a native request ID. The adapter restores the UI request ID for listeners. Timeout is 1–60000 ms; commands with unknown execution status are not retried. `consumer` distinguishes subscription owners in a window, including `handeye-rgb`.
+- `native_bridge_next {attachment}` permits one outstanding pull per window and returns one frame or an empty response after one second. Native `Response` transports raw bytes: byte 0 is 0 (JSON) or 1 (existing RCI1/RCR1/RCD1/RCT1 binary); bytes 1–8 are little-endian u64 native queue age in ms; bytes 9–16 are little-endian u64 elapsed native handler time in ms; bytes 17 onward contain the unchanged wire envelope. Requests use the same wrapper. Excluding native elapsed time from total IPC round-trip time avoids treating long-poll waiting as stale source data, while retaining a conservative bound on IPC transit delay.
+- The frontend adds `desktop_received_at_ms` in its performance-clock domain after decoding. This field is desktop-only, never a ROS/Bridge input. Feedback, RGBD, RGB target tracking and calibration consumers preserve this age through rendering and freshness checks.
+- `native_bridge_detach {attachment}` releases that window's interests. Other windows' subscriptions and the connection remain active. `stop_session` invalidates the native epoch before stopping the SSH tunnel.
+
+These APIs provide session transport. Native page ownership and migration use the task and workspace protocols below; transport availability alone does not authorize a control operation.
+
+### 原生任务状态（多窗口开发分支）
+
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller | arm_mode | trajectory | joint4`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+
+原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
+
+Position/动作组、Pick、Gravity、Trajectory、Joint4 的原生任务同时保存连接身份：host、sshPort、username、identityFile、remotePort、rosDomainId、rosSetupScript、commandTopic、statusTopic、jointStateTopic；localPort 不参与。新任务缺少当前代次的身份时拒绝提交。重连查询及终态接收均核对原身份与当前代次；不匹配时保留 uncertain 占用。排队发送时再次核验，防止准入后的配置变化使旧执行、查询、续租或取消流入另一连接。显式 mode=3 的 DISABLE 不受此身份门禁限制；它不能凭 ACK 解锁旧任务。原有只读共享状态观察不受影响，协议字段与远端消息不变。
+
+桌面原生层把页面的 `position_motion_info` / `visual_pick_status` 映射为共享只读缓存，各窗口均可观察，不直接发送续租请求。只有已受理且所属 WebView 仍存活的任务由 Rust 每 500 ms 续租：Position 使用 `position_motion_heartbeat`，Pick 使用原 `visual_pick_status`。页面不能直接请求 Position 心跳。窗口数据拉取/请求入口维护存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台查询与心跳不刷新窗口存活。取消可越过慢心跳；迟到回复按原生任务编号隔离。停止或重连后每秒查询终态：Position 必须有匹配 command_id、明确 terminal 及一致的完整 motion_state，Pick 必须有匹配编号且 busy=false 的 holding/failed/canceled。未知、单独 idle/busy=false 或 stop_failed 不解锁。恢复取得的完整终态会发给页面以释放同一动作组锁。缺少新能力的 Bridge 会阻止原生多窗口执行，并提示更新。
+
+原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹和 SSH 控制操作的任务生命周期见下文。
+
+
+Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
+
+Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 不小于该次 DISABLE ACK、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
+
+### 直接 JTC 的任务协议（多窗口开发分支）
+
+桌面 `trajectory_command` 增加唯一 `command_id`，原生入口仅允许当前 Motion 页面提交，且要求 hello 中 `trajectory_task_supported:true`。具备 MoveIt/control_msgs/controller_manager_msgs 编译依赖的 Bridge 声明该能力；缺失依赖的构建返回 false。直接轨迹不调用 MoveIt Action，但仍从 `/move_group` 读取模型、标定和限幅。
+
+能力满足时，Rust 将直接轨迹纳入共享运动和迁移锁。原生层消费的 `trajectory_command_ack` 必须匹配 `command_id` 和 `accepted:true`，仅表示受理；明确 `accepted:false,evidence:"not_published"` 可以释放尚未受理的任务，普通 error、旧式发布 ACK 和超时继续保留任务并请求取消。所属窗口的存活驱动每 500 ms 至多一次 `trajectory_heartbeat`，页面不能直接调用续租；超过 5 秒失联或页面退出请求编号匹配的 `trajectory_cancel`。取消具有保留发送容量，撤销之前排队的直接轨迹，ACK 不解除占用。
+
+原生终态消费格式为 `op:"trajectory_task_state"`、匹配 `command_id`、`terminal:true`，并严格匹配 `task_phase/evidence`：`succeeded/target_observed`、`canceled/output_disabled` 或 `failed/not_published`。缺失证据、其他编号、旧连接事件及 `uncertain` 保留占用。重连原机器人配置后只发 `trajectory_task_status`，要求 `known:true,terminal:true,busy:false` 和嵌套 `result` 中完整一致的上述终态；不重发轨迹或向替换连接发送取消。身份包括 SSH/远端 Bridge、ROS domain/setup 和反馈 Topic，不包含本地隧道端口。
+
+各页面读取 `native_task_snapshot` 可显示 `kind:"trajectory"`；`native_trajectory_cancel` 只登记本机取消意图，参数 `id` 与 `commandId` 必须同时匹配当前任务。网络发送由原生看门狗执行，IPC 返回成功不代表机械臂已停止。
+
+Bridge 在运动回调组串行处理发布、反馈和任务状态，最多保留 256 个终态。仅允许 `/arm_trajectory_controller/joint_trajectory` 和 `/gripper_trajectory_controller/joint_trajectory`，要求完整关节集合、active 控制器及 position/velocity 接口、新鲜反馈、TRACK、无故障和时钟健康。校验 JTC actual、desired 及独立测量到首点的插值；夹爪使用任务开始时保存的标定转换为米。有速度的段检查连续样条速度、加速度及位置界限。保留既有机械臂 position-only 线性路径，只能核验段内速度，不能证明结点速度跳变的加速度界限；夹爪缺失速度会拒绝。
+
+首段校验使用 Bridge 收到的起始快照，不能视为控制器内的实时限幅器。直接轨迹发布 `header.stamp=0`，由 JTC 在实际消费时选取起始时间，避免发布到消费之间的延迟压缩起点到首点的时间；Bridge 独立保存发布时间用于完成核验。[JTC 2.53.1 的采样实现](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/trajectory.cpp) 的这项行为已用安装版真实控制器和 GenericSystem 模拟硬件验证：150 ms 延迟的绝对时间戳会压缩 200 ms 首段，零时间戳保留该时长。此测试不证明实机调度时延有上界，也不能保证延迟期间实测起点没有变化。
+
+完成和取消释放还要求 `desired.time_from_start` 非负并达到末点时长；由 `controller_state.header.stamp - desired.time_from_start` 推得的控制器轨迹起点不得早于本次发布时间。旧轨迹即使末点相同也不能作为本次消费完成证据；缺失或不一致的轨迹时间保留占用。
+
+取消、所属连接断开或 5 秒租约失效会请求共享序列分配器发送三帧零输出 DISABLE，必要时每秒重申；缺少订阅者或发布错误继续保留占用，不向 JTC 发送空轨迹。完成需原轨迹时长已过、JTC reference 已在末点且速度为零，actual 与独立测量连续新鲜停稳 200 ms；成功还核验目标误差，取消还核验 DISABLE 序列回执。时间基准改变保留 uncertain，不能只靠墙钟等待释放。排队取消/断连/DISABLE 与直接发布共用撤销屏障；重复编号不重发，已发布任务绝不返回 not_published。
+
+### Joint4 原生任务协议（多窗口开发分支）
+
+桌面 `call_joint4_calibration_service` 已移除直接 SSH 服务调用，改由应用级工作持有请求。只允许当前附着的 `page-calibration`，请求 Profile 必须匹配共享连接；Begin / Release 要求 `confirmation:"SUPPORTED"`，Capture 要求 `"HANDS_CLEAR"`。原生入口要求 hello 显式声明 `joint4_task_supported:true`。具备 ControllerManager 查询能力的 Bridge 现已接入这套服务适配器并声明能力；不依赖 MoveIt Action。旧 Bridge 仍拒绝该入口并提示更新。正式部署和实机验收与隔离模拟测试分开记录。
+
+- `joint4_start`：唯一 `command_id`、`action:begin_pose|release_pose|fit|reset` 和上述确认。请求发送前占用全局运动槽及本页迁移许可；原生 worker 不随 IPC future 退出而丢弃已发送请求。`joint4_start_ack` 必须匹配编号及 action，包含布尔 `accepted` / `success` 和至多 16 KiB 的 `message`；仅明确 `accepted:false,success:false,evidence:"not_called"` 可释放未受理的任务。普通错误或回执丢失请求取消，不重新调用服务。
+- `joint4_capture`：沿用本页面已受理的 Begin 任务编号，另有唯一 `operation_id` 和手离开确认；同一时刻至多一个在途 Capture。排队事件仅允许续租，须收到 Begin 成功回执或匹配的 running 事件后才开放 Capture。回复 `joint4_capture_ack` 必须同时匹配两编号，含布尔 success 和有界 message。采样回执不结束姿态任务；异常回复请求释放，不重发采样。Bridge 串行调用服务，当前姿态最多保存 64 项采样回执；重复已完成操作编号返回原回执，不重发。重复在途 Capture 返回错误，保持原请求在途。
+- 已有任务时的 Release 只登记取消意图，IPC 回复 `{success:true,pending:true,command_id,message}`，不是姿态释放证明。原生 worker 发送 `joint4_cancel`；窗口失联或超过 5 秒没有所属页面活动也触发取消。活跃已受理任务每 500 ms 至多一次 `joint4_heartbeat`，要求编号匹配的 `joint4_heartbeat_ack,renewed:true`。页面不能直接调用这四类控制/续租消息。取消及 DISABLE 使此前排队的 Begin/Capture 失效；取消有保留发送容量。
+- `joint4_task_state` 须匹配 `command_id`、原 action 和 `terminal:true`。认可的 phase/evidence 配对为 `canceled/pose_released`、`canceled/output_disabled`、`failed/not_called`、`failed/service_rejected`，以及仅 Fit/Reset 可用的 `succeeded/service_verified`。`pose_released` 表示解除软保持，重力前馈仍有效；不能作为硬件关闭输出证据。Bridge 只有在在途服务均已返回、相应状态及必要硬件反馈核验后给出证据。服务提交/响应异常不会丢弃仍可能执行的调用，也不会并发重试；迟到 Begin/Capture 返回后才允许 Release。
+- 重连只向同一机器人、ROS/反馈配置查询 `joint4_task_status`；要求 `known:true,terminal:true,busy:false`、匹配编号/phase 及嵌套 result 中完整有效终态。未知、缺字段或其他连接不能释放占用，查询不代替所属窗口续租。桌面进程重启通过 `leased-recovery-v1.json` 恢复原编号和来源，只查询终态，不恢复续租或动作。
+
+Joint4 的服务仅限 `/joint4_calibration_controller/{begin_pose,capture_pose,release_pose,fit,reset}`。除 Release 外，要求标定 Controller active、新鲜注册表、健康同步时钟、TRACK、无硬件故障和六轴使能、有限且新鲜的独立关节反馈。Begin/Capture 保留原有 Joint4 速度、位移、修正力矩和稳定时长门禁；Fit/Reset 要求释放姿态。释放服务不因状态过期被挡住，但终态仍须核验。
+
+软释放要求 Release 回复成功、之后收到的有效标定状态显示未保持、无 fault、修正力矩近零，以及独立六轴/HardwareStatus 在服务返回后持续提供新时间戳并停稳 200 ms。状态 Topic 本身无 Header，只能验证接收新鲜度和回调先后，不能证明该消息的采样时间；服务成功及独立反馈共同作为证据。显式 DISABLE 还要求所有服务收束、Release 返回后重新分配的 DISABLE 序列由固件确认；此路径不依赖已停发的标定状态，但仍核验时钟和六轴反馈。历史最多保存 256 项 / 2 MiB，Bridge 重启或记录淘汰后的未知结果不解锁。状态查询不续租，5 秒租约到期或所属 socket 断开请求释放。
+
+### 原生页面附着（多窗口开发分支）
+
+桌面原生 IPC 与 Jetson Bridge 操作分开。主 WebView 调用 `native_bridge_attach` 时传入当前 SSH 会话实际分配的端口及 Profile；Rust 核验端口归属、Profile 格式和 16 KiB 大小上限。功能 WebView 通过 `native_bridge_context` 读取连接代次/连接状态/Profile，再不带端口地附着当前会话，不能据此新建第二个上游连接。原生调用者身份取 WebView label，不取可变的父 Window label。取消中的附着完成清理后才能进行替代附着，旧 token 不允许覆盖新消费者。
+
+主 WebView 可通过 `native_offline_profile {profile}` 显式交接离线编辑配置；同样校验格式与 16 KiB 上限，保留相机等前端附加字段。仅在未连接且没有进行中的连接握手时执行；实际配置变化与原生任务、未确认任务、本地操作及页面迁移共用互斥检查。同配置重开不递增版本。返回与 `native_bridge_context` 相同的快照，新增 `profile_revision`；发送 `native-session-changed` 失效通知，页面离线时也应用 Profile，但不附着 socket。连接建立和离线交接串行，已有连接拒绝另一 Profile 的附着请求，不能只改配置而继续复用旧 socket。该 IPC 不连接机器人、不发送控制命令，也不恢复授权。
+
+窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready/show_main/recover`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_show_main` 只显示已有主窗口，不迁移页面或重建连接。页面状态的 `recovery_required` 表示自动回滚未完成；此时拒绝再次拆收，用 `workspace_recover` 重试恢复，仍需页面 ready、无采样等 busy 状态且通过原生任务迁移锁。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。
+
+页面状态的 `restore_pending` 为启动布局恢复的等待或失败说明（正常为空字符串）。应用工作线程每 750 ms 检查待恢复页；等待 ready、无 busy 且取得同一 Tasks 迁移许可后才尝试原生移动。任务阻止期间不消耗原生尝试次数、不覆盖保存的独立布局；原生失败后不循环重试，由用户通过既有拆出/恢复入口处理。移动成功清除待恢复说明和保存保护。此字段与 `busy_reason` 独立，不能由页面 ready 通知覆盖任务或窗口失败状态。
+
+### 原生共享只读状态（多窗口开发分支）
+
+`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。十一个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`、`bag_record`、`bag_play`、`collection`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
+
+`native_observation_refresh {epoch, source, afterPending}` 通过每 source 的串行锁查询；普通同时刷新可共用同一结果，`afterPending:true` 强制在此前工作完成后重新发起，用于控制器操作后的实态核验。刷新响应额外携带 `handler_elapsed_ms`，前端从 IPC 往返耗时中扣除原生等待时间，剩余传输时间计入 age；Controller 的服务器等待也只扣除一次。`native_observation_interval {seconds}` 仅主 WebView 可调用，Topics 间隔为 5–300 秒。原有 Bridge `topics` 请求在桌面原生层复用该源，显式 `refresh:true` 触发共享刷新；浏览器回退仍直接查询 Bridge。
+
+Motion/Pick 分别每 1 秒 / 500 ms 调用无续租的 observe，生成快照后通过有界最新通知 `native_position_info_changed` / `native_visual_pick_changed` 提醒页面读取。回复保留查询及缓存帧龄，不能把读取旧缓存的时间当新反馈时间；旧空闲快照也不能解除未知任务占用。Motion 日志在 Rust 保存至多 5000 项 / 2 MiB，各窗口使用独立 session/cursor 分页读取（每页最多 256 项）；共享状态快照不复制整份日志。上游截断、缓存淘汰会向落后窗口报告 truncated；断线清空日志，旧响应不能重新填充。
+
+### 原生 Monitor 历史（多窗口开发分支）
+
+此通道只经过 Tauri IPC，不新增 Bridge WebSocket 操作。`native_monitor_configure(attachment, config)` 仅允许实际 `page-monitor` WebView 调用，`config={topics: {topic: message_type}, paused, bag_playing}`。最多 64 个数值消息 Topic，拒绝图像与点云类型，订阅与其他页面按 Topic 合并；原生消费者独立于页面附着。全部参数先校验，再提交期望配置；上游某项订阅拒绝时仍结算其余 ACK 并返回错误，传输结果未知则使对应会话失效。
+
+`native_monitor_history(attachment, after)` 返回 `{epoch, reset, now_ms, cursor, tail, lost, skipped, config, rows}`，每行 `{sequence, received_ms, segment, topic, data}`。`received_ms/now_ms` 同属原生会话管理器单调时钟，前端以固定偏移映射到自身时钟，重复读取不刷新帧龄。独立游标只能属于当前附着和连接代次，未来游标拒绝。每页最多 256 帧或 512 KiB 原始消息；历史最多 8192 帧 / 8 MiB，新帧到达时淘汰距其超过 30 秒的数据。`lost` 表示游标到保留下界间的缺失帧；超出 64 KiB 的消息增加 `skipped` 并建立明确缺口，图表重建且提示。
+
+配置或暂停变化增加 `segment`，诊断不得跨段配对；Live/bag 变化清空历史并增加 `reset`。隐藏页面只停止拉取与绘制，显式暂停才停止原生采集。连接断开清空历史，迟到响应丢弃。历史适配器不向普通 Bridge 消息监听器广播补回数据，因此不能续鲜控制反馈。
+
+### 原生编辑配置（多窗口开发分支）
+
+`editor_document_read(key)` 返回 `{revision, content}`，`content=null` 表示文件不存在。`editor_document_commit(key, expected, content)` 在 Rust 互斥内读取并校验当前文件、比较版本、原子保存，返回 `{accepted, snapshot}`。版本不符返回 `accepted=false` 及最新快照，不覆盖文件、不自动重试旧内容；校验、读写失败明确报错。写入成功后才递增版本，原生 `editor-document-changed` 只通知 `{key, revision}`，页面按需读取，不广播整份配置。断开机器人不清除编辑配置。
+
+Monitor 使用 key `monitor`，仅实际 `page-monitor` / `page-dashboard` WebView 可写；主窗口和其他功能页只能读。数据为既有 version 2 布局格式，拒绝未知字段（包括 `series.points`），单文件 512 KiB，上限 32 仪表盘、128 面板/仪表盘、64 曲线/面板、2048 曲线总数。各窗口串行提交编辑操作，队列最多 32 项，重复读取按版本丢弃迟到数据。`positions` / `motion_groups` 已接入同一版本化读写入口，沿用 `positions.v1.json` / `motion-groups.v1.json` 路径，均限制 4 MiB。Positions 仅实际 main / page-motion / page-status 可写，Groups 仅 main / page-motion 可写；旧 `positions_load/save`、`motion_groups_load/save` IPC 已移除。前端按最新文件修改指定连接下的记录，保留其他记录与连接；修改及删除还比较编辑开始时的记录内容，拒绝用旧草稿覆盖已修改或删除的记录。版本冲突不自动重试，窗口保留草稿并展示失败原因。读失败禁止写入，保存成功才关闭姿态表单或开始后续执行检查。
+
+原生 `resource` 请求以完整 URI 和编码为键共用会话缓存，上游与 IPC 均保留 RCR1 字节。缓存上限 128 MiB / 512 项、在途 URI 上限 64；同时读取同一资源只发一次上游请求。响应 URI 必须匹配，错误不缓存；越过缓存预算的单个合法响应可交付但不保留，读取队列满返回明确错误。断线清空缓存并取消待完成加载，旧代次响应不能重新填充。桌面 WebView 仅合并本页在途加载，不另存一份 128 MiB 字节缓存；浏览器回退保持原连接缓存。包路径边界和符号链接校验仍由 Bridge 执行，缓存不替代资源授权。
+
+`workspace_open_motion(tab, profileKey)` 仅主 WebView 可调用；tab 白名单为 positions / groups，连接键非空、最多 512 字节且不含控制字符。原生快照携带递增的 `motion_navigation={revision,tab,profile_key}`，首次懒加载也能读取。Motion 对每个版本只应用一次，连接不匹配时报错，不修改编辑数据。此请求不连接机器人、不发起运动、不保留运动授权。
+
+
+### 原生手眼任务（多窗口开发分支）
+
+`handeye_capture` 和 `handeye_local` 新增必填 `operationId`（1–128 个 ASCII 字母、数字或连字符）。实际调用 WebView 必须为 `page-handeye`；主窗口或其他页面不能冒充提交。原生层先登记任务并占用页面迁移锁，才运行只读 SSH 采集或本地求解子进程。所属页面每秒调用 `native_local_task_touch({operationId})`，最多一个在途心跳；其他页面的快照查询不续租。取消使用 `native_local_task_cancel({operationId})`。取消或超过 5 秒无有效心跳后，原生看门狗停止等待并销毁工作 future，子进程设置 `kill_on_drop`；SSH 远端只读采集仍保留自身 12 秒超时。已过期、旧编号和其他页面心跳不能恢复任务。
+
+`native_local_task_snapshot` 返回 null 或 `{id,window,kind,phase,message}`，变化事件 `native-local-tasks-changed` 只通知重读。kind 为 capture/compute，phase 为 running/stopping/succeeded/failed/cancelled；仅保留最近一项，message 最多 512 字符。图像、样本、结果及 operationId 不广播。事件回调在状态锁外执行。任务取消/失败终态保留供其他窗口及重建页面读取；成功后全局状态条隐藏。断开/更换采集来源或页面卸载时前端请求取消并拒绝迟到结果。文件选择对话框、文件导出仍沿用既有前端忙状态，本阶段不宣称这些操作已经有同等原生任务生命周期。
+
+
+### 重力辨识任务租约与终态（多窗口开发分支）
+
+hello.gravity_task_supported=true 表示支持本节协议。开始和取消必须带独立于 request_id 的 command_id（1–80 个 ASCII 字母、数字或连字符），重复已保留编号拒绝。开始时即占用，ROS 尚未受理也不能提交第二个辨识；取消在 GoalHandle 到达前保留，之后重试。gravity_id_cancel_ack.accepted 仅表示取消请求登记，不能当作停止。异步发送异常返回 gravity_id_pending，结果未知时保留占用，不伪装成明确拒绝。
+
+gravity_id_heartbeat 带 command_id，仅原 WebSocket 所属者可续租；响应 gravity_id_heartbeat_ack.renewed。5 秒无有效续租或连接退出请求取消；普通 gravity_id_status / gravity_id_task_status 查询不续租。原生 Rust 每 500 ms 为仍存活的所属页面续租，所属页面退出/失联则按编号取消。页面不能直接调用原生心跳。无能力标志的 Bridge 拒绝原生重力辨识执行。
+
+反馈、状态、结果都带 command_id。数值反馈 phase 不表示执行终态。Action 返回之后为 status=awaiting_stop，仍持锁；等待结果之后的 HardwareStatus（HOLD 或 DISABLE）及 joint1–joint6 的有限位置、速度 ≤0.02 rad/s，原生接收龄 <500 ms、源时刻距 ROS 当前时刻 <1 秒，两路源时间均推进，连续满足 200 ms 且距 Action 返回至少 300 ms，才发送 gravity_id_result。该事件 terminal=true，task_phase 为 succeeded/failed/canceled。明确未受理的拒绝可以立即返回失败终态。反馈不完整、过期、倒退或 Action 结果未知时不释放。HOLD 是维持输出，不等于 DISABLE。
+
+gravity_id_task_status 按 command_id 返回 known、terminal、status 和完整 result；未知编号不代表任务结束。最多保留 256 项 / 2 MiB，每项最多 256 KiB；Bridge 重启或淘汰后返回未知。恢复必须核验编号及完整匹配终态。前端忽略旧编号、早到的 DONE/FAILED 反馈及晚到 ACK，不让它们解除当前任务占用。运行环境须使用声明相应能力的 Bridge，部署验证见多窗口实现记录。
+
+辨识任务期间收到显式 DISABLE 时，会同时取消 Action，并记录“必须关闭输出”。鉴于当前编排器在返回结果后仍短暂发送 HOLD，Bridge 在结果返回至少 300 ms 后重新发布三帧清零的 DISABLE，每帧分配新的序列号；未确认时最多每秒重试一次。此时只有 mode=DISABLE 且 last_command_sequence 覆盖这批序列的新鲜固件反馈，连同上述六轴停稳条件，才能结束任务；HOLD 不满足。没有命令订阅者、没有确定 Action 结果或没有新鲜反馈时保持占用。该机制不承诺网络或硬件故障下的固定停机延迟。
+
+开发分支的 Controller 切换 IPC 仍为 `switch_ros_controller` / `switch_ros_controllers`，参数结构不变，但由实际调用 WebView（Motion 或 Status）、当前共享连接配置和原生任务占用校验。成功返回前要求远端完成记录确认命令成功和命令之后强制查询的新鲜目标状态；IPC 等待超过 25 秒返回未确认提示，已启动的原生工作不随调用页面退出而丢弃。成功命令的新状态核验可以跨同配置重连继续；SSH 超时或失败后按编号只读查询远端完成记录，不自动重发，也不借用普通列表/空闲状态解除占用。远端命令自身异常或超时仍保持未确认。
+
+Controller 的 SSH 记录协议（不经过 Bridge）：请求为 `{op: submit|query, id, command_hash}`，仅 submit 带固定命令生成器产生的 `command`。编号由本机生成 192 位随机值，格式为 `controller-` 加 48 位小写十六进制；摘要是完整命令 UTF-8 字节的 SHA-256。Rust 的提交方法消费命令内容，只能调用一次。响应包含 `version:1`、匹配的编号/摘要和 `phase`：`reserved | running | succeeded | rejected | uncertain | unknown`。仅 `succeeded + started:true + exit_code:0 + timed_out:false` 允许进入后续新鲜 Controller 状态核验；`rejected + started:false` 证明尚未启动命令，可释放任务并报告失败。`unknown` 包括记录缺失/淘汰，不能证明未执行；`uncertain` 表示命令进程异常或超时，不代表 ROS 服务未执行。查询不含命令且不创建记录。
+
+
+Controller 任务停止协调复用现有 joint_command mode=3 和 HardwareStatus 协议，不新增 Bridge 字段。显式 DISABLE 立即可下发；受支撑确认保护的 start_arm_mode(disable-stop) 仅向匹配原机器人身份的 Controller 任务登记停止意图。任务记录远端完成时已分配的原生停止动作编号，只有严格晚于该编号的 DISABLE ACK 可用于最终确认，防止完成前请求的迟到 ACK 解锁。确认要求原机器人及当前连接代次、mode=3、last_command_sequence 覆盖新 ACK、源时间推进、原生接收时刻不早于此次停止请求且接收龄小于 1 秒。发布失败、旧序列、旧源时间和另一机器人反馈不能完成任务；重连后重新发送并确认。这里证明固件输出关闭，不是机械静止，也不保证故障情况下的固定停止时延。普通 stop 的 RETURN 流程不登记立即 DISABLE 意图。
+
+
+workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebView 可请求三种导航，实际 page-handeye WebView 只可请求 robot；其他调用者拒绝。带 revision 和 profile_key 的 motion_navigation 保存在 Rust 快照，延迟创建的 Motion 页面也会应用。页面保留最新导航，等待对应配置后应用；配置通知与导航通知乱序、旧版本或他页面均不改变另一机器人的目标 Tab。导航不包含控制指令或运动授权。
+
+
+`bag_record` / `bag_play` 的 value 分别沿用 `RosbagStatus` / `RosbagPlayStatus`（camelCase 字段），每次查询结束后间隔 5 秒，超时 10 秒，新鲜度上限 8 秒且包含查询耗时。两源独立串行，共用现有 SSH Profile；只读 status 不创建目录或改 PID 文件。断线或超时丢弃探测 future 时终止其本机 SSH 子进程，启动/停止操作不套用这个行为。桌面录制/回放操作返回后使用 `afterPending:true` 复查并广播快照；命令返回值不作为其他窗口的当前状态。未知状态保留为 null，不等同于 idle。状态对象新增可空 `receipt`：kind、active、pid、domain、processIdentity、pathHash；旧无回执格式仅供显示，不能作为原生任务完成证据。processIdentity 是 boot ID、PID、启动时刻与随机 token 的摘要，pathHash 是路径 SHA-256；回执必须与显示字段一致。
+
+`start_rosbag_recording` / `stop_rosbag_recording` / `start_rosbag_playback` / `stop_rosbag_playback` 通过真实 Tauri WebView 鉴权，核对已附着页面、连接代次及当前共享 Profile。录制允许 main / page-dashboard / page-motion，回放只允许 page-monitor。响应仍为原有状态对象，但现在来自远端操作成功后重新取得的新鲜共享状态；25 秒内未确认时 IPC 返回仍在核验的错误，原生后台继续。
+
+`native_bag_operation_snapshot` 返回至多两项（record / play）的最新操作元数据：`id, kind, window, host, starting, phase, message`；phase 为 submitting / verifying / uncertain / running / succeeded / failed。`native-bag-operations-changed` 仅发失效通知，读取不续租或重发指令。同类未确认操作不允许重复提交。操作复用现有一次性 SSH journal（内部 bag- 编号，沿用原记录目录，编号和完整命令 SHA-256 绑定）；对未知、运行中及执行后不确定结果仅查询恢复，只有明确未启动的 rejected 可按未执行释放。启动完成须同时具备绑定本次命令的进程回执和同实例新鲜共享状态；成功后进入 running，持续持有所属页迁移许可。回放还在 Tasks 的同一互斥内占用运动入口，禁止并发开始运动、Controller/模式切换或采集，DISABLE 和停止回放不因这项互斥受阻。手眼 capture 与 Episode/录制属于采样占用；离线图片生成与 compute 只持有页面迁移许可，可以与回放并行。应用级监视仅消费共享状态，不新增 SSH 定时器；只有原连接同实例明确 inactive 才释放占用。同路径不同实例、错误、过期或断线均保留 uncertain。停止可由允许的另一页面接管录制占用，旧监视结果不能释放新停止任务。已发送而结果未知的停止不能重复提交；明确未提交失败则恢复原运行期核验。状态未知时界面保留“尝试停止”入口。桌面重启恢复另由下述 Native bag recovery journal 核验。
+
+`start_arm_mode` 保留 profile / mode / supportConfirmed / onProgress 参数，但实际 WebView 必须为 Status 或 Motion 并附着当前原生连接。整栈任务以 `native_task_snapshot.kind=arm_mode` 公开占用，进度经原有 Channel 及共享任务 message 呈现。IPC 等待不持有 worker 生命周期：调用者退出后任务仍由应用管理；成功回复需要远端成功记录及同配置连接的强制刷新核验。远端 ready 进度映射为 verify，只有核验成功才向前端发 ready。异常或超时保留未知占用。原生任务不接受 Bridge 的普通运动终态解除该占用。
+
+arm-mode-* 远端编号选择固定 128 KiB / 600 秒执行策略；controller-* 仍为 32 KiB / 20 秒，编号与命令摘要共同核对，查询不得包含 command。进度最多 2048 字节、单次查询结果仍限 16 KiB，记录总量仍为 256 项且不淘汰未确认任务。DISABLE 与 Controller 使用同一完成后确认屏障；切换中收到支撑退出请求时仅登记关闭输出意图并返回明确提示，不并发执行环境清理。
+
+`collection` 沿用 `CollectionStatus` 的 camelCase 字段；每次查询结束后间隔 5 秒，15 秒查询截止，20 秒新鲜度包含查询耗时。状态 helper 不创建目录、锁文件或改写采集元数据；已有变更操作持锁时返回查询失败，不返回空闲。页面消费公共快照，操作成功后以 `afterPending:true` 复查；命令响应只用于操作提示，不替代公共当前状态。断线取消本机只读 SSH 子进程，不停止 Jetson 采集器。Episode 变更生命周期与跨桌面恢复见下文。
+
+### 原生 Episode 操作（多窗口开发分支）
+
+`data_collection_action(profile, action, config)` 的真实调用者仅允许已附着当前会话的 `page-collection`。`status` 复用公共 `collection` 源；变更操作在第一个 await 前登记原生归属。`launch/start_episode` 的只读就绪预检仍保留，发送前再次核对原窗口 incarnation、Profile 和连接 epoch。操作 worker 独立于 IPC future，IPC 等待最多 25 秒；超时不表示远端操作终止。
+
+远端 `collection-<48 hex>` 任务绑定整个命令的 SHA-256，命令至多 128 KiB（包含参数的 shell 引号展开）、截止 180 秒。复用有限 journal 的先落盘后执行和一次提交规则，后续只能 query；保留上限 256 项，与 Controller/arm mode 共用容量。采集 helper 成功时附带不含日志/图像的有界回执，包含 state/managed/pid/processIdentity/recording/pendingFrames/savedEpisodes 和 root + NUL + repoId 的 SHA-256。缺少回执或非零/超时均不表示成功。受管理身份为 Linux boot ID、PID 与启动计数的 SHA-256（64 位小写十六进制），跨远端重启的旧实例不能匹配。公共 CollectionStatus 新增 `processIdentity`（未管理的进程为空）。
+
+`native_collection_operation_snapshot` 返回 null 或 `{id,action,phase,host,message,busy,recovery_error}`；仅主窗口和白名单功能页可读。`native-collection-operation-changed` 只发送失效通知，页面随后合并读取快照。phase 为 preparing/verifying/uncertain/recording/succeeded/failed；recording 保留迁移占用但允许同连接保存或丢弃，随后才能结束数据集，其余 busy 阶段禁止重复提交。failed 只用于明确未执行，uncertain 不自动解锁。真正成功须以回执匹配原连接新的 `collection` 状态，并在当前 epoch 下原子完成；旧代次、旧编号或普通 idle 不能完成该任务。跨桌面重启恢复见下述 Native collection recovery journal。
+
+
+原生 `session/activity.rs` 只读检查共享 `bag_record`、`bag_play`、`collection` 快照，无新增 IPC/Bridge 字段。Tasks 通过弱引用读取这三个源的精简快照，避免高频控制准入复制 Topics 等大对象；不启动另一套轮询。新运动/在线采样需要新鲜空闲的 bag_play；开始录制、Episode 和回放分别检查自身及关联冲突源。新连接尚无首帧查询结果时不会允许冲突操作。bag 回执须与 kind、PID、active 和路径匹配；collection 的 state、recording、pendingFrames、managed、PID 和进程身份须一致。外部 Episode 的 managed=false 本身不代表空闲。
+
+迁移时 Monitor 检查 bag_play，数据采集检查 collection，录制入口 main/page-dashboard/page-motion 检查 bag_record。非空闲、过期、失败、缺失或不一致均拒绝相关准入；bag 停止、Episode 保存/丢弃/结束和 DISABLE 不要求先证明空闲；停止/收尾期间仍阻止新回放进入，结果未知时继续保留许可。非冲突的离线编辑与计算不受限制。观察没有授予外部进程所有权，也不能代替已有任务的同实例退出/终态核验；没有远端全局锁或跨桌面进程的恢复承诺。
+
+
+### Native bag recovery journal
+
+`bag-recovery-v1.json` is a local version-1 write-ahead journal, bounded to record/play entries and 48 KiB. It stores the original Profile, authorized page, operation intent/path, query-only remote journal ticket (`id`, SHA-256 `hash`), optional predecessor receipt and verified running receipt. Command payloads are never serialized. A 0600 temporary file is fsynced, atomically renamed, and the parent directory fsynced before the first remote submission. Terminal removal uses the same durable path and checks the ticket to prevent an older worker clearing a successor.
+
+Startup restores native permits before Workspace initialization. Pending tickets are recovered using `Job::recover`, which has no command and rejects submission; polling occurs only while connected to the matching Profile. Running receipts resume the existing shared observation consumer. A journal success still requires fresh matching process status; unknown remote records remain nonterminal. Disk failures retain occupancy and retry cleanup. Malformed/version-mismatched files are preserved and cause a visible admission barrier; explicit stops and DISABLE remain available, but stops in this degraded state cannot create durable recovery records or clear that barrier. No protocol field changed on the Bridge. Controller, calibration and motion restart recovery remain separate outstanding work.
+
+The native `native_bag_operation_snapshot` entries include `recovery_error: true` for a journal-level error (reserved id 0); the UI labels it as task recovery failure instead of presenting it as a record/play control operation. Normal entries use false.
+
+
+### Native collection recovery journal
+
+`collection-recovery-v1.json` is a version-1, single-record, 24 KiB local journal. It stores the original Profile, action, query-only `collection-*` ticket, optional prior recording receipt and verified recording checkpoint. It shares the private fsync/atomic-rename/directory-fsync file implementation with bag recovery. A submission is not admitted until preparation is durable. Startup reserves the collection page before Workspace initialization; recovery never runs the readiness gate or submits the remote command again. Pending success requires a fresh matching action receipt; a verified recording checkpoint consumes existing shared observations and restores operation access only for the matching managed process/dataset/count. A save from an owned Episode requires the same instance and saved count +1; discard requires the same count. Terminal cleanup is durable before permit release; an explicitly rejected save restores the recording checkpoint.
+
+`native_collection_operation_snapshot.recovery_error` distinguishes journal-level failure from a real action. Reserved id 0 carries the error and actual finite-operation busy state. Corrupt files remain intact, new work is blocked, and existing freshness/state/confirmation checks continue to apply to explicit save/discard/finish; these degraded operations do not rewrite the corrupt file or clear the recovery barrier. Recovery does not adopt an unmanaged recorder after a desktop restart. Receipts do not contain an independent Episode UUID, so external discard/restart with unchanged counts is not uniquely detectable by this checkpoint.
+
+The fixed collection helper fingerprints `/proc/sys/kernel/random/boot_id`, PID and Linux start ticks, checking ticks before/after reading cmdline. Finalization opens pidfd before rechecking identity and signals only that descriptor; no numeric PID fallback or process-group signal is used. Old metadata containing only start ticks is not adopted by the new helper. Linux/Python pidfd support is required for finish. These helper changes are bundled with the desktop SSH adapter, not a Bridge package update.
+
+
+### Native finite control recovery
+
+`finite-control-recovery-v1.json` 是桌面内部版本化文件（24 KiB，0600），结构为 `{version:1, record:null|{window,profile,ticket:{id,hash}}}`。只接受 Status/Motion 页面、完整 Profile 和 `controller-` / `arm-mode-` 查询票据，拒绝额外执行字段、未知版本/种类及超限数据。原生初始化先恢复 Tasks 互斥，再初始化 Workspace；不向 Bridge 新增恢复协议或写入命令正文。
+
+发送前持久化成功才允许 `controller_sent`；磁盘等待不持有共享 Core/Tasks 锁。终态先在 Tasks 中冻结，仍阻止新任务和页面迁移；应用 worker 清空文件并完成 fsync 后释放。新操作不能覆盖尚未清理的前一个记录，迟到 worker 不能释放后继编号。预发送失效及落盘部分失败同样由后台清理，不依赖调用页面存活。
+
+跨桌面恢复使用只读 Job::recover，不执行 submit；原 Profile 当前连接之外不查询。绑定远端 succeeded/rejected 后登记完成屏障，须显式新的 DISABLE 请求及完成后硬件关闭证明才能解锁；不会恢复以前的停止意图或运动授权并主动发出控制。unknown/uncertain 不能以普通 idle 或仅有 ACK 消除。当前进程内正常完成路径不变，但成功响应等待持久化收尾。
+
+`NativeTaskSnapshot` 增加 `recovery_error`（普通任务 false，损坏记录的合成快照 true），用于显示恢复错误而非虚构运行中的 Controller。恢复错误保留原文件和准入屏障。终态记录待清理时的显式 disable-stop 可走现有 `joint_command mode=3`，只有正确 ACK/模式/序列才报告“请求已受理”；不声称输出已关闭或环境已清理。
+
+### Motor stream desktop restart recovery (development branch)
+
+`motor-recovery-v1.json` is a private, bounded native write-ahead record containing the original connection profile and task ID. It contains no command payload, gain, or restored authorization. The first non-DISABLE Motor write requires a durable record; subsequent frames use the same record. The native writer rechecks the original Motor connection identity immediately before sending, including queued automatic DISABLE. Explicit user DISABLE remains available.
+
+Startup restores Motor occupancy before workspace initialization and never auto-connects. After an explicit connection to the original robot, recovery requests DISABLE and retains the task until a matching publish sequence and newer firmware source timestamp prove output-off. The record must then be durably cleared before admission or migration is released. Different connection identities, unknown feedback, disk failures, and malformed recovery records do not release occupancy. File I/O runs outside the shared connection/task locks and the transport executor; task error snapshots do not acquire the journal I/O lock.
+
+### Leased task desktop restart recovery (development branch)
+
+The private `leased-recovery-v1.json` record stores `kind`, original native `window`, `command_id`, the originating `profile`, and `joint4_action` only for Joint4. No target, trajectory, group items, sample request, or motion authorization is retained. The first submission through either generic Bridge IPC or the dedicated Joint4 worker requires durable preparation; cancellation during disk I/O invalidates the pending writer.
+
+Startup restores occupancy before workspace initialization and does not connect. An explicit connection with the original identity permits only the existing task status/observe queries. It does not renew the old owner or replay/resume motion. Existing kind-specific terminal checks, including correlated nested result IDs and trajectory/Joint4 evidence, still apply. Unknown or evicted Bridge history is not completion evidence. Valid terminal proof freezes the task, and occupancy is released only after durable record cleanup. Corrupt or conflicting journals are preserved and block new actuation; explicit DISABLE remains available.
+
+多窗口桌面要求 hello 声明 `visual_pick_cancel_id_supported:true` 后才允许开始或取消视觉 Pick；旧 Bridge 可继续只读观察，但需升级后才能执行抓取。前端退出、异常清理及取消按钮始终发送其持有的原任务编号，原生层同时核对当前任务与最终发送许可，避免迟到取消影响后继任务。

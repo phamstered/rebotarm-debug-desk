@@ -1,3 +1,12 @@
+import { NativeCollectionOperationStatus } from "./NativeCollectionOperationStatus";
+import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
+import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
+import { ownsPagePreference, usePagePreference } from "./pagePreferences";
+import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
+import { NativeTaskStatus } from "./NativeTaskStatus";
+import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession, useNativeMainRecovery } from "./nativeWorkspaceLogic";
+import { sharedBagStatus } from "./nativeRosbagLogic";
+import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
 import { ARM_ERROR_CONTROLLER_TOPIC, EMPTY_MOTION_ERROR_STATUS, MotionErrorSampler, clearMotionErrorPoints, hasMotionErrorPanels, type MotionErrorStatus } from "./motionErrorMonitorLogic";
 import { captureTeachingPose, TEACHING_FEEDBACK_TOPIC, teachingControllersReady } from "./teachingLogic";
@@ -21,7 +30,8 @@ import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { BridgeClient } from "./bridge";
+import { BridgeClient, type BridgeHello } from "./bridge";
+import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
 import { HandeyeCalibrationPage, useHandeyeSession } from "./HandeyeCalibrationPage";
@@ -31,13 +41,16 @@ import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
+import { useNativeMonitor } from "./useNativeMonitor";
+import { useMonitorWorkspace, clearMonitorSamples } from "./useMonitorWorkspace";
+import { monitorCaptureConfig, MonitorReplay, applyMonitorReplay } from "./nativeMonitorLogic";
 import { PositionPage } from "./PositionPage";
 import { useWorkspacePreference } from "./workspacePreferences";
 import { SavePoseDialog } from "./SavePoseDialog";
 import { useClockSync } from "./clockSyncLogic";
 import { positionMotionBusy, usePositionMotion } from "./positionMotionLogic";
-import { addPosition, captureCurrentArmPose, nextCapturedPoseName, deletePosition, emptyPositionStore, profileKeyFor, updatePosition, type PositionDraft, type PositionStore } from "./positionLogic";
-import { loadStoredPositions, saveStoredPositions } from "./positionStore";
+import { captureCurrentArmPose, nextCapturedPoseName, profileKeyFor, type PositionDraft } from "./positionLogic";
+import { usePositions } from "./usePositions";
 import previewUrdf from "./testFixtures/rebotarm-kinematics.urdf?raw";
 import { StatusPage } from "./StatusPage";
 import { useArmModeWorkflow } from "./armModeWorkflowLogic";
@@ -56,7 +69,6 @@ import {
   removePanelFromDashboard,
   renameMonitorDashboard,
   resetDashboardPanelLayouts,
-  saveMonitorWorkspace,
   selectMonitorDashboard,
   setMonitorCompactType,
   setMonitorLayoutLocked,
@@ -98,7 +110,6 @@ import {
   rememberConnectHistory,
   rememberLastKnownDomainId,
   rememberSuccessfulHost,
-  saveNavigateStatusOnConnect,
 } from "./appLogic";
 import type { BridgeVersionCheck, CollapsiblePanel, ConnectHistory, ConnectStepId, PanelState, RecentHost, TopicSample } from "./appLogic";
 import { clamp, defaultLayoutSizes, loadLayoutSizes, resizeColumn, resizeSplit } from "./layoutLogic";
@@ -375,12 +386,24 @@ function ProfileForm({ profile, onChange }: { profile: ConnectionProfile; onChan
   );
 }
 
-export default function App() {
-  const [appPage, setAppPage] = useState<AppPage>(loadAppPage);
+export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
+  const nativeMain = nativeDesktop() && !hostedPage;
+  const workspace = useNativeWorkspace(nativeDesktop());
+  const [appPage, setLocalAppPage] = useState<AppPage>(() => hostedPage ?? loadAppPage());
+  const setAppPage = useCallback((page: AppPage) => {
+    if (hostedPage) { void workspace.action("workspace_select", page); return; }
+    setLocalAppPage(page);
+  }, [hostedPage]);
+  useEffect(() => { if (nativeMain) setLocalAppPage(workspace.snapshot.selected); }, [nativeMain, workspace.snapshot.selected]);
+  const [handeyeBusy, setHandeyeBusy] = useState("");
+  const [pageBusy, setPageBusy] = useState("");
   const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem("robot-console-nav-expanded") !== "false");
   const [profile, setProfile] = useState(loadProfile);
   const handeyeSession = useHandeyeSession(profile);
   const [manageHandeye, setManageHandeye] = useState(false);
+  const [offlineWorkspace, setOfflineWorkspace] = useState(false);
+  const offlineEntry = useRef(false);
+  const [openingOffline, setOpeningOffline] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [failedStep, setFailedStep] = useState<ConnectStepId | null>(null);
   const [sshOk, setSshOk] = useState(false);
@@ -405,7 +428,6 @@ export default function App() {
   const [positionEditRequest,setPositionEditRequest] = useState<{id:string;intent?:"edit"|"delete"}|undefined>();
   const [poseToSave, setPoseToSave] = useState<PositionDraft | null>(null);
   const [poseSaveError, setPoseSaveError] = useState("");
-  const [positionStore, setPositionStore] = useState<PositionStore>(() => emptyPositionStore());
   const [urdf, setUrdf] = useState("");
   const [jointState, setJointState] = useState<{ name?: string[]; position?: number[] } | null>(null);
   const [rgbdColorMode, setRgbdColorMode] = useState<RgbdColorMode>("rgb");
@@ -422,11 +444,13 @@ export default function App() {
   const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
   const [statusActionNotice, setStatusActionNotice] = useState("");
   const bridge = useMemo(() => new BridgeClient(), []);
+  const sharedObservations = useNativeObservations(nativeDesktop() && stage === "connected",
+    JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]));
   const controllerBlockRef = useRef("");
   const getControllerBlockReason = useCallback(() => controllerBlockRef.current, []);
   const controllers = useRosControllers({ profile, bridge, supported: bridgeHello?.controllersInfoSupported, connected: stage === "connected",
     connectionKey: JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]),
-    getBlockReason: getControllerBlockReason });
+    getBlockReason: getControllerBlockReason, shared: nativeDesktop() ? sharedObservations : undefined });
   const { status: rosControl, refreshing: rosControlRefreshing, action: controllerAction,
     message: controllerActionMessage, error: controllerActionError,
     refresh: refreshRosControllers, fetchStatus: fetchRosControllers, switchController } = controllers;
@@ -437,7 +461,7 @@ export default function App() {
   const [controlStreaming, setControlStreaming] = useState(false);
   const [effectiveLocalPort, setEffectiveLocalPort] = useState<number | null>(null);
   const [motionFocus, setMotionFocus] = useState(false);
-  const [motionNav, setMotionNav] = useWorkspacePreference<boolean>("motion-nav", false);
+  const [motionNav, setMotionNav] = useWorkspacePreference<boolean>("motion-nav", false, undefined, ownsPagePreference("robot-console-workspace-motion-nav", hostedPage));
   const [motionTab, setMotionTab] = useState<MotionTab>(loadMotionTab);
   const [motionControllersOpen, setMotionControllersOpen] = useState(loadMotionSidebar);
   const [motionLayoutReset, setMotionLayoutReset] = useState(0);
@@ -445,19 +469,22 @@ export default function App() {
   const [manageMotionGroups, setManageMotionGroups] = useState(false);
   const [topicsVisited, setTopicsVisited] = useState(false);
   const [robotVisited, setRobotVisited] = useState(false);
-  const [windowVisible, setWindowVisible] = useState(!document.hidden);
+  const [documentVisible, setDocumentVisible] = useState(!document.hidden);
+  const windowVisible = pageWindowVisible(documentVisible, hostedPage, workspace.snapshot);
   const [inspectorDataVisible, setInspectorDataVisible] = useState(true);
   const [imageSubscriptionRevision, setImageSubscriptionRevision] = useState(0);
-  const [monitorWorkspace, setMonitorWorkspace] = useState<MonitorWorkspace>(() =>
-    loadMonitorWorkspace(loadProfile().jointStateTopic),
-  );
+  const monitorEditor = useMonitorWorkspace(profile.jointStateTopic, nativeDesktop(), hostedPage === "monitor" || hostedPage === "dashboard");
+  const { workspace: monitorWorkspace, change: setMonitorWorkspace, setData: setMonitorData } = monitorEditor;
   const motionErrorSampler = useRef(new MotionErrorSampler());
   const [motionErrorStatus, setMotionErrorStatus] = useState<MotionErrorStatus>(EMPTY_MOTION_ERROR_STATUS);
   const [motionErrorSubscriptionError, setMotionErrorSubscriptionError] = useState("");
-  const motionErrorsEnabled = monitorWorkspace.dashboards.some(hasMotionErrorPanels);
+  const monitorOwner = !nativeDesktop() || hostedPage === "monitor";
+  const motionErrorsEnabled = monitorOwner && monitorWorkspace.dashboards.some(hasMotionErrorPanels);
   const motionErrorsEnabledRef = useRef(motionErrorsEnabled);
   motionErrorsEnabledRef.current = motionErrorsEnabled;
-  const [rosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
+  const [localRosbagPlayStatus, setRosbagPlayStatus] = useState<RosbagPlayStatus | null>(null);
+  const bagObservations = sharedBagStatus(sharedObservations);
+  const rosbagPlayStatus = nativeDesktop() ? bagObservations.play.status : localRosbagPlayStatus;
   const [bagBusy, setBagBusy] = useState(false);
   const [bagNotice, setBagNotice] = useState("");
   const [bagClockMs, setBagClockMs] = useState<number | null>(null);
@@ -465,12 +492,33 @@ export default function App() {
   const [bagWallStartedAtMs, setBagWallStartedAtMs] = useState<number | null>(null);
   const bagPlayingRef = useRef(false);
   const bagClockMsRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!nativeDesktop()) return;
+    const playing = Boolean(rosbagPlayStatus?.playing);
+    bagPlayingRef.current = playing;
+    bagClockMsRef.current = null; setBagClockMs(null); setBagOriginMs(null);
+    setBagWallStartedAtMs(playing ? performance.now() : null);
+  }, [rosbagPlayStatus?.playing, rosbagPlayStatus?.pid, rosbagPlayStatus?.bagPath, sharedObservations.epoch]);
   const [panels, setPanels] = useState<PanelState>(loadPanelState);
   const [sidebars, setSidebars] = useState(loadSidebarState);
   const [focusController, setFocusController] = useState("");
   const [layout, setLayout] = useState<LayoutSizes>(loadLayoutSizes);
   const [liveUpdates, setLiveUpdates] = useState(true);
-  const [rosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
+  const nativeMonitor = nativeDesktop() && monitorOwner;
+  const monitorReplay = useRef(new MonitorReplay());
+  const [monitorHistoryNotice,setMonitorHistoryNotice] = useState("");
+  const monitorCapture = monitorCaptureConfig(monitorWorkspace,topics,profile.jointStateTopic,!liveUpdates,Boolean(rosbagPlayStatus?.playing));
+  const monitorHistoryError = useNativeMonitor({bridge,enabled:nativeMonitor,connected:stage==="connected",visible:windowVisible,config:monitorCapture.config,
+    onPage:page=>{
+      const batch=monitorReplay.current.accept(page,profile.jointStateTopic,motionErrorsEnabled);
+      setMonitorData(current=>applyMonitorReplay(current,batch));
+      setMotionErrorStatus(batch.status);
+      if(batch.notice)setMonitorHistoryNotice(batch.notice);
+      if(page.config.bag_playing){setBagClockMs(batch.bagClockMs);setBagOriginMs(origin=>origin??batch.bagClockMs);}
+    }});
+  useEffect(()=>{if(stage!=="connected"){monitorReplay.current=new MonitorReplay();setMonitorHistoryNotice("");}},[stage]);
+  const [localRosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
+  const rosbagStatus = nativeDesktop() ? bagObservations.record.status : localRosbagStatus;
   const [toolbarBusy, setToolbarBusy] = useState<"record" | "diagnostics" | "">("");
   const [toolbarNotice, setToolbarNotice] = useState("");
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
@@ -506,10 +554,10 @@ export default function App() {
     if (appPage === "dashboard") setTopicsVisited(true);
     if (appPage === "motion" && motionTab === "robot") setRobotVisited(true);
   }, [stage, appPage, motionTab]);
-  useEffect(() => { localStorage.setItem("robot-console-motion-tab", motionTab); }, [motionTab]);
-  useEffect(() => { localStorage.setItem("robot-console-motion-controllers", String(motionControllersOpen)); }, [motionControllersOpen]);
+  usePagePreference("robot-console-motion-tab", motionTab, hostedPage);
+  usePagePreference("robot-console-motion-controllers", String(motionControllersOpen), hostedPage);
   useEffect(() => {
-    const changed = () => setWindowVisible(!document.hidden);
+    const changed = () => setDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", changed);
     return () => document.removeEventListener("visibilitychange", changed);
   }, []);
@@ -531,7 +579,7 @@ export default function App() {
   const [objectsEnabled, setObjectsEnabled] = useState(false);
   const objectsSupported = bridgeHello?.objectDetectionSupported === true && profile.rgbdTargetFrame === "base_link";
   const [rgbdSession, setRgbdSession] = useRgbdStream(bridge,
-    appPage === "motion" && motionTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
+    !nativeMain && appPage === "motion" && motionTab === "robot" && windowVisible && liveUpdates && profile.rgbdEnabled,
     stage === "connected", profile, bridgeHello?.rgbdSubscriptionIdSupported === true,
     JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, effectiveLocalPort, profile.remotePort, profile.rosDomainId]), objectsEnabled && objectsSupported);
 
@@ -566,13 +614,13 @@ export default function App() {
 
   useEffect(() => {
     setMotionErrorSubscriptionError("");
-    if (stage !== "connected" || !motionErrorsEnabled) return;
+    if (stage !== "connected" || !motionErrorsEnabled || nativeMonitor) return;
     let disposed = false;
     void bridge.request({ op: "subscribe", topic: ARM_ERROR_CONTROLLER_TOPIC, type: "control_msgs/msg/JointTrajectoryControllerState" })
       .catch((reason: unknown) => { if (!disposed) setMotionErrorSubscriptionError(`控制器反馈订阅失败：${String(reason)}`); });
     // The subscription is shared with Robot View / Inspector until disconnect.
     return () => { disposed = true; };
-  }, [bridge, stage, motionErrorsEnabled]);
+  }, [bridge, stage, motionErrorsEnabled, nativeMonitor]);
 
   const sendTrajectory = useCallback(async (request: TrajectorySendRequest) => {
     if (controllers.action) throw new Error("Controller 切换进行中，请等待完成");
@@ -589,58 +637,38 @@ export default function App() {
     }
     await bridge.request({
       ...createTrajectoryPayload(request.jointNames, request.points),
+      command_id: crypto.randomUUID(),
       topic: controller.topic,
     }, 30_000);
   }, [bridge, activeTrajectoryController, controllerStateSample, messages, profile.jointStateTopic, controllers.action]);
 
-  const addToMonitor = useCallback((fieldPath: string, dashboardId: string, panelId: string | null) => {
+  const addToMonitor = async (fieldPath: string, dashboardId: string, panelId: string | null) => {
     if (!selected) return;
     const sample = messages[selected];
     if (!sample) return;
-    setMonitorWorkspace((current) => {
+    const saved = await setMonitorWorkspace((current) => {
       const dashboard = current.dashboards.find((entry) => entry.id === dashboardId);
       if (!dashboard) return current;
       const series = addFieldsToSeries([], selected, fieldPath, sample.data);
       return addSeriesToDashboardPanel(current, dashboard.id, panelId, series);
     });
-    setAppPage("monitor");
-  }, [messages, selected]);
+    if (saved) setAppPage("monitor");
+  };
 
-  useEffect(() => {
-    localStorage.setItem("easy-debug-panels", JSON.stringify(panels));
-  }, [panels]);
-
-  useEffect(() => {
-    localStorage.setItem("easy-debug-sidebars", JSON.stringify(sidebars));
-  }, [sidebars]);
-
-  useEffect(() => {
-    localStorage.setItem("easy-debug-layout", JSON.stringify(layout));
-  }, [layout]);
-
-  useEffect(() => {
-    localStorage.setItem("robot-console-page", appPage);
-  }, [appPage]);
-
-  useEffect(() => {
-    saveMonitorWorkspace(monitorWorkspace);
-  }, [monitorWorkspace]);
-
-  useEffect(() => {
-    localStorage.setItem("robot-console-nav-expanded", String(navExpanded));
-  }, [navExpanded]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void loadStoredPositions().then((store) => {
-      if (!cancelled) setPositionStore(store);
-    });
-    return () => { cancelled = true; };
-  }, []);
+  usePagePreference("easy-debug-panels", JSON.stringify(panels), hostedPage);
+  usePagePreference("easy-debug-sidebars", JSON.stringify(sidebars), hostedPage);
+  usePagePreference("easy-debug-layout", JSON.stringify(layout), hostedPage);
+  usePagePreference("robot-console-page", appPage, hostedPage);
+  usePagePreference("robot-console-nav-expanded", String(navExpanded), hostedPage);
 
   const positionProfileKey = profileKeyFor(profile);
-  const motionGroups = useMotionGroups(positionProfileKey);
-  const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]));
+  const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status");
+  useMotionNavigation(hostedPage, workspace.snapshot.motion_navigation, positionProfileKey, setMotionTab);
+  const positionStore = positionsEditor.store;
+  const createPosition = positionsEditor.create, editPosition = positionsEditor.update, removePosition = positionsEditor.remove;
+  const motionGroups = useMotionGroups(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion");
+  useEffect(() => { setPoseToSave(null); }, [positionProfileKey]);
+  const clockSync = useClockSync(bridge, stage === "connected", JSON.stringify([positionProfileKey, effectiveLocalPort, profile.remotePort, profile.rosDomainId, profile.jointStateTopic]), nativeDesktop() ? sharedObservations : undefined);
   const positionMotion = usePositionMotion(bridge, stage === "connected", positionProfileKey,
     controllerAction ? "Controller 切换进行中，请等待完成" : statusActionBusy ? "控制模式操作进行中，请等待完成" : !liveUpdates ? "实时显示已暂停，请恢复后执行" : controlStreaming || gravitySessionActive ? "其他控制任务正在运行，请先停止" :
       activeTrajectoryController?.name.replace(/^\//, "") !== "arm_trajectory_controller" ? "请先激活 arm_trajectory_controller 轨迹控制" : "");
@@ -695,31 +723,7 @@ export default function App() {
       gripperPosition: gripper?.fresh ? gripper.position : undefined });
   }
 
-  function persistPositions(next: PositionStore) {
-    setPositionStore(next);
-    void saveStoredPositions(next).catch(() => undefined);
-  }
-
-  function createPosition(draft: PositionDraft) {
-    const result = addPosition(positionStore, positionProfileKey, draft, Date.now(), crypto.randomUUID());
-    if (!result.error) persistPositions(result.store);
-    return result.error;
-  }
-
-  function editPosition(id: string, draft: PositionDraft) {
-    const result = updatePosition(positionStore, positionProfileKey, id, draft, Date.now());
-    if (!result.error) persistPositions(result.store);
-    return result.error;
-  }
-
-  function removePosition(id: string) {
-    const result = deletePosition(positionStore, positionProfileKey, id);
-    if (!result.error) persistPositions(result.store);
-  }
-
-  useEffect(() => {
-    saveNavigateStatusOnConnect(navigateStatusOnConnect);
-  }, [navigateStatusOnConnect]);
+  usePagePreference("easy-debug-navigate-status-on-connect", String(navigateStatusOnConnect), hostedPage);
 
   useEffect(() => {
     if (!statusHighlightCardId) return;
@@ -801,7 +805,7 @@ export default function App() {
     topicRefreshInFlightRef.current = true;
     if (manual) setTopicRefreshing(true);
     try {
-      const discovered = await bridge.listTopics();
+      const discovered = await bridge.listTopics(manual);
       if (generation !== connectionGenerationRef.current) return;
       setTopics(discovered);
       setTopicRefreshError("");
@@ -822,7 +826,7 @@ export default function App() {
         if (!liveUpdatesRef.current) return;
         const data = message.data as { data_bytes?: unknown; encoding?: unknown; width?: unknown } | null;
         if ((imageTopicNamesRef.current.has(message.topic) || (data && typeof data === "object" && data.data_bytes != null)) && message.topic !== imageInterestRef.current) return;
-        const wallNow = performance.now();
+        const wallNow = bridgeReceivedAt(message);
         const resolved = resolveMonitorSampleTimeMs({
           bagPlaying: bagPlayingRef.current,
           topic: message.topic,
@@ -830,7 +834,7 @@ export default function App() {
           wallNowMs: wallNow,
           bagClockMs: bagClockMsRef.current,
         });
-        if (bagPlayingRef.current) {
+        if (bagPlayingRef.current && !nativeMonitor) {
           bagClockMsRef.current = resolved.bagClockMs;
           if (resolved.bagClockMs != null) {
             setBagClockMs(resolved.bagClockMs);
@@ -845,11 +849,11 @@ export default function App() {
             [message.topic!]: nextTopicSample(previous, message.data, wallNow),
           };
         });
-        const diagnostic = motionErrorsEnabledRef.current
+        const diagnostic = motionErrorsEnabledRef.current && !nativeMonitor
           ? motionErrorSampler.current.accept(message.topic, message.data, wallNow, profile.jointStateTopic, bagPlayingRef.current) : null;
         if (diagnostic) setMotionErrorStatus(diagnostic.status);
         const diagnosticBagPlaying = bagPlayingRef.current;
-        setMonitorWorkspace((current) => {
+        if (monitorOwner && !nativeMonitor) setMonitorData((current) => {
           let next = updateMonitorFromMessage(diagnostic?.reset ? clearMotionErrorPoints(current) : current, message.topic!, message.data, now);
           for (const frame of diagnostic?.frames ?? []) next = updateMonitorFromMessage(next, frame.topic, frame.data, diagnosticBagPlaying ? frame.sourceTimeMs ?? now : now);
           return next;
@@ -880,10 +884,10 @@ export default function App() {
         setStage("failed");
       }
     });
-  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic]);
+  }, [bridge, profile.jointStateTopic, profile.statusTopic, profile.urdfTopic, monitorOwner, nativeMonitor]);
 
   useEffect(() => {
-    if (stage !== "connected") return;
+    if (stage !== "connected" || nativeDesktop()) return;
     let disposed = false;
     const refresh = async () => {
       try {
@@ -911,6 +915,10 @@ export default function App() {
 
   const refreshUsbAndArm = useCallback(async () => {
     if (stage !== "connected" && !sshOk) return;
+    if (nativeDesktop() && stage === "connected") {
+      await Promise.allSettled([sharedObservations.refresh("usb", true), sharedObservations.refresh("arm", true)]);
+      return;
+    }
     try {
       const usb = await invoke<UsbProbeStatus>("probe_jetson_usb", { profile });
       setUsbProbe(usb);
@@ -931,10 +939,10 @@ export default function App() {
     } catch {
       // keep previous arm mode on transient probe failure
     }
-  }, [profile, stage, sshOk]);
+  }, [profile, stage, sshOk, sharedObservations.refresh]);
 
   useEffect(() => {
-    if (stage !== "connected") return;
+    if (stage !== "connected" || nativeDesktop()) return;
     let disposed = false;
     const refresh = async () => {
       if (disposed) return;
@@ -947,6 +955,38 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, [refreshUsbAndArm, stage]);
+
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    const entry = sharedObservations.entries.agent;
+    if (!entry) { setAgentStatus(null); setAgentChecked(false); return; }
+    try { setAgentStatus(observationValue<AgentServiceStatus>(entry)); setAgentError(""); }
+    catch (reason) { setAgentStatus(null); setAgentError(String(reason)); }
+    setAgentChecked(true);
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.agent?.sequence, sharedObservations.entries.agent?.expired, sharedObservations.connected]);
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    const entry = sharedObservations.entries.usb;
+    if (!entry) { setUsbProbe(null); setUsbChecked(false); return; }
+    try { setUsbProbe(observationValue<UsbProbeStatus>(entry)); }
+    catch (reason) { setUsbProbe({ mcuPresent: false, mcuVidPid: "", realsensePresent: false, realsenseLines: [], rawLsusb: "", error: String(reason) }); }
+    setUsbChecked(true);
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.usb?.sequence, sharedObservations.entries.usb?.expired, sharedObservations.connected]);
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    try { setArmMode(observationValue<ArmModeStatus>(sharedObservations.entries.arm)); }
+    catch { setArmMode(null); }
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.arm?.sequence, sharedObservations.entries.arm?.expired, sharedObservations.connected]);
+  useEffect(() => {
+    if (!nativeDesktop() || stage !== "connected") return;
+    const entry = sharedObservations.entries.topics;
+    if (!entry) return;
+    try { setTopics(observationValue<BridgeEnvelope>(entry).topics ?? []); setTopicRefreshError(""); }
+    catch (reason) { setTopicRefreshError(String(reason)); }
+  }, [stage, sharedObservations.epoch, sharedObservations.entries.topics?.sequence, sharedObservations.entries.topics?.expired]);
+  useEffect(() => {
+    if (nativeMain) void invoke("native_observation_interval", { seconds: settings.refreshIntervalSeconds }).catch(reason => setTopicRefreshError(String(reason)));
+  }, [nativeMain, settings.refreshIntervalSeconds]);
 
   async function switchVlaControllers(activate: string[], deactivate: string[]) {
     const message = await invoke<string>("switch_ros_controllers", {
@@ -1081,7 +1121,7 @@ export default function App() {
         if (actionGeneration !== connectionGenerationRef.current) return;
         setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
         try {
-          const agent = await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile });
+          const agent = nativeDesktop() ? observationValue<AgentServiceStatus>(await sharedObservations.refresh("agent", true)) : await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile });
           if (actionGeneration !== connectionGenerationRef.current) return;
           setAgentStatus(agent);
           setAgentError("");
@@ -1162,7 +1202,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (stage !== "connected") return;
+    if (stage !== "connected" || nativeDesktop()) return;
     const timer = window.setInterval(() => void refreshTopics(false), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [refreshTopics, settings.refreshIntervalSeconds, stage]);
@@ -1226,10 +1266,49 @@ export default function App() {
     setToolbarBusy("");
     setToolbarNotice("");
     // Keep Monitor panel config; clear live points by reloading persisted configs without points.
-    setMonitorWorkspace(loadMonitorWorkspace(profile.jointStateTopic));
+    setMonitorData(current => nativeDesktop() ? clearMonitorSamples(current) : loadMonitorWorkspace(profile.jointStateTopic));
   }
 
+  function acceptSharedSession(sharedProfile: ConnectionProfile, hello: BridgeHello, discovered: TopicInfo[]) {
+      setProfile(sharedProfile);
+      setEffectiveLocalPort(sharedProfile.localPort);
+      setSshOk(true); setBridgeUp(true); setError("");
+      setBridgeHello({ bridgeVersion: hello.bridge_version, bridgeBuildId: hello.bridge_build_id,
+        rosDistro: hello.ros_distro, controllersInfoSupported: hello.controllers_info_supported,
+        rgbdSubscriptionIdSupported: hello.rgbd_subscription_id_supported,
+        objectDetectionSupported: hello.object_detection_supported, visualPickSupported: hello.visual_pick_supported });
+      setTopics(discovered);
+      bridge.send({ op: "subscribe", topic: sharedProfile.urdfTopic, type: "std_msgs/msg/String" });
+      bridge.send({ op: "subscribe", topic: sharedProfile.jointStateTopic, type: "sensor_msgs/msg/JointState" });
+      if (sharedProfile.jointStateTopic !== "/joint_states") bridge.send({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
+      bridge.send({ op: "subscribe", topic: sharedProfile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
+      bridge.send({ op: "subscribe", topic: VLA_CHUNK_TOPIC, type: VLA_CHUNK_MESSAGE_TYPE });
+      setStage("connected");
+      setOfflineWorkspace(false);
+      const versionCheck = checkBridgeVersion(hello);
+      setBridgeVersionCheck(versionCheck);
+      if (nativeMain && versionCheck.status === "mismatch") setVersionDialogOpen(true);
+  }
+  const mainRecovery = useNativeMainRecovery({
+    enabled: nativeMain, bridge, reset: clearConnectionData, connected: acceptSharedSession,
+  });
+  useNativePageSession({
+    page: hostedPage, bridge, reset: () => { clearConnectionData(); setStage("bridge"); },
+    profile: setProfile, connected: acceptSharedSession,
+    disconnected: message => { setStage("idle"); setError(message); },
+  });
+  const migrationBusyReason = handeyeBusy ? `标定${handeyeBusy}中，请完成后移动页面` :
+    positionsEditor.saving || motionGroups.saving ? "正在保存编辑内容，请稍后移动页面" :
+    statusActionBusy ? "控制模式操作中，请完成后移动页面" : controllerAction ? "Controller 切换中，请完成后移动页面" :
+    controlStreaming ? "电机指令发送中，请先停止" : gravitySessionActive ? "重力辨识中，请结束后移动页面" :
+    hostedPage === "motion" && positionMotion.busy ? "运动任务尚未结束，请确认停止后移动页面" : pageBusy ? pageBusy : bagBusy ? "录制或回放操作中，请稍后移动页面" : "";
+  useEffect(() => {
+    if (!hostedPage) return;
+    void invoke("workspace_page_ready", { busyReason: migrationBusyReason }).catch(reason => setError(String(reason)));
+  }, [hostedPage, migrationBusyReason]);
+
   async function connect() {
+    if (offlineEntry.current || mainRecovery.pending || mainRecovery.error) return;
     clearConnectionData();
     setError("");
     setErrorCopied(false);
@@ -1277,6 +1356,7 @@ export default function App() {
 
       setStage("connected");
       activeStep = "agent";
+      if (!nativeDesktop()) {
       try {
         setAgentStatus(await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile }));
         setAgentError("");
@@ -1302,6 +1382,7 @@ export default function App() {
       void invoke<ArmModeStatus>("probe_arm_mode", { profile })
         .then(setArmMode)
         .catch(() => undefined);
+      }
       rememberLastKnownDomainId(profile.rosDomainId);
       setLastKnownDomainId(profile.rosDomainId);
       const successHistory = rememberConnectHistory({
@@ -1315,12 +1396,14 @@ export default function App() {
         setAppPage("status");
       }
 
+      if (!nativeDesktop()) {
       void invoke<RosbagStatus>("get_rosbag_status", { profile })
         .then(setRosbagStatus)
         .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`));
       void invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile })
         .then(setRosbagPlayStatus)
         .catch(() => undefined);
+      }
     } catch (reason) {
       const raw = reason instanceof Error ? reason.message : String(reason);
       const formatted = formatConnectError(raw, activeStep);
@@ -1449,26 +1532,36 @@ export default function App() {
     setToolbarNotice("工作区布局已恢复默认值");
   }
 
-  async function toggleRosbagRecording() {
-    if (toolbarBusy) return;
+  async function toggleRosbagRecording(forceStop = false) {
+    const generation = connectionGenerationRef.current;
+    if (toolbarBusy || (nativeDesktop() && !rosbagStatus && !forceStop)) return;
     setToolbarBusy("record");
     setToolbarNotice("");
     try {
-      const command = rosbagStatus?.recording ? "stop_rosbag_recording" : "start_rosbag_recording";
+      const command = forceStop || rosbagStatus?.recording ? "stop_rosbag_recording" : "start_rosbag_recording";
       const status = await invoke<RosbagStatus>(command, { profile });
-      setRosbagStatus(status);
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) await sharedObservations.refresh("bag_record", true);
+      else setRosbagStatus(status);
+      if (generation !== connectionGenerationRef.current) return;
       setToolbarNotice(`${status.message}${status.outputPath ? `：${status.outputPath}` : ""}`);
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setToolbarNotice(`rosbag 操作失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      setToolbarBusy("");
+      if (generation === connectionGenerationRef.current) setToolbarBusy("");
     }
   }
 
 
   async function refreshBagPlayStatus() {
+    const generation = connectionGenerationRef.current;
     try {
-      const status = await invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile });
+      const status = nativeDesktop()
+        ? observationValue<RosbagPlayStatus>(await sharedObservations.refresh("bag_play", true))
+        : await invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile });
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) { setBagNotice(status.message); return; }
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
       bagPlayingRef.current = Boolean(status.playing);
@@ -1481,15 +1574,23 @@ export default function App() {
         setBagWallStartedAtMs(performance.now());
       }
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setBagNotice(`无法读取 bag 回放状态：${reason instanceof Error ? reason.message : String(reason)}`);
     }
   }
 
   async function startBagPlay(bagPath: string) {
+    const generation = connectionGenerationRef.current;
     setBagBusy(true);
     setBagNotice("");
     try {
       const status = await invoke<RosbagPlayStatus>("start_rosbag_playback", { profile, bagPath });
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) {
+        await sharedObservations.refresh("bag_play", true);
+        if (generation === connectionGenerationRef.current) setBagNotice(status.message);
+        return;
+      }
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
       bagPlayingRef.current = Boolean(status.playing);
@@ -1511,30 +1612,39 @@ export default function App() {
         }
       }
     } catch (reason) {
-      bagPlayingRef.current = false;
-      setBagWallStartedAtMs(null);
+      if (generation !== connectionGenerationRef.current) return;
+      if (!nativeDesktop()) { bagPlayingRef.current = false; setBagWallStartedAtMs(null); }
       setBagNotice(`bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      setBagBusy(false);
+      if (generation === connectionGenerationRef.current) setBagBusy(false);
     }
   }
 
-    async function stopBagPlay() {
+  async function stopBagPlay() {
+    const generation = connectionGenerationRef.current;
     setBagBusy(true);
     setBagNotice("");
     try {
       const status = await invoke<RosbagPlayStatus>("stop_rosbag_playback", { profile });
+      if (generation !== connectionGenerationRef.current) return;
+      if (nativeDesktop()) {
+        await sharedObservations.refresh("bag_play", true);
+        if (generation === connectionGenerationRef.current) setBagNotice(status.message);
+        return;
+      }
       setRosbagPlayStatus(status);
       setBagNotice(status.message);
     } catch (reason) {
+      if (generation !== connectionGenerationRef.current) return;
       setBagNotice(`停止 bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      bagPlayingRef.current = false;
-      bagClockMsRef.current = null;
-      setBagClockMs(null);
-      setBagOriginMs(null);
-      setBagWallStartedAtMs(null);
-      setBagBusy(false);
+      if (generation === connectionGenerationRef.current) {
+        if (!nativeDesktop()) {
+          bagPlayingRef.current = false; bagClockMsRef.current = null;
+          setBagClockMs(null); setBagOriginMs(null); setBagWallStartedAtMs(null);
+        }
+        setBagBusy(false);
+      }
     }
   }
 
@@ -1615,7 +1725,7 @@ export default function App() {
   });
   const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId);
   const rosReady = isRosReady(jointState);
-  const connectBusy = ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
+  const connectBusy = mainRecovery.pending || Boolean(mainRecovery.error) || openingOffline || ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
   const historyLine = formatConnectHistoryLine(connectHistory);
   const faultCode = hardwareStatus?.fault_code;
   const faultModeLabel = hardwareStatus ? formatHardwareMode(hardwareStatus) : "";
@@ -1651,6 +1761,36 @@ export default function App() {
     void connect();
   }
 
+  async function openOfflineHandeye() {
+    if (!nativeMain) { setManageHandeye(true); return; }
+    await openNativeOffline("handeye");
+  }
+
+  async function openNativeOffline(page: "handeye" | "motion", tab?: "positions" | "groups") {
+    if (offlineEntry.current || connectBusy) return;
+    offlineEntry.current = true; setOpeningOffline(true); setError("");
+    try {
+      await invoke("native_offline_profile", {profile});
+      localStorage.setItem("easy-debug-profile", JSON.stringify(profile));
+      if (tab) await invoke("workspace_open_motion", {tab, profileKey: positionProfileKey});
+      else await invoke("workspace_select", {page});
+      setLocalAppPage(page); setOfflineWorkspace(true);
+    } catch (reason) { setError(String(reason)); }
+    finally { offlineEntry.current = false; setOpeningOffline(false); }
+  }
+
+  async function openRobotMotion() {
+    if (!nativeDesktop()) { setMotionTab("robot"); setAppPage("motion"); return; }
+    try {
+      await invoke("workspace_open_motion", {tab: "robot", profileKey: positionProfileKey});
+    } catch (reason) { setError(String(reason)); }
+  }
+
+  async function openOfflineMotion(tab: "positions" | "groups") {
+    if (!nativeMain) { if (tab === "positions") setManagePositions(true); else setManageMotionGroups(true); return; }
+    await openNativeOffline("motion", tab);
+  }
+
   const renderGroupEditor = (offline = false) => <MotionGroupsPage active={offline || appPage === "motion" && motionTab === "groups" && windowVisible} profileKey={positionProfileKey} groups={motionGroups.groups}
     positions={positionStore.profiles[positionProfileKey]?.positions ?? []}
     ready={motionGroups.ready} saving={motionGroups.saving} error={motionGroups.error}
@@ -1659,23 +1799,28 @@ export default function App() {
     onBack={offline ? () => setManageMotionGroups(false) : undefined}
     onOpenPoseLibrary={(id,intent) => { if(id)setPositionEditRequest({id,intent}); if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
-  if (stage !== "connected" && manageHandeye) {
+  if (nativeMain && stage !== "connected" && offlineWorkspace) {
+    return <NativeOfflineWorkspace page={appPage} snapshot={workspace.snapshot} onSelect={setAppPage}
+      onConnection={() => setOfflineWorkspace(false)} onError={setError} error={workspace.error || error}
+      onDismissError={() => { workspace.dismissError(); setError(""); }} />;
+  }
+  if (!hostedPage && stage !== "connected" && manageHandeye) {
     return <main className="handeye-offline"><button onClick={() => setManageHandeye(false)}>返回连接</button><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
   }
 
-  if (stage !== "connected" && manageMotionGroups) {
+  if (!hostedPage && stage !== "connected" && manageMotionGroups) {
     return <main className="connect-shell"><section className="offline-motion-groups">
       <MotionLayoutProvider active>{renderGroupEditor(true)}</MotionLayoutProvider>
     </section></main>;
   }
 
-  if (stage !== "connected" && managePositions) {
+  if (!hostedPage && stage !== "connected" && managePositions) {
     return (
       <main className="connect-shell">
         <PositionPage
           profileKey={positionProfileKey}
           editRequest={positionEditRequest}
-          store={positionStore}
+          store={positionStore} ready={positionsEditor.ready} saving={positionsEditor.saving} error={positionsEditor.error}
           urdfXml={urdf || previewUrdf}
           onUpdate={editPosition}
           onDelete={removePosition}
@@ -1686,10 +1831,11 @@ export default function App() {
     );
   }
 
-  if (stage !== "connected") {
+  if (!hostedPage && stage !== "connected") {
     return (
       <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
         <section className="connect-card">
+          {nativeMain && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
           <div className="brand"><img className="brand-mark" src={robotConsoleIcon} alt="" /><div><h1>Robot Console</h1><p>ROS 2 机器人调试工作台</p></div></div>
           {historyLine && (
             <p className="connect-history" aria-label="上次连接记录" title={historyLine}>{historyLine}</p>
@@ -1726,11 +1872,19 @@ export default function App() {
                 </button>
               )}
               <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
-              <button type="button" className="ghost" onClick={() => setManagePositions(true)}>管理姿态库</button>
-              <button type="button" className="ghost" onClick={() => setManageHandeye(true)}>手眼标定 / 离线样本</button>
-              <button type="button" className="ghost" onClick={() => setManageMotionGroups(true)}>管理动作组</button>
+              {nativeMain && Object.values(workspace.snapshot.pages).some(page => page?.ready) && <button type="button" className="ghost" onClick={() => {
+                const retained = (Object.keys(workspace.snapshot.pages) as AppPage[]).find(page => workspace.snapshot.pages[page]?.ready);
+                if (retained && !workspace.snapshot.pages[appPage]?.ready) setAppPage(retained);
+                setOfflineWorkspace(true);
+              }}>返回已打开页面</button>}
+              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("positions")}>管理姿态库</button>
+              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineHandeye()}>手眼标定 / 离线样本</button>
+              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
             </div>
           </div>
+          {mainRecovery.pending && <p role="status">正在恢复共享会话…</p>}
+          {mainRecovery.error && <div role="alert">{mainRecovery.error}<button type="button" onClick={mainRecovery.retry}>重试恢复共享会话</button></div>}
+          {openingOffline && <p role="status">正在同步离线配置…</p>}
           {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
           {error && (
             <div className="error-panel" role="alert">
@@ -1750,7 +1904,7 @@ export default function App() {
     );
   }
 
-  const connectionPanel = <div className="connection-panel">
+  const connectionPanel = hostedPage ? <span>{profile.host} · {stage === "connected" ? "共享会话" : "未连接"}</span> : <div className="connection-panel">
         <button
           type="button"
           className="toolbar-action switch-host"
@@ -1818,10 +1972,11 @@ export default function App() {
             type="button"
             className={`toolbar-action record ${rosbagStatus?.recording ? "active" : ""}`}
             aria-pressed={Boolean(rosbagStatus?.recording)}
-            disabled={Boolean(toolbarBusy)}
+            disabled={Boolean(toolbarBusy) || (nativeDesktop() && !rosbagStatus)}
             onClick={() => void toggleRosbagRecording()}
-            title={rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
-          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
+            title={(nativeDesktop() && bagObservations.record.error) || rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
+          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : nativeDesktop() && !rosbagStatus ? "录制状态待确认" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
+          {nativeDesktop() && !rosbagStatus && <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void toggleRosbagRecording(true)}>尝试停止录制</button>}
           <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
           <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title={appPage === "motion" ? "恢复 Motion 默认布局，保留当前 Tab 与编辑内容" : "恢复面板尺寸并展开全部面板"}><span>⊞</span>重置布局</button>
         </div>
@@ -1833,8 +1988,8 @@ export default function App() {
     .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
 
   return (
-    <div className={`app-shell ${appPage === "motion" ? `motion-shell${motionFocus ? " motion-focus" : motionNav ? "" : " nav-icons"}` : navExpanded ? "" : "nav-collapsed"}`}>
-      <AppNav
+    <div className={`app-shell ${hostedPage ? "native-hosted-page" : ""} ${appPage === "motion" ? `motion-shell${motionFocus ? " motion-focus" : motionNav ? "" : " nav-icons"}` : navExpanded ? "" : "nav-collapsed"}`}>
+      {!hostedPage && <AppNav
         page={appPage}
         expanded={appPage === "motion" ? motionNav && !motionFocus : navExpanded}
         iconRail={appPage === "motion" && !motionFocus}
@@ -1844,17 +1999,25 @@ export default function App() {
           if (next !== "status") setStatusHighlightCardId(null);
         }}
         onToggle={() => appPage === "motion" ? setMotionNav(v => !v) : setNavExpanded((current) => !current)}
-      />
-      {appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
+        detachedPages={nativeMain ? workspace.snapshot.pages : undefined}
+      />}
+      {!hostedPage && appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
       <div className="app-main-column">
-      {appPage !== "motion" && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
+      {!hostedPage && (nativeMain || appPage !== "motion") && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
+      {hostedPage && <NativePageToolbar page={hostedPage} profileName={profile.host} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
+      {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
+      {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
+      {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
+      {nativeDesktop() && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>
         {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
       </div>}
       <div className="app-page-content">
-      <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onMotion={() => { setMotionTab("robot"); setAppPage("motion"); }} /></div>
+      {nativeMain ? <NativeWorkspaceHost page={appPage} snapshot={workspace.snapshot}
+        covered={connectionDialogOpen || settingsDialogOpen || versionDialogOpen || Boolean(poseToSave)} onError={setError} /> : <>
+      {(!hostedPage || hostedPage === "handeye") && <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onBusyChange={setHandeyeBusy} onMotion={() => void openRobotMotion()} /></div>}
       {appPage === "handeye" ? null : appPage === "status" ? (
         <StatusPage
           clockSync={clockSync}
@@ -1887,16 +2050,19 @@ export default function App() {
           onQuickAction={handleStatusQuickAction}
         />
       ) : appPage === "collection" ? (
-        <DataCollectionPage profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
+        <DataCollectionPage observations={nativeDesktop() ? sharedObservations : undefined} connected={stage === "connected"} onBusyChange={setPageBusy} profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
       ) : appPage === "gravity" ? (
         <GravityIdentificationPage
           bridge={bridge}
+          connected={stage === "connected"}
           onNavigateCalibration={() => setAppPage("calibration")}
           onSessionActiveChange={setGravitySessionActive}
         />
       ) : appPage === "calibration" ? (
         <Joint4CalibrationPage
           profile={profile}
+          connected={stage === "connected"}
+          onBusyChange={setPageBusy}
           bridge={bridge}
           controllerState={calibrationControllerState}
           onRefreshControllers={() => void refreshRosControllers()}
@@ -1904,13 +2070,16 @@ export default function App() {
       ) : appPage === "monitor" ? (
         <MonitorPage
           workspace={monitorWorkspace}
+          historyNotice={nativeMonitor ? [monitorCapture.notice,monitorHistoryError,monitorHistoryNotice].filter(Boolean).join("；") : ""}
+          active={windowVisible}
           motionErrorStatus={motionErrorStatus}
           motionErrorSubscriptionError={motionErrorSubscriptionError}
           jointStateTopic={profile.jointStateTopic}
           liveUpdates={liveUpdates}
           bagStatus={rosbagPlayStatus}
           bagBusy={bagBusy}
-          bagNotice={bagNotice}
+          bagNotice={(nativeDesktop() && bagObservations.play.error) || bagNotice}
+          bagStateUnknown={nativeDesktop() && !rosbagPlayStatus}
           bagClockMs={bagClockMs}
           bagOriginMs={bagOriginMs}
           bagWallStartedAtMs={bagWallStartedAtMs}
@@ -1937,6 +2106,7 @@ export default function App() {
       ) : appPage === "motor" ? (
         <MotorPage
           bridge={bridge}
+          active={stage === "connected" && windowVisible}
           jointState={jointState}
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
@@ -1947,7 +2117,7 @@ export default function App() {
       ) : null}
       {appPage === "dashboard" && <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">{workspaceTools}</header>}
       {(appPage === "dashboard" || topicsVisited) && (
-      <TopicsPage active={appPage === "dashboard"} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
+      <TopicsPage active={appPage === "dashboard" && windowVisible} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
       <aside
         ref={topicSidebarRef}
         className={`topic-sidebar ${sidebars.left ? "" : "sidebar-collapsed"} ${panels.topics ? "" : "topics-pane-collapsed"} ${panels.rosControl ? "" : "control-pane-collapsed"}`}
@@ -2059,10 +2229,10 @@ export default function App() {
       />}
       </TopicsPage>
       )}
-      <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
+      {(!hostedPage || hostedPage === "motion") && <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
         connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
         tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <button className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</button>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
-        resetVersion={motionLayoutReset} active={appPage === "motion"} tab={motionTab} onTabChange={setMotionTab}
+        resetVersion={motionLayoutReset} visible={appPage === "motion"} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
           onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}
@@ -2121,21 +2291,21 @@ export default function App() {
           )}
 </>}
         urdf={<UrdfInspectorPage active={appPage === "motion" && motionTab === "urdf" && windowVisible} xml={urdf} bridge={bridge} jointState={jointState} receivedAt={messages[profile.jointStateTopic]?.lastAt} topic={profile.urdfTopic} liveUpdates={liveUpdates} />}
-        positions={appPage === "motion" && motionTab === "positions" ? <>          <PositionPage
+        positions={<>          <PositionPage
             profileKey={positionProfileKey}
             editRequest={positionEditRequest}
-            store={positionStore}
+            store={positionStore} ready={positionsEditor.ready} saving={positionsEditor.saving} error={positionsEditor.error}
             urdfXml={urdf || previewUrdf}
             onUpdate={editPosition}
             onDelete={removePosition}
             motion={positionMotion}
           />
-</> : null}
+</>}
         groups={renderGroupEditor()}
         log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
           plannerLog={(outputActive) => <ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible && outputActive} connected={stage === "connected"} preferredSource="moveit" />} />}
-      />
-
+      />}
+      </>}
       </div>
       </div>
       {poseToSave && <SavePoseDialog key={positionProfileKey} initial={poseToSave} urdfXml={urdf || previewUrdf}

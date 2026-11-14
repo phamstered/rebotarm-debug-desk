@@ -21,6 +21,7 @@ export type CollectionStatus = {
   state: "stopped" | "starting" | "idle" | "recording" | "finalizing";
   managed: boolean;
   pid: number;
+  processIdentity?: string;
   recording: boolean;
   pendingFrames: number;
   savedEpisodes: number;

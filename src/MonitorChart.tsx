@@ -20,9 +20,10 @@ function GaugeSettingInput({ label, title, value, onCommit }: { label: string; t
   /></label>;
 }
 
-export function MonitorChart({ panel, liveUpdates, crosshairT, onCrosshairChange, viewNow, onChartChange }: {
+export function MonitorChart({ panel, liveUpdates, crosshairT, onCrosshairChange, viewNow, onChartChange, active = true }: {
   panel: MonitorPanel;
   liveUpdates: boolean;
+  active?: boolean;
   crosshairT: number | null;
   onCrosshairChange(t: number | null): void;
   viewNow: number | null;
@@ -33,7 +34,7 @@ export function MonitorChart({ panel, liveUpdates, crosshairT, onCrosshairChange
   const chart = panel.chart;
   if (chart.type === "time-series") return <div className="monitor-chart-content">
     <DataGraph
-      seriesList={seriesList} liveUpdates={liveUpdates} compact title={panel.title}
+      seriesList={seriesList} liveUpdates={liveUpdates} active={active} compact title={panel.title}
       emptyHint="等待数据" crosshairT={crosshairT} onCrosshairChange={onCrosshairChange}
       viewNow={viewNow} renderStyle={chart.timeStyle}
       onRemoveSeries={() => undefined} onClearSeries={() => undefined}

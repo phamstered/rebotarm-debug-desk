@@ -1,24 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-import {
-  parseMotionGroupStore,
-  serializeMotionGroupStore,
-  type MotionGroupStore,
-} from "./motionGroupsLogic";
-let queue: Promise<unknown> = Promise.resolve();
-export async function loadStoredMotionGroups(): Promise<MotionGroupStore> {
-  return parseMotionGroupStore(await invoke<string>("motion_groups_load"));
+import { parseMotionGroupStore, type MotionGroup } from "./motionGroupsLogic";
+export function decodeMotionGroupStore(raw: string | null) {
+  return parseMotionGroupStore(raw ?? '{"schemaVersion":1,"profiles":{}}');
 }
-export function updateStoredMotionGroups(
-  update: (store: MotionGroupStore) => MotionGroupStore,
-): Promise<MotionGroupStore> {
-  const pending = queue
-    .catch(() => {})
-    .then(async () => {
-      const next = update(await loadStoredMotionGroups());
-      const content = serializeMotionGroupStore(next);
-      await invoke("motion_groups_save", { content });
-      return parseMotionGroupStore(content);
-    });
-  queue = pending;
-  return pending;
+export function assertMotionGroupUnchanged(group: MotionGroup | undefined, expected: string) {
+  if ((group ? JSON.stringify(group) : "") !== expected) throw new Error("该动作组已在其他窗口修改或删除；草稿已保留，请重新载入后检查");
 }

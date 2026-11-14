@@ -199,7 +199,7 @@ describe("MotionGroupsPage", () => {
           expect.objectContaining({ duration: 0 }),
           expect.objectContaining({ duration: 5 }),
         ],
-      }),
+      }), "",
     );
   });
   it("requires explicit capability and safety arming", async () => {
@@ -920,7 +920,7 @@ describe("compact Motion editing",()=>{
     fireEvent.contextMenu(screen.getByRole('button',{name:'另一组 · 2 帧'}));await user.click(screen.getByRole('menuitem',{name:'删除动作组'}));
     expect(screen.getByRole('dialog',{name:'未保存修改'})).toBeVisible();expect(options.onDelete).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button',{name:'放弃并切换'}));expect(screen.getByRole('dialog',{name:'删除动作组'})).toHaveTextContent('另一组');
-    await user.click(screen.getByRole('button',{name:'确认删除动作组'}));await waitFor(()=>expect(options.onDelete).toHaveBeenCalledExactlyOnceWith('h'));
+    await user.click(screen.getByRole('button',{name:'确认删除动作组'}));await waitFor(()=>expect(options.onDelete).toHaveBeenCalledExactlyOnceWith('h', JSON.stringify(options.groups.find(g => g.id === 'h'))));
   });
   it("keeps panels and unsaved values through focus mode and does not steal text input shortcuts",async()=>{
     const user=userEvent.setup(),options=props();const view=render(<Compact options={options}/>);

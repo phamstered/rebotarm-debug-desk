@@ -38,12 +38,14 @@ export function MotorControl({
   status,
   onStreamingChange,
   controlLocked = false,
+  active = true,
 }: {
   bridge: BridgeClient;
   jointState: JointState | null;
   status: HardwareStatus | null;
   onStreamingChange(streaming: boolean): void;
   controlLocked?: boolean;
+  active?: boolean;
 }) {
   const [mode, setMode] = useState<CommandMode>(DEFAULT_MODE);
   const [motors, setMotors] = useState<MotorRowInput[]>(() => createDefaultMotors());
@@ -57,16 +59,24 @@ export function MotorControl({
   const timerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const preflightPendingRef = useRef(false);
+  const operationRef = useRef(0);
+  const canRunRef = useRef(active && !controlLocked);
+  canRunRef.current = active && !controlLocked;
 
   const jointCount = inferredJointCount(jointState);
 
   useEffect(() => {
-    if (controlLocked && streaming) {
-      // Gravity ID (or other exclusive session) owns the arm — stop Motor stream; leave DISABLE to operator.
-      setStreaming(false);
-      setResult("控制已锁定：已停止 Motor 连续发送");
+    if (active && !controlLocked) return;
+    operationRef.current++;
+    const hadCommand = timerRef.current !== null || preflightPendingRef.current;
+    if (timerRef.current !== null) window.clearInterval(timerRef.current);
+    timerRef.current = null;
+    setStreaming(false); setArmed(false); onStreamingChange(false);
+    if (hadCommand) {
+      setResult(active ? "控制已锁定：已停止 Motor 连续发送" : "页面已隐藏或连接已断开：已停止 Motor 并请求 DISABLE");
+      if (!active) void bridge.request(createCommandPayload(3)).catch(() => undefined);
     }
-  }, [controlLocked, streaming]);
+  }, [active, controlLocked, bridge, onStreamingChange]);
   useEffect(() => {
     setMotors((current) => resizeMotors(current, jointCount));
   }, [jointCount]);
@@ -80,6 +90,7 @@ export function MotorControl({
 
   useEffect(() => {
     return bridge.onMessage((message) => {
+      if (message.op === "disconnected") { operationRef.current++; setArmed(false); stopTimer(); }
       if (message.op === "error" && !message.request_id) {
         stopTimer();
         setResult(message.message ?? "命令发送失败");
@@ -94,6 +105,7 @@ export function MotorControl({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      operationRef.current++;
       const shouldDisable = timerRef.current !== null || preflightPendingRef.current;
       if (timerRef.current !== null) window.clearInterval(timerRef.current);
       timerRef.current = null;
@@ -114,6 +126,7 @@ export function MotorControl({
       await disable();
       return;
     }
+    if (!canRunRef.current || preflightPendingRef.current) return;
     if (!armed) {
       setResult("请先勾选安全确认并解锁控制");
       return;
@@ -125,13 +138,20 @@ export function MotorControl({
     }
     const values = parsed.values;
     preflightPendingRef.current = true;
+    onStreamingChange(true);
+    const operation = ++operationRef.current;
     try {
       const response = await bridge.request(createCommandPayload(mode, values));
       preflightPendingRef.current = false;
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || operation !== operationRef.current || !canRunRef.current) {
+        onStreamingChange(false);
+        void bridge.request(createCommandPayload(3)).catch(() => undefined);
+        return;
+      }
       setResult(`预检通过，sequence=${response.sequence ?? "-"}`);
       stopTimer();
       timerRef.current = window.setInterval(() => {
+        if (!canRunRef.current || operation !== operationRef.current) { stopTimer(); return; }
         try {
           bridge.send(createCommandPayload(mode, values));
         } catch (reason) {
@@ -150,6 +170,7 @@ export function MotorControl({
   }
 
   async function disable() {
+    operationRef.current++;
     stopTimer();
     try {
       const response = await bridge.request(createCommandPayload(3));
@@ -293,14 +314,14 @@ export function MotorControl({
         </div>
 
         <label className="arm-check">
-          <input type="checkbox" checked={armed} disabled={streaming || controlLocked || mode === 3} aria-label="安全确认" onChange={(event) => {
+          <input type="checkbox" checked={armed} disabled={streaming || controlLocked || !active || mode === 3} aria-label="安全确认" onChange={(event) => {
             setArmed(event.target.checked);
           }} />
           我已确认机械臂周围安全，本次连接允许发送电机指令
         </label>
 
         <div className="control-actions">
-          <button className="send-command" disabled={streaming || controlLocked || (mode !== 3 && !armed)} onClick={start}>
+          <button className="send-command" disabled={mode !== 3 && (streaming || controlLocked || !active || !armed)} onClick={start}>
             {mode === 3 ? "发送 DISABLE" : "开始 20 Hz 发送"}
           </button>
           <button className="stop-command" onClick={disable}>停止并 DISABLE</button>

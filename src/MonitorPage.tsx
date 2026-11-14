@@ -38,11 +38,14 @@ export type MonitorSourceMode = "live" | "bag";
 
 export function MonitorPage({
   workspace,
+  historyNotice,
+  active = true,
   jointStateTopic,
   liveUpdates,
   bagStatus,
   bagBusy,
   bagNotice,
+  bagStateUnknown = false,
   bagClockMs = null,
   bagOriginMs = null,
   bagWallStartedAtMs = null,
@@ -66,11 +69,14 @@ export function MonitorPage({
   onStopBagPlay,
 }: {
   workspace: MonitorWorkspace;
+  historyNotice?: string;
+  active?: boolean;
   jointStateTopic: string;
   liveUpdates: boolean;
   bagStatus: RosbagPlayStatus | null;
   bagBusy: boolean;
   bagNotice: string;
+  bagStateUnknown?: boolean;
   /** Latest bag-domain clock (ms) while playing; null when live/unknown. */
   bagClockMs?: number | null;
   bagOriginMs?: number | null;
@@ -141,10 +147,10 @@ export function MonitorPage({
   const playing = Boolean(bagStatus?.playing);
 
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !active) return;
     const id = window.setInterval(() => setWallTick(performance.now()), 250);
     return () => window.clearInterval(id);
-  }, [playing]);
+  }, [playing, active]);
 
   const onCrosshairChange = useCallback((t: number | null) => {
     setCrosshairT(t);
@@ -276,7 +282,7 @@ export function MonitorPage({
   };
 
   const renderPanelChart = (panel: (typeof dashboard.panels)[number]) => <MonitorChart
-    panel={panel} liveUpdates={chartsLive} crosshairT={crosshairT}
+    panel={panel} liveUpdates={chartsLive} active={active} crosshairT={crosshairT}
     onCrosshairChange={onCrosshairChange} viewNow={viewNow}
     onChartChange={(chart) => onUpdatePanelChart(dashboard.id, panel.id, chart)}
   />;
@@ -295,6 +301,7 @@ export function MonitorPage({
 
   return (
     <main className="monitor-page">
+      {historyNotice && <p role="status" className="notice">{historyNotice}</p>}
       <header className="monitor-page-header">
         <div>
           <h1>Monitor</h1>
@@ -494,17 +501,18 @@ export function MonitorPage({
                 {bagBusy ? "处理中…" : "停止回放"}
               </button>
             ) : (
-              <button type="button" className="primary" disabled={bagBusy} onClick={startPlay}>
-                {bagBusy ? "处理中…" : "开始回放"}
+              <button type="button" className="primary" disabled={bagBusy || bagStateUnknown} onClick={startPlay}>
+                {bagBusy ? "处理中…" : bagStateUnknown ? "回放状态待确认" : "开始回放"}
               </button>
             )}
+            {bagStateUnknown && <button type="button" className="ghost danger" disabled={bagBusy} onClick={onStopBagPlay}>尝试停止回放</button>}
           </div>
 
           <div className="monitor-playbar" role="group" aria-label="回放控制条">
             <button
               type="button"
               className="monitor-playbar-btn"
-              disabled={bagBusy || playing}
+              disabled={bagBusy || playing || bagStateUnknown}
               title="以 1x 在 Jetson 上执行 ros2 bag play --clock"
               onClick={startPlay}
             >
