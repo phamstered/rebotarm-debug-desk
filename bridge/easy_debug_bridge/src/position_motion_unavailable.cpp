@@ -2,7 +2,7 @@
 #include "easy_debug_bridge/position_motion_core.hpp"
 namespace easy_debug_bridge {
 struct PositionMotion::Impl {};
-PositionMotion::PositionMotion(rclcpp::Node &, const std::string &, const std::string &, std::shared_ptr<ControllerRegistry>) : impl_(std::make_unique<Impl>()) {}
+PositionMotion::PositionMotion(rclcpp::Node &, const std::string &, const std::string &, std::shared_ptr<ControllerRegistry>, Disable) : impl_(std::make_unique<Impl>()) {}
 PositionMotion::~PositionMotion() = default;
 void PositionMotion::request(uint64_t, const boost::property_tree::ptree &data, Send send) {
   const auto id = position_json_quote(data.get<std::string>("request_id", ""));
@@ -18,4 +18,6 @@ void PositionMotion::diagnostic(uint64_t, const std::string &command, const std:
 }
 void PositionMotion::disconnected(uint64_t) {}
 bool PositionMotion::busy() const { return false; }
+bool PositionMotion::trajectory_supported() const { return false; }
+bool PositionMotion::rgb_recovery_ready() const { return false; }
 }

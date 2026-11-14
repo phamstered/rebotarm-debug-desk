@@ -439,7 +439,7 @@ class BridgeNode : public rclcpp::Node {
     gravity_id_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { gravity_id_tick(); });
 #endif
     controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
-    position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_);
+    position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_, [this] { return publish_task_disable(); });
     visual_pick_ = std::make_unique<easy_debug_bridge::VisualPick>(get_parameter("visual_pick_config").as_string(),
       [this](uint64_t owner, const auto &r, auto send){position_motion_->request(owner,r,std::move(send));},
       [this](uint64_t owner, const std::string &token, uint64_t id){return pick_observation(owner,token,id);},
@@ -565,6 +565,12 @@ class BridgeNode : public rclcpp::Node {
     const std::string op = request.get<std::string>("op", "");
     const std::string request_id = request.get<std::string>("request_id", "");
     try {
+      const bool starts=op=="position_move" || op=="position_group_start" || op=="position_group_resume" ||
+        op=="visual_pick_start" || op=="trajectory_command" || op=="gravity_id_send_goal" ||
+        (op=="joint_command" && request.get<int>("mode",-1)!=3);
+      // Serialize admission across socket clients. DISABLE bypasses this lock.
+      std::unique_lock<std::mutex> ingress(actuation_ingress_mutex_,std::defer_lock);
+      if (starts) ingress.lock();
       if (gravity_id_busy() && (op=="position_move" || op=="position_group_start" || op=="position_group_resume" || op=="visual_pick_start" || op=="trajectory_command" || (op=="joint_command" && request.get<int>("mode",-1)!=3)))
         throw std::runtime_error("重力辨识持有运动锁，需等待停止确认");
       if (op == "hello") {
@@ -572,6 +578,7 @@ class BridgeNode : public rclcpp::Node {
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"motion_observation_supported\":true,\"gravity_task_supported\":true,\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
+                     ",\"trajectory_task_supported\":" + (position_motion_->trajectory_supported() ? "true" : "false") +
                      ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
         const std::weak_ptr<WebSocketSession> weak = session;
@@ -596,6 +603,7 @@ class BridgeNode : public rclcpp::Node {
         selected->target_tracker.release();visual_pick_->cancel(session->id());
         session->send("{\"op\":\"visual_target_released\",\"request_id\":"+json_quote(request_id)+"}");
       } else if (op == "visual_pick_preview" || op == "visual_pick_start" || op == "visual_pick_status" || op == "visual_pick_observe" || op == "visual_pick_cancel") {
+        if (op=="visual_pick_start" && position_motion_->busy()) throw std::runtime_error("已有运动任务，等待停止确认");
         const std::weak_ptr<WebSocketSession> weak=session;
         visual_pick_->request(session->id(),request,[weak](const std::string &reply){if(auto target=weak.lock())target->send(reply);});
       } else if (op == "position_motion_info" || op == "position_motion_observe" || op == "position_motion_heartbeat" || op == "position_task_status" || op == "position_move" || op == "position_cancel" ||
@@ -633,8 +641,10 @@ class BridgeNode : public rclcpp::Node {
         send_resource(session, request.get<std::string>("uri", ""), request_id, request.get<std::string>("encoding", "base64"));
       } else if (op == "joint_command") {
         publish_joint_command(session, request, request_id);
-      } else if (op == "trajectory_command") {
-        publish_trajectory_command(session, request, request_id);
+      } else if (op == "trajectory_command" || op == "trajectory_heartbeat" || op == "trajectory_cancel" || op == "trajectory_task_status") {
+        if (op=="trajectory_command" && visual_pick_->busy()) throw std::runtime_error("视觉抓取持有运动锁");
+        const std::weak_ptr<WebSocketSession> weak=session;
+        position_motion_->request(session->id(),request,[weak](const std::string &reply){if(auto target=weak.lock())target->send(reply);});
       } else if (op == "gravity_id_send_goal") {
         gravity_id_send_goal(session, request, request_id);
       } else if (op == "gravity_id_cancel") {
@@ -1153,69 +1163,16 @@ class BridgeNode : public rclcpp::Node {
                   ",\"mode\":" + std::to_string(command.mode) + "}");
   }
 
-  // 轨迹指令发往 JointTrajectoryController 的 ~/joint_trajectory 订阅，
-  // 因此 Topic 由前端按当前 active 的控制器指定，Bridge 只做校验和转发。
-  void publish_trajectory_command(const std::shared_ptr<WebSocketSession> &session,
-                                  const boost::property_tree::ptree &request,
-                                  const std::string &request_id) {
-    if (position_motion_->busy() || visual_pick_->busy()) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
-    easy_debug_bridge::TrajectoryCommand command;
-    command.topic = request.get<std::string>("topic", "");
-    if (const auto names = request.get_child_optional("joint_names")) {
-      for (const auto &item : *names) {
-        command.joint_names.push_back(item.second.get_value<std::string>());
-      }
-    }
-    if (const auto points = request.get_child_optional("trajectory_points")) {
-      for (const auto &item : *points) {
-        const auto &node = item.second;
-        easy_debug_bridge::TrajectoryPointSpec point;
-        if (const auto positions = node.get_child_optional("positions")) {
-          for (const auto &value : *positions) {
-            point.positions.push_back(value.second.get_value<double>());
-          }
-        }
-        if (const auto velocities = node.get_child_optional("velocities")) {
-          for (const auto &value : *velocities) {
-            point.velocities.push_back(value.second.get_value<double>());
-          }
-        }
-        point.time_from_start = node.get<double>("time_from_start", 0.0);
-        command.points.push_back(std::move(point));
-      }
-    }
-
-    const auto validation = easy_debug_bridge::validate_trajectory_command(command);
-    if (validation != easy_debug_bridge::TrajectoryValidation::Ok) {
-      session->send(error_message(request_id, easy_debug_bridge::trajectory_validation_message(validation)));
-      return;
-    }
-
-    auto publisher = trajectory_publisher(command.topic);
-    if (publisher->get_subscription_count() == 0) {
-      session->send(error_message(request_id, "轨迹控制器订阅不可用"));
-      return;
-    }
-
-    trajectory_msgs::msg::JointTrajectory message;
-    message.header.stamp = now();
-    message.joint_names = command.joint_names;
-    message.points.reserve(command.points.size());
-    for (const auto &point : command.points) {
-      trajectory_msgs::msg::JointTrajectoryPoint target;
-      target.positions = point.positions;
-      target.velocities = point.velocities;
-      const auto stamp = easy_debug_bridge::duration_fields(point.time_from_start);
-      target.time_from_start.sec = stamp.first;
-      target.time_from_start.nanosec = stamp.second;
-      message.points.push_back(std::move(target));
-    }
-    publisher->publish(message);
-    session->send("{\"op\":\"trajectory_command_ack\",\"request_id\":" + json_quote(request_id) +
-                  ",\"joints\":" + std::to_string(command.joint_names.size()) +
-                  ",\"points\":" + std::to_string(command.points.size()) + "}");
+  uint32_t publish_task_disable() {
+    if (!command_publisher_->get_subscription_count()) throw std::runtime_error("DISABLE 订阅不可用，仍保留轨迹占用");
+    microros_stm32h723_bridge::msg::JointCommand command;
+    command.mode=3;command.position.fill(0);command.velocity.fill(0);
+    command.kp.fill(0);command.kd.fill(0);command.effort.fill(0);
+    std::lock_guard<std::mutex> control(control_mutex_);
+    const auto sequences=easy_debug_bridge::allocate_sequences(sequence_,3);
+    for (const auto value:sequences) {command.sequence=value;command.header.stamp=now();command_publisher_->publish(command);}
+    return sequences.back();
   }
-
 
   static std::string float_array_json(const std::vector<float> &values) {
     std::ostringstream out;
@@ -2211,15 +2168,7 @@ class BridgeNode : public rclcpp::Node {
                       steady + std::chrono::milliseconds(100));
   }
 
-  rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
-  trajectory_publisher(const std::string &topic) {
-    std::lock_guard<std::mutex> lock(trajectory_mutex_);
-    auto &publisher = trajectory_publishers_[topic];
-    if (!publisher) {
-      publisher = create_publisher<trajectory_msgs::msg::JointTrajectory>(topic, rclcpp::QoS(10));
-    }
-    return publisher;
-  }
+
 
   easy_debug_bridge::PickObservation pick_observation(uint64_t owner, const std::string &token, uint64_t id) {
     const auto sync = clock_snapshot();
@@ -2321,9 +2270,7 @@ class BridgeNode : public rclcpp::Node {
   easy_debug_bridge::FirmwareClockMonitor firmware_clock_;
   rclcpp::Subscription<std_msgs::msg::UInt32MultiArray>::SharedPtr clock_diagnostics_subscription_;
   rclcpp::Publisher<microros_stm32h723_bridge::msg::JointCommand>::SharedPtr command_publisher_;
-  std::mutex trajectory_mutex_;
-  std::unordered_map<std::string, rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr>
-      trajectory_publishers_;
+  std::mutex actuation_ingress_mutex_;
   rclcpp::Subscription<microros_stm32h723_bridge::msg::HardwareStatus>::SharedPtr
       safety_status_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr safety_joint_subscription_;

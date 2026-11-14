@@ -198,7 +198,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 ## 11. TCP 拖拽轨迹下发
 
-多窗口开发分支已给直接 JTC 下发增加原生任务编号、跨窗口占用、取消入口与终态证据校验。所属页面退出会请求取消，发布 / 取消 ACK 不解除占用；重连后仅查询原任务。此路径要求 Bridge 声明 `trajectory_task_supported`，当前 ROS 适配器尚未接入，因此该分支暂时拒绝直接 JTC 入口并显示更新提示，不代表已恢复实机可用；常用 MoveIt 点位和 Pose 执行仍使用原有入口。详见[多窗口实现记录](./multiwindow-implementation)。
+多窗口开发分支已给直接 JTC 下发增加原生任务编号、跨窗口占用、取消入口与终态证据校验。所属页面退出会请求取消，发布 / 取消 ACK 不解除占用；重连后仅查询原任务。此路径要求 Bridge 声明 `trajectory_task_supported`，已接入 arm/gripper 控制器的 ROS 发布与反馈；旧 Bridge 或缺少可选编译依赖时显示更新提示。取消会请求 DISABLE 并等待序列、JTC 末点和独立反馈确认。尚未部署生产环境；常用 MoveIt 点位和 Pose 执行仍使用原有入口。详见[多窗口实现记录](./multiwindow-implementation)。
 
 ### Robot View 关节联合调整
 
@@ -551,7 +551,7 @@ Motor 连续发送已登记到原生任务：尚未受理时即阻止冲突运�
 Controller 切换期间发送 DISABLE，或确认支撑后选择“支撑并退出”的 disable-stop，会保留停止意图。先立即请求关闭输出，远端切换确认结束后再发送新的 DISABLE；只有对应新序列的新鲜 HardwareStatus 确认关闭输出才释放占用。之前的 DISABLE ACK、旧反馈和 Controller 目标状态成功不能代替这次确认。页面全部关闭后原生工作仍继续；未知远端结果继续持锁。普通停止中的 RETURN 回零流程没有改为立即 DISABLE，其他模式启停的完整生命周期仍待接入。
 
 
-开发分支已增加直接 JTC 轨迹任务的底层终态验证器和测试，但尚未接入收发流程；现有 trajectory_command ACK 仍仅表示发布，不能当作执行完成。Robot View 当前继续使用已有 MoveIt 执行流程。
+开发分支的直接 JTC 已接入任务协议和 ROS 适配器；trajectory_command ACK 仅表示发布，完成/取消需独立反馈生成带证据终态。Robot View 当前继续使用已有 MoveIt 执行流程。
 
 
 多窗口手眼页的“前往 Motion 调整姿态”会聚焦已有 Motion 页面并明确切到 Robot View；首次使用则创建同一个 Motion 页面实例。手眼图片、样本和输入保留，不自动连接或开始运动。离线手眼入口使用公共页面容器，主窗口会随该导航切换，并可通过“已打开页面”返回手眼。导航若先于配置通知到达，会等匹配的配置就绪，不在另一机器人的编辑内容上应用。

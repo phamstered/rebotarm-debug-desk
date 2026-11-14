@@ -101,6 +101,14 @@ class TrajectoryTaskCore {
     if (!matches(id) || active_->sent) return false;
     finish("failed","not_published");return true;
   }
+  // Record pre-admission rejection without replacing an active/retained ID.
+  bool reject_unpublished(const std::string &id) {
+    if (!valid_motion_command_id(id) || result(id)) return false;
+    if (matches(id)) return reject(id);
+    history_.push_back({id,"failed","not_published"});
+    if (history_.size()>256) history_.pop_front();
+    return true;
+  }
   void tick(Time now) {
     if (!active_) return;
     if (now-active_->lease>=std::chrono::seconds(5)) cancel_once();

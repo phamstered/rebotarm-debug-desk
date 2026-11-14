@@ -401,3 +401,19 @@ Motion 保留最新导航，等对应配置到达后再应用，避免通知乱�
 窗口访问恢复后，通过真实 CUA 操作将主机改为 `offline-a.invalid`，离线进入手眼页，生成 1200×900 标定板、填写 16 mm、切到 100%，拆为独立窗口。主窗口改为 `offline-b.invalid` 后打开姿态库，确认 Motion 选中姿态库且显示新主机；返回独立手眼窗口，同样显示新主机，图片、输入和缩放均保留。大图截图确认工具栏与关闭按钮完整可见，Esc 返回正常；收回后 PageDown 截图确认底部 Save target、尺寸核对框、图片说明和滚动条可见。最后恢复原 `jetson` 草稿，手眼导航到已有 Motion 的 Robot View，确认未连接、运动确认未勾选、执行禁用，再返回手眼页。此次没有注入迁移故障或重复性能压力测试；姿态草稿的两个配置往返及冲突基线由组件回归验证。
 
 正式 `/Applications/Robot Console.app` 与生产 Bridge 未更新，没有连接机械臂或执行真实动作。完整方案继续包含直接 JTC ROS 适配器、Joint4、外部采集/回放协调、未知任务和桌面重启恢复、多屏与持续运行验收，以及最终 PR/CI/合并和正式安装部署。
+
+## 直接 JTC 的 Bridge ROS 接线
+
+直接轨迹已接入 PositionMotion 的互斥 ROS 回调组，复用模型、Controller Registry、JTC、JointState、HardwareStatus 和时钟监控。仅有可选编译依赖的构建声明 `trajectory_task_supported`；旧发布转发入口已移除。支持 arm/gripper 两个固定控制器、完整关节集合和最多 64 点；拒绝重复/未知字段、非有限值、纳秒量化后不递增时间、过期源时间戳、非零末点速度及超出模型/请求样条界限的输入。夹爪独立反馈按任务保存的标定换算成米。没有调用 MoveIt Action，但模型仍由 `/move_group` 参数提供。
+
+Socket 控制入口串行受理；排队开始也计入 busy，直接发布与排队取消、断连、DISABLE 共用撤销锁。发布前拒绝保存 `not_published` 终态；重复活动/已记录编号不能覆盖旧结果。发布异常只进入取消/结果未确认。租约、停止和最终反馈由已有纯状态机驱动，取消调用现有硬件命令发布器和共享 sequence 分配器发送三帧清零 DISABLE，不发送空 JTC 轨迹。旧轨迹时长未结束、缺失 JTC 静止末点参考、独立测量未停稳或固件序列未确认时均不释放占用。跨连接查询最多保留 256 个完整终态，未知不作为空闲证据。
+
+本阶段的 ROS 集成测试使用 `ROS_DOMAIN_ID=221`、`ROS_LOCALHOST_ONLY=1` 和模拟 ROS 发布者，不是真实 JTC / 硬件。首段校验依赖收到的反馈快照；真实 JTC 在控制更新时选取起始状态/时间，因此这不等于控制器内实时动态限幅，详见协议中的上游源码说明。真实 JTC 首段与接收延迟验证仍属未完成边界。
+
+原生窗口在用户解锁后确认旧隔离候选包的手眼页仍保留 16 mm、1200×900 标定板和 100% 缩放，处于未连接状态。本轮新包构建后准备退出旧包时 CUA 再次报告 Mac 锁屏；没有完成新包重开验证，也没有把此前窗口验收当作新包证据。正式应用和生产 Bridge 均未替换。
+
+最终 `npm test` 通过：915 前端、208 Rust、3 运行库及其余脚本，新增协议边界测试已进入默认测试入口（`/tmp/260-direct-adapter-verified-tests.log`）。前端、文档、独立 Debug `.app` 构建和严格 codesign 核验通过（`/tmp/260-direct-adapter-verified-{build,docs,bundle}.log`）。后续仅补充了注释、文档和对应生成的 build ID，没有新增功能改动；最新隔离包包含最终 build ID。
+
+Jetson 使用部署脚本同步独立 `~/easy_debug_bridge_260_motion_observe`，最终以 `MAKEFLAGS="-j1 -l1" CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1` 构建，完整 `colcon test` 和 `colcon test-result --verbose` 通过：27 tests，0 errors，0 failures，0 skipped（`/tmp/260-direct-adapter-verified-ros.log`）。首轮定向测试因模拟 DISABLE 订阅采用 reliable、与 Bridge best-effort 不兼容而失败；修正模拟订阅后重新测试，没有修改生产 QoS 或放宽断言。新增 ROS 覆盖源时间戳过期、重复编号、限幅拒绝、夹爪单位、缺失末点参考不解锁、断连取消、只读轮询不续租和保留终态。
+
+另起并清理了独立域 221、随机回环端口的临时安装二进制进程，实际 `hello` 返回 build ID `071d637c39f5` 与 `trajectory_task_supported:true`；未知任务保持非终态，白名单拒绝可按编号恢复 `not_published`（`/tmp/260-direct-adapter-hello-smoke.log`）。这不是生产进程重启或部署。完整目标仍包括 Joint4、外部采集/回放协调、未知任务和桌面重启恢复、真实 JTC 边界、多屏及持续运行，以及最终 PR/CI/合并和正式安装部署；当前目标保持进行中。

@@ -1,4 +1,5 @@
 #include "easy_debug_bridge/trajectory_task_core.hpp"
+#include "easy_debug_bridge/direct_trajectory_validation.hpp"
 #include <cassert>
 #include <iostream>
 using namespace easy_debug_bridge;
@@ -27,6 +28,33 @@ template<class F> void rejects(F operation) {
   try {operation();assert(false);} catch(const std::runtime_error &) {}
 }
 int main() {
+  {
+    Core rejected;start(rejected);
+    assert(!rejected.reject_unpublished("first")); // Published task cannot become unsent.
+    assert(rejected.reject_unpublished("other"));assert(rejected.matches("first"));
+    assert(!rejected.reject_unpublished("other"));assert(!rejected.reject_unpublished("bad id"));
+    assert(rejected.result("other")->evidence=="not_published");
+    Core pending;reserve(pending);assert(pending.reject_unpublished("first"));assert(!pending.busy());
+  }
+  {
+    PositionMotionModel model;model.joint_names={"joint1"};model.lower={-1.};model.upper={1.};
+    TrajectoryCommand path{"/arm_trajectory_controller/joint_trajectory",{"joint1"},{{{0.},{0.},.1},{{.1},{0.},2.}}};
+    validate_direct_trajectory(path,model,{0.},{0.},{1.},{1.});
+    // Matching knots alone do not prove the seed-to-first segment safe.
+    rejects([&]{validate_direct_trajectory(path,model,{.5},{0.},{1.},{1.});});
+    auto bad=path;bad.points[1].positions={2.};
+    rejects([&]{validate_direct_trajectory(bad,model,{0.},{0.},{1.},{1.});});
+    bad=path;bad.points[1].time_from_start=.10000000001;
+    rejects([&]{validate_direct_trajectory(bad,model,{0.},{0.},{1.},{1.});});
+    // Cubic interpolation can exceed position limits even if knots are valid.
+    bad=path;bad.points[1].positions={.9};bad.points[0].positions={.9};bad.points[0].velocities={3.};
+    rejects([&]{validate_direct_trajectory(bad,model,{.9},{3.},{100.},{100.});});
+    for (auto &point:path.points) point.velocities.clear();
+    validate_direct_trajectory(path,model,{0.},{0.},{1.},{1.});
+    rejects([&]{validate_direct_trajectory(path,model,{0.},{0.},{.01},{1.});});
+    path.joint_names={gripper_motion_joint()};model.joint_names=path.joint_names;
+    rejects([&]{validate_direct_trajectory(path,model,{0.},{0.},{1.},{1.});});
+  }
   // Admission, bounded input and explicit pre-publication rejection.
   Core c;
   rejects([&]{c.reserve(0,"first",command(),{{.01,.02},{.001,.002}},7,origin);});

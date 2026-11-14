@@ -12,14 +12,16 @@ class ControllerRegistry;
 class PositionMotion {
  public:
   using Send = std::function<void(const std::string &)>;
+  using Disable = std::function<uint32_t()>;
   explicit PositionMotion(rclcpp::Node &node, const std::string &joint_topic, const std::string &status_topic,
-                          std::shared_ptr<ControllerRegistry> controllers);
+                          std::shared_ptr<ControllerRegistry> controllers, Disable disable);
   ~PositionMotion();
   void request(uint64_t owner, const boost::property_tree::ptree &request, Send send);
   // Internal diagnostics only; never registered as a WebSocket operation.
   void diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message);
   void disconnected(uint64_t owner);
   bool busy() const;
+  bool trajectory_supported() const;
   bool rgb_recovery_ready() const;
  private:
   struct Impl;

@@ -83,16 +83,17 @@ JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint
 {
   "op":"trajectory_command",
   "request_id":"uuid",
-  "topic":"/arm/trajectory_controller/joint_trajectory",
-  "joint_names":["joint1","joint2"],
+  "command_id":"trajectory-uuid",
+  "topic":"/arm_trajectory_controller/joint_trajectory",
+  "joint_names":["joint1","joint2","joint3","joint4","joint5","joint6"],
   "trajectory_points":[
-    {"positions":[0.1,0.2],"velocities":[],"time_from_start":0.1},
-    {"positions":[0.5,-0.2],"velocities":[],"time_from_start":1.2}
+    {"positions":[0,0,0,0,0,0],"velocities":[0,0,0,0,0,0],"time_from_start":0.1},
+    {"positions":[0.1,0,0,0,0,0],"velocities":[0,0,0,0,0,0],"time_from_start":2}
   ]
 }
 ```
 
-`topic` 必须以 `/joint_trajectory` 结尾且只含字母数字下划线斜杠，否则拒绝。`trajectory_points` 最多 64 个点，`joint_names` 最多 32 个且不允许重复或空白；每个点的 `positions` 长度必须等于 `joint_names`，`velocities` 可为空数组，`time_from_start` 必须为正且严格递增。所有数值必须有限。Topic 上没有订阅者时返回 error。
+`topic` 仅支持已核验的 arm/gripper 两个控制器，详见下文直接 JTC 任务协议。`trajectory_points` 最多 64 个点，`joint_names` 最多 32 个且不允许重复或空白；每个点的 `positions` 长度必须等于 `joint_names`，机械臂的 `velocities` 可为空数组，夹爪必须提供速度；`time_from_start` 必须为正且在转换为纳秒后严格递增。所有数值必须有限，末点提供的速度必须为零。没有订阅者时拒绝发布。
 
 桌面端通过现有通用 `subscribe` 读取 active 控制器的 `control_msgs/msg/JointTrajectoryControllerState`（`~/controller_state`，旧版兼容 `~/state`），按其中的 `joint_names` 构造完整关节集合和顺序，不能直接复制可能含夹爪等额外关节的 JointState。下发前要求 JointState 与控制器反馈均在 1 秒内。`trajectory_command_ack` 仅确认 Bridge 已发布消息，不是 FollowJointTrajectory action 的接受/执行结果。
 
@@ -262,7 +263,7 @@ Command acknowledgement:
 Trajectory command acknowledgement:
 
 ```json
-{"op":"trajectory_command_ack","request_id":"uuid","joints":2,"points":2}
+{"op":"trajectory_command_ack","request_id":"uuid","command_id":"trajectory-uuid","accepted":true}
 ```
 
 Gravity ID feedback（Bridge → Desk，节流 ≤10 Hz）：
@@ -588,15 +589,21 @@ Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前�
 
 Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 不小于该次 DISABLE ACK、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
 
-### 直接 JTC 的原生消费路径（多窗口开发分支，ROS 适配器未接入）
+### 直接 JTC 的任务协议（多窗口开发分支）
 
-桌面 `trajectory_command` 增加唯一 `command_id`，原生入口仅允许当前 Motion 页面提交，且要求 hello 中 `trajectory_task_supported:true`。当前 Bridge 尚未声明该能力，此开发分支的原生入口会在发送前明确拒绝此入口；现有 MoveIt 点位 / Pose 入口不受此能力字段影响。不能把隔离假 Bridge 的验证当成 ROS 适配器已完成。
+桌面 `trajectory_command` 增加唯一 `command_id`，原生入口仅允许当前 Motion 页面提交，且要求 hello 中 `trajectory_task_supported:true`。具备 MoveIt/control_msgs/controller_manager_msgs 编译依赖的 Bridge 声明该能力；缺失依赖的构建返回 false。直接轨迹不调用 MoveIt Action，但仍从 `/move_group` 读取模型、标定和限幅。
 
 能力满足时，Rust 将直接轨迹纳入共享运动和迁移锁。原生层消费的 `trajectory_command_ack` 必须匹配 `command_id` 和 `accepted:true`，仅表示受理；明确 `accepted:false,evidence:"not_published"` 可以释放尚未受理的任务，普通 error、旧式发布 ACK 和超时继续保留任务并请求取消。所属窗口的存活驱动每 500 ms 至多一次 `trajectory_heartbeat`，页面不能直接调用续租；超过 5 秒失联或页面退出请求编号匹配的 `trajectory_cancel`。取消具有保留发送容量，撤销之前排队的直接轨迹，ACK 不解除占用。
 
 原生终态消费格式为 `op:"trajectory_task_state"`、匹配 `command_id`、`terminal:true`，并严格匹配 `task_phase/evidence`：`succeeded/target_observed`、`canceled/output_disabled` 或 `failed/not_published`。缺失证据、其他编号、旧连接事件及 `uncertain` 保留占用。重连原机器人配置后只发 `trajectory_task_status`，要求 `known:true,terminal:true,busy:false` 和嵌套 `result` 中完整一致的上述终态；不重发轨迹或向替换连接发送取消。身份包括 SSH/远端 Bridge、ROS domain/setup 和反馈 Topic，不包含本地隧道端口。
 
-各页面读取 `native_task_snapshot` 可显示 `kind:"trajectory"`；`native_trajectory_cancel` 只登记本机取消意图，参数 `id` 与 `commandId` 必须同时匹配当前任务。网络发送由原生看门狗执行，IPC 返回成功不代表机械臂已停止。该桌面路径已有隔离回归；Bridge 的实际订阅、发布及停止证据生成仍未接入。
+各页面读取 `native_task_snapshot` 可显示 `kind:"trajectory"`；`native_trajectory_cancel` 只登记本机取消意图，参数 `id` 与 `commandId` 必须同时匹配当前任务。网络发送由原生看门狗执行，IPC 返回成功不代表机械臂已停止。
+
+Bridge 在运动回调组串行处理发布、反馈和任务状态，最多保留 256 个终态。仅允许 `/arm_trajectory_controller/joint_trajectory` 和 `/gripper_trajectory_controller/joint_trajectory`，要求完整关节集合、active 控制器及 position/velocity 接口、新鲜反馈、TRACK、无故障和时钟健康。校验 JTC actual、desired 及独立测量到首点的插值；夹爪使用任务开始时保存的标定转换为米。有速度的段检查连续样条速度、加速度及位置界限。保留既有机械臂 position-only 线性路径，只能核验段内速度，不能证明结点速度跳变的加速度界限；夹爪缺失速度会拒绝。
+
+首段校验使用 Bridge 收到的起始快照与请求时间，不能视为控制器内的实时限幅器。[JTC 2.53.1 的采样实现](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/trajectory.cpp) 在实际更新时选取起始状态和起始时间，传输/调度延迟会改变到首点的时间。隔离模拟节点测试覆盖任务协议和反馈证据，不替代真实 JTC 的首段插值及硬件验证。
+
+取消、所属连接断开或 5 秒租约失效会请求共享序列分配器发送三帧零输出 DISABLE，必要时每秒重申；缺少订阅者或发布错误继续保留占用，不向 JTC 发送空轨迹。完成需原轨迹时长已过、JTC reference 已在末点且速度为零，actual 与独立测量连续新鲜停稳 200 ms；成功还核验目标误差，取消还核验 DISABLE 序列回执。时间基准改变保留 uncertain，不能只靠墙钟等待释放。排队取消/断连/DISABLE 与直接发布共用撤销屏障；重复编号不重发，已发布任务绝不返回 not_published。
 
 ### 原生页面附着（多窗口开发分支）
 

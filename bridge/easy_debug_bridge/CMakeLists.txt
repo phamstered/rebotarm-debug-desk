@@ -80,6 +80,9 @@ if(BUILD_TESTING)
   target_include_directories(test_trajectory_task_core PRIVATE include)
   target_compile_options(test_trajectory_task_core PRIVATE -UNDEBUG)
   add_test(NAME trajectory_task_core COMMAND test_trajectory_task_core)
+  add_executable(test_trajectory_task_protocol test/test_trajectory_task_protocol.cpp)
+  target_include_directories(test_trajectory_task_protocol PRIVATE include ${Boost_INCLUDE_DIRS})
+  add_test(NAME trajectory_task_protocol COMMAND test_trajectory_task_protocol)
   add_executable(test_gravity_task_core test/test_gravity_task_core.cpp)
   target_include_directories(test_gravity_task_core PRIVATE include)
   target_compile_options(test_gravity_task_core PRIVATE -UNDEBUG)
@@ -148,6 +151,10 @@ if(BUILD_TESTING)
   add_test(NAME topic_json COMMAND test_topic_json)
   if(moveit_msgs_FOUND AND control_msgs_FOUND AND controller_manager_msgs_FOUND)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME trajectory_task_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_trajectory_task_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(trajectory_task_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=221;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
     add_test(NAME capture_action_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_capture_action_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(capture_action_ros PROPERTIES

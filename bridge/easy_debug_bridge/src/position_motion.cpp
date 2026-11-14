@@ -1,4 +1,6 @@
 #include "easy_debug_bridge/position_motion.hpp"
+#include "easy_debug_bridge/trajectory_task_protocol.hpp"
+#include "easy_debug_bridge/direct_trajectory_validation.hpp"
 #include "easy_debug_bridge/position_motion_model.hpp"
 #include "easy_debug_bridge/position_motion_core.hpp"
 #include "easy_debug_bridge/controller_feedback_core.hpp"
@@ -90,7 +92,8 @@ std::vector<double> read_values(const Tree &request) {
 }
 
 struct PositionMotion::Impl {
-  struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; };
+  struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; std::shared_ptr<std::atomic<bool>> revoked; };
+  struct QueuedStart { uint64_t owner; std::string id; std::weak_ptr<std::atomic<bool>> revoked; };
   struct GroupRun {
     PositionGroupSpec spec;
     PositionGroupTimeline timeline;
@@ -132,6 +135,17 @@ struct PositionMotion::Impl {
   rclcpp::CallbackGroup::SharedPtr callback_group;
   std::mutex queue_mutex; std::deque<Request> requests;
   std::atomic<bool> in_motion{false};
+  std::atomic<unsigned> pending_starts{0};
+  std::atomic<bool> in_direct{false};
+  std::deque<QueuedStart> queued_starts;
+  TrajectoryTaskCore direct;
+  Disable disable_output;
+  Send direct_send;
+  PositionMotionModel direct_model;
+  GripperCalibration direct_calibration;
+  std::string direct_model_signature, direct_last_phase;
+  bool direct_gripper{false};
+  rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr arm_trajectory, gripper_trajectory;
   std::atomic<int64_t> rgb_stopped_until{0};
   Clock::time_point rgb_stopped_since{}, rgb_stopped_sample{};
   rclcpp_action::Client<Group>::SharedPtr action;
@@ -169,9 +183,11 @@ struct PositionMotion::Impl {
   std::shared_ptr<Motion> current;
   std::deque<std::pair<std::string, uint64_t>> seen;
 
-  Impl(rclcpp::Node &n, const std::string &joint_topic, const std::string &status_topic, std::shared_ptr<ControllerRegistry> registry)
-      : node(n), controller_registry(std::move(registry)) {
+  Impl(rclcpp::Node &n, const std::string &joint_topic, const std::string &status_topic, std::shared_ptr<ControllerRegistry> registry, Disable disable)
+      : node(n), disable_output(std::move(disable)), controller_registry(std::move(registry)) {
     callback_group = controller_registry->callback_group();
+    arm_trajectory=node.create_publisher<trajectory_msgs::msg::JointTrajectory>("/"+controller+"/joint_trajectory",rclcpp::QoS(10));
+    gripper_trajectory=node.create_publisher<trajectory_msgs::msg::JointTrajectory>("/"+gripper_controller+"/joint_trajectory",rclcpp::QoS(10));
     action = rclcpp_action::create_client<Group>(node.get_node_base_interface(), node.get_node_graph_interface(),
         node.get_node_logging_interface(), node.get_node_waitables_interface(), "/move_action", callback_group);
     execute_action = rclcpp_action::create_client<Execute>(node.get_node_base_interface(), node.get_node_graph_interface(),
@@ -380,9 +396,9 @@ struct PositionMotion::Impl {
       return "JointState Broadcaster /joint_states 源时间戳无效/已过期";
     return "";
   }
-  std::string readiness(bool starting = true) {
+  std::string readiness(bool starting = true, bool planner = true) {
     poll_controllers();
-    if (!action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
+    if (planner && !action->action_server_is_ready()) return "MoveIt /move_action 未启动，请启动 real_move_group.launch.py";
     if (!fresh(model_at, 10) || !model_error.empty()) return model_error.empty() ? "MoveIt 模型信息已过期" : model_error;
     const auto controller_reason = controller_readiness();
     if (!controller_reason.empty()) return controller_reason;
@@ -406,10 +422,10 @@ struct PositionMotion::Impl {
     } catch (const std::exception &e) { return e.what(); }
     return "";
   }
-  std::string gripper_readiness(bool starting = true) {
+  std::string gripper_readiness(bool starting = true, bool planner = true) {
     poll_controllers();
     const auto registry_reason = controller_readiness(); if (!registry_reason.empty()) return registry_reason;
-    if (!execute_action->action_server_is_ready()) return "MoveIt /execute_trajectory 未启动";
+    if (planner && !execute_action->action_server_is_ready()) return "MoveIt /execute_trajectory 未启动";
     if (!gripper_supported || !fresh(model_at, 10) || !model_error.empty()) return gripper_error.empty() ? "夹爪模型已过期" : gripper_error;
     if (!gripper_controller_active || !fresh(controller_at, ControllerHealthPoll::validity_seconds)) return "夹爪轨迹控制器未激活或未认领 position+velocity 接口";
     if (!fresh(gripper_state_at) || !fresh(joints_at) || !fresh(hardware_at)) return "夹爪反馈缺失或已过期";
@@ -461,6 +477,7 @@ struct PositionMotion::Impl {
     request_cancel_handle(m);
   }
   void move(const Request &r, const std::shared_ptr<GroupRun> &group = nullptr) {
+    if (direct.busy()) throw std::runtime_error("直接轨迹仍持有运动锁，等待终态确认");
     const auto id = r.data.get<std::string>("command_id", "");
     if (id.empty() || id.size() > 80 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
       throw std::runtime_error("command_id 无效");
@@ -850,6 +867,7 @@ struct PositionMotion::Impl {
     move(r, group);
   }
   void start_group(const Request &r) {
+    if (direct.busy()) throw std::runtime_error("直接轨迹仍持有运动锁，等待终态确认");
     const auto id = r.data.get<std::string>("command_id", "");
     if (id.empty() || id.size() > 80 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
       throw std::runtime_error("command_id 无效");
@@ -1033,9 +1051,135 @@ struct PositionMotion::Impl {
     if (result != GroupHoldResult::ready || !allow_progress || timeline.phase == "paused" || timeline.hold_remaining_s > 0) return;
     advance_group(m);
   }
+  static int64_t source_stamp(const builtin_interfaces::msg::Time &stamp) {
+    return static_cast<int64_t>(stamp.sec)*1000000000LL+stamp.nanosec;
+  }
+  void direct_start(const Request &r) {
+    const auto id=r.data.get<std::string>("command_id","");
+    if (!valid_motion_command_id(id)) throw std::runtime_error("command_id 无效");
+    if (direct.matches(id) || direct.result(id)) throw std::runtime_error("直接轨迹编号已使用；请查询任务状态，禁止重发");
+    if (direct.busy() || (current && !current->terminal)) throw std::runtime_error("已有运动任务，等待终态确认");
+    auto command=parse_task_trajectory(r.data);
+    const bool gripper=command.topic=="/"+gripper_controller+"/joint_trajectory";
+    if (!gripper && command.topic!="/"+controller+"/joint_trajectory") throw std::runtime_error("直接轨迹只支持 arm/gripper 已核验控制器");
+    auto reason=readiness(true,false);
+    if (reason.empty() && gripper) reason=gripper_readiness(true,false);
+    if (!reason.empty()) throw std::runtime_error(reason);
+    auto checked_model=gripper ? gripper_motion_model(model,gripper_calibration,false) : model;
+    if (!same_motion_joints(command.joint_names,checked_model.joint_names)) throw std::runtime_error("直接轨迹关节集合不匹配");
+    for (auto &point:command.points) {
+      point.positions=ordered_motion_values(checked_model.joint_names,command.joint_names,point.positions);
+      if (!point.velocities.empty()) point.velocities=ordered_motion_values(checked_model.joint_names,command.joint_names,point.velocities);
+    }
+    command.joint_names=checked_model.joint_names;
+    const auto &feedback=gripper ? gripper_state : state;
+    const auto ros_now=node.now().nanoseconds();
+    for (const auto &stamp:{feedback.header.stamp,joints.header.stamp,hardware.header.stamp}) {
+      const auto ns=source_stamp(stamp);
+      if (ns<=0 || ns>ros_now || ros_now-ns>=1000000000LL)
+        throw std::runtime_error("直接轨迹源时间戳缺失、超前或已过期");
+    }
+    const auto vmax=gripper ? std::vector<double>{gripper_velocity_limit} : velocity_limits;
+    const auto amax=gripper ? std::vector<double>{gripper_acceleration_limit} : acceleration_limits;
+    for (const auto *seed:{&feedback.actual,&feedback.desired}) {
+      validate_direct_trajectory(command,checked_model,
+        ordered_motion_values(command.joint_names,feedback.joint_names,seed->positions),
+        ordered_motion_values(command.joint_names,feedback.joint_names,seed->velocities),vmax,amax);
+    }
+    validate_direct_trajectory(command,checked_model,measured(checked_model),measured(checked_model,true),vmax,amax);
+    auto publisher=gripper ? gripper_trajectory : arm_trajectory;
+    if (!publisher->get_subscription_count()) throw std::runtime_error("轨迹控制器订阅不可用");
+    trajectory_msgs::msg::JointTrajectory message;
+    message.joint_names=command.joint_names;
+    for (const auto &point:command.points) {
+      trajectory_msgs::msg::JointTrajectoryPoint out;out.positions=point.positions;out.velocities=point.velocities;
+      const auto ns=static_cast<int64_t>(std::llround(point.time_from_start*1e9));
+      out.time_from_start.sec=ns/1000000000LL;out.time_from_start.nanosec=ns%1000000000LL;
+      message.points.push_back(std::move(out));
+    }
+    std::vector<TrajectoryTaskCore::Limits> tolerances(command.joint_names.size(),{gripper ? .001 : .01,gripper ? .001 : .02});
+    direct.reserve(r.owner,id,command,tolerances,clock_snapshot().generation,Clock::now());
+    direct_model=checked_model;direct_calibration=gripper_calibration;direct_model_signature=model_signature;
+    direct_gripper=gripper;direct_send=r.send;direct_last_phase.clear();in_direct.store(true);
+    try {
+      // DISABLE / disconnect / cancel revokes queued starts under this same
+      // mutex. It cannot overtake this publication and leave a delayed start.
+      std::lock_guard<std::mutex> lock(queue_mutex);
+      if (!r.revoked || r.revoked->load()) throw std::runtime_error("直接轨迹已在发布前撤销");
+      message.header.stamp=node.now();
+      direct.sending(id,source_stamp(message.header.stamp),Clock::now());
+      publisher->publish(message);
+    } catch (...) {
+      if (direct.active() && direct.active()->sent) direct.cancel(id);
+      throw;
+    }
+    r.send("{\"op\":\"trajectory_command_ack\",\"request_id\":"+quote(r.data.get<std::string>("request_id",""))+
+      ",\"command_id\":"+quote(id)+",\"accepted\":true}");
+    r.send(trajectory_task_event(id,"running",false));
+    log(r.owner,id,"trajectory_published","直接 JTC 已发布，等待独立反馈确认；topic="+command.topic);
+  }
+  void direct_query(const Request &r) {
+    const auto id=trajectory_control_id(r.data);
+    const auto op=r.data.get<std::string>("op");
+    const auto prefix="{\"op\":"+quote(op=="trajectory_task_status" ? op : op+"_ack")+
+      ",\"request_id\":"+quote(r.data.get<std::string>("request_id",""))+",\"command_id\":"+quote(id);
+    if (op=="trajectory_heartbeat") {
+      const bool renewed=direct.renew(r.owner,id,Clock::now());
+      r.send(prefix+",\"renewed\":"+(renewed ? "true}" : "false}"));
+    } else if (op=="trajectory_cancel") {
+      const bool accepted=direct.cancel(id);
+      r.send(prefix+",\"accepted\":"+(accepted ? "true}" : "false}"));
+    } else {
+      const auto result=direct.result(id);const bool active=direct.matches(id);
+      r.send(prefix+",\"known\":"+(active || result ? "true" : "false")+
+        ",\"terminal\":"+(result ? "true" : "false")+",\"busy\":"+(direct.busy() ? "true" : "false")+
+        ",\"task_phase\":"+quote(active ? direct.active()->phase : result ? result->phase : "unknown")+
+        ",\"result\":"+(result ? trajectory_task_event(*result) : "null")+"}");
+    }
+  }
+  void direct_tick() {
+    if (!direct.busy()) {in_direct.store(false);return;}
+    const auto at=Clock::now();direct.tick(at);
+    auto &task=*direct.active();
+    if (!task.stopping) {
+      auto reason=readiness(false,false);
+      if (reason.empty() && direct_gripper) reason=gripper_readiness(false,false);
+      if (model_signature!=direct_model_signature) reason="直接轨迹期间模型发生变化";
+      if (!reason.empty()) {direct.cancel(task.id);log(task.owner,task.id,"trajectory_stopping",reason,"warn");}
+    }
+    const auto &feedback=direct_gripper ? gripper_state : state;
+    const auto received=direct_gripper ? gripper_state_at : state_at;
+    if (direct.disable_due(at)) {
+      try {
+        const auto sequence=disable_output();
+        direct.disabled_sent(task.id,sequence,at,source_stamp(hardware.header.stamp),source_stamp(joints.header.stamp),source_stamp(feedback.header.stamp));
+      } catch (const std::exception &e) {log(task.owner,task.id,"trajectory_disable",e.what(),"error");}
+    }
+    TrajectoryTaskCore::Feedback f;
+    const auto sync=clock_snapshot();f.ros_now=node.now().nanoseconds();f.clock_valid=sync.healthy();f.clock_epoch=sync.generation;
+    f.reference={source_stamp(feedback.header.stamp),received,feedback.joint_names,feedback.desired.positions,feedback.desired.velocities};
+    f.actual={source_stamp(feedback.header.stamp),received,feedback.joint_names,feedback.actual.positions,feedback.actual.velocities};
+    f.status_stamp=source_stamp(hardware.header.stamp);f.status_received=hardware_at;f.mode=hardware.mode;f.sequence=hardware.last_command_sequence;
+    try {
+      f.joint={source_stamp(joints.header.stamp),joints_at,direct_model.joint_names,
+        measured(direct_model,false,&direct_calibration),measured(direct_model,true,&direct_calibration)};
+      // A gripper-only task cannot release the shared arm slot while the arm
+      // is moving. Missing/malformed feedback remains nonterminal.
+      if (direct_gripper && !motion_stopped(arm_motion_joints(),ordered_arm_values(joints.name,joints.velocity))) f.joint.velocities.clear();
+    } catch (...) {}
+    if (const auto result=direct.observe(f,at)) {
+      in_direct.store(false);direct_send(trajectory_task_event(*result));
+      log(0,result->id,"trajectory_terminal",result->phase+" evidence="+result->evidence);
+    } else if (direct.active()->phase!=direct_last_phase) {
+      direct_last_phase=direct.active()->phase;direct_send(trajectory_task_event(direct.active()->id,direct_last_phase,false));
+    }
+  }
   void process(const Request &r) {
-    if (r.disconnect) { if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
+    if (r.disconnect) { direct.lost(r.owner); if (current && (r.owner == 0 || current->owner == r.owner)) cancel(current, r.owner == 0 ? "已请求 DISABLE，取消点位运动" : "连接已断开，已请求取消"); return; }
+    if (r.revoked && r.revoked->load()) throw std::runtime_error("运动请求已在执行前撤销");
     const auto op = r.data.get<std::string>("op", "");
+    if (op=="trajectory_command") {direct_start(r);return;}
+    if (op=="trajectory_heartbeat" || op=="trajectory_cancel" || op=="trajectory_task_status") {direct_query(r);return;}
     if (op == "position_task_status" || op == "position_motion_heartbeat") {
       std::set<std::string> fields;
       for (const auto &field : r.data)
@@ -1111,7 +1255,7 @@ struct PositionMotion::Impl {
   void tick() {
     bool stationary = false;
     try {
-      stationary = !in_motion.load() && fresh(joints_at, .3) && clock_snapshot().healthy() &&
+      stationary = !in_motion.load() && !in_direct.load() && !pending_starts.load() && fresh(joints_at, .3) && clock_snapshot().healthy() &&
           readiness().empty() && gripper_readiness().empty() &&
           motion_stopped(arm_motion_joints(), ordered_arm_values(joints.name, joints.velocity)) &&
           motion_stopped({gripper_motion_joint()}, {calibrated_gripper_value(joints.name, joints.velocity, gripper_calibration, true)});
@@ -1140,14 +1284,23 @@ struct PositionMotion::Impl {
     }
     std::deque<Request> pending;
     { std::lock_guard<std::mutex> lock(queue_mutex); pending.swap(requests); }
-    for (const auto &r : pending) try { process(r); } catch (const std::exception &e) {
+    for (const auto &r : pending) {
+      try { process(r); } catch (const std::exception &e) {
       log(r.owner, r.data.get<std::string>("command_id", ""), "rejected", e.what(), "error");
       const auto op = r.data.get<std::string>("op", "");
       if (op == "position_move" || op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume")
         r.send("{\"op\":" + quote(op + "_ack") + ",\"accepted\":false,\"request_id\":" + quote(r.data.get<std::string>("request_id", "")) +
           ",\"command_id\":" + quote(r.data.get<std::string>("command_id", "")) + ",\"message\":" + quote(e.what()) + "}");
-      else error(r, e.what());
+      else if (op=="trajectory_command" && direct.reject_unpublished(r.data.get<std::string>("command_id",""))) {
+        in_direct.store(direct.busy());
+        r.send("{\"op\":\"trajectory_command_ack\",\"accepted\":false,\"evidence\":\"not_published\",\"request_id\":"+
+          quote(r.data.get<std::string>("request_id",""))+",\"command_id\":"+quote(r.data.get<std::string>("command_id",""))+
+          ",\"message\":"+quote(e.what())+"}");
+      } else error(r, e.what());
+      }
+      if (r.revoked) pending_starts.fetch_sub(1);
     }
+    direct_tick();
     const auto m = current;
     if (!m || m->terminal) return;
     if (!m->cancel_requested) {
@@ -1211,28 +1364,43 @@ struct PositionMotion::Impl {
   }
 };
 
-PositionMotion::PositionMotion(rclcpp::Node &n, const std::string &joints, const std::string &status, std::shared_ptr<ControllerRegistry> controllers)
-    : impl_(std::make_unique<Impl>(n, joints, status, std::move(controllers))) {}
+PositionMotion::PositionMotion(rclcpp::Node &n, const std::string &joints, const std::string &status, std::shared_ptr<ControllerRegistry> controllers, Disable disable)
+    : impl_(std::make_unique<Impl>(n, joints, status, std::move(controllers),std::move(disable))) {}
 PositionMotion::~PositionMotion() = default;
 void PositionMotion::request(uint64_t owner, const Tree &data, Send send) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);
+  const auto op=data.get<std::string>("op","");
+  const auto id=data.get<std::string>("command_id","");
+  if (op=="trajectory_cancel") trajectory_control_id(data); // Validate before revoking queued work.
+  impl_->queued_starts.erase(std::remove_if(impl_->queued_starts.begin(),impl_->queued_starts.end(),
+    [](const auto &entry){return entry.revoked.expired();}),impl_->queued_starts.end());
+  if (op=="trajectory_cancel") for (auto &entry:impl_->queued_starts)
+    if (entry.id==id) if (auto flag=entry.revoked.lock()) flag->store(true);
   if (impl_->requests.size() >= 64) {
     const auto op = data.get<std::string>("op", "");
     const bool group_op = op == "position_group_start" || op == "position_group_pause" || op == "position_group_resume";
     send("{\"op\":" + quote(group_op ? op + "_ack" : "error") + ",\"request_id\":" + quote(data.get<std::string>("request_id", "")) +
         (group_op ? ",\"accepted\":false,\"command_id\":" + quote(data.get<std::string>("command_id", "")) : "") + ",\"message\":\"运动请求队列已满\"}"); return;
   }
-  impl_->requests.push_back({owner, data, std::move(send), false});
+  std::shared_ptr<std::atomic<bool>> revoked;
+  if (op=="trajectory_command" || op=="position_move" || op=="position_group_start" || op=="position_group_resume") {
+    revoked=std::make_shared<std::atomic<bool>>(false);
+    impl_->queued_starts.push_back({owner,id,revoked});impl_->pending_starts.fetch_add(1);
+  }
+  impl_->requests.push_back({owner, data, std::move(send), false,std::move(revoked)});
 }
 void PositionMotion::diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message) {
   impl_->log(owner, command, phase, message);
 }
 void PositionMotion::disconnected(uint64_t owner) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);
+  for (auto &entry:impl_->queued_starts)
+    if (!owner || entry.owner==owner) if (auto flag=entry.revoked.lock()) flag->store(true);
   impl_->requests.push_back({owner, {}, [](const std::string &) {}, true});
 }
 bool PositionMotion::rgb_recovery_ready() const {
   return !busy() && std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count() < impl_->rgb_stopped_until.load();
 }
-bool PositionMotion::busy() const { return impl_->in_motion.load(); }
+bool PositionMotion::busy() const { return impl_->in_motion.load() || impl_->in_direct.load() || impl_->pending_starts.load(); }
+bool PositionMotion::trajectory_supported() const { return true; }
 }
