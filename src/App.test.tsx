@@ -194,6 +194,7 @@ describe("App workflow", () => {
       if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
       if (command === "start_rosbag_playback") return Promise.resolve({ playing: true, pid: 9, bagPath: args?.bagPath || "", message: "rosbag 回放已开始" });
       if (command === "stop_rosbag_playback") return Promise.resolve({ playing: false, pid: 0, bagPath: "robot-console-bags/demo", message: "rosbag 回放已停止" });
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -224,6 +225,33 @@ describe("App workflow", () => {
     } finally {
       view.unmount(); delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
       globalThis.ResizeObserver = resize; doubles.invoke.mockImplementation(base);
+    }
+  });
+
+  it("restores a reloaded main window from the native connection without creating or stopping SSH", async () => {
+    const base = doubles.invoke.getMockImplementation()!, resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{}, configurable:true});
+    globalThis.ResizeObserver = class {observe(){} unobserve(){} disconnect(){}};
+    const profile = {...defaultProfile, host:"retained-host",name:"Retained session",localPort:19444};
+    doubles.connect.mockResolvedValueOnce({bridge_version:"0.1.0",bridge_build_id:EXPECTED_BRIDGE_BUILD_ID,ros_distro:"humble",controllers_info_supported:true});
+    doubles.invoke.mockImplementation((command,args) => {
+      if(command === "native_bridge_context") return Promise.resolve({epoch:9,profile_revision:3,connected:true,profile,error:null});
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"dashboard",pages:{dashboard:{detached:true,ready:true,visible:true,busy_reason:""}}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:9,revision:0,connected:true,entries:{}});
+      return base(command,args);
+    });
+    const view=render(<App/>);
+    try {
+      expect(await screen.findByRole("button",{name:"断开"})).toBeEnabled();
+      expect(screen.getByText("Retained session")).toBeInTheDocument();
+      expect(screen.getByText("localhost:19444")).toBeInTheDocument();
+      expect(screen.queryByRole("button",{name:"连接 Jetson"})).not.toBeInTheDocument();
+      expect(doubles.connect.mock.calls).toEqual([[]]);
+      expect(doubles.send.mock.calls.every(([message])=>message.op==="subscribe")).toBe(true);
+      expect(doubles.invoke.mock.calls.some(([command])=>["check_ssh","start_session","stop_session"].includes(command))).toBe(false);
+    } finally {
+      view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);
     }
   });
 
@@ -515,6 +543,7 @@ describe("App workflow", () => {
 
       if (command === "get_rosbag_status") return Promise.resolve({ recording: false, pid: 0, outputPath: "", message: "rosbag 当前未录制" });
       if (command === "get_rosbag_play_status") return Promise.resolve({ playing: false, pid: 0, bagPath: "", message: "rosbag 当前未回放" });
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       if (command === "deploy_bridge") return Promise.resolve({ ok: true, message: "Bridge 已同步、编译并重启", log: "[done]" });
       if (command === "stop_session") return Promise.resolve(undefined);
@@ -620,6 +649,7 @@ describe("App workflow", () => {
         loadState: "loaded", activeState: "active", subState: "running", result: "success",
         mainPid: 10, unitFileState: "enabled", description: "micro ROS agent",
       });
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
 
       if (command === "probe_jetson_usb") return Promise.resolve({
@@ -826,6 +856,7 @@ describe("App workflow", () => {
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
 
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -1074,6 +1105,7 @@ describe("App workflow", () => {
       if (command === "restart_micro_ros_agent") return Promise.resolve({ ok: true, exitCode: 0, message: "micro-ROS Agent 已重启", detail: "" });
       if (command === "start_arm_mode") return Promise.resolve({ ok: true, exitCode: 0, message: "arm mode started", detail: "" });
 
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       return Promise.resolve(undefined);
     });
@@ -1634,6 +1666,7 @@ describe("App workflow", () => {
       });});
     doubles.invoke.mockImplementation((command: string) => {
       if (command === "check_ssh") return Promise.resolve("ready");
+      if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
       if (command === "check_micro_ros_agent") return Promise.resolve({
         loadState: "loaded", activeState: "active", subState: "running", result: "success",

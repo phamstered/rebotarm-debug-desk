@@ -40,6 +40,16 @@ struct SessionState {
     local_port: Mutex<Option<u16>>,
 }
 
+impl SessionState {
+    fn close_on_exit(&self) {
+        // Tauri process exit need not drop managed state or run another async
+        // task. Signal only the child we own before the event loop terminates.
+        *self.local_port.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        let child = self.tunnel.lock().unwrap_or_else(|error| error.into_inner()).take();
+        if let Some(mut child) = child { let _ = child.start_kill(); }
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentServiceStatus {
@@ -1614,6 +1624,8 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit) {
                 app.state::<session::workspace::Workspace>().flush();
+                app.state::<session::runtime::Runtime>().close();
+                app.state::<SessionState>().close_on_exit();
             }
         });
 }
@@ -1621,6 +1633,24 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn process_exit_stops_only_the_owned_tunnel_without_async_cleanup() {
+        use tokio::io::AsyncReadExt;
+        // Disable kill_on_drop here so EOF proves the synchronous exit signal.
+        let mut child = Command::new("sh").args(["-c", "exec sleep 30"])
+            .stderr(Stdio::piped()).kill_on_drop(false).spawn().unwrap();
+        let mut pipe = child.stderr.take().unwrap();
+        let mut other = Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+        let state = SessionState { tunnel: Mutex::new(Some(child)), local_port: Mutex::new(Some(18765)) };
+        state.close_on_exit();
+        state.close_on_exit(); // Exit cleanup is idempotent.
+        assert!(state.tunnel.lock().unwrap().is_none());
+        assert!(state.local_port.lock().unwrap().is_none());
+        tokio::time::timeout(Duration::from_secs(2), pipe.read_to_end(&mut Vec::new())).await.unwrap().unwrap();
+        assert!(other.try_wait().unwrap().is_none(), "unrelated children must survive");
+        other.kill().await.unwrap(); other.wait().await.unwrap();
+    }
 
     fn profile(username: &str) -> ConnectionProfile {
         ConnectionProfile {

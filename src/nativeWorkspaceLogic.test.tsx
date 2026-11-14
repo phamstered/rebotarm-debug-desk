@@ -3,7 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient } from "./bridge";
 import { defaultProfile } from "./types";
-import { hostedPageFromSearch, useNativePageSession, useNativeWorkspace } from "./nativeWorkspaceLogic";
+import { hostedPageFromSearch, useNativePageSession, useNativeWorkspace, useNativeMainRecovery } from "./nativeWorkspaceLogic";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), events: new Map<string, (event: { payload: unknown }) => void>() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
@@ -16,6 +16,60 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+describe("main document session recovery", () => {
+  function setup(connected = true) {
+    const context = { epoch: 7, profile_revision: 2, connected, profile: {...defaultProfile, host:"retained-host",localPort:19444}, error:null };
+    mocks.invoke.mockResolvedValue(context);
+    const client = {attach:vi.fn().mockResolvedValue({op:"hello"}),listTopics:vi.fn().mockResolvedValue([]),close:vi.fn()};
+    const options = {enabled:true,bridge:client as unknown as BridgeClient,reset:vi.fn(),connected:vi.fn()};
+    return {context,client,options};
+  }
+  it("reattaches an existing session without SSH, starting a session or replaying commands", async () => {
+    const {context,client,options}=setup();
+    const hook=renderHook(()=>useNativeMainRecovery(options));
+    expect(hook.result.current.pending).toBe(true);
+    await waitFor(()=>expect(options.connected).toHaveBeenCalledWith(context.profile,{op:"hello"},[]));
+    expect(client.attach.mock.calls).toEqual([[]]);
+    expect(mocks.invoke.mock.calls.map(([command])=>command)).toEqual(["native_bridge_context","native_bridge_context"]);
+    expect(hook.result.current).toMatchObject({pending:false,error:""});
+    hook.rerender(); expect(client.attach).toHaveBeenCalledOnce();
+  });
+  it("leaves a fresh disconnected launch offline and does not replace draft configuration", async () => {
+    const {client,options}=setup(false);
+    const hook=renderHook(()=>useNativeMainRecovery(options));
+    await waitFor(()=>expect(hook.result.current.pending).toBe(false));
+    expect(client.attach).not.toHaveBeenCalled();expect(options.reset).not.toHaveBeenCalled();
+    expect(options.connected).not.toHaveBeenCalled();
+  });
+  it.each(["disconnect","epoch","profile"])("rejects %s while topics are pending and retries only a new observation",async change=>{
+    const {context,client,options}=setup(); const topics=deferred<[]>();
+    client.listTopics.mockReturnValueOnce(topics.promise);
+    const hook=renderHook(()=>useNativeMainRecovery(options));
+    await waitFor(()=>expect(client.listTopics).toHaveBeenCalledOnce());
+    mocks.invoke.mockResolvedValue({...context,...(change==="disconnect"?{connected:false}:change==="epoch"?{epoch:8}:{profile_revision:3})});
+    await act(async()=>topics.resolve([]));
+    await waitFor(()=>expect(hook.result.current.error).toContain("共享会话已改变"));
+    expect(options.connected).not.toHaveBeenCalled(); expect(client.close).toHaveBeenCalledOnce();
+    mocks.invoke.mockResolvedValue({...context,connected:false});
+    act(()=>hook.result.current.retry());
+    await waitFor(()=>expect(hook.result.current).toMatchObject({pending:false,error:""}));
+    expect(client.attach).toHaveBeenCalledOnce();
+  });
+  it("retains a retry error on context failure without disconnecting the native session",async()=>{
+    const {client,options}=setup();mocks.invoke.mockRejectedValue(new Error("context unavailable"));
+    const hook=renderHook(()=>useNativeMainRecovery(options));
+    await waitFor(()=>expect(hook.result.current.error).toContain("context unavailable"));
+    expect(client.attach).not.toHaveBeenCalled();expect(client.close).not.toHaveBeenCalled();
+  });
+  it("cancels an in-flight attach on unmount and ignores its late result",async()=>{
+    const {client,options}=setup();const pending=deferred<unknown>();client.attach.mockReturnValue(pending.promise);
+    const hook=renderHook(()=>useNativeMainRecovery(options));
+    await waitFor(()=>expect(client.attach).toHaveBeenCalledOnce());hook.unmount();
+    await act(async()=>pending.resolve({op:"hello"}));
+    expect(client.close).toHaveBeenCalledOnce();expect(options.connected).not.toHaveBeenCalled();
+    expect(client.listTopics).not.toHaveBeenCalled();
+  });
+});
 describe("native page routing", () => {
   it("only accepts the nine known feature identifiers", () => {
     for (const page of ["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "calibration", "gravity"]) expect(hostedPageFromSearch(`?page=${page}`)).toBe(page);

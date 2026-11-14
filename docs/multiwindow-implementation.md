@@ -664,3 +664,21 @@ hello 新增 `visual_pick_cancel_id_supported`；原生桌面在旧 Bridge 上�
 首次为当前候选代码执行非 Debug 的 `npm run tauri build -- --bundles app --config /tmp/260-native-window-release.json`，完成 Release 构建，日志 `/tmp/260-window-release-bundle.log`。产物 `src-tauri/target/release/bundle/macos/Robot Console Window Release Test.app` 通过严格 codesign 校验，Info.plist 的标识确认为 `dev.easydebug.multiwindowtest`。未启动、未安装至生产位置；不能将此前 Debug 包的实际窗口或性能数据当作此 Release 包的验收结果。
 
 本轮 CUA 再次确认 Mac 锁屏。原生渲染进程退出后重新注册、最新恢复记录与窗口布局的组合交互、Release 实际运行仍缺少证据；外接屏拔插按用户说明延期。全量自动测试和构建不能替代这些原生验收，PR/CI/合并及正式安装仍未完成，Issue #260 不宣称完成。
+
+## 解锁后的 Release 原生恢复复测与主窗口修复
+
+先使用 `505bda1` 的 Release 隔离包（应用 PID 6737）连接测试域 225、loopback 28865。临时发布器 274448 / Bridge 274462 仅提供模拟图像、关节、关闭模式 HardwareStatus 和简单 URDF，日志独立保存在远端 `/tmp/260-release-recovery/`。生产 Bridge 8367 / 8765 未替换。
+
+在创建 Topics 前记录仅主窗口和 Status 的 WebContent，确定新增 Topics 渲染进程 7409 后发送 SIGTERM。手眼另一窗口的 RGB 颜色继续变化，大图与 Esc 响应；Topics 自动重载显示“共享连接已就绪”，不再出现“窗口已注册”。其本页临时 Topic 选择被重置，重新选择后显示约 30 Hz 图像。前后同一 TCP 四元组、RGB 上游订阅数仍为 1，应用与 Bridge 进程不变。记录 `/tmp/260-release-recovery-{before,after,kill}.txt`；此验证证明页面重新附着及其他消费者存活，不声称崩溃前全部临时 UI 状态被持久化。
+
+进一步结束主 WebContent 6742，复现主窗口显示“未连接”而 Topics 仍约 30 Hz 的问题。根因是原有 `useNativePageSession` 仅用于功能页面。新增主文档一次性恢复入口：先读 native context，仅在原生会话仍连接时 attach，读取 Topics 后复核 epoch/profile_revision，再恢复 UI；不重新执行 SSH 检查/建隧道/Bridge 启动，不重放动作。恢复期间禁用新连接，失败保留明确重试入口；没有原生连接的新进程仍保持离线。主页面和功能页共用连接状态应用函数。
+
+修复后 Release 包的实际主进程为 64847，初始只创建主 WebContent 64850，随后手动连接并拆出手眼。结束 64850 后，主窗口自动恢复“已连接”和实际端口 63722，无须点击连接；SSH 子进程 64954、远端 TCP 四元组 127.0.0.1:45842 → 28865、Bridge PID 274462 和图像订阅数不变。证据 `/tmp/260-main-fixed-{initial-processes,before-kill,after-kill,kill}.txt`。工具栏 `jetson` 核对为原配置显示名，实际 SSH 主机为 damiao，不是连接串线。
+
+再在隔离配置目录放入只含虚构来源/编号的 leased Position 恢复记录，保存 Motion 独立窗口偏好后启动。实际 UI 保持未连接，显示“停止未确认、不重发、不恢复续租”；进入已打开页面后显示等待恢复原因，手动拆出被拒绝。读盘确认恢复记录字节未变、detached=true 未被失败覆盖。测试结束退出应用，将自己的模拟文件归档到 `/tmp/260-release-leased-fixture-consumed.json`，恢复原隔离布局；清理测试文件不计作真实任务终态核验。
+
+退出旧候选包时还发现 SSH PID 7088 被遗留，父进程变为 1，继续占用 18765。`kill_on_drop` 不足以保证 Tauri 退出时释放托管状态；现在 Exit 回调保存布局、关闭 Runtime，并通过当前 Child 句柄同步结束自己的隧道，不匹配进程名、不停止远端 Bridge。新增真实短期子进程回归验证清理幂等、管道 EOF 和无关子进程存活。旧孤儿仅在核对启动时间、目标端口和主机后清理，证据 `/tmp/260-orphan-tunnel-evidence.txt`。
+
+最终 `npm test` 全部通过：935 前端、276 Rust、3 运行库及其余脚本；`npm run build`、Release bundle 构建及严格 codesign 校验通过，日志 `/tmp/260-main-lifecycle-{full-tests,build,bundle}.log`。早一轮构建发现新增测试误用了查询选项 exact，修正后重新完整执行测试与构建，未删除或弱化断言。Bridge 包未改，沿用 build ID f2339e317dd4 的 ROS 验证。
+
+最终退出清理候选已实际启动并连接（应用 11159、SSH 11211，127.0.0.1:18765 → 28865），但点击 Quit 前 Mac 再次锁屏，最后这项原生退出核验仍待完成；不能把子进程单测称为原生 Quit 已通过。生产应用未安装，PR/CI/合并未完成，外接屏仍按用户说明延期。

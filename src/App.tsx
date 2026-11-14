@@ -4,7 +4,7 @@ import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
 import { ownsPagePreference, usePagePreference } from "./pagePreferences";
 import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
-import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession } from "./nativeWorkspaceLogic";
+import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession, useNativeMainRecovery } from "./nativeWorkspaceLogic";
 import { sharedBagStatus } from "./nativeRosbagLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
 import { UrdfInspectorPage } from "./UrdfInspectorPage";
@@ -30,7 +30,7 @@ import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { BridgeClient } from "./bridge";
+import { BridgeClient, type BridgeHello } from "./bridge";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import robotConsoleIcon from "./assets/robot-console-icon.png";
 import { AppNav } from "./AppNav";
@@ -1269,10 +1269,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     setMonitorData(current => nativeDesktop() ? clearMonitorSamples(current) : loadMonitorWorkspace(profile.jointStateTopic));
   }
 
-  useNativePageSession({
-    page: hostedPage, bridge, reset: () => { clearConnectionData(); setStage("bridge"); },
-    profile: setProfile,
-    connected: (sharedProfile, hello, discovered) => {
+  function acceptSharedSession(sharedProfile: ConnectionProfile, hello: BridgeHello, discovered: TopicInfo[]) {
       setProfile(sharedProfile);
       setEffectiveLocalPort(sharedProfile.localPort);
       setSshOk(true); setBridgeUp(true); setError("");
@@ -1287,7 +1284,17 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       bridge.send({ op: "subscribe", topic: sharedProfile.statusTopic, type: "microros_stm32h723_bridge/msg/HardwareStatus" });
       bridge.send({ op: "subscribe", topic: VLA_CHUNK_TOPIC, type: VLA_CHUNK_MESSAGE_TYPE });
       setStage("connected");
-    },
+      setOfflineWorkspace(false);
+      const versionCheck = checkBridgeVersion(hello);
+      setBridgeVersionCheck(versionCheck);
+      if (nativeMain && versionCheck.status === "mismatch") setVersionDialogOpen(true);
+  }
+  const mainRecovery = useNativeMainRecovery({
+    enabled: nativeMain, bridge, reset: clearConnectionData, connected: acceptSharedSession,
+  });
+  useNativePageSession({
+    page: hostedPage, bridge, reset: () => { clearConnectionData(); setStage("bridge"); },
+    profile: setProfile, connected: acceptSharedSession,
     disconnected: message => { setStage("idle"); setError(message); },
   });
   const migrationBusyReason = handeyeBusy ? `标定${handeyeBusy}中，请完成后移动页面` :
@@ -1301,7 +1308,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }, [hostedPage, migrationBusyReason]);
 
   async function connect() {
-    if (offlineEntry.current) return;
+    if (offlineEntry.current || mainRecovery.pending || mainRecovery.error) return;
     clearConnectionData();
     setError("");
     setErrorCopied(false);
@@ -1718,7 +1725,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   });
   const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId);
   const rosReady = isRosReady(jointState);
-  const connectBusy = openingOffline || ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
+  const connectBusy = mainRecovery.pending || Boolean(mainRecovery.error) || openingOffline || ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
   const historyLine = formatConnectHistoryLine(connectHistory);
   const faultCode = hardwareStatus?.fault_code;
   const faultModeLabel = hardwareStatus ? formatHardwareMode(hardwareStatus) : "";
@@ -1875,6 +1882,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
               <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
             </div>
           </div>
+          {mainRecovery.pending && <p role="status">正在恢复共享会话…</p>}
+          {mainRecovery.error && <div role="alert">{mainRecovery.error}<button type="button" onClick={mainRecovery.retry}>重试恢复共享会话</button></div>}
           {openingOffline && <p role="status">正在同步离线配置…</p>}
           {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
           {error && (

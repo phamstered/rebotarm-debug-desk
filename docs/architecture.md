@@ -302,3 +302,7 @@ Motor 首条使能指令发送前，Rust 在阻塞工作线程持久化原连接
 ### Bridge 租约任务的桌面重启恢复
 
 Position（含动作组）、Pick、Gravity、直接 Trajectory 和 Joint4 共享 `leased_recovery` 持久化门禁。原生任务状态与真正写入 Bridge 的许可串行；提交前落盘及终态后清理在独立阻塞线程完成，不持有 Core/Tasks 锁。Joint4 的应用级 worker 与普通 Bridge IPC 均使用该入口，Capture 沿用原姿态任务记录。重启恢复仅保留原编号和来源，按已有查询协议核验终态；不恢复页面授权、任务续租或动作参数。Bridge 历史不可用时继续显示未知结果，普通空闲状态不能释放旧任务。
+
+主 WebView 的重载恢复由 `useNativeMainRecovery` 在文档初始化时执行：读取 Runtime context，只在现有原生会话 connected 时调用无 port/profile 的 attach，读取 Topics 后再次核对 epoch 与 profile_revision，再恢复 UI。它不调用 `check_ssh`、`start_session` 或 `stop_session`，也不监听后续正常连接流程以免与用户主动连接竞争。恢复失败只释放自身 attachment，保留共享 transport 与其他消费者；原生进程重启后的离线行为不变。
+
+Tauri `RunEvent::Exit` 在保存布局后关闭 Runtime，并同步向 `SessionState` 持有的 SSH 子进程发出结束信号、清空本地端口记录。不能依赖托管状态 Drop 或在退出回调中另起异步清理任务：事件循环退出可能使两者都不执行。清理只使用该 Child 句柄，既不扫描进程名，也不停止远端 Bridge。

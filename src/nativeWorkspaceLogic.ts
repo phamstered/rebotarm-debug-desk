@@ -24,6 +24,53 @@ export function pageWindowVisible(documentVisible: boolean, page: AppPage | unde
 }
 export type NativeSessionContext = { epoch: number; connected: boolean; profile: ConnectionProfile | null; profile_revision?: number; error: string | null };
 
+/** Bootstrap a reloaded main document from the existing native session only.
+ * Normal connect/disconnect remains owned by the main UI; no SSH or motion is replayed.
+ */
+export function useNativeMainRecovery(options: {
+  enabled: boolean; bridge: BridgeClient; reset(): void;
+  connected(profile: ConnectionProfile, hello: BridgeHello, topics: TopicInfo[]): void;
+}) {
+  const callbacks = useRef(options); callbacks.current = options;
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState({ pending: options.enabled, error: "" });
+  useEffect(() => {
+    if (!options.enabled) return;
+    let disposed = false, attached = false;
+    const { bridge } = options;
+    setState({ pending: true, error: "" });
+    void (async () => {
+      try {
+        const context = await invoke<NativeSessionContext>("native_bridge_context");
+        if (disposed) return;
+        if (typeof context?.connected !== "boolean") throw new Error("共享会话状态无效");
+        if (!context.connected) { setState({ pending: false, error: "" }); return; }
+        if (!context.profile) throw new Error("共享会话缺少连接配置");
+        callbacks.current.reset();
+        attached = true;
+        const hello = await bridge.attach();
+        if (disposed) return;
+        const topics = await bridge.listTopics();
+        if (disposed) return;
+        const current = await invoke<NativeSessionContext>("native_bridge_context");
+        if (disposed) return;
+        if (!current.connected || current.epoch !== context.epoch || current.profile_revision !== context.profile_revision)
+          throw new Error("恢复期间共享会话已改变，请重试恢复");
+        callbacks.current.connected(context.profile, hello, topics);
+        setState({ pending: false, error: "" });
+      } catch (reason) {
+        if (!disposed) {
+          if (attached) bridge.close();
+          attached = false;
+          setState({ pending: false, error: `无法恢复共享会话：${String(reason)}` });
+        }
+      }
+    })();
+    return () => { disposed = true; if (attached) bridge.close(); };
+  }, [options.enabled, options.bridge, attempt]);
+  return { ...state, retry: () => { setState({ pending: true, error: "" }); setAttempt(value => value + 1); } };
+}
+
 /** Snapshots are authoritative; do not infer visibility from focus on a multi-monitor desktop. */
 export function useNativeWorkspace(enabled: boolean) {
   const [snapshot, setSnapshot] = useState<NativeWorkspaceSnapshot>({ selected: "status", pages: {} });
