@@ -260,6 +260,27 @@ fn apply_geometry(window: &Window, geometry: &Geometry, minimum: (f64, f64)) -> 
 }
 
 impl Workspace {
+    pub fn page_loading(view: &Webview) {
+        let app = view.app_handle();
+        let Some(hub) = app.try_state::<super::runtime::Runtime>() else { return; };
+        let retirement = match hub.page_loading(view.label()) {
+            Ok(retirement) => retirement,
+            Err(error) => { eprintln!("页面生命周期处理失败：{error}"); return; }
+        };
+        if let (Some(workspace), Some(page)) = (app.try_state::<Self>(), Page::from_label(view.label())) {
+            if let Some(state) = workspace.state.lock().unwrap().pages.get_mut(&page) {
+                state.ready = false;
+            }
+            workspace.emit(app);
+        }
+        if let Some(retirement) = retirement {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                app.state::<super::runtime::Runtime>().retire_page(retirement).await;
+            });
+        }
+    }
+
     pub fn initialize(app: &AppHandle) {
         let workspace = app.state::<Self>();
         let loaded = app

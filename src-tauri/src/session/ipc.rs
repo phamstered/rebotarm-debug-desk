@@ -28,7 +28,7 @@ pub async fn native_bridge_attach(
         let profile = profile.ok_or("连接缺少 Profile")?;
         hub.connect_profile(port, profile).await?;
     }
-    let (attachment, hello) = hub.attach(window.label())?;
+    let (attachment, hello) = hub.attach_page(window.label()).await?;
     Ok(Attached { attachment, hello })
 }
 

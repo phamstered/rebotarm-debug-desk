@@ -148,6 +148,14 @@ impl LocalTasks {
         self.emit();
         Ok(())
     }
+    pub fn owner_lost(&self, label: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(entry) = inner.entry.as_mut().filter(|e| e.snapshot.window == label && running(e.snapshot.phase)) else { return; };
+        entry.snapshot.phase = Phase::Stopping;
+        entry.snapshot.message = "所属页面已重新加载或异常退出，等待子进程结束".into();
+        drop(inner);
+        self.emit();
+    }
     fn lost(&self, id: u64, now: Instant) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.entry.as_ref().is_none_or(|e| {
@@ -230,6 +238,31 @@ impl Drop for Lease {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    #[tokio::test]
+    async fn renderer_loss_cancels_offline_work_and_retains_reservation_until_exit() {
+        let local = Arc::new(LocalTasks::default());
+        let tasks = Arc::new(Tasks::default());
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let worker_local = local.clone();
+        let worker_tasks = tasks.clone();
+        let worker = tokio::spawn(async move {
+            worker_local.run(&worker_tasks, "page-handeye", "old-document", "compute", async move {
+                started.send(()).unwrap();
+                std::future::pending::<Result<(), String>>().await
+            }).await
+        });
+        ready.await.unwrap();
+        local.owner_lost("page-dashboard");
+        assert_eq!(local.snapshot().unwrap().phase, Phase::Running);
+        local.owner_lost("page-handeye");
+        assert_eq!(local.snapshot().unwrap().phase, Phase::Stopping);
+        assert!(local.touch("page-handeye", "old-document").is_err());
+        assert!(tasks.migration("page-handeye").is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(1), worker).await.unwrap().unwrap().is_err());
+        assert_eq!(local.snapshot().unwrap().phase, Phase::Cancelled);
+        assert!(tasks.migration("page-handeye").is_ok());
+    }
+
     #[test]
     fn caller_identity_expired_and_old_heartbeats_cannot_renew() {
         let local = Arc::new(LocalTasks::default());

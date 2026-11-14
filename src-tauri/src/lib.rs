@@ -1489,13 +1489,28 @@ async fn stop_session(state: State<'_, SessionState>, hub: State<'_, session::ru
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::default())
         .manage(session::runtime::Runtime::default())
         .manage(session::workspace::Workspace::default())
         .manage(session::documents::Documents::default())
         .manage(control_logs::LogSessions::default())
+        .on_page_load(|view, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                session::workspace::Workspace::page_loading(view);
+            }
+        });
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let builder = builder.on_web_content_process_terminate(|view| {
+        session::workspace::Workspace::page_loading(view);
+        // A custom termination handler replaces tauri-runtime-wry's default
+        // reload handler. Keep that recovery after fencing the old document.
+        if let Err(error) = view.reload() {
+            eprintln!("重新加载退出的页面 {} 失败：{error}", view.label());
+        }
+    });
+    builder
         .invoke_handler(tauri::generate_handler![
             session::documents::editor_document_read,
             session::documents::editor_document_commit,

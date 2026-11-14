@@ -14,7 +14,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::{watch, Mutex as AsyncMutex, Notify};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Attachment {
@@ -36,6 +36,18 @@ struct Client {
     notify: Arc<Notify>,
     pulling: Arc<AtomicBool>,
     error: Option<String>,
+}
+
+#[derive(Default)]
+struct PageLoad {
+    generation: u64,
+    retiring: Option<(u64, watch::Receiver<bool>)>,
+}
+
+pub(crate) struct RetiringPage {
+    attachment: Attachment,
+    generation: u64,
+    done: watch::Sender<bool>,
 }
 
 struct Core {
@@ -98,6 +110,7 @@ pub struct Runtime {
     core: Arc<Mutex<Core>>,
     connect_gate: AsyncMutex<()>,
     subscriptions_gate: AsyncMutex<()>,
+    page_loads: Mutex<BTreeMap<String, PageLoad>>,
     origin: Instant,
     changed: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     task_changed: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
@@ -133,6 +146,7 @@ impl Default for Runtime {
             })),
             connect_gate: AsyncMutex::new(()),
             subscriptions_gate: AsyncMutex::new(()),
+            page_loads: Mutex::new(BTreeMap::new()),
             origin: Instant::now(),
             changed: Arc::new(Mutex::new(None)),
             task_changed: Arc::new(Mutex::new(None)),
@@ -692,8 +706,80 @@ impl Runtime {
         });
     }
 
-    pub fn attach(&self, native_label: &str) -> Result<(Attachment, Value), String> {
+    /// Called only by a native navigation/renderer event, never by an IPC
+    /// request claiming that a different window has closed. Fence old requests
+    /// immediately; keep registration until serialized subscription cleanup ends.
+    pub(crate) fn page_loading(&self, native_label: &str) -> Result<Option<RetiringPage>, String> {
+        if native_label != "main" && super::windows::Page::from_label(native_label).is_none() {
+            return Err("未授权的功能窗口".into());
+        }
+        let retirement = {
+            let mut loads = self.page_loads.lock().unwrap();
+            let load = loads.entry(native_label.into()).or_default();
+            load.generation = load.generation.checked_add(1).ok_or("页面加载代次耗尽")?;
+            if load.retiring.is_some() {
+                return Ok(None);
+            }
+            let mut core = self.core.lock().unwrap();
+            let epoch = core.epoch;
+            core.clients.iter_mut().find(|(token, _)| token.label == native_label).map(|(token, client)| {
+                let attachment = Attachment { epoch, window: token.clone() };
+                client.error = Some("页面已重新加载，旧窗口身份失效".into());
+                client.notify.notify_one();
+                self.tasks.lost(Some(&attachment.owner()), "页面已重新加载或异常退出，等待原任务停止确认");
+                let (done, receiver) = watch::channel(false);
+                load.retiring = Some((load.generation, receiver));
+                RetiringPage { attachment, generation: load.generation, done }
+            })
+        };
+        // Offline subprocesses have no Bridge attachment, but still belong to
+        // the vanished document. Their native reservation lasts until work exits.
+        self.local_tasks.owner_lost(native_label);
+        Ok(retirement)
+    }
+
+    pub(crate) async fn retire_page(&self, retirement: RetiringPage) {
+        let label = &retirement.attachment.window.label;
+        if let Err(error) = self.detach(label, &retirement.attachment).await {
+            eprintln!("清理重新加载页面 {label} 的订阅失败：{error}");
+        }
+        {
+            let mut loads = self.page_loads.lock().unwrap();
+            if let Some(load) = loads.get_mut(label) {
+                if load.retiring.as_ref().is_some_and(|(id, _)| *id == retirement.generation) {
+                    load.retiring = None;
+                }
+            }
+        }
+        let _ = retirement.done.send(true);
+    }
+
+    pub async fn attach_page(&self, native_label: &str) -> Result<(Attachment, Value), String> {
+        let (generation, pending, epoch) = {
+            let loads = self.page_loads.lock().unwrap();
+            let load = loads.get(native_label);
+            (load.map_or(0, |l| l.generation), load.and_then(|l| l.retiring.as_ref().map(|(_, r)| r.clone())), self.core.lock().unwrap().epoch)
+        };
+        if let Some(mut pending) = pending {
+            pending.wait_for(|done| *done).await.map_err(|_| "页面恢复清理中断，请重新打开页面")?;
+        }
+        // Keep the navigation fence locked through registration, so a second
+        // navigation cannot let an earlier pending attach claim its incarnation.
+        let loads = self.page_loads.lock().unwrap();
+        if loads.get(native_label).map_or(0, |l| l.generation) != generation {
+            return Err("页面已再次加载，本次窗口注册失效".into());
+        }
         let mut core = self.core.lock().unwrap();
+        if core.epoch != epoch { return Err("Bridge 连接代次已失效".into()); }
+        Self::attach_core(&mut core, native_label)
+    }
+
+    #[cfg(test)]
+    pub fn attach(&self, native_label: &str) -> Result<(Attachment, Value), String> {
+        Self::attach_core(&mut self.core.lock().unwrap(), native_label)
+    }
+
+    fn attach_core(core: &mut Core, native_label: &str) -> Result<(Attachment, Value), String> {
         if let Some(error) = &core.error {
             return Err(error.clone());
         }
@@ -1453,6 +1539,92 @@ mod tests {
             }
         });
         (port, tx, received, task)
+    }
+
+    #[tokio::test]
+    async fn reloaded_page_gets_a_new_incarnation_without_restarting_shared_transport() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect_profile(port, offline_profile("fixture")).await.unwrap();
+        seed_idle_activity(&hub).await;
+        let (old, _) = hub.attach_page("page-dashboard").await.unwrap();
+        let (other, _) = hub.attach_page("page-handeye").await.unwrap();
+        let subscribe = json!({"op":"subscribe","topic":"/rgb","type":"sensor_msgs/msg/Image"});
+        for (label, attachment) in [("page-dashboard", &old), ("page-handeye", &other)] {
+            hub.request(label, attachment, "preview", subscribe.clone(), Duration::from_secs(1)).await.unwrap();
+        }
+        let retirement = hub.page_loading("page-dashboard").unwrap().unwrap();
+        assert!(hub.next("page-dashboard", &old).await.is_err());
+        let mut attaching = Box::pin(hub.attach_page("page-dashboard"));
+        assert!(tokio::time::timeout(Duration::from_millis(20), attaching.as_mut()).await.is_err());
+        hub.retire_page(retirement).await;
+        let (new, _) = attaching.await.unwrap();
+        assert_eq!(new.epoch, old.epoch);
+        assert!(new.window.incarnation > old.window.incarnation);
+        assert!(hub.detach("page-dashboard", &old).await.is_err());
+        hub.request("page-dashboard", &new, "preview", subscribe, Duration::from_secs(1)).await.unwrap();
+        assert_eq!(seen.lock().unwrap().iter().filter(|m| m["op"] == "subscribe" && m["topic"] == "/rgb").count(), 1);
+        assert!(!seen.lock().unwrap().iter().any(|m| m["op"] == "unsubscribe" && m["topic"] == "/rgb"));
+        events.send(json!({"op":"topic_message","topic":"/rgb","data":{"frame":"new"}})).unwrap();
+        for (label, attachment) in [("page-dashboard", &new), ("page-handeye", &other)] {
+            let packed = hub.next(label, attachment).await.unwrap();
+            assert_eq!(WireFrame::parse(Arc::from(&packed[17..]), false).unwrap().metadata["data"]["frame"], "new");
+        }
+        hub.close(); server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_navigation_and_disconnect_fence_pending_page_registration() {
+        let (port, _events, _seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect(port).await.unwrap();
+        hub.attach_page("page-dashboard").await.unwrap();
+        let retirement = hub.page_loading("page-dashboard").unwrap().unwrap();
+        let mut old_attach = Box::pin(hub.attach_page("page-dashboard"));
+        assert!(tokio::time::timeout(Duration::from_millis(20), old_attach.as_mut()).await.is_err());
+        assert!(hub.page_loading("page-dashboard").unwrap().is_none());
+        hub.retire_page(retirement).await;
+        assert!(old_attach.await.unwrap_err().contains("再次加载"));
+        let (new, _) = hub.attach_page("page-dashboard").await.unwrap();
+        let retirement = hub.page_loading("page-dashboard").unwrap().unwrap();
+        let mut disconnected_attach = Box::pin(hub.attach_page("page-dashboard"));
+        assert!(tokio::time::timeout(Duration::from_millis(20), disconnected_attach.as_mut()).await.is_err());
+        hub.close();
+        hub.retire_page(retirement).await;
+        assert!(disconnected_attach.await.unwrap_err().contains("连接代次"));
+        assert!(hub.page_loading("untrusted-window").is_err());
+        assert!(hub.next("page-dashboard", &new).await.is_err());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn page_reload_cancels_old_motion_without_transferring_its_lease_to_the_new_document() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        hub.connect_profile(port, offline_profile("fixture")).await.unwrap(); seed_idle_activity(&hub).await;
+        let (old, _) = hub.attach_page("page-motion").await.unwrap();
+        hub.request("page-motion", &old, "test", json!({"op":"position_move","command_id":"reload-motion"}), Duration::from_secs(1)).await.unwrap();
+        let retirement = hub.page_loading("page-motion").unwrap().unwrap();
+        let old_owner = hub.tasks.snapshot().unwrap();
+        assert!(matches!(old_owner.phase, super::super::tasks::Phase::Stopping | super::super::tasks::Phase::Uncertain));
+        hub.retire_page(retirement).await;
+        let (new, _) = hub.attach_page("page-motion").await.unwrap();
+        assert!(new.window.incarnation > old.window.incarnation);
+        assert!(hub.tasks.migration("page-motion").is_err());
+        assert!(hub.request("page-motion", &new, "test", json!({"op":"position_move","command_id":"must-not-restart"}), Duration::from_secs(1)).await.is_err());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !seen.lock().unwrap().iter().any(|m| m["op"] == "position_cancel" && m["command_id"] == "reload-motion") {
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        assert_eq!(hub.tasks.snapshot().unwrap().id, old_owner.id, "cancel ACK is not terminal proof");
+        events.send(json!({"op":"position_motion","command_id":"reload-motion","motion_phase":"canceled"})).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub.tasks.snapshot().is_some() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert!(hub.tasks.migration("page-motion").is_ok());
+        assert!(!seen.lock().unwrap().iter().any(|m| m["command_id"] == "must-not-restart"));
+        hub.close(); server.await.unwrap();
     }
 
     #[tokio::test]

@@ -235,6 +235,8 @@ Local vision calls have a single-operation semaphore, size limits and a deadline
 
 桌面主 WebView 负责连接和导航。功能页按白名单 URL 懒创建独立的子 WebView，在主窗口区域和独立 macOS Window 之间 reparent。页面 JS 堆与图像、模型视图不会因拆收被复制；每个页面只有一个实例。IPC 以原生调用 WebView label 和 incarnation 鉴权，重新挂到另一 Window 不改变页面身份。页面在共享 Rust 会话中独立附着消费者，主窗口不转发其数据。
 
+页面导航和 WebKit 渲染进程退出由原生生命周期回调处理：立即封锁旧消费者，串行释放其订阅，再允许新文档注册新 incarnation。此过程保留共享连接和其他页面，旧任务只走取消及终态核验，不转移续租权；离线计算的子进程也需结束后才释放占用。连续导航与断连使用加载代次及连接 epoch 拒绝迟到注册。
+
 原生页以 Rust 的窗口可见状态决定绘制/查询活跃状态，浏览器预览使用 document visibility；不把 reparent 后 WebKit 可能过期的 `document.hidden` 用于否决原生窗口。Motion 表单的路由显示与绘制活跃状态分离。主窗口弹层与子 WebView 的原生层级通过显式覆盖状态协调。页面区域更新与迁移必须串行，防止主窗口的迟到尺寸覆盖独立窗口；布局更新不能覆盖同时到达的 ready/busy 状态。关闭主窗口保留其 WebView 与原生会话，只隐藏嵌入页；独立页和 Dock 可恢复主窗口。`layout.rs` 以最多 32 KiB 的版本化配置保存窗口偏好，临时文件写入后原子替换；不序列化连接、任务或授权。后台检查显示器工作区变化，恢复普通窗口到可见范围。完整的公共轮询、任务租约与资源/Monitor 共享缓存仍在实现，详见[开发记录](./multiwindow-implementation)。
 
 `migration.rs` / `workspace_migration.rs` 将拆收作为可恢复的事务执行，失败恢复不重建 WebView。使用仓库内补丁版 `tauri 2.11.5` 与 `tauri-runtime-wry 2.11.4`：原生 reparent 成功前保留源窗口对 WebView 的持有及父窗口元数据，失败或目标消失时返回错误，防止目标销毁事件误删存活页面的 IPC 注册。等待迁移 ACK 的线程不持有父窗口 ID 锁，主线程成功迁移后先提交新路由 ID 再回复，避免页面就绪事件与启动时恢复窗口相互等待。详情及许可证见两个 vendor 目录的 `PATCHES.md`。`npm run test:rust` 同时执行运行库迁移和页面注册回归测试。真实错误注入仅允许独立标识的 Debug 测试应用消费一次性配置文件，正式应用和 Release 构建没有故障注入入口。

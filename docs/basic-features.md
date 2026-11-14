@@ -11,6 +11,8 @@
 macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 `Robot Console.app` 安装到 `/Applications`，更新失败时恢复原安装。
 
+多窗口开发分支中，页面重新加载或 WebKit 渲染进程退出后，原生层立即使旧页面身份失效，等待旧订阅清理后允许新页面接入同一连接。其他页面仍可接收共享图像；旧页面运动任务请求取消并保留占用至停止确认，本地标定子进程等待退出后释放占用。恢复页面不会自动恢复运动许可，尚未保存的页面内存状态可能丢失。
+
 ## 0. Jetson Bridge 部署脚本
 
 - `npm run deploy:bridge`（`scripts/deploy-bridge.mjs`）用于把本地 `bridge/easy_debug_bridge` 同步到 Jetson colcon 工作区、执行 `colcon build`，并校验安装二进制与 `127.0.0.1:8765` 监听状态。
