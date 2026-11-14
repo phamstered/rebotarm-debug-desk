@@ -458,6 +458,7 @@ export type NativeTaskSnapshot = {
   kind: "position" | "pick" | "motor" | "gravity" | "controller" | "arm_mode" | "trajectory" | "joint4";
   phase: "submitting" | "running" | "stopping" | "uncertain";
   message: string;
+  recovery_error?: boolean;
 };
 
 export type ArmModeKind = "teleop" | "trajectory" | "teaching" | "realsense" | "idle" | "unknown";

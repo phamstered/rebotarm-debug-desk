@@ -88,6 +88,7 @@ impl Core {
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
     pub tasks: Arc<Tasks>,
+    pub finite_recovery: Arc<super::finite_recovery::Recovery>,
     pub local_tasks: Arc<super::local_tasks::LocalTasks>,
     pub bag_operations: Arc<super::bag_operation::Operations>,
     pub collection_operations: Arc<super::collection_operation::Operations>,
@@ -109,6 +110,7 @@ impl Default for Runtime {
         tasks.bind_observations(&observations);
         Self {
             tasks,
+            finite_recovery: Arc::new(super::finite_recovery::Recovery::default()),
             local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
             bag_operations: Arc::new(super::bag_operation::Operations::default()),
             collection_operations: Arc::new(super::collection_operation::Operations::default()),
@@ -340,6 +342,25 @@ impl Runtime {
         let token = core.clients.iter().find(|(token, client)| token.label == label && client.error.is_none())
             .map(|(token, _)| token.clone()).ok_or("功能页面尚未附着当前连接")?;
         self.tasks.begin_arm_mode(Owner { epoch: core.epoch, window: token })
+    }
+
+    pub async fn disable_finite_terminal(&self, label: &str, profile: &crate::ConnectionProfile) -> Result<bool, String> {
+        let attachment = {
+            let core = self.core.lock().unwrap();
+            if self.tasks.finite_terminal().is_none() { return Ok(false); }
+            if !matches!(label, "page-status" | "page-motion") || core.error.is_some() || core.transport.is_none()
+                || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e|e.to_string())?) {
+                return Err("DISABLE 请求与当前共享连接不一致".into());
+            }
+            let window = core.clients.iter().find(|(token, client)| token.label == label && client.error.is_none())
+                .map(|(token, _)| token.clone()).ok_or("功能页面尚未附着当前连接")?;
+            Attachment {epoch:core.epoch, window}
+        };
+        // The old control operation is already terminal; only its disk cleanup
+        // is pending. An explicit safety request must not wait behind that I/O.
+        let reply = self.request(label, &attachment, "finite-terminal-disable", json!({"op":"joint_command","mode":3}), Duration::from_secs(3)).await?;
+        super::finite_recovery::disable_ack(&reply.metadata)?;
+        Ok(true)
     }
 
     pub fn send_controller(&self, label: &str, epoch: u64, id: u64, profile: &crate::ConnectionProfile) -> Result<(), String> {
@@ -1836,6 +1857,64 @@ mod tests {
             .any(|m| m["op"] == "unsubscribe" && m["topic"] == "/status"));
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn restored_control_never_replays_and_releases_only_after_disable_feedback_and_disk_cleanup() {
+        use super::super::{controller_journal::{Job, new_id}, finite_recovery::Record};
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        let profile = offline_profile("isolated-control.invalid");
+        let record = Record {window:"page-motion".into(),profile:profile.clone(),
+            ticket:Job::new(new_id().unwrap(), "never replay".into()).unwrap().ticket()};
+        let root = std::env::temp_dir().join(new_id().unwrap()); std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("finite.json");
+        std::fs::write(&path, serde_json::to_vec(&json!({"version":1,"record":record})).unwrap()).unwrap();
+        let (id, _) = hub.finite_recovery.restore(&hub.tasks, Ok(path.clone())).unwrap();
+        // Missing localPort makes SSH readers reject before launching processes;
+        // the remaining fields retain the original firmware identity.
+        let mut no_ssh = profile.clone(); no_ssh.as_object_mut().unwrap().remove("localPort");
+        hub.set_profile(no_ssh); hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
+        let (motion, _) = hub.attach("page-motion").unwrap();
+        let timeout = Duration::from_secs(3);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="joint_command" || m["op"]=="position_move"));
+        assert!(hub.request("page-motion",&motion,"test",json!({"op":"position_move","command_id":"conflict"}),timeout).await.is_err());
+        hub.tasks.controller_remote_completed(id); // Simulated bound remote completion proof.
+        assert!(hub.tasks.poll(motion.epoch, Instant::now()).is_none());
+        hub.request("page-motion",&motion,"test",json!({"op":"joint_command","mode":3}),timeout).await.unwrap();
+        hub.detach("page-motion",&motion).await.unwrap();
+        tokio::time::timeout(timeout,async {
+            while seen.lock().unwrap().iter().filter(|m|m["op"]=="joint_command").count()<2 {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        let frame = |seq,stamp| json!({"op":"topic_message","topic":"/status","data":{"last_command_sequence":seq,"mode":3,"header":{"stamp":{"sec":stamp,"nanosec":0}}}});
+        events.send(frame(122,1)).unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(hub.tasks.finite_terminal().is_none());
+        events.send(frame(123,2)).unwrap();
+        tokio::time::timeout(timeout,async {
+            while hub.tasks.finite_terminal().is_none() {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        assert!(hub.tasks.snapshot().is_some());
+        assert!(hub.tasks.migration("page-motion").is_err());
+        hub.set_profile(profile.clone()); hub.attach("page-motion").unwrap();
+        let request: crate::ConnectionProfile = serde_json::from_value(profile).unwrap();
+        let mut other = request.clone(); other.ros_domain_id += 1;
+        assert!(hub.disable_finite_terminal("page-motion", &other).await.is_err());
+        let before = seen.lock().unwrap().iter().filter(|m|m["op"]=="joint_command").count();
+        assert!(hub.disable_finite_terminal("page-motion", &request).await.unwrap());
+        assert!(seen.lock().unwrap().iter().filter(|m|m["op"]=="joint_command").count() > before);
+        assert!(hub.tasks.finite_terminal().is_some(), "an ACK must not bypass journal cleanup");
+        let task_hub = hub.tasks.clone(); let core = hub.core.clone();
+        super::super::recovery_file::before_write_for_test(move || {
+            assert!(core.try_lock().is_ok(), "cleanup must not hold shared connection");
+            assert!(task_hub.snapshot().is_some(), "cleanup must not hold Tasks");
+        });
+        assert!(hub.finite_recovery.cleanup(&hub.tasks).unwrap());
+        assert!(hub.tasks.snapshot().is_none());
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap()["record"], Value::Null);
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="position_move"));
+        hub.close(); server.abort(); std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

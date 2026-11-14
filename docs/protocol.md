@@ -728,3 +728,14 @@ The native `native_bag_operation_snapshot` entries include `recovery_error: true
 `native_collection_operation_snapshot.recovery_error` distinguishes journal-level failure from a real action. Reserved id 0 carries the error and actual finite-operation busy state. Corrupt files remain intact, new work is blocked, and existing freshness/state/confirmation checks continue to apply to explicit save/discard/finish; these degraded operations do not rewrite the corrupt file or clear the recovery barrier. Recovery does not adopt an unmanaged recorder after a desktop restart. Receipts do not contain an independent Episode UUID, so external discard/restart with unchanged counts is not uniquely detectable by this checkpoint.
 
 The fixed collection helper fingerprints `/proc/sys/kernel/random/boot_id`, PID and Linux start ticks, checking ticks before/after reading cmdline. Finalization opens pidfd before rechecking identity and signals only that descriptor; no numeric PID fallback or process-group signal is used. Old metadata containing only start ticks is not adopted by the new helper. Linux/Python pidfd support is required for finish. These helper changes are bundled with the desktop SSH adapter, not a Bridge package update.
+
+
+### Native finite control recovery
+
+`finite-control-recovery-v1.json` 是桌面内部版本化文件（24 KiB，0600），结构为 `{version:1, record:null|{window,profile,ticket:{id,hash}}}`。只接受 Status/Motion 页面、完整 Profile 和 `controller-` / `arm-mode-` 查询票据，拒绝额外执行字段、未知版本/种类及超限数据。原生初始化先恢复 Tasks 互斥，再初始化 Workspace；不向 Bridge 新增恢复协议或写入命令正文。
+
+发送前持久化成功才允许 `controller_sent`；磁盘等待不持有共享 Core/Tasks 锁。终态先在 Tasks 中冻结，仍阻止新任务和页面迁移；应用 worker 清空文件并完成 fsync 后释放。新操作不能覆盖尚未清理的前一个记录，迟到 worker 不能释放后继编号。预发送失效及落盘部分失败同样由后台清理，不依赖调用页面存活。
+
+跨桌面恢复使用只读 Job::recover，不执行 submit；原 Profile 当前连接之外不查询。绑定远端 succeeded/rejected 后登记完成屏障，须显式新的 DISABLE 请求及完成后硬件关闭证明才能解锁；不会恢复以前的停止意图或运动授权并主动发出控制。unknown/uncertain 不能以普通 idle 或仅有 ACK 消除。当前进程内正常完成路径不变，但成功响应等待持久化收尾。
+
+`NativeTaskSnapshot` 增加 `recovery_error`（普通任务 false，损坏记录的合成快照 true），用于显示恢复错误而非虚构运行中的 Controller。恢复错误保留原文件和准入屏障。终态记录待清理时的显式 disable-stop 可走现有 `joint_command mode=3`，只有正确 ACK/模式/序列才报告“请求已受理”；不声称输出已关闭或环境已清理。

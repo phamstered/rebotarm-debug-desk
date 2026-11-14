@@ -1828,7 +1828,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     return (
       <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
         <section className="connect-card">
-          {nativeMain && <><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
+          {nativeMain && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
           <div className="brand"><img className="brand-mark" src={robotConsoleIcon} alt="" /><div><h1>Robot Console</h1><p>ROS 2 机器人调试工作台</p></div></div>
           {historyLine && (
             <p className="connect-history" aria-label="上次连接记录" title={historyLine}>{historyLine}</p>

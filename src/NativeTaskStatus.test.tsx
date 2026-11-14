@@ -127,3 +127,11 @@ it("shows Joint4 release as unconfirmed and never offers an unsupported trajecto
   expect(screen.queryByRole("button", { name: "取消直接轨迹" })).not.toBeInTheDocument();
   expect(mocks.invoke.mock.calls.every(([command]) => command === "native_task_snapshot")).toBe(true);
 });
+
+it("shows corrupt control recovery as a journal error without suggesting a running switch", async () => {
+  mocks.invoke.mockResolvedValue({...task,id:0,window:"main",kind:"controller",phase:"uncertain",recovery_error:true,message:"控制恢复记录不可用"});
+  render(<NativeTaskStatus />);
+  expect(await screen.findByRole("status")).toHaveTextContent("任务恢复异常 · 控制恢复记录不可用");
+  expect(screen.getByRole("status")).not.toHaveTextContent("Controller 切换");
+  expect(screen.queryByRole("button")).toBeNull();
+});

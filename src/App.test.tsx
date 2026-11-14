@@ -199,6 +199,34 @@ describe("App workflow", () => {
     });
   });
 
+  it.each([false, true])("shows retained control recovery on login and offline workspace without auto-connecting (corrupt=%s)", async corrupt => {
+    const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
+    const resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{}, configurable:true});
+    globalThis.ResizeObserver = class {observe(){} unobserve(){} disconnect(){}};
+    const task = {id:1,epoch:0,window:"page-motion",command_id:"controller-fixture",kind:"controller",phase:"uncertain",
+      message:corrupt ? "控制恢复记录不可用" : "桌面已重启，等待原连接查询控制结果",recovery_error:corrupt};
+    doubles.invoke.mockImplementation((command, args) => {
+      if(command === "workspace_snapshot") return Promise.resolve({selected:"monitor",pages:{monitor:{detached:false,ready:true,visible:false,busy_reason:""}}});
+      if(command === "native_observation_snapshot") return Promise.resolve({epoch:0,revision:0,connected:false,entries:{}});
+      if(command === "native_task_snapshot") return Promise.resolve(task);
+      return base(command,args);
+    });
+    const view = render(<App />);
+    const expected = corrupt ? "任务恢复异常" : "Controller 切换 · 结果未确认";
+    try {
+      expect(await screen.findByRole("status", {name:"原生共享运动任务"})).toHaveTextContent(expected);
+      await user.click(await screen.findByRole("button", {name:"返回已打开页面"}));
+      expect(await screen.findByRole("status", {name:"原生共享运动任务"})).toHaveTextContent(expected);
+      expect(screen.getByRole("combobox", {name:"已打开页面"})).toHaveValue("monitor");
+      expect(doubles.connect).not.toHaveBeenCalled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("start_session", expect.anything());
+    } finally {
+      view.unmount(); delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver = resize; doubles.invoke.mockImplementation(base);
+    }
+  });
+
   it("returns from the disconnected form to an existing native Monitor without connecting", async () => {
     const user = userEvent.setup();
     const originalInvoke = doubles.invoke.getMockImplementation()!;

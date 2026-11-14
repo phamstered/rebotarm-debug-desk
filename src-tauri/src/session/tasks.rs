@@ -48,6 +48,7 @@ pub struct Snapshot {
     pub kind: Kind,
     pub phase: Phase,
     pub message: String,
+    pub recovery_error: bool,
 }
 
 struct Task {
@@ -65,10 +66,15 @@ struct Task {
     controller: Option<super::controller_stop::Stop>,
     leased_origin: Option<String>,
     joint4: Option<super::joint4_task::State>,
+    finite_durable: bool,
+    finite_prepared: bool,
+    finite_restored: bool,
+    finite_terminal: Option<super::controller_stop::Outcome>,
 }
 #[derive(Default)]
 struct Inner {
     sequence: u64,
+    finite_recovery_enabled: bool,
     task: Option<Task>,
     migrations: BTreeSet<String>,
     local_operations: BTreeSet<String>,
@@ -177,6 +183,21 @@ fn stop(task: &mut Task, reason: &str) {
     task.snapshot.message = reason.into();
 }
 
+// Terminal evidence freezes this finite operation. Retain its admission and
+// migration reservation until the app worker has durably cleared its journal.
+fn finite_complete(inner: &mut Inner, outcome: super::controller_stop::Outcome) {
+    let task = inner.task.as_mut().unwrap();
+    if task.finite_terminal.is_some() { return; }
+    task.controller.as_ref().unwrap().finish(outcome);
+    if task.finite_durable {
+        task.finite_terminal = Some(outcome);
+        task.snapshot.phase = Phase::Uncertain;
+        task.snapshot.message = "控制操作已核验，等待恢复记录持久化清理；保留占用".into();
+    } else {
+        inner.task = None;
+    }
+}
+
 impl Tasks {
     pub fn recovery_failed(&self, message: String) {
         *self.recovery_error.lock().unwrap() = Some(message);
@@ -214,6 +235,53 @@ impl Tasks {
         Ok(Some(task.snapshot.command_id.clone()))
     }
 
+    pub fn enable_finite_recovery(&self) {
+        self.inner.lock().unwrap().finite_recovery_enabled = true;
+    }
+    pub fn restore_finite(&self, kind: Kind, window: String, command_id: String, profile: &Value) -> Result<u64, String> {
+        if !matches!(kind, Kind::Controller | Kind::ArmMode) || !matches!(window.as_str(), "page-motion" | "page-status") {
+            return Err("控制恢复任务种类或页面无效".into());
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner.task.is_some() { return Err("已有控制任务，不能覆盖恢复记录".into()); }
+        let context = super::motor_task::Context::new(0, profile).ok_or("控制恢复配置缺少反馈身份")?;
+        let controller = super::controller_stop::Stop::new(Some(&context), 0, Instant::now());
+        inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
+        let id = inner.sequence;
+        inner.task = Some(Task {
+            snapshot: Snapshot { id, epoch: 0, window: window.clone(), command_id, kind,
+                phase: Phase::Uncertain, message: "桌面已重启，等待原连接查询控制结果；不重发、不恢复运动授权".into(), recovery_error: false },
+            owner: Owner { epoch: 0, window: WindowToken { label: window, incarnation: 0 } },
+            sent: true, admitted: false, stop_pending: false, seen: Instant::now(), probed: None,
+            heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller),
+            leased_origin: None, joint4: None, finite_durable: true, finite_prepared: true,
+            finite_restored: true, finite_terminal: None,
+        });
+        Ok(id)
+    }
+    pub fn finite_prepared(&self, id: u64, command_id: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.command_id == command_id
+            && t.controller.is_some() && !t.sent && t.finite_terminal.is_none()).ok_or("控制操作在记录落盘期间已失效")?;
+        task.finite_prepared = true;
+        Ok(())
+    }
+    pub fn finite_terminal(&self) -> Option<Snapshot> {
+        self.inner.lock().unwrap().task.as_ref().filter(|t| t.finite_terminal.is_some()).map(|t| t.snapshot.clone())
+    }
+    pub fn finite_release(&self, id: u64, command_id: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.task.as_ref().is_some_and(|t| t.snapshot.id == id && t.snapshot.command_id == command_id && t.finite_terminal.is_some()) { return false; }
+        inner.task = None;
+        true
+    }
+    pub fn finite_message(&self, id: u64, message: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.controller.is_some()) {
+            task.snapshot.message = message.chars().take(512).collect();
+        }
+    }
+
     pub fn begin_controller(&self, owner: Owner) -> Result<u64, String> {
         self.begin_finite_control(owner, Kind::Controller)
     }
@@ -236,16 +304,17 @@ impl Tasks {
         inner.task = Some(Task {
             snapshot: Snapshot { id, epoch: owner.epoch, window: owner.window.label.clone(),
                 command_id: if kind == Kind::ArmMode { super::controller_journal::new_arm_id()? } else { super::controller_journal::new_id()? }, kind,
-                phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
+                phase: Phase::Submitting, message: "核验 Controller 切换前状态".into(), recovery_error: false },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
             probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller), leased_origin: None, joint4: None,
+            finite_durable: inner.finite_recovery_enabled, finite_prepared: false, finite_restored: false, finite_terminal: None,
         });
         Ok(id)
     }
 
     pub fn arm_progress(&self, id: u64, message: &str) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::ArmMode && !t.controller.as_ref().unwrap().requested()) {
+        if let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::ArmMode && t.finite_terminal.is_none() && !t.controller.as_ref().unwrap().requested()) {
             task.snapshot.message = message.chars().take(512).collect();
             if task.sent { task.snapshot.phase = Phase::Running; }
         }
@@ -256,7 +325,8 @@ impl Tasks {
         self.check_activity(super::activity::Check::Motion)?;
         let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && matches!(t.snapshot.kind, Kind::Controller | Kind::ArmMode))
             .ok_or("Controller 任务已失效，未发送切换")?;
-        if task.sent || stopped(task) { return Err("Controller 任务已发送或撤销".into()); }
+        if task.sent || stopped(task) || task.finite_terminal.is_some() { return Err("Controller 任务已发送或撤销".into()); }
+        if task.finite_durable && !task.finite_prepared { return Err("控制恢复记录尚未持久化，拒绝提交".into()); }
         task.sent = true;
         task.snapshot.phase = Phase::Running;
         task.snapshot.message = "Controller 切换中，完成后核验新状态".into();
@@ -265,7 +335,7 @@ impl Tasks {
 
     pub fn request_controller_disable(&self, profile: &Value) -> bool {
         let mut inner=self.inner.lock().unwrap();
-        let Some(task)=inner.task.as_mut().filter(|task|task.controller.is_some()) else {return false;};
+        let Some(task)=inner.task.as_mut().filter(|task|task.controller.is_some() && task.finite_terminal.is_none()) else {return false;};
         let control=task.controller.as_mut().unwrap();
         if !control.matches_profile(profile) {return false;}
         control.request();
@@ -289,12 +359,13 @@ impl Tasks {
     pub fn controller_finish(&self, id: u64, verified: bool, message: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && matches!(t.snapshot.kind, Kind::Controller | Kind::ArmMode)) else { return false; };
+        if task.finite_terminal.is_some() { return true; }
         let control=task.controller.as_mut().unwrap();
-        if !task.sent || verified && !control.requested() {
-            control.finish(super::controller_stop::Outcome::Finished);
-            inner.task = None;return true;
+        if !task.sent || verified && !control.requested() && !task.finite_restored {
+            finite_complete(&mut inner, super::controller_stop::Outcome::Finished);
+            return true;
         }
-        if verified && !control.completed() {control.complete(task.action_next);task.probed=None;}
+        if verified && !control.completed() && !task.finite_restored {control.complete(task.action_next);task.probed=None;}
         if control.requested() && control.completed() {
             task.snapshot.phase=Phase::Stopping;
             task.snapshot.message="Controller 已结束；等待新的 DISABLE 序列及硬件输出关闭反馈".into();
@@ -405,11 +476,12 @@ impl Tasks {
             .as_mut()
             .filter(|task| owner.is_none_or(|owner| &task.owner == owner))
         {
+            if task.finite_terminal.is_some() { return; }
             // The writer uses this same lock before setting sent. Clearing an
             // unsent ticket therefore cannot race with a later transmission.
             if !task.sent {
-                if let Some(control)=&task.controller {control.finish(super::controller_stop::Outcome::Finished);}
-                inner.task = None;
+                if task.controller.is_some() { finite_complete(&mut inner, super::controller_stop::Outcome::Finished); }
+                else { inner.task = None; }
                 return;
             }
             if matches!(task.snapshot.kind, Kind::Controller | Kind::ArmMode) {
@@ -477,8 +549,10 @@ impl Tasks {
                     && task.snapshot.kind == Kind::Position
                     && message["command_id"] == task.snapshot.command_id);
             if cancel {
-                if let Some(control)=&mut task.controller {control.request();}
-                stop(task, "已请求停止，等待 Bridge 确认任务终态");
+                if task.finite_terminal.is_none() {
+                    if let Some(control)=&mut task.controller {control.request();}
+                    stop(task, "已请求停止，等待 Bridge 确认任务终态");
+                }
                 task.stop_pending = false;
                 if let Some(motor) = &mut task.motor {
                     motor.stopping(motor_context.as_ref(), owner.epoch, now);
@@ -544,6 +618,7 @@ impl Tasks {
                     kind,
                     phase: Phase::Submitting,
                     message: "等待 Bridge 受理".into(),
+                    recovery_error: false,
                 },
                 owner: owner.clone(),
                 sent: false,
@@ -556,6 +631,7 @@ impl Tasks {
                 inflight: None,
                 motor,
                 controller: None,
+                finite_durable: false, finite_prepared: false, finite_restored: false, finite_terminal: None,
                 leased_origin,
                 joint4: (kind == Kind::Joint4).then(|| super::joint4_task::State {
                     action: message["action"].as_str().unwrap().into(), operation: None, capture_ready: false,
@@ -617,8 +693,7 @@ impl Tasks {
                 if let Ok(value)=response { task.controller.as_mut().unwrap().acknowledge(action,epoch,value); }
                 let confirmed=inner.task.as_ref().unwrap().controller.as_ref().unwrap().confirmed(inner.motor_context.as_ref(),Instant::now());
                 if confirmed {
-                    inner.task.as_ref().unwrap().controller.as_ref().unwrap().finish(super::controller_stop::Outcome::Disabled);
-                    inner.task=None;
+                    finite_complete(&mut inner, super::controller_stop::Outcome::Disabled);
                 }
                 return;
             }
@@ -654,6 +729,7 @@ impl Tasks {
         let Some(task) = inner.task.as_mut() else {
             return;
         };
+        if task.controller.is_some() { return; }
         if task.snapshot.kind == Kind::Motor && ticket == Some(task.snapshot.id) {
             if request["op"] == "joint_command" && request["mode"] == 3 {
                 if let Ok(value) = response {
@@ -848,8 +924,8 @@ impl Tasks {
         }
         if inner.task.as_ref().and_then(|task|task.controller.as_ref())
             .is_some_and(|control|control.confirmed(inner.motor_context.as_ref(),Instant::now())) {
-            inner.task.as_ref().unwrap().controller.as_ref().unwrap().finish(super::controller_stop::Outcome::Disabled);
-            inner.task=None;return;
+            finite_complete(&mut inner, super::controller_stop::Outcome::Disabled);
+            return;
         }
         if inner
             .task
@@ -931,10 +1007,11 @@ impl Tasks {
             task.snapshot.message = "任务结果未确认，请重连原机器人配置核验；未向其他连接发送控制请求".into();
             return None;
         }
+        if task.finite_terminal.is_some() { return None; }
         if let Some(control)=&mut task.controller {
             if !control.requested() {return None;}
             if !task.sent {
-                control.finish(super::controller_stop::Outcome::Finished);inner.task=None;return None;
+                finite_complete(&mut inner, super::controller_stop::Outcome::Finished);return None;
             }
             if task.inflight.is_some() || task.probed.is_some_and(|at|now.saturating_duration_since(at)<Duration::from_secs(1)) {return None;}
             if let Err(error)=control.prepare(context.as_ref(),epoch,now) {

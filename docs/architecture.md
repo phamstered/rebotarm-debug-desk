@@ -259,7 +259,7 @@ Humble 容器使用 host 网络及独立 PID 命名空间，构建目录与 host
 直接 JTC 任务复用 PositionMotion 的互斥 ROS 回调组、模型、Controller Registry、时钟及反馈订阅，不依赖 MoveIt Action 服务。Socket 线程只排队并撤销待执行许可；跨客户端的控制入口串行受理，排队任务也占用运动锁。发布前在撤销锁内标记发送状态，随后异常只允许进入取消/结果未确认，不能退回“未发布”。取消通过 Bridge 现有硬件命令发布器及共享序列分配器发送 DISABLE，独立关节反馈、JTC reference/actual 和固件回执共同形成终态。原生桌面只消费带编号和证据的终态；Bridge 重启丢失记录仍为未知，不自动重放轨迹。
 
 
-开发分支的 Controller 单个/批量切换由 Rust 任务管理器预留全局运动及页面迁移占用，再以既有固定 SSH 命令执行。工作由应用层持有，WebView 的销毁或 IPC 超时不会终止成功后核验；成功后的公共 Controller 强制查询只在原机器人相同配置的当前会话中进行。未知 SSH 结果通过远端任务记录恢复，不根据普通空闲快照猜测完成，也不重放切换。其他 SSH 控制入口仍待接入。
+开发分支的 Controller 单个/批量切换由 Rust 任务管理器预留全局运动及页面迁移占用，再以既有固定 SSH 命令执行。工作由应用层持有，WebView 的销毁或 IPC 超时不会终止成功后核验；成功后的公共 Controller 强制查询只在原机器人相同配置的当前会话中进行。未知 SSH 结果通过远端任务记录恢复，不根据普通空闲快照猜测完成，也不重放切换。整栈模式切换及有限控制的桌面重启恢复见下文。
 
 Controller SSH helper 仅使用 Python 标准库，通过现有 SSH 传入固定 helper 及结构化请求，不安装额外守护进程。提交先在 `~/.cache/rebotarm-debug-desk/controller-operations-v1` 的私有目录持久化记录，再启动脱离 SSH 标准流的有限子进程。记录使用原子替换和 fsync；输出仅保留尾部 2048 字节。每条记录最多 16 KiB、至多保留 256 条，满时仅淘汰成功/启动前拒绝记录，未确认记录不自动淘汰。保留期内同编号同摘要的重复提交返回原记录；Mac 的恢复路径始终只查询，因此淘汰或记录丢失不会导致重新执行。CLI 自身最多等待 20 秒（既有 ROS 命令内部另有 10 秒 timeout）；超时停止本次 CLI 进程组，但不能据此宣称已取消 ROS 服务，故记录为 uncertain。目录和记录不是跨用户认证机制；访问仍由 SSH 用户权限控制。
 
@@ -269,7 +269,7 @@ Controller 停止证明由 session/controller_stop.rs 持有，与远端完成�
 
 rosbag 录制与回放的只读状态也由 `session/observations.rs` 调度，分别通过固定 SSH status 命令读取，所有 WebView 只消费带连接代次和帧龄的快照。窗口不发起启动时的重复 bag 查询，手动刷新及操作后复查走相同的串行源。查询不依赖主窗口存活；断开会话取消查询，不把取消只读探测等同于停止远端录制或回放。
 
-rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 worker 持有，与原生页面迁移使用同一页面操作锁，并按录制/回放分别互斥。提交前核对原始 WebView incarnation 与共享连接；提交后不依赖发起 IPC future。远端 journal 持久化有界进程身份回执，成功后原机器人连接的共享状态源排在旧查询之后核验同实例。启动成功仍持有页面迁移许可；回放与运动在 Tasks 同一互斥内抢占。应用级监视消费已有公共状态，只有同实例进程组退出才解除占用，断线、旧状态及同路径替换进程不解锁。不同机器人连接不参与该任务恢复。后台 worker 目前随桌面进程存在，在途任务的桌面进程重启恢复尚未完成。固定 SSH 命令携带标准库 Python helper，使用远端私有目录中的原子身份记录与文件锁管理 bag 进程；只读 status 不创建目录或清理历史。boot ID、启动时刻与继承 token 约束进程归属，pidfd 发送信号避免数字 PID 重用竞态；不增加网络监听或 ROS 控制接口。未知身份和遗留无身份活动进程拒绝自动接管。
+rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 worker 持有，与原生页面迁移使用同一页面操作锁，并按录制/回放分别互斥。提交前核对原始 WebView incarnation 与共享连接；提交后不依赖发起 IPC future。远端 journal 持久化有界进程身份回执，成功后原机器人连接的共享状态源排在旧查询之后核验同实例。启动成功仍持有页面迁移许可；回放与运动在 Tasks 同一互斥内抢占。应用级监视消费已有公共状态，只有同实例进程组退出才解除占用，断线、旧状态及同路径替换进程不解锁。不同机器人连接不参与该任务恢复。后台 worker 的桌面重启恢复由下文有界本地查询票据及进程检查点接入。固定 SSH 命令携带标准库 Python helper，使用远端私有目录中的原子身份记录与文件锁管理 bag 进程；只读 status 不创建目录或清理历史。boot ID、启动时刻与继承 token 约束进程归属，pidfd 发送信号避免数字 PID 重用竞态；不增加网络监听或 ROS 控制接口。未知身份和遗留无身份活动进程拒绝自动接管。
 
 整栈控制切换由 `session/arm_operation.rs` 负责，复用 Tasks 全局控制占用与完成后 DISABLE 屏障。命令记录使用独立 `arm-mode-` 编号，固定策略允许至多 128 KiB 命令和 600 秒远端步骤等待；原 Controller 策略仍为 32 KiB / 20 秒。两类共享原子记录容量上限和命令摘要核验，只能提交一次。远端进度是有界元数据，不转发完整持续日志。600 秒超时不会被解释为 ROS 服务停止；异常结果保留占用。该层不替换已有 arm 生命周期脚本的输出确认、进程归属、示教支撑确认及自检条件。
 
@@ -289,3 +289,6 @@ The native session restores rosbag ownership from a bounded private write-ahead 
 Episode tasks restore from `collection-recovery-v1.json` before Workspace startup, using the same private atomic-file utility as bag recovery. Pending remote work is query-only; running checkpoints consume existing shared status and never renew a robot-motion lease. Native ownership remains until matched completion and durable cleanup. Recorder process identity includes boot ID, PID and start ticks; finalization pins the process with pidfd before checking identity and signaling. Legacy or unmanaged processes are not automatically adopted across desktop restarts. Samples and dataset files remain on Jetson and are not serialized into this local recovery journal.
 
 Journal operation locks precede the shared connection lock. Durable I/O never retains the connection lock; Episode completion revalidates the current connection after persistence before publishing completion and releasing occupancy. A blocked journal writer therefore does not serialize incoming feedback or DISABLE behind fsync.
+
+
+Finite Controller and arm-environment operations use a separate one-record native recovery journal. Write-ahead persistence occurs outside Core/Tasks; submission admission requires its durable marker. A terminal task remains reserved while the app-owned cleanup worker atomically clears the file, including pre-send cancellation and hardware-confirmed DISABLE. New tasks cannot overtake that cleanup. On desktop restart only the original remote query ticket is recovered; there is no command replay or restored actuation authorization. After bound remote completion, a new explicit DISABLE and post-completion firmware proof are required. Ordinary controller state matching cannot stand in for remote completion. Corrupt records fail closed for new actuation while leaving DISABLE and offline editing available.

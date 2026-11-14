@@ -44,3 +44,5 @@ pub mod recovery_file;
 pub mod collection_recovery;
 
 pub mod activity;
+
+pub mod finite_recovery;

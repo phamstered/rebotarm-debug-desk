@@ -189,6 +189,8 @@ pub async fn start(
             )
             .await;
         }
+        hub.finite_recovery
+            .prepare(&hub.tasks, id, &profile, job.ticket())?;
         hub.send_controller(&label, task.epoch, id, &profile)?;
         let _ = progress.send(Progress {
             stage: "prepare".into(),
@@ -199,6 +201,7 @@ pub async fn start(
         let mut completed = false;
         loop {
             if *outcome.borrow() == Outcome::Disabled {
+                super::finite_recovery::wait_released(&guard.app, id).await;
                 return Err("控制环境切换期间收到 DISABLE；已核验新的输出关闭反馈".into());
             }
             if hub.tasks.snapshot().is_none_or(|s| s.id != id) {
@@ -211,6 +214,7 @@ pub async fn start(
                 }
                 Some(Proof::Rejected(detail)) => {
                     if guard.finish(true, &detail) {
+                        super::finite_recovery::wait_released(&guard.app, id).await;
                         return Err(format!("远端确认未启动控制环境操作：{detail}"));
                     }
                 }
@@ -249,6 +253,7 @@ pub async fn start(
                         && verified(&hub.observations.snapshot(), &mode)
                     {
                         if guard.finish(true, "") {
+                            super::finite_recovery::wait_released(&guard.app, id).await;
                             let message = format!("{mode} 操作完成，已核验新鲜控制环境状态");
                             let _ = progress.send(Progress {
                                 stage: "ready".into(),
@@ -266,6 +271,7 @@ pub async fn start(
                         while *outcome.borrow() == Outcome::Pending {
                             outcome.changed().await.map_err(|_| "输出关闭结果未确认")?;
                         }
+                        super::finite_recovery::wait_released(&guard.app, id).await;
                         return Err("控制环境已结束；已按停止请求核验输出关闭".into());
                     }
                     guard.progress("远端步骤完成，等待原机器人新鲜目标模式状态");

@@ -143,11 +143,13 @@ impl Guard {
     async fn wait_for_disable(&self) -> Result<String, String> {
         let mut outcome = self.outcome.clone();
         loop {
-            match *outcome.borrow() {
+            let current = *outcome.borrow();
+            match current {
                 super::controller_stop::Outcome::Disabled => {
+                    super::finite_recovery::wait_released(&self.app, self.id).await;
                     return Err(
                         "Controller 切换期间收到 DISABLE；已核验新的硬件反馈确认输出关闭".into(),
-                    )
+                    );
                 }
                 super::controller_stop::Outcome::Finished => {
                     return Err("Controller 任务已结束".into())
@@ -246,6 +248,8 @@ async fn run(
         .ok_or("Controller 任务已失效")?
         .command_id;
     let mut job = super::controller_journal::Job::new(remote_id, remote)?;
+    hub.finite_recovery
+        .prepare(&hub.tasks, guard.id, &profile, job.ticket())?;
     hub.send_controller(label, epoch, guard.id, &profile)?;
     let _ = guard.app.emit("native-tasks-changed", ());
     // This is the only submit. Losing the SSH reply must never replay control.
@@ -277,6 +281,7 @@ async fn run(
             }
             Some(Proof::Rejected(detail)) => {
                 guard.finish(true, "");
+                super::finite_recovery::wait_released(&guard.app, guard.id).await;
                 return Err(format!("Controller 远端确认未执行：{detail}"));
             }
             Some(Proof::Uncertain(detail)) => {
@@ -319,6 +324,7 @@ async fn run(
                     && verified(&snapshot, &expected)
                 {
                     if guard.finish(true, "") {
+                        super::finite_recovery::wait_released(&guard.app, guard.id).await;
                         return Ok("Controller 切换完成，原生层已核验新状态".into());
                     }
                     return guard.wait_for_disable().await;

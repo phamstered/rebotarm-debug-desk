@@ -54,7 +54,7 @@ export function NativeTaskStatus() {
   if (!task && !error) return null;
   const page = task?.window.replace(/^page-/, "") as keyof typeof PAGE_TITLES;
   return <div className="global-motion-status" role="status" aria-label="原生共享运动任务">
-    {error || `${PAGE_TITLES[page] || task!.window} · ${task!.kind === "joint4" ? "Joint4 标定" : task!.kind === "trajectory" ? "直接 JTC 轨迹" : task!.kind === "arm_mode" ? "控制环境切换" : task!.kind === "controller" ? "Controller 切换" : task!.kind === "gravity" ? "重力辨识" : task!.kind === "motor" ? "Motor 连续发送" : task!.kind === "pick" ? "视觉抓取" : "点位 / 动作组"} · ${["controller", "arm_mode", "joint4"].includes(task!.kind) && task!.phase === "uncertain" ? "结果未确认" : PHASES[task!.phase]} · ${task!.message}`}
+    {error || (task?.recovery_error ? `任务恢复异常 · ${task.message}` : `${PAGE_TITLES[page] || task!.window} · ${task!.kind === "joint4" ? "Joint4 标定" : task!.kind === "trajectory" ? "直接 JTC 轨迹" : task!.kind === "arm_mode" ? "控制环境切换" : task!.kind === "controller" ? "Controller 切换" : task!.kind === "gravity" ? "重力辨识" : task!.kind === "motor" ? "Motor 连续发送" : task!.kind === "pick" ? "视觉抓取" : "点位 / 动作组"} · ${["controller", "arm_mode", "joint4"].includes(task!.kind) && task!.phase === "uncertain" ? "结果未确认" : PHASES[task!.phase]} · ${task!.message}`)}
     {!error && task?.kind === "trajectory" && <button type="button"
       disabled={canceling === taskKey || task.phase === "stopping" || task.phase === "uncertain"}
       onClick={() => void cancelTrajectory()}>取消直接轨迹</button>}

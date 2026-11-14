@@ -1468,6 +1468,9 @@ async fn start_arm_mode(window: tauri::Webview, profile: ConnectionProfile, mode
         return Err("请先确认现场支撑机械臂，且夹爪释放无风险".into());
     }
     let remote = arm_mode_remote_command(&profile, &mode)?;
+    if mode == "disable-stop" && hub.disable_finite_terminal(window.label(), &profile).await? {
+        return Err("DISABLE 请求已受理；原控制操作已结束但恢复记录仍在清理。请核对新的输出关闭反馈；环境清理尚未执行".into());
+    }
     if mode == "disable-stop" && hub.tasks.request_controller_disable(&serde_json::to_value(&profile).map_err(|e| e.to_string())?) {
         let _ = app.emit("native-tasks-changed", ());
         return Err("已请求关闭输出；正在等待当前控制切换结束及新的关闭反馈。控制环境清理尚未执行，请待共享任务结束后重试退出".into());
@@ -1571,6 +1574,7 @@ pub fn run() {
                 .set_changed(std::sync::Arc::new(move || {
                     let _ = handle.emit("native-session-changed", ());
                 }));
+            session::finite_recovery::initialize(app.handle());
             session::bag_operation::initialize(app.handle());
             session::collection_operation::initialize(app.handle());
             session::workspace::Workspace::initialize(app.handle());

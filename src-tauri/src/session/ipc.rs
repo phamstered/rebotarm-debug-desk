@@ -70,7 +70,7 @@ pub fn native_task_snapshot(
     hub: State<'_, Runtime>,
 ) -> Result<Option<super::tasks::Snapshot>, String> {
     observation_caller(&window)?;
-    Ok(hub.tasks.snapshot())
+    Ok(hub.finite_recovery.error_snapshot().or_else(|| hub.tasks.snapshot()))
 }
 
 #[tauri::command]
