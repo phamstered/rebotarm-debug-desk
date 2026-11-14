@@ -10,6 +10,7 @@ find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -48,12 +49,12 @@ find_package(Threads REQUIRED)
 add_library(visual_pick STATIC src/visual_pick.cpp)
 target_include_directories(visual_pick PUBLIC include PRIVATE ${Boost_INCLUDE_DIRS})
 target_link_libraries(visual_pick PUBLIC Threads::Threads)
-add_executable(bridge_node src/bridge_node.cpp src/controller_registry.cpp)
+add_executable(bridge_node src/bridge_node.cpp src/controller_registry.cpp src/joint4_calibration.cpp)
 target_link_libraries(bridge_node visual_pick rgb_target)
 target_link_libraries(bridge_node object_detection)
 target_include_directories(bridge_node PRIVATE include)
 ament_target_dependencies(bridge_node
-  ament_index_cpp rclcpp rclcpp_action std_msgs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
+  ament_index_cpp rclcpp rclcpp_action std_msgs std_srvs sensor_msgs geometry_msgs nav_msgs diagnostic_msgs
   trajectory_msgs shape_msgs tf2 tf2_ros microros_stm32h723_bridge rosidl_typesupport_introspection_cpp)
 target_link_libraries(bridge_node Boost::system Boost::thread ZLIB::ZLIB)
 if(controller_manager_msgs_FOUND)
@@ -76,6 +77,11 @@ install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
 if(BUILD_TESTING)
   enable_testing()
+  add_executable(test_joint4_task_core test/test_joint4_task_core.cpp)
+  target_include_directories(test_joint4_task_core PRIVATE include)
+  target_compile_options(test_joint4_task_core PRIVATE -UNDEBUG)
+  add_test(NAME joint4_task_core COMMAND test_joint4_task_core)
+
   add_executable(test_trajectory_task_core test/test_trajectory_task_core.cpp)
   target_include_directories(test_trajectory_task_core PRIVATE include)
   target_compile_options(test_trajectory_task_core PRIVATE -UNDEBUG)
@@ -100,6 +106,12 @@ if(BUILD_TESTING)
   target_link_libraries(test_object_detection object_detection)
   add_test(NAME object_detection COMMAND test_object_detection ${CMAKE_CURRENT_SOURCE_DIR}/config/object_detection.json)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  if(controller_manager_msgs_FOUND)
+    add_test(NAME joint4_task_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_joint4_task_ros.py $<TARGET_FILE:bridge_node>)
+    set_tests_properties(joint4_task_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=222;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 100)
+  endif()
   add_test(NAME gravity_task_ros
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gravity_task_ros.py $<TARGET_FILE:bridge_node>)
   set_tests_properties(gravity_task_ros PROPERTIES

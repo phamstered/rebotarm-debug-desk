@@ -376,7 +376,7 @@ impl Tasks {
         if op == "joint4_capture" && !inner.task.as_ref().is_some_and(|task|
             task.snapshot.kind == Kind::Joint4 && task.owner == owner && task.admitted
             && !stopped(task) && message["command_id"] == task.snapshot.command_id
-            && task.joint4.as_ref().is_some_and(|j| j.action == "begin_pose" && j.operation.is_none())) {
+            && task.joint4.as_ref().is_some_and(|j| j.action == "begin_pose" && j.capture_ready && j.operation.is_none())) {
             return Err("Capture 需要本页面已受理的 Joint4 姿态任务，且没有在途采样".into());
         }
         let is_motor = op == "joint_command" && message["mode"].as_i64() != Some(3);
@@ -487,7 +487,7 @@ impl Tasks {
                 controller: None,
                 leased_origin,
                 joint4: (kind == Kind::Joint4).then(|| super::joint4_task::State {
-                    action: message["action"].as_str().unwrap().into(), operation: None,
+                    action: message["action"].as_str().unwrap().into(), operation: None, capture_ready: false,
                 }),
             });
             Some(id)
@@ -660,6 +660,7 @@ impl Tasks {
                         || (task.snapshot.kind == Kind::Pick && value["op"] == "visual_pick_state" && value["busy"] == true)) =>
             {
                 task.admitted = true;
+                if let Some(joint4) = &mut task.joint4 { joint4.capture_ready = value["success"] == true; }
                 if !stopped(task) {
                     task.snapshot.phase = Phase::Running;
                     task.snapshot.message = "Bridge 已受理".into();
@@ -825,6 +826,9 @@ impl Tasks {
             return;
         }
         task.admitted = true;
+        if message["task_phase"] == "running" {
+            if let Some(joint4) = &mut task.joint4 { joint4.capture_ready = true; }
+        }
         if matches!(task.snapshot.kind, Kind::Trajectory | Kind::Joint4) && message["task_phase"] == "stopping" && !stopped(task) {
             task.snapshot.phase = Phase::Stopping;
             task.snapshot.message = "Bridge 正在停止任务，等待终态证据".into();

@@ -429,3 +429,19 @@ Jetson 使用部署脚本同步独立 `~/easy_debug_bridge_260_motion_observe`�
 最终 `npm test` 通过：919 前端 / 219 Rust / 3 运行库测试与其余脚本（`/tmp/260-joint4-native-verified-tests.log`）。新增回归覆盖实际回环 WebSocket 中的能力/页面/配置拒绝、服务 ACK 后持有姿态、页面退出后取消及证据终态释放；状态机覆盖重复采样、迟到回执、错误动作、旧代次、队列撤销和同机器人重连查询。应用 worker 测试确认调用 future 被取消后仍能处理完成；前端回归验证等待期间 Release、取消前迟到回复隔离以及换配置/断线不写入旧样本。测试不连接真实 ROS 服务或机械臂。
 
 `npm run build`、文档构建及独立 Debug `.app` 构建通过（`/tmp/260-joint4-native-{build,docs,bundle}.log`），严格 codesign 核验通过。再次使用 CUA 选择隔离应用时，系统仍返回 Mac 锁屏；本轮没有启动新包并完成真实窗口复验，未将既有图片迁移验收记作本版本证据。正式 `/Applications/Robot Console.app` 和生产 Bridge 未替换。
+
+## Joint4 Bridge 服务适配与隔离联调
+
+Joint4 的 Begin、Capture、Release、Fit、Reset 已接入 Bridge 固定 Trigger 白名单，并声明 `joint4_task_supported`。每个姿态只有一个在途服务；取消、断线和 5 秒租约失效先登记释放意图，等迟到 Begin/Capture 返回后才调用 Release。未知服务结果不重新提交，也不假定已经释放。重复 Capture 操作编号返回原回执；同一姿态成功采样后拒绝再采。原生层区分排队与 Begin 成功，排队可以续租但不能提前 Capture。
+
+Release 终态要求服务成功后新的状态回调、独立六轴及 HardwareStatus 源时间戳持续推进并停稳 200 ms。显式 DISABLE 则要求在服务收束后重新发出的序列由固件确认；解除软保持不等于关闭重力前馈。Headerless Joint4 状态只能核验接收先后，不能证明源采样时间。直接轨迹被 Joint4/重力辨识占用拒绝时，现在保留 `not_published` 终态，避免普通错误让原生层永久等待未知结果。
+
+开发验证发现两类环境/测试问题并修正：一次增量链接使用了旧三参数对象文件（旧构建完成时间晚于新源码时间），核对源码哈希及符号后执行单线程干净构建；ROS 测试节点改用非只读属性名保存 Trigger，测试 WebSocket 按既有无 request_id 的 hello 协议匹配。没有改变生产 hello 协议或弱化断言。定向真实 Bridge 测试使用模拟服务、隔离域 222、localhost，通过迟到回复、去重、占用拒绝、租约/断线、旧反馈、Release/DISABLE 与 Fit/Reset 核验，日志 `/tmp/260-joint4-adapter-ros-retest.log`。
+
+最终本地 `npm test` 通过：919 前端 / 220 Rust / 3 运行库测试与其余脚本（`/tmp/260-joint4-adapter-final-tests.log`）。前端、文档及独立 Debug `.app` 构建通过（`/tmp/260-joint4-adapter-{build,docs,bundle}.log`），严格 codesign 核验通过。本轮两次 CUA 仍返回 Mac 锁屏；未退出旧隔离进程或重开新包，未把既有图片缩放/迁移验收计为新包证据。正式应用与生产 Bridge 未替换。
+
+隔离安装二进制的实际 hello 已读回 build ID `4df615ad577f`，Joint4 与直接轨迹能力均为 true；未知任务不返回终态，无效轨迹的 `not_published` 拒绝可读回。冒烟使用随机 loopback 端口及独立 ROS 域 223，只清理自己启动的 Bridge（`/tmp/260-joint4-adapter-smoke.log`）。生产 Joint4 状态 Topic 当前没有发布者，未声称核验了生产发布 QoS；模拟发布者 RELIABLE 与适配器 BEST_EFFORT 的实际接收兼容性已验证。
+
+最终远端单线程 `colcon build`、完整 `colcon test` 和 `colcon test-result --verbose` 通过：29 tests，0 errors，0 failures，0 skipped（`/tmp/260-joint4-adapter-colcon-final.log`）。所有 ROS 测试使用各自隔离域和模拟节点，不等于真实 Joint4/JTC 或电机验证。完整 Issue #260 仍在进行：外部采集/回放运行期、未知任务与桌面重启恢复、真实 JTC 接收延迟边界、多显示器/拔屏及九窗口持续运行验收，最终正式安装部署、PR/CI/合并均未完成。
+
+提交前移除测试辅助文件末尾空行，包内容指纹更新为 `66cee9e4c20f`；控制代码没有再改动。该最终源码重新通过全量 `npm test`、前端和独立 Debug bundle 构建、严格 codesign（`/tmp/260-joint4-adapter-publish-{tests,build,bundle}.log`）。远端重新构建后，最终安装二进制再次通过 Joint4 隔离联调和实际 hello/未知查询/拒绝历史冒烟（`/tmp/260-joint4-adapter-publish-{colcon,ros,smoke}.log`）。上述 29 项完整 colcon 测试对应清理空行前的同一控制实现；最终格式及指纹变化后仅重跑受影响的联调与冒烟，没有宣称再次执行完整 colcon 测试。

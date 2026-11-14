@@ -92,7 +92,7 @@ std::vector<double> read_values(const Tree &request) {
 }
 
 struct PositionMotion::Impl {
-  struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; std::shared_ptr<std::atomic<bool>> revoked; };
+  struct Request { uint64_t owner; Tree data; Send send; bool disconnect{false}; std::shared_ptr<std::atomic<bool>> revoked; std::string admission_error; };
   struct QueuedStart { uint64_t owner; std::string id; std::weak_ptr<std::atomic<bool>> revoked; };
   struct GroupRun {
     PositionGroupSpec spec;
@@ -1055,6 +1055,7 @@ struct PositionMotion::Impl {
     return static_cast<int64_t>(stamp.sec)*1000000000LL+stamp.nanosec;
   }
   void direct_start(const Request &r) {
+    if(!r.admission_error.empty())throw std::runtime_error(r.admission_error);
     const auto id=r.data.get<std::string>("command_id","");
     if (!valid_motion_command_id(id)) throw std::runtime_error("command_id 无效");
     if (direct.matches(id) || direct.result(id)) throw std::runtime_error("直接轨迹编号已使用；请查询任务状态，禁止重发");
@@ -1367,7 +1368,7 @@ struct PositionMotion::Impl {
 PositionMotion::PositionMotion(rclcpp::Node &n, const std::string &joints, const std::string &status, std::shared_ptr<ControllerRegistry> controllers, Disable disable)
     : impl_(std::make_unique<Impl>(n, joints, status, std::move(controllers),std::move(disable))) {}
 PositionMotion::~PositionMotion() = default;
-void PositionMotion::request(uint64_t owner, const Tree &data, Send send) {
+void PositionMotion::request(uint64_t owner, const Tree &data, Send send, const std::string &admission_error) {
   std::lock_guard<std::mutex> lock(impl_->queue_mutex);
   const auto op=data.get<std::string>("op","");
   const auto id=data.get<std::string>("command_id","");
@@ -1387,7 +1388,7 @@ void PositionMotion::request(uint64_t owner, const Tree &data, Send send) {
     revoked=std::make_shared<std::atomic<bool>>(false);
     impl_->queued_starts.push_back({owner,id,revoked});impl_->pending_starts.fetch_add(1);
   }
-  impl_->requests.push_back({owner, data, std::move(send), false,std::move(revoked)});
+  impl_->requests.push_back({owner, data, std::move(send), false,std::move(revoked),admission_error});
 }
 void PositionMotion::diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message) {
   impl_->log(owner, command, phase, message);

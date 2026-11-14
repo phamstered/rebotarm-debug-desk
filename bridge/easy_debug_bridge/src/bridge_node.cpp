@@ -43,6 +43,7 @@
 #include "easy_debug_bridge/bridge_core.hpp"
 #include "easy_debug_bridge/position_motion.hpp"
 #include "easy_debug_bridge/gravity_task_core.hpp"
+#include "easy_debug_bridge/joint4_calibration.hpp"
 #include "easy_debug_bridge/clock_sync_core.hpp"
 #include "easy_debug_bridge/topic_json.hpp"
 
@@ -440,6 +441,9 @@ class BridgeNode : public rclcpp::Node {
 #endif
     controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_, [this] { return publish_task_disable(); });
+    joint4_calibration_ = std::make_unique<easy_debug_bridge::Joint4Calibration>(*this, controller_registry_,
+      [this] { return joint4_safety(); }, [this] { return publish_task_disable(); },
+      [this](const std::string &event) { broadcast(event); });
     visual_pick_ = std::make_unique<easy_debug_bridge::VisualPick>(get_parameter("visual_pick_config").as_string(),
       [this](uint64_t owner, const auto &r, auto send){position_motion_->request(owner,r,std::move(send));},
       [this](uint64_t owner, const std::string &token, uint64_t id){return pick_observation(owner,token,id);},
@@ -519,6 +523,7 @@ class BridgeNode : public rclcpp::Node {
 
   void remove_session(uint64_t client) {
     gravity_id_disconnect(client);
+    if(joint4_calibration_)joint4_calibration_->disconnected(client);
     if(visual_pick_)visual_pick_->cancel(client);
     controller_registry_->disconnected(client);
     position_motion_->disconnected(client);
@@ -566,18 +571,32 @@ class BridgeNode : public rclcpp::Node {
     const std::string request_id = request.get<std::string>("request_id", "");
     try {
       const bool starts=op=="position_move" || op=="position_group_start" || op=="position_group_resume" ||
-        op=="visual_pick_start" || op=="trajectory_command" || op=="gravity_id_send_goal" ||
+        op=="visual_pick_start" || op=="trajectory_command" || op=="gravity_id_send_goal" || op=="joint4_start" || op=="joint4_capture" ||
         (op=="joint_command" && request.get<int>("mode",-1)!=3);
       // Serialize admission across socket clients. DISABLE bypasses this lock.
       std::unique_lock<std::mutex> ingress(actuation_ingress_mutex_,std::defer_lock);
       if (starts) ingress.lock();
+      std::string admission_error;
+      if (joint4_calibration_->busy() && starts && op!="joint4_start" && op!="joint4_capture")
+        admission_error="Joint4 标定持有任务锁，需等待释放确认";
       if (gravity_id_busy() && (op=="position_move" || op=="position_group_start" || op=="position_group_resume" || op=="visual_pick_start" || op=="trajectory_command" || (op=="joint_command" && request.get<int>("mode",-1)!=3)))
-        throw std::runtime_error("重力辨识持有运动锁，需等待停止确认");
+        admission_error="重力辨识持有运动锁，需等待停止确认";
+      if(!admission_error.empty()) {
+        if(op=="trajectory_command") {
+          const std::weak_ptr<WebSocketSession> weak=session;
+          position_motion_->request(session->id(),request,[weak](const std::string &reply) {
+            if(const auto target=weak.lock())target->send(reply);
+          },admission_error);
+          return;
+        }
+        throw std::runtime_error(admission_error);
+      }
       if (op == "hello") {
         session->send(std::string("{\"op\":\"hello\",\"bridge_version\":\"") +
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"motion_observation_supported\":true,\"gravity_task_supported\":true,\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
+                     ",\"joint4_task_supported\":" + (joint4_calibration_->supported() ? "true" : "false") +
                      ",\"trajectory_task_supported\":" + (position_motion_->trajectory_supported() ? "true" : "false") +
                      ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
@@ -620,6 +639,12 @@ class BridgeNode : public rclcpp::Node {
         position_motion_->request(session->id(), request, [weak](const std::string &reply) {
           if (const auto target = weak.lock()) target->send(reply);
         });
+      } else if (op == "joint4_start" || op == "joint4_capture" || op == "joint4_cancel" || op == "joint4_heartbeat" || op == "joint4_task_status") {
+        const std::weak_ptr<WebSocketSession> weak=session;
+        const bool conflict=position_motion_->busy()||visual_pick_->busy()||gravity_id_busy();
+        joint4_calibration_->request(session->id(),request,[weak](const std::string &reply) {
+          if(const auto target=weak.lock())target->send(reply);
+        },conflict);
       } else if (op == "topics") {
         send_topics(session, request_id);
       } else if (op == "graph") {
@@ -1052,7 +1077,7 @@ class BridgeNode : public rclcpp::Node {
     const double effort = request.get<double>("effort", 0.0);
     const bool disable = mode_value == microros_stm32h723_bridge::msg::JointCommand::MODE_DISABLE;
     if ((position_motion_->busy() || visual_pick_->busy()) && !disable) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
-    if (disable) { gravity_id_disable(); visual_pick_->cancel(); position_motion_->disconnected(0); }
+    if (disable) { joint4_calibration_->disable(); gravity_id_disable(); visual_pick_->cancel(); position_motion_->disconnected(0); }
 
     easy_debug_bridge::CommandFields fields;
     fields.mode = mode_value;
@@ -1161,6 +1186,34 @@ class BridgeNode : public rclcpp::Node {
     session->send("{\"op\":\"joint_command_ack\",\"request_id\":" + json_quote(request_id) +
                   ",\"sequence\":" + std::to_string(command.sequence) +
                   ",\"mode\":" + std::to_string(command.mode) + "}");
+  }
+
+  easy_debug_bridge::Joint4Calibration::Safety joint4_safety() {
+    using Clock=std::chrono::steady_clock;
+    easy_debug_bridge::Joint4Calibration::Safety result;
+    const auto sync=clock_snapshot();const auto at=Clock::now();
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    auto &o=result.observation;o.ros_now=now().nanoseconds();o.clock_generation=sync.generation;
+    o.joint_stamp=int64_t(latest_joint_state_.header.stamp.sec)*1000000000LL+latest_joint_state_.header.stamp.nanosec;
+    o.hardware_stamp=int64_t(latest_status_.header.stamp.sec)*1000000000LL+latest_status_.header.stamp.nanosec;
+    o.mode=latest_status_.mode;o.sequence=latest_status_.last_command_sequence;
+    const auto source_fresh=[&](int64_t stamp) {return stamp>0&&stamp<=o.ros_now+50000000LL&&o.ros_now-stamp<1000000000LL;};
+    // Joint4 needs positions and velocities, not effort fields in JointState.
+    o.fresh=have_status_&&sync.healthy()&&latest_status_.header.stamp.sec>0&&latest_status_.header.stamp.nanosec<1000000000u&&
+      latest_joint_state_.header.stamp.sec>0&&latest_joint_state_.header.stamp.nanosec<1000000000u&&at-status_received_at_<std::chrono::milliseconds(500)&&
+      at-joint_received_at_<std::chrono::milliseconds(500)&&source_fresh(o.joint_stamp)&&source_fresh(o.hardware_stamp);
+    o.stopped=true;
+    for(int joint=1;joint<=6;++joint) {
+      const auto &names=latest_joint_state_.name;const auto name="joint"+std::to_string(joint);
+      const auto found=std::find(names.begin(),names.end(),name);const auto index=static_cast<size_t>(std::distance(names.begin(),found));
+      const bool valid=found!=names.end()&&std::count(names.begin(),names.end(),name)==1&&
+        index<latest_joint_state_.position.size()&&index<latest_joint_state_.velocity.size()&&
+        std::isfinite(latest_joint_state_.position[index])&&std::isfinite(latest_joint_state_.velocity[index]);
+      o.fresh=o.fresh&&valid;o.stopped=o.stopped&&valid&&(valid?std::abs(latest_joint_state_.velocity[index])<=.02:false);
+    }
+    result.tracking=latest_status_.mode==microros_stm32h723_bridge::msg::HardwareStatus::MODE_TRACK;
+    result.healthy=latest_status_.fault_code==0&&(latest_status_.active_joint_mask&0x3f)==0x3f;
+    return result;
   }
 
   uint32_t publish_task_disable() {
@@ -2237,6 +2290,7 @@ class BridgeNode : public rclcpp::Node {
 
   std::shared_ptr<easy_debug_bridge::ControllerRegistry> controller_registry_;
   std::unique_ptr<easy_debug_bridge::PositionMotion> position_motion_;
+  std::unique_ptr<easy_debug_bridge::Joint4Calibration> joint4_calibration_;
   std::unique_ptr<easy_debug_bridge::VisualPick> visual_pick_;
   int port_;
   std::string command_topic_;

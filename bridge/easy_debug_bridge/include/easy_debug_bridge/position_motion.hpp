@@ -16,7 +16,7 @@ class PositionMotion {
   explicit PositionMotion(rclcpp::Node &node, const std::string &joint_topic, const std::string &status_topic,
                           std::shared_ptr<ControllerRegistry> controllers, Disable disable);
   ~PositionMotion();
-  void request(uint64_t owner, const boost::property_tree::ptree &request, Send send);
+  void request(uint64_t owner, const boost::property_tree::ptree &request, Send send, const std::string &admission_error = "");
   // Internal diagnostics only; never registered as a WebSocket operation.
   void diagnostic(uint64_t owner, const std::string &command, const std::string &phase, const std::string &message);
   void disconnected(uint64_t owner);

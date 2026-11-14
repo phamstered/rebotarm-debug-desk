@@ -4,7 +4,7 @@ namespace easy_debug_bridge {
 struct PositionMotion::Impl {};
 PositionMotion::PositionMotion(rclcpp::Node &, const std::string &, const std::string &, std::shared_ptr<ControllerRegistry>, Disable) : impl_(std::make_unique<Impl>()) {}
 PositionMotion::~PositionMotion() = default;
-void PositionMotion::request(uint64_t, const boost::property_tree::ptree &data, Send send) {
+void PositionMotion::request(uint64_t, const boost::property_tree::ptree &data, Send send, const std::string &) {
   const auto id = position_json_quote(data.get<std::string>("request_id", ""));
   const auto op = data.get<std::string>("op", "");
   if (op == "position_motion_info")

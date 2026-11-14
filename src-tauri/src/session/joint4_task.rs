@@ -10,6 +10,7 @@ use std::{sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager};
 
 pub struct State {
+    pub capture_ready: bool,
     pub action: String,
     pub operation: Option<String>,
 }
@@ -37,8 +38,7 @@ pub fn validate(label: &str, value: &Value) -> Result<(), String> {
         if !value[*field].as_str().is_some_and(|s| {
             !s.is_empty()
                 && s.len() <= 80
-                && s.bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
+                && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
         }) {
             return Err(format!("Joint4 {field} 无效"));
         }
@@ -448,5 +448,17 @@ mod tests {
         assert_eq!(t.snapshot().unwrap().phase, Phase::Uncertain);
         assert!(t.admit(owner(1), &capture(), now).is_err());
         assert_eq!(t.poll(1, now).unwrap().message["op"], "joint4_cancel");
+    }
+    #[test]
+    fn queued_begin_can_renew_but_cannot_capture_until_service_acceptance() {
+        let t = configured();
+        let now = Instant::now();
+        let a = t.admit(owner(1), &request("begin_pose"), now).unwrap();
+        assert!(a.permit.unwrap()());
+        t.observe(1, &json!({"op":"joint4_task_state","command_id":"pose-1","action":"begin_pose","terminal":false,"task_phase":"queued"}));
+        assert_eq!(t.poll(1, now).unwrap().message["op"], "joint4_heartbeat");
+        assert!(t.admit(owner(1), &capture(), now).is_err());
+        t.reply(a.ticket, 1, &request("begin_pose"), Ok(&ack()));
+        assert!(t.admit(owner(1), &capture(), now).is_ok());
     }
 }

@@ -275,4 +275,4 @@ rosbag 录制与回放的只读状态也由 `session/observations.rs` 调度，�
 
 Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。进程重启恢复及外部录制的完整生命周期仍在开发范围内。
 
-多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。当前 Bridge 尚未实现这套服务适配器，桌面拒绝旧能力入口；此处仅为原生接入，不能作为已发布的 Joint4 控制链路。
+多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。Bridge 的 `joint4_calibration.cpp` 持有互斥服务调用、姿态租约和有界回执/终态记录，复用 Controller Registry 与底层独立反馈及 DISABLE 序列分配。服务未返回时不允许 Release 越过它；状态和硬件证据确认后才释放任务。桌面拒绝旧能力入口；开发分支尚未作为已发布的实机控制链路验收。
