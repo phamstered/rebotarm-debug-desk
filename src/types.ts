@@ -239,6 +239,7 @@ export type BridgeEnvelope = {
   rgbd_subscription_id_supported?: boolean;
   object_detection_supported?: boolean;
   visual_pick_supported?: boolean;
+  visual_pick_cancel_id_supported?: boolean;
   rgb_target_tracking_supported?: boolean;
   tracking?: RgbTargetState | null;
   target_id?: string;

@@ -498,11 +498,21 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
     return;
   }
   if (op == "visual_pick_cancel") {
+    const auto command = r.get<std::string>("command_id", "");
+    if (command.empty() || command.size() > 60 ||
+        command.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
+      throw std::runtime_error("取消抓取需要有效的原任务 command_id");
     {
+      // Check identity and set cancellation under one lock: a delayed request
+      // must never cancel a successor belonging to the same shared connection.
       std::lock_guard<std::mutex> lock(impl_->mutex);
+      if (command != impl_->id) throw std::runtime_error("取消编号不匹配当前视觉抓取任务");
       if (impl_->active && owner != impl_->owner) throw std::runtime_error("抓取由其他会话持有");
+      if (impl_->active) {
+        impl_->canceled = true;
+        impl_->previews.erase(owner);
+      }
     }
-    cancel(owner);
     send(impl_->state(rid));
     return;
   }
@@ -583,11 +593,11 @@ void VisualPick::request(uint64_t owner, const Tree &r, Send send) {
     impl_->phase = "validating";
     impl_->message = "校验视觉抓取条件";
     impl_->heartbeat = Clock::now();
+    impl_->canceled = false;
+    impl_->active = true;
   }
   impl_->accepted_ids.push_back(id);
   if (impl_->accepted_ids.size() > 256) impl_->accepted_ids.pop_front();
-  impl_->canceled = false;
-  impl_->active = true;
   send(impl_->state(rid));
   impl_->worker = std::thread(
       [this, owner, r, config, observed, send]() { impl_->run(owner, r, config, observed, send); });

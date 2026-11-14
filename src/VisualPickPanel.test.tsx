@@ -52,7 +52,9 @@ it('starts only after explicit click and cancels its own task on leaving the vie
  expect(vi.mocked(bridge.request).mock.calls.filter(([m])=>m.op==='visual_pick_start')).toHaveLength(0);
  fireEvent.click(screen.getByRole('button',{name:'接近、抓取并抬升'}));
  await waitFor(()=>expect(bridge.request).toHaveBeenCalledWith(expect.objectContaining({op:'visual_pick_start',object_id:1,subscription_id:'a',preview_frame_seq:3,confirmation:'ARMED'}),5000));
- view.rerender(<VisualPickPanel {...props} active={false}/>);expect(bridge.send).toHaveBeenCalledWith({op:'visual_pick_cancel'});
+ const id=vi.mocked(bridge.request).mock.calls.find(([m])=>m.op==='visual_pick_start')![0].command_id;
+ fireEvent.click(screen.getByRole('button',{name:'取消抓取'}));expect(bridge.send).toHaveBeenLastCalledWith({op:'visual_pick_cancel',command_id:id});
+ view.rerender(<VisualPickPanel {...props} active={false}/>);expect(bridge.send).toHaveBeenLastCalledWith({op:'visual_pick_cancel',command_id:id});
 });
 it('retains the selected UUID across handoff, blocks unverified RGB and releases explicitly',async()=>{
  const t={target_id:'550e8400-e29b-41d4-a716-446655440000',object_id:1,sequence:3,generation:2,mode:'rgbd',identity_valid:true,metric_ready:true,plane_verified:false,confidence:.95,age_ms:10,camera_z_m:.3,depth_valid_fraction:.9,geometry_source:'depth_verified_surface',message:'一致跟踪',source_frame:'color_optical',target_frame:'base_link',stamp_ns:1000000000,roi:[10,10,30,30],box};

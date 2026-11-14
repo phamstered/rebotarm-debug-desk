@@ -623,3 +623,17 @@ Position/动作组、Pick、Gravity、直接 Trajectory 和 Joint4 接入 `lease
 最终 `npm test` 通过：927 前端、272 Rust、3 运行库，以及 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build`、`npm run docs:build`、`npm run tauri build -- --debug --bundles app --config /tmp/260-native-leased-recovery.json` 和严格 codesign 校验通过。日志 `/tmp/260-leased-recovery-{full-tests,build,docs,bundle}.log`。产物 `Robot Console Leased Recovery Test.app` 使用隔离标识 `dev.easydebug.multiwindowtest`，未启动或安装到生产位置；本轮没有 Bridge 源码或 Jetson 部署变更。
 
 原生启动检查仍被 Mac 锁屏阻止，真实渲染进程退出恢复尚待解锁复测；没有重复请求解锁或等待外接屏。任务历史若已被 Bridge 丢弃，查询的普通 idle/unknown 仍不足以核验旧动作结束，当前会保留未知占用，这不是完整未知结果恢复的证明。外部活动跨连接归属、外接屏拔插、上述边界及最终 PR/CI/合并/正式安装仍需后续完成；完整 Issue #260 保持进行中。
+
+## 视觉抓取取消的原任务编号核验
+
+检查共享连接的取消路径时发现，视觉 Pick 原取消消息没有携带任务编号，迟到的旧页面请求可能取消同一共享连接上的后继任务。前端退出、开始请求异常清理及取消按钮现在都发送自身持有的 command_id；原生层在修改任务状态前核对编号，最终发送许可继续隔离后继任务。Bridge 在同一锁内核对任务编号、连接归属和登记取消；匹配已结束任务的请求不清除后续预览。开始任务时的 active/canceled 初始化也放入同一临界区。
+
+hello 新增 `visual_pick_cancel_id_supported`；原生桌面在旧 Bridge 上拒绝开始和取消 Pick，并提示升级。内部断线/DISABLE 的停止路径保留。新增回归验证旧编号、缺失/无效编号及外部连接不能取消当前模拟抓取、排队取消不能影响后继任务、旧 Bridge 不预留或发布抓取。前端测试核验按钮和离开页面均携带原编号。
+
+本机完整 `npm test` 通过：927 前端、274 Rust、3 运行库以及其余 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build`、`npm run docs:build`、隔离配置原生 bundle 构建及严格 codesign 校验通过。日志 `/tmp/260-pick-cancel-{full-tests,build,docs,bundle}.log`。产物 `Robot Console Pick Cancel Test.app` 使用隔离标识，未安装至 `/Applications`。本轮再次检查确认 Mac 锁屏，因此尚未完成新包真实窗口重载恢复复测；外接屏验证按用户说明留待设备可用时进行。
+
+通过统一部署脚本 dry-run、backup、build、verify 更新 damiao 的 `easy_debug_bridge_260_motion_observe` 独立工作区，未传 `--restart`。临时 ROS overlay 设置 `CMAKE_BUILD_PARALLEL_LEVEL=1`、`MAKEFLAGS=-j1`，以单线程完成完整构建。备份为该工作区 `backup/easy_debug_bridge-20261114-221910.tar.gz`；部署日志 `/tmp/260-pick-cancel-deploy.log`。随后完整执行 `colcon test --packages-select easy_debug_bridge --event-handlers console_direct+` 与 `colcon test-result --verbose`，30 项全部通过，0 errors / failures / skipped；日志 `/tmp/260-pick-cancel-colcon-test.log`。各 ROS 用例使用 CMake 指定的隔离域与模拟数据。
+
+实际安装路径烟测使用 ROS_DOMAIN_ID=226、ROS_LOCALHOST_ONLY=1、127.0.0.1:28867。核验 `/proc/237872/exe` 与 install 符号链接解析到同一构建二进制；hello 返回构建 ID `f2339e317dd4` 和新取消能力。仅请求 hello、observe 和缺失/错误/非法/超长编号的取消，全部负例返回 error，前后均保持相同 idle 状态；没有请求开始抓取或发送硬件命令。活动任务不受旧编号影响由前述 C++ 模拟用例覆盖，此烟测不冒充实机抓取验证。证据 `/tmp/260-pick-cancel-smoke.log`；自己的测试进程 237872 经 SIGINT 正常退出，复核端口 28867 消失，生产 PID 8367 / 8765 未变。
+
+本轮只更新隔离工作区和候选包，不代表生产部署、原生窗口全部验收或整个 Issue #260 完成；剩余边界沿用上节。

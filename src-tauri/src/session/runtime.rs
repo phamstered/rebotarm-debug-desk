@@ -1004,6 +1004,9 @@ impl Runtime {
         if op == "trajectory_cancel" {
             return Err("直接轨迹取消须通过原生任务入口登记，页面不能向当前连接直接发送".into());
         }
+        if matches!(op, "visual_pick_start" | "visual_pick_cancel") && transport.hello.metadata["visual_pick_cancel_id_supported"] != true {
+            return Err("请更新 Bridge：视觉抓取需要按原任务编号取消，避免迟到请求影响新任务".into());
+        }
         if op == "trajectory_command" && transport.hello.metadata["trajectory_task_supported"] != true {
             return Err("请更新 Bridge：直接轨迹需要编号、租约与停止证据，不能仅凭发布 ACK 执行".into());
         }
@@ -1500,6 +1503,12 @@ mod tests {
     async fn fake_bridge_capabilities(trajectory: bool, joint4: bool) -> (
         u16, mpsc::UnboundedSender<Value>, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>,
     ) {
+        fake_bridge_flags(trajectory,joint4,true).await
+    }
+
+    async fn fake_bridge_flags(trajectory: bool, joint4: bool, pick_cancel: bool) -> (
+        u16, mpsc::UnboundedSender<Value>, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
@@ -1519,7 +1528,7 @@ mod tests {
                             socket.send(Message::Text(json!({"op":"topic_message", "topic":message["topic"], "data":"<robot name='fixture'/>"}).to_string().into())).await.unwrap();
                         }
                         match message["op"].as_str().unwrap() {
-                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true, "trajectory_task_supported":trajectory, "joint4_task_supported":joint4}),
+                            "hello" => json!({"op":"hello", "motion_observation_supported":true, "gravity_task_supported":true, "trajectory_task_supported":trajectory, "joint4_task_supported":joint4,"visual_pick_cancel_id_supported":pick_cancel}),
                             "topics" => json!({"op":"topics", "topics":[], "request_id":message["request_id"]}),
                             "resource" => {
                                 let metadata = serde_json::to_vec(&json!({"op":"resource", "uri":message["uri"], "request_id":message["request_id"], "data_length":3})).unwrap();
@@ -1859,6 +1868,19 @@ mod tests {
         assert!(hub.tasks.migration("page-calibration").is_ok());
         hub.close();server.await.unwrap();
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pick_requires_id_scoped_cancel_capability_before_publishing_or_reserving() {
+        let (port,_events,seen,server)=fake_bridge_flags(false,false,false).await;
+        let hub=Runtime::default();hub.connect_profile(port,offline_profile("fixture.invalid")).await.unwrap();seed_idle_activity(&hub).await;
+        let (page,_)=hub.attach("page-motion").unwrap();
+        for op in ["visual_pick_start","visual_pick_cancel"] {
+            let error=hub.request("page-motion",&page,"pick",json!({"op":op,"command_id":"old"}),Duration::from_secs(1)).await.unwrap_err();
+            assert!(error.contains("请更新 Bridge")); assert!(hub.tasks.snapshot().is_none());
+        }
+        assert!(!seen.lock().unwrap().iter().any(|m|matches!(m["op"].as_str(),Some("visual_pick_start"|"visual_pick_cancel"))));
+        hub.close();server.await.unwrap();
     }
 
     #[tokio::test]

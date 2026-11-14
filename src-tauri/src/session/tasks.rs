@@ -639,6 +639,10 @@ impl Tasks {
     ) -> Result<Admission, String> {
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
         let mut inner = self.inner.lock().unwrap();
+        if op == "visual_pick_cancel" && !inner.task.as_ref().is_some_and(|task|
+            task.snapshot.kind == Kind::Pick && message["command_id"] == task.snapshot.command_id) {
+            return Err("取消编号不匹配当前视觉抓取任务".into());
+        }
         let checks_activity = actuation(op, message) && op != "position_group_pause"
             && !(op == "joint4_start" && message["action"] == "release_pose");
         if checks_activity { self.check_activity(super::activity::Check::Motion)?; }
@@ -1301,7 +1305,7 @@ impl Tasks {
             (Kind::Position, false, false) => {
                 json!({"op":"position_cancel", "command_id":task.snapshot.command_id})
             }
-            (Kind::Pick, false, false) => json!({"op":"visual_pick_cancel"}),
+            (Kind::Pick, false, false) => json!({"op":"visual_pick_cancel","command_id":task.snapshot.command_id}),
             (Kind::Position, true, _) => {
                 json!({"op":"position_task_status", "command_id":task.snapshot.command_id})
             }
@@ -1648,6 +1652,22 @@ mod tests {
         assert!(!own.permit.unwrap()());
     }
     #[test]
+    fn stale_pick_cancel_cannot_stop_a_successor_or_escape_the_writer_fence() {
+        let tasks=Arc::new(Tasks::default()); let now=Instant::now();
+        let first=start(&tasks,"visual_pick_start",now); assert!(first.permit.unwrap()());
+        let old=tasks.admit(owner("main"),&json!({"op":"visual_pick_cancel","command_id":"command-1"}),now).unwrap();
+        tasks.observe(1,&json!({"op":"visual_pick_state","command_id":"command-1","pick_phase":"canceled","busy":false}));
+        let next=tasks.admit(owner("page-motion"),&json!({"op":"visual_pick_start","command_id":"next-pick"}),now).unwrap();
+        assert!(next.permit.unwrap()()); assert!(!old.permit.unwrap()());
+        for request in [json!({"op":"visual_pick_cancel"}),json!({"op":"visual_pick_cancel","command_id":"command-1"})] {
+            assert!(tasks.admit(owner("main"),&request,now).is_err());
+            assert_eq!(tasks.snapshot().unwrap().phase,Phase::Submitting);
+        }
+        tasks.lost(Some(&owner("page-motion")),"page gone");
+        let cancel=tasks.poll(1,now).unwrap(); assert_eq!(cancel.message,json!({"op":"visual_pick_cancel","command_id":"next-pick"}));
+    }
+
+    #[test]
     fn pick_child_motion_and_false_idle_do_not_release_pick_or_unknown_stop() {
         let tasks = Arc::new(Tasks::default());
         let now = Instant::now();
@@ -1657,7 +1677,7 @@ mod tests {
         tasks.observe(1, &json!({"op":"visual_pick_state","command_id":"command-1","pick_phase":"holding","busy":true}));
         assert!(tasks.snapshot().is_some());
         let cancel = tasks
-            .admit(owner("main"), &json!({"op":"visual_pick_cancel"}), now)
+            .admit(owner("main"), &json!({"op":"visual_pick_cancel","command_id":"command-1"}), now)
             .unwrap();
         assert!(cancel.permit.unwrap()());
         assert_eq!(tasks.snapshot().unwrap().phase, Phase::Stopping);

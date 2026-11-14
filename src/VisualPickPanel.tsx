@@ -76,7 +76,7 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
     const poll=async()=>{if(polling)return;polling=true;try{const m=await bridge.request({op:"visual_pick_status"},2000);if(valid)applyState(m);}catch(e){if(valid&&owns.current){setError(`抓取状态未确认：${String(e)}`);onBusy(true);}}finally{polling=false;}};
     const off=bridge.onMessage(m=>{if(m.op==="native_visual_pick_changed"){void poll();return;}if(m.op==="visual_pick_state"&&m.command_id===owns.current)try{if(valid)applyState(m);}catch(e){setError(String(e));}});
     void poll();const timer=nativeDesktop()?undefined:window.setInterval(()=>void poll(),500);
-    return()=>{valid=false;off();window.clearInterval(timer);if(owns.current){bridge.send({op:"visual_pick_cancel"});owns.current="";}onBusy(false);};
+    return()=>{valid=false;off();window.clearInterval(timer);if(owns.current){bridge.send({op:"visual_pick_cancel",command_id:owns.current});owns.current="";}onBusy(false);};
   },[bridge,active,onBusy]);
   useEffect(()=>{
     let valid=true,pending=false,needsRelease=true;setPreview(null);onPreview(null);setError("");
@@ -114,7 +114,7 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
     const id=crypto.randomUUID();owns.current=id;stateAt.current=performance.now();onBusy(true);setState({...idle,command_id:id,busy:true,phase:"validating"});
     try{const m=await bridge.request({op:"visual_pick_start",command_id:id,subscription_id:token,object_id:selected.id,preview_frame_seq:preview.frame_seq,...(preview.tracking?{target_id:preview.tracking.target_id}:{}),confirmation:"ARMED"},5000);
       if(owns.current===id)applyState(m);}
-    catch(e){if(owns.current===id){setError(String(e));bridge.send({op:"visual_pick_cancel"});}}
+    catch(e){if(owns.current===id){setError(String(e));bridge.send({op:"visual_pick_cancel",command_id:id});}}
   }
   async function clear(){
     if(releasing.current)return;const version=selectionVersion.current;releasing.current=true;setClearing(true);
@@ -148,7 +148,7 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
     {blocked&&<div style={{overflowWrap:"anywhere"}}>{blocked}</div>}
     <label><input type="checkbox" checked={motion?.armed??false} disabled={state.busy||!preview?.execution_ready} onChange={e=>motion?.setArmed(e.target.checked)}/> 已确认现场安全、夹爪为空，允许运动</label>
     <div className="viewer-overlay-row"><button disabled={Boolean(blocked)||!motion?.armed||state.busy} onClick={()=>void start()}>接近、抓取并抬升</button>
-      <button disabled={!state.busy||!owns.current} onClick={()=>bridge.send({op:"visual_pick_cancel"})}>取消抓取</button>
+      <button disabled={!state.busy||!owns.current} onClick={()=>bridge.send({op:"visual_pick_cancel",command_id:owns.current})}>取消抓取</button>
       <button disabled={state.busy||clearing} onClick={()=>void clear()}>清除选择</button></div>
     {state.phase!=="idle"&&<div aria-live="polite">{state.phase} · {state.message}</div>}
     {error&&<div role="alert" style={{overflowWrap:"anywhere"}}>{error}</div>}

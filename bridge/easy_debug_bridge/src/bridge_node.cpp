@@ -598,7 +598,7 @@ class BridgeNode : public rclcpp::Node {
                      (controller_registry_->supported() ? "true" : "false") +
                      ",\"joint4_task_supported\":" + (joint4_calibration_->supported() ? "true" : "false") +
                      ",\"trajectory_task_supported\":" + (position_motion_->trajectory_supported() ? "true" : "false") +
-                     ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
+                     ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"visual_pick_cancel_id_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
       } else if (op == "controllers_info") {
         const std::weak_ptr<WebSocketSession> weak = session;
         if (const auto field = request.get_child_optional("refresh")) {
