@@ -312,3 +312,15 @@ SSH 回复丢失可以通过只读记录查询恢复；CLI 本身失败/超时�
 本阶段最终 `npm test` 全部通过（901 前端 / 174 Rust / 3 运行库测试及全部其余脚本），日志 `/tmp/260-bag-operation-all-tests.log`。`npm run build`、`npm run docs:build` 和独立标识的 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-bag-operation-{build,docs,native-build}.log`。新增 loopback Bridge 回归检查实际页面附着、Profile、连接与页面 incarnation；本地异步测试确认 IPC future 取消后 worker 继续持有迁移许可直至核验结束。前端覆盖共享提示、过期初读不覆盖新终态、查询失败不显示空闲。远端 journal 的既有进程回归随全量测试重跑，本阶段没有在真实 Jetson 发起 bag 操作。
 
 CUA 再次确认 Mac 处于锁屏状态；此前解锁请求仍待回复，没有重复索要。此次尚未替换隔离 .app 或进行新一轮原生窗口验证，正式应用及生产 Bridge 未更新。上述构建是二进制构建，不是安装或部署。完整目标保持进行中。
+
+## rosbag 进程身份与子进程退出确认
+
+固定 SSH helper 现在使用 Python 标准库管理远端 bag 身份。每次启动先持久化待启动标记，再创建独立会话；记录 boot ID、启动时刻、随机继承 token、ROS domain 与路径。录制和回放分别使用文件锁与记录，查询只读且不创建目录。私有目录 `~/.cache/robot-console/bag-processes-v1/` 使用 0700；旧 PID/路径文件保留兼容读取，不作为发送信号的依据。
+
+停止使用 pidfd 绑定进程后再次核验身份，先 INT 后 TERM；扫描继承 token 的进程，即使原 CLI 已退出、子进程另建 session 也不能误报停止。退出后保留身份历史，仍存活或身份未知时报错。启动后落盘失败保留 pending 标记并阻止重复启动。旧版缺少新身份的活动 bag 拒绝自动接管，须由原启动方式停止。此处并非 cgroup 隔离，不保证追踪主动清除继承标识且离开原会话的任意外部进程；桌面重启后的在途操作恢复与回放/运动完整协调仍待完成。
+
+本阶段 `npm test` 全部通过（901 前端 / 174 Rust / 3 运行库测试及其余脚本），日志 `/tmp/260-bag-identity-all-tests.log`；前端与文档构建通过。新增 10 项 Python 回归随 Rust 测试执行，覆盖 PID 重用、启动前落盘、落盘失败、并发启动、只读状态、旧版进程拒绝、回放路径、子进程以及 pidfd 再核验。Jetson 临时目录再次执行 10 项单元测试和 3 项真实 Linux 子进程测试，全部通过，日志 `/tmp/260-bag-identity-linux-final.log`；真实测试仅使用临时 Python 进程，未启动 ROS bag 或连接机械臂。首次远端测试暴露默认 umask 下共享缓存目录为 0775，已改用独立 0700 子目录并完整重跑。
+
+解锁后已退出旧隔离进程，构建并启动最新独立 Debug bundle，严格 codesign 核验通过（`/tmp/260-bag-identity-bundle.log`）。真实窗口重新生成 1200×900 标定板、切到 100%、打开大图并用 Esc 返回；工具栏及关闭按钮完整可见。再次注入 detach:bounds + rollback:reparent、recover:bounds、dock:bounds，确认失败提示、重试恢复及最终收回均正常，图片、缩放与 12×9、15 / 11.25 mm 输入保留。三个单次 fixture 均已消费。一次自动化滚动坐标定位失败后，使用 PageDown 实际滚动，截图确认底部保存按钮、尺寸核对框、图片说明与滚动条完整可见。
+
+本轮未连接 Bridge，未执行真实录制/回放或机械臂动作，没有更新正式 `/Applications/Robot Console.app` 或生产 Jetson。原生窗口回归不等于运动、实时相机或多显示器验收；完整多窗口目标仍在进行中。

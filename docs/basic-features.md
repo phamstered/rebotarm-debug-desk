@@ -229,8 +229,8 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 - “暂停显示”只冻结 WebView 对 Topic、JointState 和硬件状态消息的消费，不断开 Bridge，也不停止后台 rosbag；恢复后从下一条消息继续更新。
 - “全部刷新”同时刷新 Topics 和 ROS Control 列表，并复用各自的并发保护。
-- “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>`；PID 和输出路径记录在 `$HOME/.cache/robot-console/`。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
-- rosbag PID 在停止和状态检查前同时验证进程存在且命令行为 `ros2 bag record`，避免对复用 PID 的无关进程发送信号。断开 Rebotarm Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
+- “开始录制”通过受约束的 Tauri SSH 命令在 Jetson 执行 `ros2 bag record -a`，输出到 `$HOME/robot-console-bags/robot-console-<时间>-<随机标识>`；身份记录存于 `$HOME/.cache/robot-console/bag-processes-v1/`，兼容 PID 与路径文件仍保留。停止时先发送 SIGINT 以便 rosbag 完成索引，超时后才使用 SIGTERM。
+- 录制/回放按系统启动编号、进程启动时刻和随机继承标识确认归属；停止通过 Linux pidfd 绑定实际进程后再次核验身份，包含原启动进程退出后的已标记子进程。断开 Rebotarm Debug Desk 不会自动停止录制；重新连接会恢复显示远端录制状态。
 - “诊断快照”保存本机 JSON，包含脱敏后的连接信息、Topics、Controller、micro-ROS Agent、HardwareStatus、选中 Topic 和消息统计；不写入 SSH 私钥路径，大消息预览限制为 4 KiB，文件上限为 5 MiB。
 - 在 Motion 点击“重置布局”恢复所有面板尺寸、收起 Controllers 侧栏和输出区并保留当前 Tab；其他页沿用 Topics 默认左右宽度、Topics/ROS Control 分割比例及侧栏/面板展开状态的重置；“设置”可配置自动刷新周期和诊断快照是否包含消息摘要。
 
@@ -555,4 +555,4 @@ Controller 切换期间发送 DISABLE，或确认支撑后选择“支撑并退�
 
 多窗口 rosbag 状态由原生会话统一查询，Topics / Motion 的录制指示与 Monitor 回放状态共享更新，页面隐藏不停止查询。录制或回放操作后会重新核验，再更新各窗口；错误或过期显示“状态待确认”，不会误显示“开始录制/回放”，Monitor 仍可手动刷新。恢复新鲜结果后自动恢复按钮状态。录制/回放任务的全局互斥、未知执行结果恢复与应用退出处理仍待接入，此项不代表任务生命周期已完成。
 
-rosbag 启动/停止操作已由原生后台接管。同类操作跨窗口串行，发起页在结果确认前不能拆出或收回；页面退出不会丢弃已提交操作。SSH 回复丢失后只查询远端记录，不自动重复启动或停止。只有对应命令完成记录和同一机器人新鲜目标状态都成立，才解除本次操作占用。结果未知时，连接页及各功能窗口显示原生 rosbag 操作提示。停止脚本在 TERM 后再次确认记录 PID 退出，否则保留 PID 文件并报告失败。长期录制/回放进程的完整身份与资源管理、桌面进程重启恢复仍待完成；本阶段只接管有限的启动/停止操作。
+rosbag 启动/停止操作已由原生后台接管。同类操作跨窗口串行，发起页在结果确认前不能拆出或收回；页面退出不会丢弃已提交操作。SSH 回复丢失后只查询远端记录，不自动重复启动或停止。只有对应命令完成记录和同一机器人新鲜目标状态都成立，才解除本次操作占用。结果未知时，连接页及各功能窗口显示原生 rosbag 操作提示。停止在 INT / TERM 后确认所有可识别的所属进程退出，否则保留身份记录并报告失败。进程记录支持后续状态查询；桌面进程重启后的在途操作恢复及回放与运动的完整协调仍待完成。旧版启动且缺少新身份记录的活动 bag 必须由原启动方式停止，应用不会仅凭 PID 接管。启动后身份落盘失败时保留待恢复标记，阻止重复启动；停止要求远端 Python / 内核支持 pidfd。

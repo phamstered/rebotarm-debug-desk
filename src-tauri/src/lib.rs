@@ -356,52 +356,24 @@ fn validate_diagnostics_snapshot(path: &str, content: &str) -> Result<(), String
     Ok(())
 }
 
-fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<String, String> {
-    let transport = ros_transport_setup();
-    if !is_safe_setup_script(&profile.ros_setup_script) {
-        return Err("ROS 环境脚本路径包含不允许的字符".into());
+fn bag_remote_command(profile: &ConnectionProfile, kind: &str, action: &str, bag_path: &str) -> Result<String, String> {
+    if !matches!(kind, "record" | "play") || !matches!(action, "status" | "start" | "stop") {
+        return Err("Unsupported rosbag operation".into());
     }
-    let setup = format!(
-        "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
-        profile.ros_setup_script, profile.ros_setup_script,
-    );
-    let paths = "\
-                 pid_file=\"$HOME/.cache/robot-console/rosbag.pid\"; \
-                 path_file=\"$HOME/.cache/robot-console/rosbag.path\"; ";
-    let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true); \
-                 case \"$pid\" in *[!0-9]*|\"\") alive=0 ;; \
-                 *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag record\"; then alive=1; else alive=0; fi ;; esac; ";
-    let body = match action {
-        "status" => format!(
-            "{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
-             if [ \"$alive\" = 1 ]; then printf \"RECORDING|%s|%s\\n\" \"$pid\" \"$output\"; \
-             else printf \"IDLE|0|%s\\n\" \"$output\"; fi"
-        ),
-        "start" => format!(
-            "{setup}{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
-             if [ \"$alive\" = 1 ]; then printf \"RECORDING|%s|%s\\n\" \"$pid\" \"$output\"; exit 0; fi; \
-             output=\"$HOME/robot-console-bags/robot-console-$(date +%Y%m%d-%H%M%S)\"; \
-             ROS_DOMAIN_ID={} nohup ros2 bag record -a -o \"$output\" \
-             >\"$HOME/.cache/robot-console/rosbag.log\" 2>&1 </dev/null & pid=$!; \
-             printf \"%s\\n\" \"$pid\" >\"$pid_file\"; printf \"%s\\n\" \"$output\" >\"$path_file\"; sleep 1; \
-             if ! kill -0 \"$pid\" 2>/dev/null; then cat \"$HOME/.cache/robot-console/rosbag.log\" >&2; exit 1; fi; \
-             printf \"STARTED|%s|%s\\n\" \"$pid\" \"$output\"",
-            profile.ros_domain_id,
-        ),
-        "stop" => format!(
-            "{paths}{alive}output=$(cat \"$path_file\" 2>/dev/null || true); \
-             if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$output\"; exit 0; fi; \
-             kill -INT \"$pid\"; \
-             for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
-               if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; \
-             done; \
-             if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; done; if kill -0 \"$pid\" 2>/dev/null; then echo \"rosbag process has not exited; retaining PID\" >&2; exit 1; fi; \
-             rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$output\""
-        ),
-        _ => return Err("不支持的 rosbag 操作".into()),
-    };
-    let prepare = if action == "status" { "" } else { "mkdir -p \"$HOME/.cache/robot-console\" \"$HOME/robot-console-bags\"; " };
-    Ok(format!("bash -lc '{prepare}{body}'"))
+    if !is_safe_setup_script(&profile.ros_setup_script) || (!bag_path.is_empty() && !is_safe_setup_script(bag_path))
+        || (kind == "play" && action == "start" && bag_path.is_empty()) {
+        return Err("Invalid rosbag setup or path".into());
+    }
+    let request = serde_json::json!({"kind":kind,"action":action,"setup":profile.ros_setup_script,
+        "domain":profile.ros_domain_id,"path":bag_path,"transport":ros_transport_setup()});
+    let quote = |word: &str| format!("'{}'", word.replace('\'', "'\\''"));
+    let command = format!("python3 -c {} {}", quote(include_str!("bag_remote.py")), quote(&request.to_string()));
+    if command.len() > 32768 {return Err("Rosbag helper request exceeds journal limit".into());}
+    Ok(command)
+}
+
+fn rosbag_remote_command(profile: &ConnectionProfile, action: &str) -> Result<String, String> {
+    bag_remote_command(profile, "record", action, "")
 }
 
 fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
@@ -437,44 +409,8 @@ fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
     })
 }
 
-fn rosbag_play_remote_command(
-    profile: &ConnectionProfile,
-    action: &str,
-    bag_path: &str,
-) -> Result<String, String> {
-    let transport = ros_transport_setup();
-    if !is_safe_setup_script(&profile.ros_setup_script) {
-        return Err("ROS 环境脚本路径包含不允许的字符".into());
-    }
-    if action != "status" && action != "stop" {
-        if bag_path.is_empty() || !is_safe_setup_script(bag_path) {
-            return Err("bag 路径包含不允许的字符".into());
-        }
-    } else if !bag_path.is_empty() && !is_safe_setup_script(bag_path) {
-        return Err("bag 路径包含不允许的字符".into());
-    }
-    let setup = format!(
-        "{transport}source /opt/ros/humble/setup.bash; if [ -f \"{}\" ]; then source \"{}\"; fi; ",
-        profile.ros_setup_script, profile.ros_setup_script,
-    );
-    let paths = "                 pid_file=\"$HOME/.cache/robot-console/rosbag-play.pid\";                  path_file=\"$HOME/.cache/robot-console/rosbag-play.path\"; ";
-    let alive = "pid=$(cat \"$pid_file\" 2>/dev/null || true);                  case \"$pid\" in *[!0-9]*|\"\") alive=0 ;;                  *) if kill -0 \"$pid\" 2>/dev/null && ps -p \"$pid\" -o args= | grep -Fq \"ros2 bag play\"; then alive=1; else alive=0; fi ;; esac; ";
-    let body = match action {
-        "status" => format!(
-            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" = 1 ]; then printf \"PLAYING|%s|%s\\n\" \"$pid\" \"$bag\";              else printf \"IDLE|0|%s\\n\" \"$bag\"; fi"
-        ),
-        "start" => format!(
-            "{setup}{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" = 1 ]; then printf \"PLAYING|%s|%s\\n\" \"$pid\" \"$bag\"; exit 0; fi;              bag=\"{bag_path}\";              if [ ! -e \"$bag\" ]; then echo \"bag path not found: $bag\" >&2; exit 1; fi;              ROS_DOMAIN_ID={domain} nohup ros2 bag play \"$bag\" --clock              >\"$HOME/.cache/robot-console/rosbag-play.log\" 2>&1 </dev/null & pid=$!;              printf \"%s\\n\" \"$pid\" >\"$pid_file\"; printf \"%s\\n\" \"$bag\" >\"$path_file\"; sleep 1;              if ! kill -0 \"$pid\" 2>/dev/null; then cat \"$HOME/.cache/robot-console/rosbag-play.log\" >&2; exit 1; fi;              printf \"STARTED|%s|%s\\n\" \"$pid\" \"$bag\"",
-            bag_path = bag_path,
-            domain = profile.ros_domain_id,
-        ),
-        "stop" => format!(
-            "{paths}{alive}bag=$(cat \"$path_file\" 2>/dev/null || true);              if [ \"$alive\" != 1 ]; then rm -f \"$pid_file\"; printf \"IDLE|0|%s\\n\" \"$bag\"; exit 0; fi;              kill -INT \"$pid\";              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25;              done;              if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; for attempt in 1 2 3 4 5 6 7 8 9 10; do if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.25; done; if kill -0 \"$pid\" 2>/dev/null; then echo \"rosbag process has not exited; retaining PID\" >&2; exit 1; fi;              rm -f \"$pid_file\"; printf \"STOPPED|0|%s\\n\" \"$bag\""
-        ),
-        _ => return Err("不支持的 rosbag 回放操作".into()),
-    };
-    let prepare = if action == "status" { "" } else { "mkdir -p \"$HOME/.cache/robot-console\"; " };
-    Ok(format!("bash -lc '{prepare}{body}'"))
+fn rosbag_play_remote_command(profile: &ConnectionProfile, action: &str, bag_path: &str) -> Result<String, String> {
+    bag_remote_command(profile, "play", action, bag_path)
 }
 
 fn parse_rosbag_play_status(output: &str) -> Result<RosbagPlayStatus, String> {
@@ -1979,11 +1915,12 @@ mod tests {
     #[test]
     fn builds_and_parses_rosbag_recording_commands() {
         let start = rosbag_remote_command(&profile(""), "start").unwrap();
-        assert!(start.contains("ROS_DOMAIN_ID=0 nohup ros2 bag record -a"));
-        assert!(start.contains("$HOME/robot-console-bags"));
-        assert!(start.contains("rosbag.pid"));
+        assert!(start.contains("\"kind\":\"record\""));
+        assert!(start.contains("\"domain\":0"));
+        assert!(start.contains("robot-console-bags"));
+        assert!(start.len() <= 32768);
         let stop = rosbag_remote_command(&profile(""), "stop").unwrap();
-        assert!(stop.contains("kill -INT"));
+        assert!(stop.contains("\"action\":\"stop\""));
         assert!(rosbag_remote_command(&profile(""), "delete").is_err());
 
         assert_eq!(
@@ -2009,41 +1946,24 @@ mod tests {
 
     #[test]
     fn bag_stop_preserves_pid_until_the_managed_process_exits() {
-        let root=std::env::temp_dir().join(session::controller_journal::new_id().unwrap());
-        let cache=root.join(".cache/robot-console");std::fs::create_dir_all(&cache).unwrap();
-        for (name,command) in [("rosbag",rosbag_remote_command(&profile(""),"stop").unwrap()),("rosbag-play",rosbag_play_remote_command(&profile(""),"stop","").unwrap())] {
-            let body=command.strip_prefix("bash -lc '").unwrap().strip_suffix('\'').unwrap();
-            let pid=cache.join(format!("{name}.pid"));std::fs::write(&pid,"42\n").unwrap();
-            // Local shell doubles only: never send a signal to a real process.
-            let setup="ps() { echo 'ros2 bag record ros2 bag play'; }; sleep() { :; }; ";
-            let stuck=format!("{setup}kill() {{ return 0; }}; {body}");
-            let result=std::process::Command::new("bash").args(["-c",&stuck]).env("HOME",&root).output().unwrap();
-            assert!(!result.status.success());assert!(!String::from_utf8_lossy(&result.stdout).contains("STOPPED"));
-            assert_eq!(std::fs::read_to_string(&pid).unwrap(),"42\n");
-            let exits=format!("{setup}stopped=0; kill() {{ if [ \"$1\" = -TERM ]; then stopped=1; return 0; fi; if [ \"$1\" = -0 ] && [ \"$stopped\" = 1 ]; then return 1; fi; return 0; }}; {body}");
-            let result=std::process::Command::new("bash").args(["-c",&exits]).env("HOME",&root).output().unwrap();
-            assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
-            assert!(String::from_utf8_lossy(&result.stdout).starts_with("STOPPED|0|"));assert!(!pid.exists());
-        }
-        std::fs::remove_dir_all(root).unwrap();
+        let output=std::process::Command::new("python3").arg("tests/test_bag_remote.py")
+            .current_dir(env!("CARGO_MANIFEST_DIR")).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
+        assert!(output.status.success(),"{}{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
     }
 
     #[test]
     fn bag_status_probes_do_not_create_directories_or_change_pid_records() {
         let root=std::env::temp_dir().join(format!("bag-status-readonly-{}",std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        for command in [rosbag_remote_command(&profile(""),"status").unwrap(),rosbag_play_remote_command(&profile(""),"status","").unwrap()] {
-            assert!(!command.contains("mkdir"));assert!(!command.contains("rm -f"));
-            assert!(!command.contains("kill -INT"));assert!(!command.contains("nohup"));
-            let body=command.strip_prefix("bash -lc '").unwrap().strip_suffix('\'').unwrap();
-            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).output().unwrap();
+        for (name,command) in [("rosbag",rosbag_remote_command(&profile(""),"status").unwrap()),("rosbag-play",rosbag_play_remote_command(&profile(""),"status","").unwrap())] {
+            let body=&command;
+            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
             assert!(output.status.success());assert!(String::from_utf8_lossy(&output.stdout).starts_with("IDLE|0|"));
             assert_eq!(std::fs::read_dir(&root).unwrap().count(),0);
             let cache=root.join(".cache/robot-console");std::fs::create_dir_all(&cache).unwrap();
-            let name=if command.contains("rosbag-play.pid") {"rosbag-play"} else {"rosbag"};
             let pid=cache.join(format!("{name}.pid"));let path=cache.join(format!("{name}.path"));
             std::fs::write(&pid,"invalid-pid\n").unwrap();std::fs::write(&path,"bags/retained\n").unwrap();
-            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).output().unwrap();
+            let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
             assert!(output.status.success());assert_eq!(String::from_utf8_lossy(&output.stdout),"IDLE|0|bags/retained\n");
             assert_eq!(std::fs::read_to_string(&pid).unwrap(),"invalid-pid\n");
             assert_eq!(std::fs::read_to_string(&path).unwrap(),"bags/retained\n");
@@ -2060,12 +1980,13 @@ mod tests {
             "robot-console-bags/robot-console-demo",
         )
         .unwrap();
-        assert!(start.contains("ROS_DOMAIN_ID=0 nohup ros2 bag play"));
+        assert!(start.contains("\"kind\":\"play\""));
+        assert!(start.contains("\"domain\":0"));
         assert!(start.contains("robot-console-bags/robot-console-demo"));
-        assert!(start.contains("rosbag-play.pid"));
+        assert!(start.len() <= 32768);
         assert!(start.contains("--clock"));
         let stop = rosbag_play_remote_command(&profile(""), "stop", "").unwrap();
-        assert!(stop.contains("kill -INT"));
+        assert!(stop.contains("\"action\":\"stop\""));
         assert!(rosbag_play_remote_command(&profile(""), "start", "bad;rm").is_err());
         assert!(rosbag_play_remote_command(&profile(""), "delete", "").is_err());
 
