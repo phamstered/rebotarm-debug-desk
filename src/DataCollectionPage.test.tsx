@@ -8,6 +8,8 @@ import { COLLECTION_STORAGE_KEY, defaultCollectionConfig, type CollectionStatus 
 import { defaultProfile, type HardwareStatus } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
+const nativeOperation = vi.hoisted(() => ({ ready: true, task: null as null | { busy: boolean; phase: string }, error: "" }));
+vi.mock("./NativeCollectionOperationStatus", () => ({ useNativeCollectionOperation: () => nativeOperation }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const config = { ...defaultCollectionConfig, repoId: "robot/demo", task: "pick cube" };
 const stopped: CollectionStatus = { state: "stopped", managed: false, pid: 0, recording: false, pendingFrames: 0, savedEpisodes: 0, fps: 0, task: "", repoId: "", root: "", message: "", log: "" };
@@ -43,7 +45,7 @@ function renderPage(overrides: Partial<ComponentProps<typeof DataCollectionPage>
   return { ...render(<DataCollectionPage {...props} />), props };
 }
 
-beforeEach(() => { localStorage.clear(); localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(config)); invoke.mockReset(); });
+beforeEach(() => { nativeOperation.ready = true; nativeOperation.task = null; nativeOperation.error = ""; localStorage.clear(); localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(config)); invoke.mockReset(); });
 afterEach(() => vi.useRealTimers());
 
 describe("DataCollectionPage", () => {
@@ -280,4 +282,19 @@ it("verifies mutations through a post-action shared query instead of adopting th
   rerender(<DataCollectionPage {...props} observations={fresh} />);
   expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeEnabled();
   expect(invoke).toHaveBeenCalledTimes(1);
+});
+
+it("keeps Episode commands blocked while native work outlives the page request, but permits saving an owned recording", () => {
+  const observations = sharedCollection(recording);
+  nativeOperation.task = { busy: true, phase: "uncertain" };
+  const { rerender, props } = renderPage({ observations });
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "丢弃 Episode" })).toBeDisabled();
+  nativeOperation.task = { busy: true, phase: "recording" };
+  rerender(<DataCollectionPage {...props} />);
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "丢弃 Episode" })).toBeEnabled();
+  nativeOperation.ready = false; nativeOperation.error = "IPC unavailable";
+  rerender(<DataCollectionPage {...props} />);
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
 });

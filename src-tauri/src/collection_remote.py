@@ -2,6 +2,7 @@
 import contextlib
 import fcntl
 import json
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -126,6 +127,7 @@ class RecorderControl:
         saved = data.get("saved_episodes", 0) if data else summary.get("saved_episodes", 0)
         return {
             "state": state, "managed": owned, "pid": metadata.get("pid", 0) if owned else 0,
+            "processIdentity": str(metadata.get("identity", "")) if owned else "",
             "recording": bool(data and data.get("recording")),
             "pendingFrames": int(data.get("pending_frames", 0)) if data else 0,
             "savedEpisodes": int(saved),
@@ -217,7 +219,7 @@ class RecorderControl:
             if not self.owned(metadata):
                 if before["savedEpisodes"] and "Dataset finalized" not in self.log():
                     raise RuntimeError("采集器已退出，但未确认 finalize 成功，请检查日志：" + self.log())
-                result = dict(before, state="stopped", managed=False, pid=0, log=self.log())
+                result = dict(before, state="stopped", managed=False, pid=0, processIdentity="", log=self.log())
                 result["message"] = "数据集已完成，采集器已退出" if before["savedEpisodes"] else "采集器已退出；尚未保存 Episode，未创建数据集"
                 return result
             time.sleep(0.25)
@@ -244,7 +246,7 @@ class RecorderControl:
 
 
 @contextlib.contextmanager
-def operation_lock(cache, readonly):
+def operation_lock(cache, readonly, wait_seconds=0):
     """Status neither creates files nor writes metadata; mutations exclude readers."""
     path = cache / "lerobot-recorder.lock"
     if readonly:
@@ -259,10 +261,15 @@ def operation_lock(cache, readonly):
         cache.mkdir(parents=True, exist_ok=True)
         lock = path.open("a")
     with lock:
-        try:
-            fcntl.flock(lock, (fcntl.LOCK_SH if readonly else fcntl.LOCK_EX) | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError("另一项采集操作正在执行，请稍后刷新")
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(lock, (fcntl.LOCK_SH if readonly else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("另一项采集操作正在执行，请稍后刷新")
+                time.sleep(0.05)
         yield
 
 
@@ -272,10 +279,12 @@ def main():
         action, config_json = sys.argv[1:3]
         config = json.loads(config_json)
         cache = default_cache()
-        with operation_lock(cache, readonly=action == "status"):
+        with operation_lock(cache, readonly=action == "status", wait_seconds=0 if action == "status" else 15):
             services = RosServices()
             result = RecorderControl(services, cache).execute(action, config)
         print(PREFIX + json.dumps(result, ensure_ascii=False), flush=True)
+        if len(sys.argv) > 3 and sys.argv[3] == "receipt" and action != "status":
+            print("ROBOT_CONSOLE_COLLECTION_RECEIPT=" + json.dumps(completion_receipt(result)), flush=True)
     except Exception as error:
         print(PREFIX + json.dumps({"error": str(error)}, ensure_ascii=False), flush=True)
         sys.exit(1)
@@ -283,6 +292,12 @@ def main():
         if services:
             with contextlib.suppress(Exception):
                 services.close()
+
+
+def completion_receipt(result):
+    receipt = {key: result[key] for key in ("state", "managed", "pid", "recording", "pendingFrames", "savedEpisodes", "processIdentity")}
+    receipt["datasetHash"] = hashlib.sha256((result["root"] + "\0" + result["repoId"]).encode()).hexdigest()
+    return receipt
 
 
 if __name__ == "__main__":

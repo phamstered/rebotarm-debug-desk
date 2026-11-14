@@ -348,3 +348,17 @@ DISABLE 复用远端完成后的新确认屏障；成功目标状态不能覆盖
 本轮窗口访问恢复后，退出旧包、构建并启动最新隔离应用。生成 1200×900 标定板，切到 100% 缩放，大图工具栏与关闭按钮完整可见，Esc 返回保留缩放。重新注入 detach:bounds + rollback:reparent、recover:bounds、dock:bounds，验证失败提示、再次恢复及收回重试成功；12×9、15 / 11.25 mm、图片与缩放均保留。PageDown 后截图确认底部按钮、尺寸核对框、说明和右侧滚动条可见。三个单次 fixture 已消费，最终为主窗口嵌入手眼页。此离线回归不等于真实采集或运动验收。
 
 没有安装正式 `/Applications/Robot Console.app`，没有部署生产 Bridge、录制实际数据或发送机械臂命令。直接 JTC 接线、Joint4 / Episode 等任务生命周期、进程重启恢复、完整离线配置、多屏持续运行以及最终 PR/CI/发布仍按完整目标继续。
+
+## Episode 有限操作及录制期间的原生归属
+
+`data_collection_action` 已移除绑定 IPC future 的 AtomicBool，接入 `collection_operation.rs` 应用级 worker。真实 page-collection、Profile、附着代次在提交前校验；原生登记先于就绪检查的第一个 await，发送前再核验原身份。已发送工作不随页面消失而取消，25 秒 IPC 截止只返回“仍在核验”。所有窗口读取保留的任务摘要，未确认时按钮和原生入口都拒绝重复提交。采集任务不占全局机械臂运动槽，遥操作可继续录制。
+
+远端复用一次性 journal 的先落盘后执行规则，使用 collection-* 编号，128 KiB 命令上限和 180 秒截止；包含 shell 引号展开后的最大合法配置已有回归。helper 成功输出不含日志的回执，绑定数据集哈希、PID/启动身份、状态和计数；命令退出零但无回执不算成功。只查询恢复，不重新提交；明确未执行可以释放，非零/超时/缺失记录保留未知占用。状态查询与变更争用远端锁时，变更有限等待短查询结束，避免正常自动查询导致立即拒绝。该身份仍是当前 Linux 启动时刻，不宣称跨 Jetson 重启恢复。
+
+操作成功还需原连接的新鲜共享采集状态与回执匹配，并在当前连接 epoch 下原子确认。Start Episode 成功后继续持有迁移许可；同配置的新页面 incarnation 可以保存或丢弃，完成后释放。发送前失败不会清除前一段仍在录制的占用，旧编号、旧连接或另一个数据集不能释放当前任务。外部启动/外部状态变化的完整采集生命周期、未知结果的进一步恢复和桌面进程重启恢复尚未完成，仍在完整目标范围内。
+
+最终 `npm test` 全部通过：908 前端 / 193 Rust / 3 运行库测试及其余脚本，日志 `/tmp/260-collection-owned-verified-tests.log`。新增真实 loopback 会话测试覆盖页面/连接身份、旧代次完成拒绝，应用 worker 测试覆盖发起 future 退出后继续工作和录制占用；前端测试覆盖迟到快照、未知状态禁用及录制后允许保存。Jetson 临时目录中的 20 项采集 helper 和 13 项 journal 测试通过（`/tmp/260-collection-owned-verified-jetson.log`），包括单次执行、回复丢失恢复、回执边界与共享锁；未调用 ROS 控制或实际采集服务。开发时两项测试因 fixture 缺少完整 Profile 被正确拒绝，已补齐 fixture；最终结果来自修正及参数上限加强后的完整重跑。
+
+前端、文档与独立 Debug bundle 构建通过；最终原生构建的 beforeBuildCommand 完整执行 npm run build，日志 `/tmp/260-collection-owned-verified-bundle.log`，文档日志 `/tmp/260-collection-owned-verified-docs.log`。严格 codesign 核验通过。退出旧隔离进程后启动最新包，离线主窗口及手眼工作区正常载入，无新增任务状态错误；本轮未通过真实原生窗口执行 Episode，也未重复上一轮图片故障注入，将这些限制与测试证据分开记录。
+
+未安装正式应用，未部署生产 Bridge，未录制真实数据或操作机械臂。完整方案仍需直接 JTC 接线、Joint4、外部采集/回放协调、进程重启恢复、离线配置、多屏与持续运行，以及最终 PR/CI/安装部署验收。

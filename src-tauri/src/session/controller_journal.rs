@@ -19,12 +19,16 @@ pub fn new_id() -> Result<String, String> {
 pub fn new_arm_id() -> Result<String, String> {
     Ok(new_id()?.replacen("controller-", "arm-mode-", 1))
 }
+pub fn new_collection_id() -> Result<String, String> {
+    Ok(new_id()?.replacen("controller-", "collection-", 1))
+}
 #[derive(Debug, PartialEq, Eq)]
 pub enum Proof {
     Pending,
     Progress(String),
     Unknown,
     Succeeded,
+    CollectionSucceeded(Value),
     Rejected(String),
     Uncertain(String),
 }
@@ -35,8 +39,8 @@ pub struct Job {
 }
 impl Job {
     pub fn new(id: String, command: String) -> Result<Self, String> {
-        let suffix = id.strip_prefix("controller-").or_else(|| id.strip_prefix("arm-mode-"));
-        let limit = if id.starts_with("arm-mode-") { 131072 } else { 32768 };
+        let suffix = id.strip_prefix("controller-").or_else(|| id.strip_prefix("arm-mode-")).or_else(|| id.strip_prefix("collection-"));
+        let limit = if id.starts_with("arm-mode-") || id.starts_with("collection-") { 131072 } else { 32768 };
         if !suffix.is_some_and(|value| value.len() == 48 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             || command.is_empty() || command.len() > limit || command.contains('\0')
         {
@@ -84,7 +88,11 @@ impl Job {
                     && value["exit_code"] == 0
                     && value["timed_out"] == false =>
             {
-                Ok(Proof::Succeeded)
+                if self.id.starts_with("collection-") {
+                    let receipt = value.get("receipt").filter(|v| v.is_object() && v.to_string().len() <= 1024)
+                        .ok_or("采集完成记录缺少有效回执")?;
+                    Ok(Proof::CollectionSucceeded(receipt.clone()))
+                } else { Ok(Proof::Succeeded) }
             }
             Some("rejected") if value["started"] == false => Ok(Proof::Rejected(detail)),
             Some("uncertain") if value["started"] == true => Ok(Proof::Uncertain(detail)),
@@ -137,6 +145,18 @@ fn remote_command() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn collection_success_requires_its_bound_receipt_and_submission_is_one_shot() {
+        assert!(Job::new(new_collection_id().unwrap(), "x".repeat(131073)).is_err());
+        let mut job = Job::new(new_collection_id().unwrap(), "echo receipt".into()).unwrap();
+        assert!(job.submission().is_ok()); assert!(job.submission().is_err());
+        let mut proof = json!({"version":1,"id":job.id,"command_hash":job.hash,"phase":"succeeded","started":true,"exit_code":0,"timed_out":false});
+        assert!(job.proof(&proof).is_err());
+        proof["receipt"] = json!({"state":"idle"});
+        assert_eq!(job.proof(&proof).unwrap(), Proof::CollectionSucceeded(json!({"state":"idle"})));
+        proof["command_hash"] = json!("a".repeat(64)); assert!(job.proof(&proof).is_err());
+        assert!(job.query_request().get("command").is_none());
+    }
     #[test]
     fn arm_policy_binds_large_command_and_progress_to_a_distinct_operation_id() {
         assert!(Job::new(new_id().unwrap(), "x".repeat(32769)).is_err());

@@ -662,3 +662,11 @@ workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebV
 arm-mode-* 远端编号选择固定 128 KiB / 600 秒执行策略；controller-* 仍为 32 KiB / 20 秒，编号与命令摘要共同核对，查询不得包含 command。进度最多 2048 字节、单次查询结果仍限 16 KiB，记录总量仍为 256 项且不淘汰未确认任务。DISABLE 与 Controller 使用同一完成后确认屏障；切换中收到支撑退出请求时仅登记关闭输出意图并返回明确提示，不并发执行环境清理。
 
 `collection` 沿用 `CollectionStatus` 的 camelCase 字段；每次查询结束后间隔 5 秒，15 秒查询截止，20 秒新鲜度包含查询耗时。状态 helper 不创建目录、锁文件或改写采集元数据；已有变更操作持锁时返回查询失败，不返回空闲。页面消费公共快照，操作成功后以 `afterPending:true` 复查；命令响应只用于操作提示，不替代公共当前状态。断线取消本机只读 SSH 子进程，不停止 Jetson 采集器。此源不代表 Episode 变更任务已经具备原生生命周期或跨进程恢复。
+
+### 原生 Episode 操作（多窗口开发分支）
+
+`data_collection_action(profile, action, config)` 的真实调用者仅允许已附着当前会话的 `page-collection`。`status` 复用公共 `collection` 源；变更操作在第一个 await 前登记原生归属。`launch/start_episode` 的只读就绪预检仍保留，发送前再次核对原窗口 incarnation、Profile 和连接 epoch。操作 worker 独立于 IPC future，IPC 等待最多 25 秒；超时不表示远端操作终止。
+
+远端 `collection-<48 hex>` 任务绑定整个命令的 SHA-256，命令至多 128 KiB（包含参数的 shell 引号展开）、截止 180 秒。复用有限 journal 的先落盘后执行和一次提交规则，后续只能 query；保留上限 256 项，与 Controller/arm mode 共用容量。采集 helper 成功时附带不含日志/图像的有界回执，包含 state/managed/pid/processIdentity/recording/pendingFrames/savedEpisodes 和 root + NUL + repoId 的 SHA-256。缺少回执或非零/超时均不表示成功。当前身份沿用 Linux PID 与进程启动时刻，不宣称跨远端重启的录制身份恢复。公共 CollectionStatus 新增 `processIdentity`（未管理的进程为空）。
+
+`native_collection_operation_snapshot` 返回 null 或 `{id,action,phase,host,message,busy}`；仅主窗口和白名单功能页可读。`native-collection-operation-changed` 只发送失效通知，页面随后合并读取快照。phase 为 preparing/verifying/uncertain/recording/succeeded/failed；recording 保留迁移占用但允许同连接保存、丢弃或结束操作，其余 busy 阶段禁止重复提交。failed 只用于明确未执行，uncertain 不自动解锁。真正成功须以回执匹配原连接新的 `collection` 状态，并在当前 epoch 下原子完成；旧代次、旧编号或普通 idle 不能完成该任务。此协议尚无跨桌面进程重启恢复。

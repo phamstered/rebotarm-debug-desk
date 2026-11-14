@@ -24,6 +24,40 @@ def job(command="true"):
 
 
 class JournalTests(unittest.TestCase):
+    def test_collection_command_limit_includes_shell_quoted_configuration(self):
+        request = job("x" * 40000)
+        request["id"] = request["id"].replace("controller-", "collection-")
+        remote.request(request)
+        request["command"] = "x" * 131073
+        request["command_hash"] = hashlib.sha256(request["command"].encode()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "invalid command"):
+            remote.request(request)
+
+    def test_collection_receipt_survives_lost_reply_and_cannot_reexecute(self):
+        marker = self.home / "collection-once"
+        receipt = {"state": "idle", "managed": True, "pid": 42, "processIdentity": "123", "recording": False,
+                   "pendingFrames": 0, "savedEpisodes": 3, "datasetHash": "a" * 64}
+        line = "ROBOT_CONSOLE_COLLECTION_RECEIPT=" + json.dumps(receipt)
+        command = "sleep 0.15; printf x >> " + shlex.quote(str(marker)) + "; printf '%s\\n' " + shlex.quote(line)
+        request = job(command)
+        request["id"] = request["id"].replace("controller-", "collection-")
+        with patch.object(remote, "COMMAND_TIMEOUT", 0.05):
+            remote.submit(self.root, request["id"], request["command_hash"], command)
+        proof = self.wait(request)
+        self.assertEqual(proof["phase"], "succeeded")
+        self.assertEqual(proof["receipt"], receipt)
+        self.cli(request)
+        self.assertEqual(marker.read_text(), "x")
+        self.assertEqual(self.read(request)["receipt"], receipt)
+
+    def test_collection_exit_zero_without_bounded_receipt_never_proves_success(self):
+        for line in ["nothing", "ROBOT_CONSOLE_COLLECTION_RECEIPT=invalid", "ROBOT_CONSOLE_COLLECTION_RECEIPT=" + json.dumps({"large": "x" * 3000})]:
+            command = "printf '%s\\n' " + shlex.quote(line)
+            request = job(command)
+            request["id"] = request["id"].replace("controller-", "collection-")
+            remote.worker(self.root, self.reserve(request), command)
+            self.assertEqual(self.read(request)["phase"], "uncertain")
+
     def test_arm_progress_and_log_tail_fit_record_even_with_invalid_utf8(self):
         command = f"{shlex.quote(sys.executable)} -c 'import sys; sys.stdout.buffer.write(b\"ARM_STAGE|startup|\" + bytes([255])*2000 + b\"\\n\" + bytes([255])*5000)'"
         request = job(command)

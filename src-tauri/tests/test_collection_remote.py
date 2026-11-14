@@ -67,6 +67,38 @@ class RecorderTests(unittest.TestCase):
         self.services.call.return_value = None
         self.assertEqual(self.control.status()["savedEpisodes"], 3)
 
+    def test_completion_receipt_omits_logs_and_binds_dataset_and_process(self):
+        self.owned()
+        with patch.object(remote, "process_identity", return_value="old-start"):
+            result = self.control.status()
+        receipt = remote.completion_receipt(dict(result, log="x" * 50000))
+        self.assertNotIn("log", receipt)
+        self.assertEqual(receipt["processIdentity"], "old-start")
+        changed = remote.completion_receipt(dict(result, root="/other"))
+        self.assertNotEqual(changed["datasetHash"], receipt["datasetHash"])
+        self.assertLess(len(json.dumps(receipt)), 1024)
+
+    def test_mutation_waits_for_short_shared_status_without_repeating_action(self):
+        # An automatic read must not cause a common start/save click to be
+        # classified as an unknown mutation; wait a bounded time for its lock.
+        with remote.operation_lock(self.control.cache, readonly=False):
+            pass
+        import threading
+        release = threading.Event()
+        entered = threading.Event()
+        def reader():
+            with remote.operation_lock(self.control.cache, readonly=True):
+                entered.set()
+                release.wait(2)
+        worker = threading.Thread(target=reader)
+        worker.start(); self.assertTrue(entered.wait(1))
+        timer = threading.Timer(0.05, release.set); timer.start()
+        try:
+            with remote.operation_lock(self.control.cache, readonly=False, wait_seconds=1):
+                self.assertTrue(release.is_set())
+        finally:
+            release.set(); worker.join(); timer.join()
+
     def test_external_recorder_has_no_process_ownership(self):
         result = self.control.status()
         self.assertEqual(result["state"], "idle")
@@ -125,6 +157,7 @@ class RecorderTests(unittest.TestCase):
             result = self.control.finish()
         kill.assert_called_once_with(123, signal.SIGINT)
         self.assertEqual(result["state"], "stopped")
+        self.assertEqual(result["processIdentity"], "")
         self.assertEqual(result["savedEpisodes"], 2)
         self.services.call.return_value = None
         self.assertEqual(self.control.status()["savedEpisodes"], 2)

@@ -80,6 +80,7 @@ pub struct Runtime {
     pub tasks: Arc<Tasks>,
     pub local_tasks: Arc<super::local_tasks::LocalTasks>,
     pub bag_operations: Arc<super::bag_operation::Operations>,
+    pub collection_operations: Arc<super::collection_operation::Operations>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
     motion_logs: Arc<super::motion_observations::MotionLogs>,
@@ -97,6 +98,7 @@ impl Default for Runtime {
             tasks: Arc::new(Tasks::default()),
             local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
             bag_operations: Arc::new(super::bag_operation::Operations::default()),
+            collection_operations: Arc::new(super::collection_operation::Operations::default()),
             observations: Arc::new(super::observations::Observations::default()),
             resources: Arc::new(super::resources::Resources::default()),
             motion_logs: Arc::new(super::motion_observations::MotionLogs::default()),
@@ -173,6 +175,33 @@ impl Runtime {
     }
     pub fn set_profile(&self, profile: Value) {
         self.core.lock().unwrap().profile = profile;
+    }
+    pub fn collection_owner(&self, label: &str, profile: &crate::ConnectionProfile) -> Result<Owner, String> {
+        if label != "page-collection" { return Err("只有数据采集页面可操作 Episode".into()); }
+        let core = self.core.lock().unwrap();
+        if core.error.is_some() || core.transport.is_none() || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e| e.to_string())?) {
+            return Err("采集请求与当前共享连接不一致或已断开".into());
+        }
+        let window = core.clients.iter().find(|(token, client)| token.label == label && client.error.is_none())
+            .map(|(token, _)| token.clone()).ok_or("数据采集页面尚未附着当前连接")?;
+        Ok(Owner { epoch: core.epoch, window })
+    }
+    pub fn send_collection(&self, owner: &Owner, id: u64, profile: &crate::ConnectionProfile) -> Result<(), String> {
+        // Keep the connection lock through admission so reconnect cannot replace
+        // the origin between validation and marking the one-shot send.
+        let core = self.core.lock().unwrap();
+        if core.error.is_some() || core.transport.is_none() || core.epoch != owner.epoch
+            || !core.clients.get(&owner.window).is_some_and(|client| client.error.is_none())
+            || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e| e.to_string())?) {
+            return Err("采集提交前页面或连接已失效".into());
+        }
+        self.collection_operations.sending(id, owner)
+    }
+    pub fn finish_collection(&self, id: u64, profile: &crate::ConnectionProfile, epoch: u64, recording: bool) -> bool {
+        let core = self.core.lock().unwrap();
+        if core.error.is_some() || core.transport.is_none() || core.epoch != epoch
+            || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).unwrap_or(Value::Null)) { return false; }
+        self.collection_operations.finish(id, recording)
     }
     pub fn begin_bag(&self,label:&str,profile:&crate::ConnectionProfile,kind:super::bag_operation::Kind,starting:bool)->Result<(u64,Owner),String> {
         let core=self.core.lock().unwrap();
@@ -1523,6 +1552,37 @@ mod tests {
         assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="unsubscribe" && m["topic"]=="/status"));
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn collection_admission_and_completion_bind_profile_page_and_current_epoch() {
+        use super::super::collection_operation::{Action, Phase};
+        let (port, _events, _seen, server) = fake_bridge().await; let hub = Runtime::default();
+        let profile = json!({"host":"127.0.0.1","sshPort":1,"username":"fixture","identityFile":"", "localPort":port,"remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash","commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
+        let request: crate::ConnectionProfile = serde_json::from_value(profile.clone()).unwrap();
+        assert!(hub.collection_owner("page-collection", &request).is_err());
+        hub.set_profile(profile.clone()); hub.connect(port).await.unwrap();
+        assert!(hub.collection_owner("page-collection", &request).is_err());
+        let (page, _) = hub.attach("page-collection").unwrap();
+        let owner = hub.collection_owner("page-collection", &request).unwrap();
+        assert!(hub.collection_owner("page-motion", &request).is_err());
+        let mut other = request.clone(); other.ros_domain_id += 1;
+        assert!(hub.collection_owner("page-collection", &other).is_err());
+        let id = hub.collection_operations.begin(&hub.tasks, owner.clone(), profile, Action::Launch).unwrap();
+        assert!(hub.send_collection(&owner, id, &other).is_err());
+        hub.detach("page-collection", &page).await.unwrap(); hub.attach("page-collection").unwrap();
+        assert!(hub.send_collection(&owner, id, &request).is_err());
+        hub.collection_operations.rejected(id, "not sent");
+        let owner = hub.collection_owner("page-collection", &request).unwrap();
+        let id = hub.collection_operations.begin(&hub.tasks, owner.clone(), serde_json::to_value(&request).unwrap(), Action::StartEpisode).unwrap();
+        hub.send_collection(&owner, id, &request).unwrap();
+        assert!(!hub.finish_collection(id, &other, owner.epoch, true));
+        assert!(!hub.finish_collection(id, &request, owner.epoch + 1, true));
+        assert!(!hub.finish_collection(id + 1, &request, owner.epoch, true));
+        assert!(hub.finish_collection(id, &request, owner.epoch, true));
+        assert_eq!(hub.collection_operations.snapshot().unwrap().phase, Phase::Recording);
+        hub.close(); assert!(!hub.finish_collection(id, &request, owner.epoch, false));
+        assert!(hub.tasks.migration("page-collection").is_err()); server.abort();
     }
 
     #[tokio::test]

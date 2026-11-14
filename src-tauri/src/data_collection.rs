@@ -1,7 +1,6 @@
 use super::{is_safe_setup_script, ssh_base, ssh_target, stderr_tail, ConnectionProfile};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::State;
+use tauri::{AppHandle, State, Webview};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
@@ -9,16 +8,6 @@ const REMOTE_HELPER: &str = include_str!("collection_remote.py");
 const RESULT_PREFIX: &str = "ROBOT_CONSOLE_COLLECTION=";
 /// Per-topic timeout passed to Jetson `check_collection_ready.sh` (hard gate).
 const COLLECTION_READY_TOPIC_TIMEOUT_SECS: u32 = 8;
-
-#[derive(Default)]
-pub struct CollectionState(AtomicBool);
-
-struct OperationGuard<'a>(&'a AtomicBool);
-impl Drop for OperationGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -42,6 +31,8 @@ pub struct CollectionStatus {
     state: CollectionPhase,
     managed: bool,
     pid: u32,
+    #[serde(default)]
+    process_identity: String,
     recording: bool,
     pending_frames: u64,
     saved_episodes: u64,
@@ -168,7 +159,7 @@ bash \"$script\" --ros-domain-id={domain} --workspace=\"$ws\" --timeout={timeout
     Ok(format!("bash -lc {}", shell_word(&body)))
 }
 
-fn remote_command(
+pub(crate) fn remote_command(
     profile: &ConnectionProfile,
     action: &str,
     config: Option<&CollectionConfig>,
@@ -195,7 +186,7 @@ fn remote_command(
     }
     let payload = serde_json::to_string(&config).map_err(|error| error.to_string())?;
     let body = format!(
-        "set -e; cd \"$HOME\"; source /opt/ros/humble/setup.bash; source {}; export ROS_DOMAIN_ID={}; exec python3 -c {} {} {}",
+        "set -e; cd \"$HOME\"; source /opt/ros/humble/setup.bash; source {}; export ROS_DOMAIN_ID={}; exec python3 -c {} {} {} receipt",
         shell_word(&profile.ros_setup_script), profile.ros_domain_id, shell_word(REMOTE_HELPER), shell_word(action), shell_word(&payload),
     );
     Ok(format!("bash -lc {}", shell_word(&body)))
@@ -231,7 +222,7 @@ fn ssh_output_command(profile: &ConnectionProfile, remote: String) -> Command {
     command
 }
 
-async fn run_collection_ready_gate(profile: &ConnectionProfile) -> Result<(), String> {
+pub(crate) async fn run_collection_ready_gate(profile: &ConnectionProfile) -> Result<(), String> {
     let remote = check_collection_ready_remote_command(profile)?;
     let output = timeout(
         Duration::from_secs(u64::from(COLLECTION_READY_TOPIC_TIMEOUT_SECS) * 2 + 20),
@@ -274,21 +265,25 @@ async fn run_remote(profile: &ConnectionProfile, remote: String, seconds: u64) -
 
 #[tauri::command]
 pub async fn data_collection_action(
+    window: Webview,
+    app: AppHandle,
     profile: ConnectionProfile,
     action: String,
     config: Option<CollectionConfig>,
-    state: State<'_, CollectionState>,
+    hub: State<'_, crate::session::runtime::Runtime>,
 ) -> Result<CollectionStatus, String> {
     let remote = remote_command(&profile, &action, config.as_ref())?;
-    state
-        .0
-        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .map_err(|_| "另一项采集操作正在执行")?;
-    let _guard = OperationGuard(&state.0);
-    if action == "launch" || action == "start_episode" {
-        run_collection_ready_gate(&profile).await?;
+    let owner = hub.collection_owner(window.label(), &profile)?;
+    if action == "status" {
+        let snapshot = hub.observations.refresh(owner.epoch, crate::session::observations::Source::Collection, false).await?;
+        let entry = snapshot.entries.get(&crate::session::observations::Source::Collection).ok_or("等待采集共享状态")?;
+        if let Some(error) = &entry.error { return Err(error.clone()); }
+        if entry.age_ms >= entry.ttl_ms { return Err("采集共享状态已过期".into()); }
+        return serde_json::from_value(entry.value.clone().ok_or("采集共享状态不可用")?).map_err(|e| e.to_string());
     }
-    run_remote(&profile, remote, 150).await
+    let action = crate::session::collection_operation::Action::parse(&action)?;
+    let value = crate::session::collection_operation::start(app, &hub, owner, profile, action, remote).await?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -327,6 +322,25 @@ mod tests {
             python_path: "venvs/lerobot/bin/python".into(),
             resume: false,
         }
+    }
+
+    #[test]
+    fn every_collection_command_fits_its_bound_journal_and_requests_a_receipt() {
+        use crate::session::controller_journal::{Job, new_collection_id};
+        for action in ["launch", "start_episode", "save_episode", "discard_episode", "finish"] {
+            let config = config();
+            let remote = remote_command(&profile(), action, if action == "launch" { Some(&config) } else { None }).unwrap();
+            assert!(remote.contains("receipt"));
+            assert!(Job::new(new_collection_id().unwrap(), remote).is_ok());
+        }
+        let mut maximum = config();
+        maximum.task = "'".repeat(2000);
+        maximum.root = "r".repeat(4096);
+        maximum.python_path = "p".repeat(4096);
+        let mut long_profile = profile();
+        long_profile.ros_setup_script = "s".repeat(4096);
+        let remote = remote_command(&long_profile, "launch", Some(&maximum)).unwrap();
+        assert!(Job::new(new_collection_id().unwrap(), remote).is_ok());
     }
 
     #[test]

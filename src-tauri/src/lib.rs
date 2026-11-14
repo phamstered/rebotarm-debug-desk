@@ -1570,13 +1570,13 @@ pub fn run() {
         .manage(session::workspace::Workspace::default())
         .manage(session::documents::Documents::default())
         .manage(control_logs::LogSessions::default())
-        .manage(data_collection::CollectionState::default())
         .invoke_handler(tauri::generate_handler![
             session::documents::editor_document_read,
             session::documents::editor_document_commit,
             session::ipc::native_bridge_context,
             session::ipc::native_task_snapshot,
             session::ipc::native_bag_operation_snapshot,
+            session::ipc::native_collection_operation_snapshot,
             session::ipc::native_local_task_snapshot,
             session::ipc::native_local_task_touch,
             session::ipc::native_local_task_cancel,

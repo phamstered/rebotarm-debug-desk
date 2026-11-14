@@ -64,6 +64,12 @@ pub fn native_bag_operation_snapshot(window:Webview,hub:State<'_,Runtime>)->Resu
 }
 
 #[tauri::command]
+pub fn native_collection_operation_snapshot(window: Webview, hub: State<'_, Runtime>) -> Result<Option<super::collection_operation::Snapshot>, String> {
+    observation_caller(&window)?;
+    Ok(hub.collection_operations.snapshot())
+}
+
+#[tauri::command]
 pub fn native_task_snapshot(
     window: Webview,
     hub: State<'_, Runtime>,
