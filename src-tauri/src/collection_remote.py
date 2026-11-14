@@ -80,7 +80,6 @@ class RecorderControl:
     def __init__(self, services, cache=None):
         self.services = services
         self.cache = Path(cache) if cache else default_cache()
-        self.cache.mkdir(parents=True, exist_ok=True)
         self.manifest = self.cache / "lerobot-recorder.json"
         self.log_path = self.cache / "lerobot-recorder.log"
 
@@ -107,7 +106,7 @@ class RecorderControl:
         except OSError:
             return ""
 
-    def status(self):
+    def status(self, persist=False):
         metadata = self.metadata()
         owned = self.owned(metadata)
         raw = None if metadata.get("finalizing") and owned else self.services.call("status", timeout=8)
@@ -121,7 +120,7 @@ class RecorderControl:
             state = "finalizing" if metadata.get("finalizing") else "starting"
         if data is not None:
             state = "recording" if data.get("recording") else "idle"
-            if owned:
+            if owned and persist:
                 metadata["lastStatus"] = data
                 self.manifest.write_text(json.dumps(metadata))
         saved = data.get("saved_episodes", 0) if data else summary.get("saved_episodes", 0)
@@ -142,6 +141,7 @@ class RecorderControl:
         return path if path.is_absolute() else Path.home() / path
 
     def launch(self, config):
+        self.cache.mkdir(parents=True, exist_ok=True)
         before = self.status()
         if before["state"] != "stopped":
             raise RuntimeError("已有采集器运行，请先使用或结束现有采集器")
@@ -192,7 +192,7 @@ class RecorderControl:
         metadata = {"pid": child.pid, "identity": identity, "config": dict(config, root=str(root))}
         self.manifest.write_text(json.dumps(metadata))
         for _ in range(10):
-            result = self.status()
+            result = self.status(persist=True)
             if result["state"] == "idle":
                 result["message"] = "采集器已就绪，点击开始 Episode 录入数据"
                 return result
@@ -203,7 +203,7 @@ class RecorderControl:
         return result
 
     def finish(self):
-        before = self.status()
+        before = self.status(persist=True)
         metadata = self.metadata()
         if not self.owned(metadata):
             raise RuntimeError("仅能结束由本应用启动且进程身份匹配的采集器")
@@ -238,9 +238,32 @@ class RecorderControl:
         message = self.services.call(action)
         if message is None:
             raise RuntimeError("采集器服务不可用")
-        result = self.status()
+        result = self.status(persist=True)
         result["message"] = message
         return result
+
+
+@contextlib.contextmanager
+def operation_lock(cache, readonly):
+    """Status neither creates files nor writes metadata; mutations exclude readers."""
+    path = cache / "lerobot-recorder.lock"
+    if readonly:
+        try:
+            lock = path.open("r")
+        except FileNotFoundError:
+            # No managed operation has started. A subsequent launch may race this
+            # snapshot, so callers must refresh after every mutation.
+            yield
+            return
+    else:
+        cache.mkdir(parents=True, exist_ok=True)
+        lock = path.open("a")
+    with lock:
+        try:
+            fcntl.flock(lock, (fcntl.LOCK_SH if readonly else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("另一项采集操作正在执行，请稍后刷新")
+        yield
 
 
 def main():
@@ -249,12 +272,7 @@ def main():
         action, config_json = sys.argv[1:3]
         config = json.loads(config_json)
         cache = default_cache()
-        cache.mkdir(parents=True, exist_ok=True)
-        with (cache / "lerobot-recorder.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise RuntimeError("另一项采集操作正在执行，请稍后刷新")
+        with operation_lock(cache, readonly=action == "status"):
             services = RosServices()
             result = RecorderControl(services, cache).execute(action, config)
         print(PREFIX + json.dumps(result, ensure_ascii=False), flush=True)

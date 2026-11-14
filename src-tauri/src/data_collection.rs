@@ -253,6 +253,25 @@ async fn run_collection_ready_gate(profile: &ConnectionProfile) -> Result<(), St
     })
 }
 
+/// Fixed read-only source for the application-level observation scheduler.
+pub async fn read_status(profile: ConnectionProfile) -> Result<CollectionStatus, String> {
+    let remote = remote_command(&profile, "status", None)?;
+    run_remote(&profile, remote, 15).await
+}
+
+async fn run_remote(profile: &ConnectionProfile, remote: String, seconds: u64) -> Result<CollectionStatus, String> {
+    let output = timeout(Duration::from_secs(seconds), ssh_output_command(profile, remote).output())
+        .await
+        .map_err(|_| "采集查询或操作超时；远端操作可能仍在执行，请刷新状态确认")?
+        .map_err(|error| format!("采集 SSH 失败：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() && !stdout.lines().any(|line| line.starts_with(RESULT_PREFIX)) {
+        return Err(format!("采集 SSH/ROS 环境失败：{}", stderr_tail(&stderr, &stdout)));
+    }
+    parse_result(&stdout)
+}
+
 #[tauri::command]
 pub async fn data_collection_action(
     profile: ConnectionProfile,
@@ -269,19 +288,7 @@ pub async fn data_collection_action(
     if action == "launch" || action == "start_episode" {
         run_collection_ready_gate(&profile).await?;
     }
-    let output = timeout(Duration::from_secs(150), ssh_output_command(&profile, remote).output())
-        .await
-        .map_err(|_| "采集操作超时；远端操作可能仍在执行，请刷新状态确认")?
-        .map_err(|error| format!("采集 SSH 失败：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() && !stdout.lines().any(|line| line.starts_with(RESULT_PREFIX)) {
-        return Err(format!(
-            "采集 SSH/ROS 环境失败：{}",
-            stderr_tail(&stderr, &stdout)
-        ));
-    }
-    parse_result(&stdout)
+    run_remote(&profile, remote, 150).await
 }
 
 #[cfg(test)]

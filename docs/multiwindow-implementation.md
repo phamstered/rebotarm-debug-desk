@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务与完整离线配置切换仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十一项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务与完整离线配置切换仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -23,7 +23,7 @@
 ## 待接入和验收
 
 1. 原生会话与前端适配器已接通并有跨窗口模拟测试。后续必须补全窗口异常退出时的任务所有权/安全停止；原生共享资源缓存与 Monitor 独立历史已接入，Monitor 在最新帧合并前保存有界采样历史。
-2. Agent、USB、arm mode、Controller、Topics、clock、Motion、Pick、bag recording、bag playback 十项公共状态/轮询已移到原生会话。其他任务生命周期和完整共享配置仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
+2. Agent、USB、arm mode、Controller、Topics、clock、Motion、Pick、bag recording、bag playback、Episode 采集十一项公共状态/轮询已移到原生会话。其他任务生命周期和完整共享配置仍待抽离；手眼原始样本不随窗口复制，页面编辑须有明确单写者和版本。
 3. 页面路由、拆出、收回、关闭拦截已接入。采用同一个原生 WebView reparent，迁移时不复制/重建 React、样本或 GPU 场景；原生调用者鉴权也改为稳定 WebView 身份。布局持久化、工作区变化后的窗口约束及主窗口隐藏/恢复已接入；迁移失败回滚已接入并进行原生故障验证；实际拔屏、多屏仍待验证。
 4. 窗口菜单与全部九页面接入；执行/采样中禁止迁移；全局任务状态一致；主窗口关闭不终止其他窗口会话。
 5. 图像/点云和 Monitor 展示按窗口兴趣驱动；共享资源缓存已接入；刷新限流、源数据新鲜度门禁继续验收。
@@ -336,3 +336,15 @@ DISABLE 复用远端完成后的新确认屏障；成功目标状态不能覆盖
 本阶段最终 `npm test` 通过（902 前端 / 185 Rust / 3 运行库测试与其余脚本），日志 `/tmp/260-arm-owned-release-tests.log`。新增回归覆盖真实 loopback Bridge 中的窗口全部退出后继续关闭输出、完成前后 ACK 屏障、来源页面 / Profile / 连接代次拒绝、模式与 Controller 冲突、过期 / 错误状态不释放、远端 ready 不提前完成，以及发起 future 退出后 worker 继续。远端记录 10 项测试在 Mac 和 Jetson 临时目录通过，包含单次执行、进度、不同截止期限和异常 UTF-8 输出大小边界（`/tmp/260-arm-owned-verified-jetson.log`）。全程没有调用真实 ROS 控制服务。
 
 `npm run build`、文档构建以及隔离标识的 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-arm-owned-release-build.log / /tmp/260-arm-owned-docs-final.log / /tmp/260-arm-owned-release-native.log`。本次仅构建原生二进制，没有替换隔离 .app 或正式应用，也没有部署 Bridge；未将上一轮窗口复验记作本次整栈操作实机验收。该层仍需随完整方案完成最终集成与发布验收。
+
+## Episode 采集公共状态与新隔离包复验
+
+采集状态接入第十一项原生观察源 `collection`，共享同一连接 Profile 和递增快照。每次查询结束后间隔 5 秒，查询截止 15 秒，新鲜度 20 秒包含 SSH/服务等待；没有页面时也由原生会话查询。数据采集页不再建立自己的远程定时器，失败或过期保留只读旧内容、禁用操作。启动/保存等返回后以 afterPending 强制重新查询，不直接采用命令结果作为共享当前状态。浏览器旧入口保留原行为。
+
+远端 status 不再创建采集缓存目录/锁文件或修改 manifest。已有锁时使用只读共享锁，变更持有排他锁时返回未知错误而非 idle；操作路径仍保存最后成功摘要，结束后已保存计数可读取。原检查就绪脚本、TRACK/故障/JointState 门禁及丢弃确认保留。本阶段仅接管公共查询，Episode 变更的应用级 worker、整段采集的原生迁移占用和桌面重启恢复仍待完成，不能据此宣称采集任务生命周期已交付。
+
+最终 `npm test` 全部通过（904 前端 / 186 Rust / 3 运行库测试及其余脚本），日志 `/tmp/260-collection-observe-final-tests.log`。首次全量运行出现多项无关页面测试与 worker 启动超时；未改断言或超时，使用 `caffeinate -i npm test` 完整重跑通过。前端、文档及独立 Debug Tauri bundle 构建、严格 codesign 核验通过（`/tmp/260-collection-observe-{build,docs,bundle}.log`）。新增回归覆盖共享查询、断线迟到结果、过期/错误禁用、成功后复查、只读文件路径与锁冲突。18 项 Python helper 测试同时在 Mac 与 Jetson 临时目录通过（`/tmp/260-collection-observe-jetson.log`），使用模拟服务和进程，没有调用实际 ROS 服务。
+
+本轮窗口访问恢复后，退出旧包、构建并启动最新隔离应用。生成 1200×900 标定板，切到 100% 缩放，大图工具栏与关闭按钮完整可见，Esc 返回保留缩放。重新注入 detach:bounds + rollback:reparent、recover:bounds、dock:bounds，验证失败提示、再次恢复及收回重试成功；12×9、15 / 11.25 mm、图片与缩放均保留。PageDown 后截图确认底部按钮、尺寸核对框、说明和右侧滚动条可见。三个单次 fixture 已消费，最终为主窗口嵌入手眼页。此离线回归不等于真实采集或运动验收。
+
+没有安装正式 `/Applications/Robot Console.app`，没有部署生产 Bridge、录制实际数据或发送机械臂命令。直接 JTC 接线、Joint4 / Episode 等任务生命周期、进程重启恢复、完整离线配置、多屏持续运行以及最终 PR/CI/发布仍按完整目标继续。

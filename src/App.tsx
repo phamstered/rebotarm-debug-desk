@@ -2027,7 +2027,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           onQuickAction={handleStatusQuickAction}
         />
       ) : appPage === "collection" ? (
-        <DataCollectionPage connected={stage === "connected"} onBusyChange={setPageBusy} profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
+        <DataCollectionPage observations={nativeDesktop() ? sharedObservations : undefined} connected={stage === "connected"} onBusyChange={setPageBusy} profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
       ) : appPage === "gravity" ? (
         <GravityIdentificationPage
           bridge={bridge}

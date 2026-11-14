@@ -30,7 +30,42 @@ class RecorderTests(unittest.TestCase):
         Path(self.config["pythonPath"]).touch()
 
     def owned(self, finalizing=False):
+        self.control.cache.mkdir(parents=True, exist_ok=True)
         self.control.manifest.write_text(json.dumps(dict(pid=123, identity="old-start", config=self.config, finalizing=finalizing)))
+
+    def test_status_does_not_create_files_or_rewrite_owned_metadata(self):
+        with remote.operation_lock(self.control.cache, readonly=True):
+            self.control.execute("status")
+        self.assertFalse(self.control.cache.exists())
+        self.owned()
+        before = self.control.manifest.read_bytes()
+        with patch.object(remote, "process_identity", return_value="old-start"):
+            with remote.operation_lock(self.control.cache, readonly=True):
+                result = self.control.execute("status")
+        self.assertTrue(result["managed"])
+        self.assertEqual(self.control.manifest.read_bytes(), before)
+        self.assertEqual(list(self.control.cache.iterdir()), [self.control.manifest])
+
+    def test_status_lock_excludes_mutations_and_never_reports_idle_on_contention(self):
+        with remote.operation_lock(self.control.cache, readonly=False):
+            with self.assertRaisesRegex(RuntimeError, "正在执行"):
+                with remote.operation_lock(self.control.cache, readonly=True):
+                    self.fail("status entered a mutation")
+        with remote.operation_lock(self.control.cache, readonly=True):
+            with remote.operation_lock(self.control.cache, readonly=True):
+                pass
+            with self.assertRaisesRegex(RuntimeError, "正在执行"):
+                with remote.operation_lock(self.control.cache, readonly=False):
+                    self.fail("mutation entered active status")
+
+    def test_saved_episode_keeps_summary_without_status_writes(self):
+        self.owned()
+        self.services.call.side_effect = [sample(True, 10), "saved", sample(False, 0, 3)]
+        with patch.object(remote, "process_identity", return_value="old-start"):
+            self.control.execute("save_episode")
+        self.services.call.side_effect = None
+        self.services.call.return_value = None
+        self.assertEqual(self.control.status()["savedEpisodes"], 3)
 
     def test_external_recorder_has_no_process_ownership(self):
         result = self.control.status()

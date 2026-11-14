@@ -596,7 +596,7 @@ Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份�
 
 ### 原生共享只读状态（多窗口开发分支）
 
-`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。十个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`、`bag_record`、`bag_play`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
+`native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。十一个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`、`bag_record`、`bag_play`、`collection`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。
 
 `native_observation_refresh {epoch, source, afterPending}` 通过每 source 的串行锁查询；普通同时刷新可共用同一结果，`afterPending:true` 强制在此前工作完成后重新发起，用于控制器操作后的实态核验。刷新响应额外携带 `handler_elapsed_ms`，前端从 IPC 往返耗时中扣除原生等待时间，剩余传输时间计入 age；Controller 的服务器等待也只扣除一次。`native_observation_interval {seconds}` 仅主 WebView 可调用，Topics 间隔为 5–300 秒。原有 Bridge `topics` 请求在桌面原生层复用该源，显式 `refresh:true` 触发共享刷新；浏览器回退仍直接查询 Bridge。
 
@@ -660,3 +660,5 @@ workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebV
 `start_arm_mode` 保留 profile / mode / supportConfirmed / onProgress 参数，但实际 WebView 必须为 Status 或 Motion 并附着当前原生连接。整栈任务以 `native_task_snapshot.kind=arm_mode` 公开占用，进度经原有 Channel 及共享任务 message 呈现。IPC 等待不持有 worker 生命周期：调用者退出后任务仍由应用管理；成功回复需要远端成功记录及同配置连接的强制刷新核验。远端 ready 进度映射为 verify，只有核验成功才向前端发 ready。异常或超时保留未知占用。原生任务不接受 Bridge 的普通运动终态解除该占用。
 
 arm-mode-* 远端编号选择固定 128 KiB / 600 秒执行策略；controller-* 仍为 32 KiB / 20 秒，编号与命令摘要共同核对，查询不得包含 command。进度最多 2048 字节、单次查询结果仍限 16 KiB，记录总量仍为 256 项且不淘汰未确认任务。DISABLE 与 Controller 使用同一完成后确认屏障；切换中收到支撑退出请求时仅登记关闭输出意图并返回明确提示，不并发执行环境清理。
+
+`collection` 沿用 `CollectionStatus` 的 camelCase 字段；每次查询结束后间隔 5 秒，15 秒查询截止，20 秒新鲜度包含查询耗时。状态 helper 不创建目录、锁文件或改写采集元数据；已有变更操作持锁时返回查询失败，不返回空闲。页面消费公共快照，操作成功后以 `afterPending:true` 复查；命令响应只用于操作提示，不替代公共当前状态。断线取消本机只读 SSH 子进程，不停止 Jetson 采集器。此源不代表 Episode 变更任务已经具备原生生命周期或跨进程恢复。

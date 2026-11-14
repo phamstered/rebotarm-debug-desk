@@ -234,3 +234,50 @@ it("reports an active episode as blocking window migration", async () => {
   renderPage({ onBusyChange });
   await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith("正在采集或保存，请完成 Episode 后移动页面"));
 });
+
+function sharedCollection(value: CollectionStatus, sequence = 1, options: { expired?: boolean; error?: string } = {}) {
+  return {
+    enabled: true, connected: true, epoch: 1, revision: sequence,
+    entries: { collection: { sequence, value, error: options.error ?? null, age_ms: 0,
+      ttl_ms: 20000, receivedAt: performance.now(), expired: options.expired ?? false } },
+    refresh: vi.fn(),
+  };
+}
+
+it("uses application collection snapshots without per-page SSH polling, and fails closed on expiry", async () => {
+  vi.useFakeTimers();
+  const observations = sharedCollection(recording);
+  const { rerender, props } = renderPage({ observations });
+  expect(screen.getByText("正在采集", { selector: ".collection-state" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeEnabled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(invoke).not.toHaveBeenCalled();
+  expect(observations.refresh).not.toHaveBeenCalled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(recording, 1, { expired: true })} />);
+  expect(screen.getByText("状态待确认")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle, 2, { error: "SSH gone" })} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("SSH gone");
+  expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeDisabled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle, 3)} />);
+  expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeEnabled();
+  rerender(<DataCollectionPage {...props} connected={false} />);
+  expect(screen.getByText("状态待确认")).toBeInTheDocument();
+});
+
+it("verifies mutations through a post-action shared query instead of adopting their returned status", async () => {
+  const observations = sharedCollection(recording);
+  let finish!: () => void;
+  observations.refresh.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+  invoke.mockResolvedValue(idle);
+  const { rerender, props } = renderPage({ observations });
+  fireEvent.click(screen.getByRole("button", { name: "保存成功 Episode" }));
+  await waitFor(() => expect(observations.refresh).toHaveBeenCalledWith("collection", true));
+  expect(screen.getByText("正在采集", { selector: ".collection-state" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+  await act(async () => finish());
+  const fresh = sharedCollection(idle, 2); fresh.refresh = observations.refresh;
+  rerender(<DataCollectionPage {...props} observations={fresh} />);
+  expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeEnabled();
+  expect(invoke).toHaveBeenCalledTimes(1);
+});

@@ -9,11 +9,13 @@ import {
 } from "./dataCollectionLogic";
 import { formatFaultCode, formatHardwareMode } from "./statusLogic";
 import type { ConnectionProfile, HardwareStatus, TopicInfo } from "./types";
+import { observationValue, type SharedObservations } from "./nativeObservationsLogic";
 
 export function DataCollectionPage({
-  profile, topics, rosReady, hardwareStatus = null, topicSamples = {}, connected = true, onBusyChange,
+  profile, topics, rosReady, hardwareStatus = null, topicSamples = {}, connected = true, onBusyChange, observations,
 }: {
   connected?: boolean;
+  observations?: SharedObservations;
   onBusyChange?(reason: string): void;
   profile: ConnectionProfile;
   topics: TopicInfo[];
@@ -32,6 +34,8 @@ export function DataCollectionPage({
   const [discardRequested, setDiscardRequested] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const sessionRef = useRef({ alive: false, busy: false });
+  const shared = Boolean(observations);
+  const refreshShared = observations?.refresh;
 
   const run = useCallback(async (action: CollectionAction, launchConfig?: CollectionConfig) => {
     const session = sessionRef.current;
@@ -40,12 +44,15 @@ export function DataCollectionPage({
     setBusy(action);
     if (action !== "status") { setError(""); setDiscardRequested(false); }
     try {
-      const result = await invoke<CollectionStatus>("data_collection_action", { profile, action, config: launchConfig ?? null });
+      const result = action === "status" && refreshShared
+        ? observationValue<CollectionStatus>(await refreshShared("collection"))
+        : await invoke<CollectionStatus>("data_collection_action", { profile, action, config: launchConfig ?? null });
       if (!session.alive) return;
-      setStatus(result);
-      setFresh(true);
+      if (!refreshShared) { setStatus(result); setFresh(true); }
       setPollError("");
       if (action !== "status") setNotice(result.message);
+      // A command reply is not the shared current state. Drain older reads first.
+      if (action !== "status" && refreshShared) await refreshShared("collection", true);
     } catch (reason) {
       if (!session.alive) return;
       setFresh(false);
@@ -56,17 +63,30 @@ export function DataCollectionPage({
       session.busy = false;
       if (session.alive) setBusy("");
     }
-  }, [profile]);
+  }, [profile, refreshShared]);
 
   useEffect(() => {
     const session = { alive: connected, busy: false };
     sessionRef.current = session;
     setStatus(null); setFresh(false); setError(""); setPollError(""); setNotice(""); setBusy("");
-    if (!connected) return () => { session.alive = false; };
+    if (!connected || shared) return () => { session.alive = false; };
     void run("status");
     const timer = window.setInterval(() => void run("status"), 5000);
     return () => { session.alive = false; window.clearInterval(timer); };
-  }, [run, connected]);
+  }, [run, connected, shared, observations?.epoch]);
+
+  const collectionObservation = observations?.entries.collection;
+  useEffect(() => {
+    if (!shared || !connected) return;
+    try {
+      if (!observations?.connected) throw new Error("等待共享采集状态");
+      setStatus(observationValue<CollectionStatus>(collectionObservation));
+      setFresh(true); setPollError("");
+    } catch (reason) {
+      // Retain the last session for read-only display and migration blocking.
+      setFresh(false); setPollError(String(reason instanceof Error ? reason.message : reason));
+    }
+  }, [shared, connected, observations?.connected, observations?.epoch, collectionObservation]);
 
   useEffect(() => {
     try { localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(config)); } catch { /* storage unavailable */ }
@@ -165,7 +185,7 @@ export function DataCollectionPage({
         {status?.recording && status.pendingFrames === 0 && <p className="collection-hint">尚未写入有效帧；请检查 Topic、数据新鲜度及日志。</p>}
         {notice && <output className="collection-notice">{notice}</output>}
         {(error || pollError) && <pre className="collection-error" role="alert">{error || pollError}</pre>}
-        <p className="collection-hint">每 5 秒刷新。采集中请勿重置场景；保存或丢弃后再复位物体。切换页面或断开连接后，Jetson 上的采集器仍继续运行。退出前请先保存或丢弃，再完成数据集。</p>
+        <p className="collection-hint">{shared ? "应用统一查询状态，每次查询完成后间隔 5 秒；查询失败或过期时禁止操作。" : "每 5 秒刷新。"}采集中请勿重置场景；保存或丢弃后再复位物体。切换页面或断开连接后，Jetson 上的采集器仍继续运行。退出前请先保存或丢弃，再完成数据集。</p>
         <details open className="collection-logs"><summary>采集器日志</summary><pre>{status?.log || "暂无日志"}</pre></details>
       </section>
     </div>

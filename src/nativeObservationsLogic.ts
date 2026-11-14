@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BridgeEnvelope } from "./types";
 
-export type ObservationSource = "agent" | "usb" | "arm" | "controllers" | "topics" | "clock" | "motion" | "pick" | "bag_record" | "bag_play";
+export type ObservationSource = "agent" | "usb" | "arm" | "controllers" | "topics" | "clock" | "motion" | "pick" | "bag_record" | "bag_play" | "collection";
 export type NativeObservation = {
   sequence: number;
   value: unknown;

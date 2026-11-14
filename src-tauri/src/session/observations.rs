@@ -28,9 +28,10 @@ pub enum Source {
     Pick,
     BagRecord,
     BagPlay,
+    Collection,
 }
 impl Source {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Agent,
         Self::Usb,
         Self::Arm,
@@ -41,10 +42,11 @@ impl Source {
         Self::Pick,
         Self::BagRecord,
         Self::BagPlay,
+        Self::Collection,
     ];
     fn period(self, topics_ms: u64) -> Duration {
         Duration::from_millis(match self {
-            Self::Agent | Self::BagRecord | Self::BagPlay => 5000,
+            Self::Agent | Self::BagRecord | Self::BagPlay | Self::Collection => 5000,
             Self::Usb | Self::Arm => 10000,
             Self::Topics => topics_ms,
             Self::Pick => 500,
@@ -56,12 +58,14 @@ impl Source {
             Self::Controllers => 5500,
             Self::Clock => 2000,
             Self::Motion | Self::Pick => 3000,
+            Self::Collection => 15000,
             _ => 10000,
         })
     }
     fn ttl(self, topics_ms: u64) -> u64 {
         match self {
             Self::Agent | Self::BagRecord | Self::BagPlay => 8000,
+            Self::Collection => 20000,
             Self::Usb | Self::Arm => 15000,
             Self::Topics => topics_ms + 10000,
             Self::Controllers => 3100,
@@ -408,6 +412,8 @@ pub fn reader(transport: Arc<Transport>, profile: Value) -> Reader {
                     .map_err(|e| e.to_string()),
                 Source::BagPlay => serde_json::to_value(crate::get_rosbag_play_status(profile()?).await?)
                     .map_err(|e| e.to_string()),
+                Source::Collection => serde_json::to_value(crate::data_collection::read_status(profile()?).await?)
+                    .map_err(|e| e.to_string()),
                 _ => {
                     if source == Source::Controllers
                         && transport.hello.metadata["controllers_info_supported"] != true
@@ -589,17 +595,54 @@ mod tests {
         for _ in 0..9 {
             let _ = service.snapshot();
         }
-        assert_eq!(counts.lock().unwrap().values().sum::<usize>(), 10);
+        assert_eq!(counts.lock().unwrap().values().sum::<usize>(), 11);
         tokio::time::sleep(Duration::from_millis(1050)).await;
         assert_eq!(counts.lock().unwrap()[&Source::Controllers], 2);
         assert_eq!(counts.lock().unwrap()[&Source::Clock], 2);
         assert_eq!(counts.lock().unwrap()[&Source::Agent], 1);
         assert_eq!(counts.lock().unwrap()[&Source::BagRecord], 1);
         assert_eq!(counts.lock().unwrap()[&Source::BagPlay], 1);
+        assert_eq!(counts.lock().unwrap()[&Source::Collection], 1);
         service.stop(2);
         let before = counts.lock().unwrap().clone();
         tokio::time::sleep(Duration::from_millis(1050)).await;
         assert_eq!(*counts.lock().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn collection_queries_are_shared_and_late_results_cannot_cross_connections() {
+        let service = Arc::new(Observations::default());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        service.start(1, Arc::new(move |source, _| {
+            let tx = tx.clone();
+            Box::pin(async move {
+                if source != Source::Collection { return Ok(json!({"supported":false})); }
+                let (done, reply) = oneshot::channel();
+                tx.send(done).unwrap();
+                reply.await.map_err(|_| "query dropped".into())
+            })
+        }));
+        let first = rx.recv().await.unwrap();
+        let readers: Vec<_> = (0..9).map(|_| {
+            let service = service.clone();
+            tokio::spawn(async move { service.read(1, Source::Collection).await.unwrap() })
+        }).collect();
+        settle().await;
+        assert!(rx.try_recv().is_err());
+        first.send(json!({"state":"recording","recording":true})).unwrap();
+        for reader in readers {
+            assert_eq!(reader.await.unwrap().entries[&Source::Collection].value.as_ref().unwrap()["recording"], true);
+        }
+        let refresh = tokio::spawn({ let service = service.clone(); async move {
+            service.refresh(1, Source::Collection, true).await
+        }});
+        let late = rx.recv().await.unwrap();
+        service.stop(2);
+        assert!(refresh.await.unwrap().is_err());
+        assert!(late.send(json!({"state":"idle"})).is_err());
+        assert!(service.snapshot().entries.is_empty());
+        assert_eq!(Source::Collection.period(30000), Duration::from_secs(5));
+        assert_eq!(Source::Collection.timeout(), Duration::from_secs(15));
     }
 
     #[tokio::test]
