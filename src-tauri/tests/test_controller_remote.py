@@ -24,6 +24,53 @@ def job(command="true"):
 
 
 class JournalTests(unittest.TestCase):
+    def test_arm_progress_and_log_tail_fit_record_even_with_invalid_utf8(self):
+        command = f"{shlex.quote(sys.executable)} -c 'import sys; sys.stdout.buffer.write(b\"ARM_STAGE|startup|\" + bytes([255])*2000 + b\"\\n\" + bytes([255])*5000)'"
+        request = job(command)
+        request["id"] = request["id"].replace("controller-", "arm-mode-")
+        remote.worker(self.root, self.reserve(request), command)
+        proof = remote.query(self.root, request["id"], request["command_hash"])
+        self.assertEqual(proof["phase"], "succeeded")
+        self.assertLessEqual(len(proof["progress"]), 512)
+        self.assertLess((self.root / (request["id"] + ".json")).stat().st_size, remote.MAX_RECORD_BYTES)
+
+    def test_arm_deadline_does_not_inherit_short_controller_timeout(self):
+        short = job("sleep 0.3")
+        arm = job("sleep 0.3")
+        arm["id"] = arm["id"].replace("controller-", "arm-mode-")
+        with patch.object(remote, "COMMAND_TIMEOUT", 0.05):
+            remote.submit(self.root, short["id"], short["command_hash"], short["command"])
+            remote.submit(self.root, arm["id"], arm["command_hash"], arm["command"])
+        self.assertTrue(self.wait(short)["timed_out"])
+        result = self.wait(arm)
+        self.assertEqual(result["phase"], "succeeded")
+        self.assertFalse(result["timed_out"])
+
+    def test_arm_policy_records_progress_and_only_executes_once(self):
+        marker = self.home / "arm-once"
+        request = job("printf 'ARM_STAGE|startup|starting\\n'; sleep 0.3; printf x >> " + shlex.quote(str(marker)))
+        request["id"] = request["id"].replace("controller-", "arm-mode-")
+        self.cli(request, discard_reply=True)
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            proof = self.read(request)
+            if proof.get("progress") == "ARM_STAGE|startup|starting":
+                break
+            time.sleep(0.01)
+        self.assertEqual(proof.get("progress"), "ARM_STAGE|startup|starting")
+        self.assertEqual(self.wait(request)["phase"], "succeeded")
+        self.cli(request)
+        self.assertEqual(marker.read_text(), "x")
+        large = job("#" + "x" * 40000)
+        with self.assertRaises(ValueError):
+            remote.request(large)
+        large["id"] = large["id"].replace("controller-", "arm-mode-")
+        remote.request(large)
+        too_large = job("#" + "x" * 131072)
+        too_large["id"] = too_large["id"].replace("controller-", "arm-mode-")
+        with self.assertRaises(ValueError):
+            remote.request(too_large)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

@@ -575,7 +575,7 @@ These APIs provide session transport. Page ownership, safe migration and multi-w
 
 ### 原生任务状态（多窗口开发分支，覆盖 Position / Pick / Motor / Gravity）
 
-`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
+`native_task_snapshot` 由已授权的主/功能 WebView 调用，返回 `null` 或 `{id, epoch, window, command_id, kind, phase, message}`；`kind` 为 `position | pick | motor | gravity | controller | arm_mode`，`phase` 为 `submitting | running | stopping | uncertain`。`native-tasks-changed` 通知只触发合并读取该快照，不新建远端轮询。该状态属于桌面 IPC，不改写 Bridge 运动请求或机器人安全确认。
 
 原生层在 Position/动作组/Pick 请求下发前登记实际调用 WebView、incarnation 和连接代次。尚未受理也占用任务；其他窗口不能并发提交执行指令。任务所属页面迁移与提交采用同一原子互斥；取消和 DISABLE 保持可用。发送前已明确失败的请求可释放占用；下发后的超时只请求取消，不重发运动。取消 ACK 不等于停止；仅同一任务的成功、失败或取消终态释放占用，`stop_failed` 保留。
 
@@ -656,3 +656,7 @@ workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebV
 `start_rosbag_recording` / `stop_rosbag_recording` / `start_rosbag_playback` / `stop_rosbag_playback` 通过真实 Tauri WebView 鉴权，核对已附着页面、连接代次及当前共享 Profile。录制允许 main / page-dashboard / page-motion，回放只允许 page-monitor。响应仍为原有状态对象，但现在来自远端操作成功后重新取得的新鲜共享状态；25 秒内未确认时 IPC 返回仍在核验的错误，原生后台继续。
 
 `native_bag_operation_snapshot` 返回至多两项（record / play）的最新操作元数据：`id, kind, window, host, starting, phase, message`；phase 为 submitting / verifying / uncertain / succeeded / failed。`native-bag-operations-changed` 仅发失效通知，读取不续租或重发指令。同类未确认操作不允许重复提交。操作复用现有一次性 SSH journal（内部 controller- 编号及记录目录，编号和完整命令 SHA-256 绑定）；对未知、运行中及执行后不确定结果仅查询恢复，只有明确未启动的 rejected 可按未执行释放。保留的记录和页面状态不构成应用进程重启后的任务自动恢复。
+
+`start_arm_mode` 保留 profile / mode / supportConfirmed / onProgress 参数，但实际 WebView 必须为 Status 或 Motion 并附着当前原生连接。整栈任务以 `native_task_snapshot.kind=arm_mode` 公开占用，进度经原有 Channel 及共享任务 message 呈现。IPC 等待不持有 worker 生命周期：调用者退出后任务仍由应用管理；成功回复需要远端成功记录及同配置连接的强制刷新核验。远端 ready 进度映射为 verify，只有核验成功才向前端发 ready。异常或超时保留未知占用。原生任务不接受 Bridge 的普通运动终态解除该占用。
+
+arm-mode-* 远端编号选择固定 128 KiB / 600 秒执行策略；controller-* 仍为 32 KiB / 20 秒，编号与命令摘要共同核对，查询不得包含 command。进度最多 2048 字节、单次查询结果仍限 16 KiB，记录总量仍为 256 项且不淘汰未确认任务。DISABLE 与 Controller 使用同一完成后确认屏障；切换中收到支撑退出请求时仅登记关闭输出意图并返回明确提示，不并发执行环境清理。

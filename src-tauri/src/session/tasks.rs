@@ -25,6 +25,7 @@ pub enum Kind {
     Gravity,
     Motor,
     Controller,
+    ArmMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -147,6 +148,14 @@ fn stop(task: &mut Task, reason: &str) {
 
 impl Tasks {
     pub fn begin_controller(&self, owner: Owner) -> Result<u64, String> {
+        self.begin_finite_control(owner, Kind::Controller)
+    }
+
+    pub fn begin_arm_mode(&self, owner: Owner) -> Result<u64, String> {
+        self.begin_finite_control(owner, Kind::ArmMode)
+    }
+
+    fn begin_finite_control(&self, owner: Owner, kind: Kind) -> Result<u64, String> {
         if !matches!(owner.window.label.as_str(), "page-motion" | "page-status") {
             return Err("只有 Motion 或 Status 页面可以切换 Controller".into());
         }
@@ -158,7 +167,7 @@ impl Tasks {
         let controller=super::controller_stop::Stop::new(inner.motor_context.as_ref(),owner.epoch,Instant::now());
         inner.task = Some(Task {
             snapshot: Snapshot { id, epoch: owner.epoch, window: owner.window.label.clone(),
-                command_id: super::controller_journal::new_id()?, kind: Kind::Controller,
+                command_id: if kind == Kind::ArmMode { super::controller_journal::new_arm_id()? } else { super::controller_journal::new_id()? }, kind,
                 phase: Phase::Submitting, message: "核验 Controller 切换前状态".into() },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
             probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller),
@@ -166,9 +175,17 @@ impl Tasks {
         Ok(id)
     }
 
+    pub fn arm_progress(&self, id: u64, message: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::ArmMode && !t.controller.as_ref().unwrap().requested()) {
+            task.snapshot.message = message.chars().take(512).collect();
+            if task.sent { task.snapshot.phase = Phase::Running; }
+        }
+    }
+
     pub fn controller_sent(&self, id: u64) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
-        let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::Controller)
+        let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && matches!(t.snapshot.kind, Kind::Controller | Kind::ArmMode))
             .ok_or("Controller 任务已失效，未发送切换")?;
         if task.sent || stopped(task) { return Err("Controller 任务已发送或撤销".into()); }
         task.sent = true;
@@ -202,7 +219,7 @@ impl Tasks {
     }
     pub fn controller_finish(&self, id: u64, verified: bool, message: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
-        let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.kind == Kind::Controller) else { return false; };
+        let Some(task) = inner.task.as_mut().filter(|t| t.snapshot.id == id && matches!(t.snapshot.kind, Kind::Controller | Kind::ArmMode)) else { return false; };
         let control=task.controller.as_mut().unwrap();
         if !task.sent || verified && !control.requested() {
             control.finish(super::controller_stop::Outcome::Finished);
@@ -287,7 +304,7 @@ impl Tasks {
                 inner.task = None;
                 return;
             }
-            if task.snapshot.kind == Kind::Controller {
+            if matches!(task.snapshot.kind, Kind::Controller | Kind::ArmMode) {
                 if task.snapshot.phase != Phase::Uncertain && !task.controller.as_ref().unwrap().requested() {
                     task.snapshot.phase = Phase::Uncertain;
                     task.snapshot.message = "Controller 操作结果未确认；窗口退出或断线不代表操作结束".into();
@@ -579,7 +596,7 @@ impl Tasks {
             return false;
         };
         let terminal = match task.snapshot.kind {
-            Kind::Motor | Kind::Controller => false,
+            Kind::Motor | Kind::Controller | Kind::ArmMode => false,
             Kind::Gravity => value["op"]=="gravity_id_task_status" && value["known"]==true && value["terminal"]==true &&
                 value["result"]["op"]=="gravity_id_result" && value["result"]["command_id"]==task.snapshot.command_id &&
                 value["result"]["terminal"]==true && value["status"]==value["result"]["task_phase"] &&
@@ -635,7 +652,7 @@ impl Tasks {
         let renewed = response.is_ok_and(|value| {
             value["command_id"] == task.snapshot.command_id
                 && match task.snapshot.kind {
-                    Kind::Motor | Kind::Controller => false,
+                    Kind::Motor | Kind::Controller | Kind::ArmMode => false,
                     Kind::Gravity => value["op"]=="gravity_id_heartbeat_ack" && value["renewed"]==true,
                     Kind::Position => {
                         value["op"] == "position_motion_heartbeat_ack" && value["renewed"] == true
@@ -674,7 +691,7 @@ impl Tasks {
         }) else {
             return;
         };
-        if task.snapshot.kind == Kind::Controller { return; }
+        if matches!(task.snapshot.kind, Kind::Controller | Kind::ArmMode) { return; }
         let terminal = match task.snapshot.kind {
             Kind::Gravity if message["op"]=="gravity_id_result" => message["terminal"]==true && matches!(message["task_phase"].as_str(),Some("succeeded" | "failed" | "canceled")),
             Kind::Gravity if matches!(message["op"].as_str(),Some("gravity_id_status" | "gravity_id_feedback")) => false,
@@ -848,7 +865,7 @@ impl Tasks {
         let action = task.action_next;
         task.inflight = Some(action);
         let message = match (task.snapshot.kind, recovery, heartbeat) {
-            (Kind::Motor | Kind::Controller, _, _) => unreachable!("Native task handled above"),
+            (Kind::Motor | Kind::Controller | Kind::ArmMode, _, _) => unreachable!("Native task handled above"),
             (Kind::Gravity, false, true) => json!({"op":"gravity_id_heartbeat","command_id":task.snapshot.command_id}),
             (Kind::Gravity, false, false) => json!({"op":"gravity_id_cancel","command_id":task.snapshot.command_id}),
             (Kind::Gravity, true, _) => json!({"op":"gravity_id_task_status","command_id":task.snapshot.command_id}),
@@ -973,6 +990,32 @@ mod tests {
         drop(motion);
     }
     #[test]
+    fn arm_operation_owns_global_control_and_survives_page_loss_until_proven() {
+        let tasks = Arc::new(Tasks::default());
+        let now = Instant::now();
+        let moving = tasks.migration("page-status").unwrap();
+        assert!(tasks.begin_arm_mode(owner("page-status")).is_err()); drop(moving);
+        let id = tasks.begin_arm_mode(owner("page-status")).unwrap();
+        assert_eq!(tasks.snapshot().unwrap().kind, Kind::ArmMode);
+        assert!(tasks.snapshot().unwrap().command_id.starts_with("arm-mode-"));
+        assert!(tasks.begin_controller(owner("page-motion")).is_err());
+        assert!(tasks.begin_arm_mode(owner("page-status")).is_err());
+        assert!(tasks.migration("page-status").is_err());
+        for op in ["position_move", "visual_pick_start", "gravity_id_send_goal", "trajectory_command"] {
+            assert!(tasks.admit(owner("page-motion"), &json!({"op":op,"command_id":"conflict"}), now).is_err());
+        }
+        tasks.controller_sent(id).unwrap();
+        tasks.lost(Some(&owner("page-status")), "page exited");
+        assert_eq!(tasks.snapshot().unwrap().id, id);
+        assert_eq!(tasks.snapshot().unwrap().phase, Phase::Uncertain);
+        assert!(!tasks.controller_finish(id, false, "unknown"));
+        tasks.controller_remote_completed(id);
+        assert!(tasks.controller_finish(id, true, "verified"));
+        assert!(tasks.migration("page-status").is_ok());
+        assert!(tasks.begin_arm_mode(owner("page-handeye")).is_err());
+    }
+
+    #[test]
     fn controller_disable_requires_reassertion_after_remote_completion_and_fresh_output_proof() {
         let tasks=Arc::new(Tasks::default());let now=Instant::now();
         tasks.configure_motor(1,&json!({"host":"original","commandTopic":"/cmd","statusTopic":"/status"}));
@@ -998,6 +1041,35 @@ mod tests {
         tasks.observe(1,&status(30,6));assert!(tasks.snapshot().is_none());
         assert_eq!(*outcome.borrow(),super::super::controller_stop::Outcome::Disabled);
         let next=tasks.begin_controller(owner("page-status")).unwrap();
+        tasks.disable_reply(id,after.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":40})));
+        assert_eq!(tasks.snapshot().unwrap().id,next);
+    }
+    #[test]
+    fn arm_mode_disable_requires_reassertion_after_remote_completion_and_fresh_output_proof() {
+        let tasks=Arc::new(Tasks::default());let now=Instant::now();
+        tasks.configure_motor(1,&json!({"host":"original","commandTopic":"/cmd","statusTopic":"/status"}));
+        let status=|seq,stamp| json!({"op":"topic_message","topic":"/status","data":{"mode":3,"last_command_sequence":seq,"header":{"stamp":{"sec":stamp,"nanosec":0}}}});
+        tasks.observe(1,&status(1,1));
+        let id=tasks.begin_arm_mode(owner("page-motion")).unwrap();
+        let outcome=tasks.controller_outcome(id).unwrap();tasks.controller_sent(id).unwrap();
+        let disabled=tasks.admit(owner("page-motor"),&json!({"op":"joint_command","mode":3}),now).unwrap();
+        assert!((disabled.permit.unwrap())()); // User stop always remains sendable.
+        let early=tasks.poll(1,now).unwrap();assert!((early.permit)());
+        tasks.disable_reply(id,early.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":10})));
+        tasks.observe(1,&status(10,2));assert!(tasks.snapshot().is_some());
+        tasks.controller_remote_completed(id);
+        tasks.disable_reply(id,early.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":10})));
+        tasks.observe(1,&status(10,3));assert!(tasks.snapshot().is_some());
+        assert!(!tasks.controller_finish(id,true,"")); // Target state verification cannot clear a requested stop.
+        tasks.finish_action(id,early.action);
+        let after=tasks.poll(1,Instant::now()).unwrap();assert!(after.action>early.action);
+        tasks.disable_reply(id,early.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":20})));
+        tasks.observe(1,&status(20,4));assert!(tasks.snapshot().is_some()); // wrong action number
+        tasks.disable_reply(id,after.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":30})));
+        tasks.observe(1,&status(29,5));assert!(tasks.snapshot().is_some());
+        tasks.observe(1,&status(30,6));assert!(tasks.snapshot().is_none());
+        assert_eq!(*outcome.borrow(),super::super::controller_stop::Outcome::Disabled);
+        let next=tasks.begin_arm_mode(owner("page-status")).unwrap();
         tasks.disable_reply(id,after.action,1,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":40})));
         assert_eq!(tasks.snapshot().unwrap().id,next);
     }

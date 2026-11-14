@@ -29,3 +29,5 @@ pub mod controller_journal;
 
 pub mod controller_stop;
 pub mod bag_operation;
+
+pub mod arm_operation;

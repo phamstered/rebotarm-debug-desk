@@ -22,7 +22,7 @@ VERSION = 1
 MAX_RECORDS = 256
 MAX_RECORD_BYTES = 16384
 COMMAND_TIMEOUT = 20
-ID = re.compile(r"controller-[a-f0-9]{48}\Z")
+ID = re.compile(r"(?:controller-|arm-mode-)[a-f0-9]{48}\Z")
 PHASES = {"reserved", "running", "succeeded", "rejected", "uncertain"}
 
 
@@ -37,7 +37,7 @@ def request(value):
         raise ValueError("invalid command hash")
     if value["op"] == "submit":
         command = value.get("command")
-        if not isinstance(command, str) or not command or len(command.encode()) > 32768 or "\0" in command:
+        if not isinstance(command, str) or not command or len(command.encode()) > (131072 if job.startswith("arm-mode-") else 32768) or "\0" in command:
             raise ValueError("invalid command")
         if hashlib.sha256(command.encode()).hexdigest() != digest:
             raise ValueError("command hash mismatch")
@@ -119,7 +119,7 @@ def reserve(root, job, digest):
         existing = query(root, job, digest)
         if existing["phase"] != "unknown":
             return existing, False
-        records = list(root.glob("controller-*.json"))
+        records = list(root.glob("controller-*.json")) + list(root.glob("arm-mode-*.json"))
         if len(records) >= MAX_RECORDS:
             completed = []
             for path in records:
@@ -149,6 +149,7 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
         write_record(root, record)
         return
     tail = bytearray()
+    progress_buffer = bytearray()
     expired = False
     deadline = time.monotonic() + timeout
     with selectors.DefaultSelector() as selector:
@@ -165,6 +166,18 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
                 else:
                     tail.extend(data)
                     del tail[:-2048]
+                    if record["id"].startswith("arm-mode-"):
+                        progress_buffer.extend(data)
+                        while b"\n" in progress_buffer:
+                            line, _, rest = progress_buffer.partition(b"\n")
+                            progress_buffer = bytearray(rest)
+                            if line.startswith(b"ARM_STAGE|") and len(line) <= 2048:
+                                # ensure_ascii expands malformed/unicode input;
+                                # leave room for the separately bounded log tail.
+                                record["progress"] = line.decode("utf-8", errors="replace")[:512]
+                                write_record(root, record)
+                        if len(progress_buffer) > 2048:
+                            progress_buffer.clear()
         if not expired:
             try:
                 child.wait(timeout=max(0.001, deadline - time.monotonic()))
@@ -204,15 +217,15 @@ def submit(root, job, digest, command):
                 os.dup2(fd, target)
             if fd > 2:
                 os.close(fd)
-            worker(root, record, command)
+            worker(root, record, command, timeout=600 if job.startswith("arm-mode-") else COMMAND_TIMEOUT)
         finally:
             os._exit(0)
     return record
 
 
 def main():
-    raw = sys.stdin.buffer.read(65537)
-    if len(raw) > 65536:
+    raw = sys.stdin.buffer.read(1048577)
+    if len(raw) > 1048576:
         raise ValueError("request too large")
     value = json.loads(raw)
     job, digest = request(value)

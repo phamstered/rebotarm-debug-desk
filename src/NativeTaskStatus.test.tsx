@@ -60,3 +60,15 @@ it("labels Controller uncertainty without claiming the remote operation has stop
   expect(await screen.findByRole("status")).toHaveTextContent("Motion · Controller 切换 · 结果未确认");
   expect(mocks.invoke.mock.calls.every(([command]) => command === "native_task_snapshot")).toBe(true);
 });
+
+it("keeps arm environment ownership visible across windows until native verification completes", async () => {
+  mocks.invoke.mockResolvedValue({...task, window:"page-status", kind:"arm_mode", phase:"running", message:"启动并核验目标控制器"});
+  render(<NativeTaskStatus />);
+  expect(await screen.findByRole("status")).toHaveTextContent("Status · 控制环境切换 · 执行中");
+  mocks.invoke.mockResolvedValue({...task, window:"page-status", kind:"arm_mode", phase:"uncertain", message:"等待原机器人状态"});
+  await act(async () => changed());
+  expect(screen.getByRole("status")).toHaveTextContent("控制环境切换 · 结果未确认");
+  mocks.invoke.mockResolvedValue(null);
+  await act(async () => changed());
+  expect(screen.queryByRole("status")).toBeNull();
+});

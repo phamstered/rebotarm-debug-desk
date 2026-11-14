@@ -35,7 +35,7 @@ struct Target {
     type_name: String,
     state: String,
 }
-fn rows(snapshot: &Snapshot) -> Result<&Vec<Value>, String> {
+pub(super) fn rows(snapshot: &Snapshot) -> Result<&Vec<Value>, String> {
     let entry = snapshot
         .entries
         .get(&Source::Controllers)

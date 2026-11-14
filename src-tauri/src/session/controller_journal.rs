@@ -16,9 +16,13 @@ pub fn new_id() -> Result<String, String> {
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
     ))
 }
+pub fn new_arm_id() -> Result<String, String> {
+    Ok(new_id()?.replacen("controller-", "arm-mode-", 1))
+}
 #[derive(Debug, PartialEq, Eq)]
 pub enum Proof {
     Pending,
+    Progress(String),
     Unknown,
     Succeeded,
     Rejected(String),
@@ -31,14 +35,10 @@ pub struct Job {
 }
 impl Job {
     pub fn new(id: String, command: String) -> Result<Self, String> {
-        if id.len() != 59
-            || !id.starts_with("controller-")
-            || !id[11..]
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || command.is_empty()
-            || command.len() > 32768
-            || command.contains('\0')
+        let suffix = id.strip_prefix("controller-").or_else(|| id.strip_prefix("arm-mode-"));
+        let limit = if id.starts_with("arm-mode-") { 131072 } else { 32768 };
+        if !suffix.is_some_and(|value| value.len() == 48 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            || command.is_empty() || command.len() > limit || command.contains('\0')
         {
             return Err("Controller 远端任务参数无效".into());
         }
@@ -78,7 +78,7 @@ impl Job {
         match value["phase"].as_str() {
             Some("unknown") => Ok(Proof::Unknown),
             Some("reserved") if value["started"] == false => Ok(Proof::Pending),
-            Some("running") if value["started"] == true => Ok(Proof::Pending),
+            Some("running") if value["started"] == true => Ok(value["progress"].as_str().filter(|line| line.len() <= 2048).map(|line| Proof::Progress(line.into())).unwrap_or(Proof::Pending)),
             Some("succeeded")
                 if value["started"] == true
                     && value["exit_code"] == 0
@@ -137,6 +137,17 @@ fn remote_command() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn arm_policy_binds_large_command_and_progress_to_a_distinct_operation_id() {
+        assert!(Job::new(new_id().unwrap(), "x".repeat(32769)).is_err());
+        assert!(Job::new(new_arm_id().unwrap(), "x".repeat(131073)).is_err());
+        let mut job = Job::new(new_arm_id().unwrap(), "x".repeat(40000)).unwrap();
+        assert!(job.submission().is_ok()); assert!(job.submission().is_err());
+        let progress = json!({"version":1,"id":job.id,"command_hash":job.hash,"phase":"running","started":true,"progress":"ARM_STAGE|verify|checking"});
+        assert_eq!(job.proof(&progress).unwrap(), Proof::Progress("ARM_STAGE|verify|checking".into()));
+        let mut other=progress.clone(); other["id"]=json!(new_id().unwrap()); assert!(job.proof(&other).is_err());
+        assert!(job.query_request().get("command").is_none());
+    }
     #[test]
     fn recovery_query_cannot_execute_and_proof_is_bound_to_id_and_full_command() {
         let id = new_id().unwrap();

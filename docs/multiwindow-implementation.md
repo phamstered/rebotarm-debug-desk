@@ -324,3 +324,15 @@ CUA 再次确认 Mac 处于锁屏状态；此前解锁请求仍待回复，没�
 解锁后已退出旧隔离进程，构建并启动最新独立 Debug bundle，严格 codesign 核验通过（`/tmp/260-bag-identity-bundle.log`）。真实窗口重新生成 1200×900 标定板、切到 100%、打开大图并用 Esc 返回；工具栏及关闭按钮完整可见。再次注入 detach:bounds + rollback:reparent、recover:bounds、dock:bounds，确认失败提示、重试恢复及最终收回均正常，图片、缩放与 12×9、15 / 11.25 mm 输入保留。三个单次 fixture 均已消费。一次自动化滚动坐标定位失败后，使用 PageDown 实际滚动，截图确认底部保存按钮、尺寸核对框、图片说明与滚动条完整可见。
 
 本轮未连接 Bridge，未执行真实录制/回放或机械臂动作，没有更新正式 `/Applications/Robot Console.app` 或生产 Jetson。原生窗口回归不等于运动、实时相机或多显示器验收；完整多窗口目标仍在进行中。
+
+## 整栈模式切换的原生任务归属
+
+`start_arm_mode` 已接入 `arm_operation.rs` 应用级 worker，覆盖 Teleop / Trajectory / VLA / Teaching、MoveIt、相机重启及 stop / disable-stop。实际 Status / Motion WebView、当前 Profile 和连接附着必须匹配；Tasks 中新增 arm_mode 类型，与其他运动、Controller 和页面迁移共用占用。未提交前页面失效可撤销，提交后原生工作不随 IPC future 或窗口消失而丢弃。未经过该操作的其他入口（Joint4、Episode 采集、直接 JTC 等）仍按原待办继续接入。
+
+远端复用原子完成记录并使用 arm-mode-* 独立编号策略，命令至多 128 KiB，有限步骤最长等待 600 秒；Controller 原策略仍为 32 KiB / 20 秒。同编号只提交一次，SSH 回复丢失后仅查询。原有 arm 生命周期脚本及现场支撑确认保持不变；进度写入有界记录，原 Channel 与跨窗口共享状态读取进度。ready 标记只能进入本地 verify；远端成功记录之后，还要刷新原机器人模式和相应 Controller。MoveIt 单独启动允许外部启动的轨迹控制栈，不额外要求 Console PID。
+
+DISABLE 复用远端完成后的新确认屏障；成功目标状态不能覆盖停止意图。切换期间的已支撑退出登记关闭输出请求，并明确提示清理尚未执行，防止并发清理与启动竞争。普通 safe_stop 的 RETURN 不被预先 DISABLE 打断；已有其他运动任务时拒绝开始整栈退出。异常或超时保留未知占用，不能以进程退出或普通 idle 状态释放。桌面进程重启后的在途任务恢复、未确认结果的完整恢复，以及其余任务生命周期仍未完成，整体目标保持进行中。
+
+本阶段最终 `npm test` 通过（902 前端 / 185 Rust / 3 运行库测试与其余脚本），日志 `/tmp/260-arm-owned-release-tests.log`。新增回归覆盖真实 loopback Bridge 中的窗口全部退出后继续关闭输出、完成前后 ACK 屏障、来源页面 / Profile / 连接代次拒绝、模式与 Controller 冲突、过期 / 错误状态不释放、远端 ready 不提前完成，以及发起 future 退出后 worker 继续。远端记录 10 项测试在 Mac 和 Jetson 临时目录通过，包含单次执行、进度、不同截止期限和异常 UTF-8 输出大小边界（`/tmp/260-arm-owned-verified-jetson.log`）。全程没有调用真实 ROS 控制服务。
+
+`npm run build`、文档构建以及隔离标识的 `npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过，日志 `/tmp/260-arm-owned-release-build.log / /tmp/260-arm-owned-docs-final.log / /tmp/260-arm-owned-release-native.log`。本次仅构建原生二进制，没有替换隔离 .app 或正式应用，也没有部署 Bridge；未将上一轮窗口复验记作本次整栈操作实机验收。该层仍需随完整方案完成最终集成与发布验收。

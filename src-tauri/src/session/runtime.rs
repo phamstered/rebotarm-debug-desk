@@ -198,6 +198,17 @@ impl Runtime {
         self.tasks.begin_controller(Owner { epoch: core.epoch, window: token })
     }
 
+    pub fn begin_arm_mode(&self, label: &str, profile: &crate::ConnectionProfile) -> Result<u64, String> {
+        let core = self.core.lock().unwrap();
+        if core.error.is_some() || core.transport.is_none() { return Err("Bridge 尚未连接".into()); }
+        if !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e| e.to_string())?) {
+            return Err("Controller 请求配置与当前共享连接不一致".into());
+        }
+        let token = core.clients.iter().find(|(token, client)| token.label == label && client.error.is_none())
+            .map(|(token, _)| token.clone()).ok_or("功能页面尚未附着当前连接")?;
+        self.tasks.begin_arm_mode(Owner { epoch: core.epoch, window: token })
+    }
+
     pub fn send_controller(&self, label: &str, epoch: u64, id: u64, profile: &crate::ConnectionProfile) -> Result<(), String> {
         let core = self.core.lock().unwrap();
         if core.epoch != epoch || core.error.is_some() || core.transport.is_none()
@@ -1459,6 +1470,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn arm_mode_disable_survives_all_pages_detaching_and_waits_for_post_completion_feedback() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        // Incomplete profile prevents SSH readers: this test uses loopback only.
+        hub.set_profile(json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}));
+        hub.connect(port).await.unwrap();
+        let (motion, _) = hub.attach("page-motion").unwrap();
+        let timeout = Duration::from_secs(3);
+        let id = hub.tasks.begin_arm_mode(motion.owner()).unwrap();
+        let outcome = hub.tasks.controller_outcome(id).unwrap();
+        hub.tasks.controller_sent(id).unwrap();
+        hub.request("page-motion", &motion, "control", json!({"op":"joint_command","mode":3}), timeout).await.unwrap();
+        hub.detach("page-motion", &motion).await.unwrap();
+        let disables = || seen.lock().unwrap().iter().filter(|m| m["op"] == "joint_command" && m["mode"] == 3).count();
+        tokio::time::timeout(timeout, async {
+            while disables() < 2 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        let status = |seq, mode, stamp| json!({"op":"topic_message","topic":"/status",
+            "data":{"last_command_sequence":seq,"mode":mode,"header":{"stamp":{"sec":stamp,"nanosec":0}}}});
+        let deliver = |frame: Value| {
+            let events = &events;
+            let hub = &hub;
+            async move {
+                events.send(frame.clone()).unwrap();
+                tokio::time::timeout(timeout, async {
+                    loop {
+                        if hub.core.lock().unwrap().latest_topics.get("/status").is_some_and(|(f,_)| f.metadata == frame) {break;}
+                        tokio::task::yield_now().await;
+                    }
+                }).await.unwrap();
+            }
+        };
+        deliver(status(123, 3, 1)).await;
+        assert!(hub.tasks.snapshot().is_some()); // ACK + DISABLE before remote completion is insufficient.
+        let before = disables();
+        hub.tasks.controller_remote_completed(id);
+        assert!(!hub.tasks.controller_finish(id, true, ""));
+        tokio::time::timeout(timeout, async {
+            while disables() <= before {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        for frame in [status(122, 3, 2), status(123, 1, 3)] {
+            deliver(frame).await;
+            assert!(hub.tasks.snapshot().is_some());
+        }
+        deliver(status(123, 3, 4)).await;
+        tokio::time::timeout(timeout, async {
+            while hub.tasks.snapshot().is_some() {tokio::task::yield_now().await;}
+        }).await.unwrap();
+        assert_eq!(*outcome.borrow(), super::super::controller_stop::Outcome::Disabled);
+        assert_eq!(seen.lock().unwrap().iter().filter(|m|m["op"]=="subscribe" && m["topic"]=="/status").count(), 1);
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="unsubscribe" && m["topic"]=="/status"));
+        hub.close();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn bag_admission_and_send_require_current_connection_profile_and_exact_page_incarnation() {
         use super::super::bag_operation::{Kind,Phase};
         let (port,_events,_seen,server)=fake_bridge().await;let hub=Runtime::default();
@@ -1492,6 +1559,28 @@ mod tests {
         let mut other=request.clone();other.ros_domain_id+=1;
         assert!(hub.begin_controller("page-motion",&other).is_err());
         let id=hub.begin_controller("page-motion",&request).unwrap();
+        assert!(hub.send_controller("page-motion",motion.epoch+1,id,&request).is_err());
+        assert!(hub.send_controller("page-motion",motion.epoch,id,&other).is_err());
+        hub.detach("page-motion",&motion).await.unwrap();
+        assert!(hub.send_controller("page-motion",motion.epoch,id,&request).is_err());
+        assert!(hub.tasks.snapshot().is_none());
+        hub.close();server.abort();
+    }
+
+    #[tokio::test]
+    async fn arm_mode_admission_requires_attached_owner_and_exact_shared_profile_and_epoch() {
+        let (port, _events, _seen, server)=fake_bridge().await;
+        let hub=Runtime::default();
+        let profile=json!({"host":"127.0.0.1","sshPort":1,"username":"fixture","identityFile":"", "localPort":port,
+            "remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash", "commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"});
+        let request:crate::ConnectionProfile=serde_json::from_value(profile.clone()).unwrap();
+        assert!(hub.begin_arm_mode("page-motion",&request).is_err());
+        hub.set_profile(profile.clone());hub.connect(port).await.unwrap();
+        assert!(hub.begin_arm_mode("page-motion",&request).is_err());
+        let (motion,_)=hub.attach("page-motion").unwrap();
+        let mut other=request.clone();other.ros_domain_id+=1;
+        assert!(hub.begin_arm_mode("page-motion",&other).is_err());
+        let id=hub.begin_arm_mode("page-motion",&request).unwrap();
         assert!(hub.send_controller("page-motion",motion.epoch+1,id,&request).is_err());
         assert!(hub.send_controller("page-motion",motion.epoch,id,&other).is_err());
         hub.detach("page-motion",&motion).await.unwrap();

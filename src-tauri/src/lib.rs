@@ -821,13 +821,6 @@ fn parse_arm_mode_status(output: &str) -> Result<ArmModeStatus, String> {
     })
 }
 
-fn parse_remote_action_ok(output: &str) -> Option<(u32, String)> {
-    let line = output.lines().rev().find(|line| line.starts_with("OK|"))?;
-    let mut fields = line.trim_start_matches("OK|").splitn(2, '|');
-    let pid = fields.next()?.parse().unwrap_or_default();
-    let label = fields.next().unwrap_or("").to_string();
-    Some((pid, label))
-}
 
 fn restart_agent_remote_command() -> String {
     format!(
@@ -1543,52 +1536,21 @@ async fn probe_arm_mode(profile: ConnectionProfile) -> Result<ArmModeStatus, Str
 }
 
 #[tauri::command]
-async fn start_arm_mode(profile: ConnectionProfile, mode: String, support_confirmed: Option<bool>,
+async fn start_arm_mode(window: tauri::Webview, profile: ConnectionProfile, mode: String, support_confirmed: Option<bool>,
     app: AppHandle, hub: State<'_, session::runtime::Runtime>,
     on_progress: tauri::ipc::Channel<arm_workflow::Progress>,
-    logs: State<'_, control_logs::LogSessions>,
 ) -> Result<RemoteActionResult, String> {
+    session::arm_operation::authorize(window.label())?;
     if matches!(mode.as_str(), "teaching" | "disable-stop") && support_confirmed != Some(true) {
         return Err("请先确认现场支撑机械臂，且夹爪释放无风险".into());
     }
     let remote = arm_mode_remote_command(&profile, &mode)?;
     if mode == "disable-stop" && hub.tasks.request_controller_disable(&serde_json::to_value(&profile).map_err(|e| e.to_string())?) {
         let _ = app.emit("native-tasks-changed", ());
+        return Err("已请求关闭输出；正在等待当前控制切换结束及新的关闭反馈。控制环境清理尚未执行，请待共享任务结束后重试退出".into());
     }
-    // Normal safe_stop includes RETURN before DISABLE; do not interrupt RETURN.
-    // Diagnostics must never delay or block a requested stop/DISABLE.
-    if matches!(mode.as_str(), "teleop" | "trajectory" | "vla" | "teaching" | "realsense" | "moveit") {
-        let _ = control_logs::prepare(&profile, &logs).await;
-    }
-    let mut command = ssh_base(&profile);
-    command.arg("-o")
-        .arg("BatchMode=yes")
-        .arg(ssh_target(&profile))
-        .arg(remote);
-    let (ok, exit_code, stdout, stderr) = arm_workflow::run(&mut command, Some(on_progress)).await?;
-    if !ok {
-        return Ok(RemoteActionResult {
-            ok: false,
-            exit_code,
-            message: format!("arm mode `{mode}` 失败"),
-            detail: stderr_tail(&stderr, &stdout),
-        });
-    }
-    let (pid, label) = parse_remote_action_ok(&stdout).unwrap_or((0, mode.clone()));
-    Ok(RemoteActionResult {
-        ok: true,
-        exit_code: 0,
-        message: if mode == "stop" || mode == "disable-stop" {
-            "控制环境已停止，输出已关闭".into()
-        } else if mode == "moveit" {
-            label
-        } else if mode == "trajectory" {
-            format!("Trajectory + MoveIt 已就绪 (pid {pid})")
-        } else {
-            format!("{label} 已启动 (pid {pid})")
-        },
-        detail: stderr_tail(&stderr, &stdout),
-    })
+    session::arm_operation::start(app, window.label().to_owned(), &hub, profile, mode, remote, on_progress).await
+
 }
 
 
@@ -2296,6 +2258,14 @@ __BYID_SEP__\n\
         let output = run_status("Project/missing/install/setup.bash");
         assert!(output.contains(&format!("WORKSPACE={}", legacy.display())));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn all_arm_mode_commands_fit_the_bound_single_submission_journal() {
+        for mode in ["teleop", "trajectory", "vla", "teaching", "moveit", "realsense", "stop", "disable-stop"] {
+            let remote = arm_mode_remote_command(&profile(""), mode).unwrap();
+            assert!(session::controller_journal::Job::new(session::controller_journal::new_arm_id().unwrap(), remote).is_ok(), "{mode}");
+        }
     }
 
     #[test]
