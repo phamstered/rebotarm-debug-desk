@@ -13,7 +13,7 @@
 | 任务独立于页面、冲突互斥、断线代次和恢复记录 | 各类任务状态机、持久化与 loopback 回归；Controller/JTC/Joint4 等隔离 ROS 验证；Release 原生重载及未知任务阻止迁移复测 | 模拟恢复记录不等于实机任务终态核验 |
 | 有界图像/点云分发、共享资源、Monitor 历史 | 九窗口 30 分钟记录、两次慢消费者实验、帧龄区间、缓存及队列回归 | 测量来自旧 Debug 候选包和模拟数据，不是 Release 长期性能保证 |
 | 外部活动跨连接隔离 | 共享观察绑定连接 Profile/epoch，换连接重置；迟到回复及本桌面任务身份由回归验证 | 不接管任意外部进程、不保证其他客户端全局互斥；不能把观察当成本桌面所有权 |
-| 全量测试、构建、CI、合并和安装 | 各阶段本机全量测试、隔离 ROS 测试和候选包记录见末尾 | PR/CI/合并及生产安装未完成，生产 Bridge 未更新 |
+| 全量测试、构建、CI、合并和安装 | 各阶段本机全量测试、隔离 ROS 测试和候选包记录见末尾；正式应用已安装、签名/哈希及离线启动通过 | PR #269 CI/合并进行中，生产 Bridge 更新结果待核验 |
 
 未知任务历史不构成结束证据；当前保留占用且不重放。这是已实现的失败处理边界，不声称能从被删除的 Bridge 历史恢复终态。继续验收时应验证这些提示和停止入口，不通过清空记录来伪造任务完成。
 
@@ -690,3 +690,9 @@ hello 新增 `visual_pick_cancel_id_supported`；原生桌面在旧 Bridge 上�
 退出之后隔离 Bridge 274462 / 发布器 274448 和生产 Bridge 8367 仍在，证明应用退出未停止远端服务。随后只对已核对完整命令的测试发布器 274448 发送 TERM，由其 finally 清理隔离 Bridge；复核两进程和 28865 监听消失，生产 8367 / 8765 保持不变。应用停止后从 `/tmp/260-load-original-layout.json` 恢复隔离配置原布局。
 
 本轮只补充实际验收证据，产品代码与上一节全量测试及 Release 构建一致。外接屏拔插按用户明确要求延期；PR/CI/合并、正式应用安装与生产 Bridge 更新仍需按实际结果记录。
+
+## 正式应用安装与发布流程
+
+`npm run install:mac` 成功完成正式 Release 构建及 `/Applications/Robot Console.app` 安装；标识为 `dev.easydebug.desktop`，严格 codesign 通过，安装包与构建产物的主二进制 SHA-256 均为 `33c0efb410e9f85668b34e7b542d6b0cb1590bc3bfd4208bf2eab858d3fbfb72`。实际启动正式应用，保持未连接，打开手眼标定页，确认页面工具栏和图片工具完整加载；未发出运动请求。安装日志 `/tmp/260-production-install.log`。
+
+PR [#269](https://github.com/phamstered/rebotarm-debug-desk/pull/269) 已建立，等待 CI 和仓库自动合并检查。生产 Bridge 更新前只读核验得到连续递增时间戳的 mode=DISABLE / fault_code=0，未发现运动控制进程或其他 Bridge 连接。统一脚本已完成 dry-run，并备份至 `easy_debug_bridge/backup/easy_debug_bridge-20261115-004646.tar.gz`，正在单线程构建。现场 `visual_pick.json` 的 0 mm 下探、抓取偏移及 `plane_verified=false` 从该备份逐字节保留，配置 SHA-256 为 `d848bb15a982f4064f61dd34d400b9076b76edb77823e15d7f66e00cd4421cd8`；不以仓库默认值替代现场标定。编译完成不代表运行进程已替换，后续须单独核验重启、安装二进制及 hello。

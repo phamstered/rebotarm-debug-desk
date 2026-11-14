@@ -573,7 +573,7 @@ These IPC commands do not alter Bridge motion capabilities or remove any executi
 - The frontend adds `desktop_received_at_ms` in its performance-clock domain after decoding. This field is desktop-only, never a ROS/Bridge input. Feedback, RGBD, RGB target tracking and calibration consumers preserve this age through rendering and freshness checks.
 - `native_bridge_detach {attachment}` releases that window's interests. Other windows' subscriptions and the connection remain active. `stop_session` invalidates the native epoch before stopping the SSH tunnel.
 
-These APIs provide session transport. Page ownership, safe migration and multi-window UI remain under development in Issue #260; their availability must not be inferred from these internal endpoints.
+These APIs provide session transport. Native page ownership and migration use the task and workspace protocols below; transport availability alone does not authorize a control operation.
 
 ### 原生任务状态（多窗口开发分支）
 
@@ -585,7 +585,7 @@ Position/动作组、Pick、Gravity、Trajectory、Joint4 的原生任务同时�
 
 桌面原生层把页面的 `position_motion_info` / `visual_pick_status` 映射为共享只读缓存，各窗口均可观察，不直接发送续租请求。只有已受理且所属 WebView 仍存活的任务由 Rust 每 500 ms 续租：Position 使用 `position_motion_heartbeat`，Pick 使用原 `visual_pick_status`。页面不能直接请求 Position 心跳。窗口数据拉取/请求入口维护存活时间；超过 5 秒无入口调用，或页面会话退出/队列失效时，由 Rust 请求取消。后台查询与心跳不刷新窗口存活。取消可越过慢心跳；迟到回复按原生任务编号隔离。停止或重连后每秒查询终态：Position 必须有匹配 command_id、明确 terminal 及一致的完整 motion_state，Pick 必须有匹配编号且 busy=false 的 holding/failed/canceled。未知、单独 idle/busy=false 或 stop_failed 不解锁。恢复取得的完整终态会发给页面以释放同一动作组锁。缺少新能力的 Bridge 会阻止原生多窗口执行，并提示更新。
 
-原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹和 SSH 控制操作的完整原生生命周期仍待接入。
+原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹和 SSH 控制操作的任务生命周期见下文。
 
 
 Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
@@ -618,7 +618,7 @@ Bridge 在运动回调组串行处理发布、反馈和任务状态，最多保�
 - `joint4_capture`：沿用本页面已受理的 Begin 任务编号，另有唯一 `operation_id` 和手离开确认；同一时刻至多一个在途 Capture。排队事件仅允许续租，须收到 Begin 成功回执或匹配的 running 事件后才开放 Capture。回复 `joint4_capture_ack` 必须同时匹配两编号，含布尔 success 和有界 message。采样回执不结束姿态任务；异常回复请求释放，不重发采样。Bridge 串行调用服务，当前姿态最多保存 64 项采样回执；重复已完成操作编号返回原回执，不重发。重复在途 Capture 返回错误，保持原请求在途。
 - 已有任务时的 Release 只登记取消意图，IPC 回复 `{success:true,pending:true,command_id,message}`，不是姿态释放证明。原生 worker 发送 `joint4_cancel`；窗口失联或超过 5 秒没有所属页面活动也触发取消。活跃已受理任务每 500 ms 至多一次 `joint4_heartbeat`，要求编号匹配的 `joint4_heartbeat_ack,renewed:true`。页面不能直接调用这四类控制/续租消息。取消及 DISABLE 使此前排队的 Begin/Capture 失效；取消有保留发送容量。
 - `joint4_task_state` 须匹配 `command_id`、原 action 和 `terminal:true`。认可的 phase/evidence 配对为 `canceled/pose_released`、`canceled/output_disabled`、`failed/not_called`、`failed/service_rejected`，以及仅 Fit/Reset 可用的 `succeeded/service_verified`。`pose_released` 表示解除软保持，重力前馈仍有效；不能作为硬件关闭输出证据。Bridge 只有在在途服务均已返回、相应状态及必要硬件反馈核验后给出证据。服务提交/响应异常不会丢弃仍可能执行的调用，也不会并发重试；迟到 Begin/Capture 返回后才允许 Release。
-- 重连只向同一机器人、ROS/反馈配置查询 `joint4_task_status`；要求 `known:true,terminal:true,busy:false`、匹配编号/phase 及嵌套 result 中完整有效终态。未知、缺字段或其他连接不能释放占用，查询不代替所属窗口续租。桌面进程重启恢复尚未实现。
+- 重连只向同一机器人、ROS/反馈配置查询 `joint4_task_status`；要求 `known:true,terminal:true,busy:false`、匹配编号/phase 及嵌套 result 中完整有效终态。未知、缺字段或其他连接不能释放占用，查询不代替所属窗口续租。桌面进程重启通过 `leased-recovery-v1.json` 恢复原编号和来源，只查询终态，不恢复续租或动作。
 
 Joint4 的服务仅限 `/joint4_calibration_controller/{begin_pose,capture_pose,release_pose,fit,reset}`。除 Release 外，要求标定 Controller active、新鲜注册表、健康同步时钟、TRACK、无硬件故障和六轴使能、有限且新鲜的独立关节反馈。Begin/Capture 保留原有 Joint4 速度、位移、修正力矩和稳定时长门禁；Fit/Reset 要求释放姿态。释放服务不因状态过期被挡住，但终态仍须核验。
 
@@ -676,7 +676,7 @@ gravity_id_heartbeat 带 command_id，仅原 WebSocket 所属者可续租；响�
 
 反馈、状态、结果都带 command_id。数值反馈 phase 不表示执行终态。Action 返回之后为 status=awaiting_stop，仍持锁；等待结果之后的 HardwareStatus（HOLD 或 DISABLE）及 joint1–joint6 的有限位置、速度 ≤0.02 rad/s，原生接收龄 <500 ms、源时刻距 ROS 当前时刻 <1 秒，两路源时间均推进，连续满足 200 ms 且距 Action 返回至少 300 ms，才发送 gravity_id_result。该事件 terminal=true，task_phase 为 succeeded/failed/canceled。明确未受理的拒绝可以立即返回失败终态。反馈不完整、过期、倒退或 Action 结果未知时不释放。HOLD 是维持输出，不等于 DISABLE。
 
-gravity_id_task_status 按 command_id 返回 known、terminal、status 和完整 result；未知编号不代表任务结束。最多保留 256 项 / 2 MiB，每项最多 256 KiB；Bridge 重启或淘汰后返回未知。恢复必须核验编号及完整匹配终态。前端忽略旧编号、早到的 DONE/FAILED 反馈及晚到 ACK，不让它们解除当前任务占用。正式 Bridge 尚未部署此开发分支。
+gravity_id_task_status 按 command_id 返回 known、terminal、status 和完整 result；未知编号不代表任务结束。最多保留 256 项 / 2 MiB，每项最多 256 KiB；Bridge 重启或淘汰后返回未知。恢复必须核验编号及完整匹配终态。前端忽略旧编号、早到的 DONE/FAILED 反馈及晚到 ACK，不让它们解除当前任务占用。运行环境须使用声明相应能力的 Bridge，部署验证见多窗口实现记录。
 
 辨识任务期间收到显式 DISABLE 时，会同时取消 Action，并记录“必须关闭输出”。鉴于当前编排器在返回结果后仍短暂发送 HOLD，Bridge 在结果返回至少 300 ms 后重新发布三帧清零的 DISABLE，每帧分配新的序列号；未确认时最多每秒重试一次。此时只有 mode=DISABLE 且 last_command_sequence 覆盖这批序列的新鲜固件反馈，连同上述六轴停稳条件，才能结束任务；HOLD 不满足。没有命令订阅者、没有确定 Action 结果或没有新鲜反馈时保持占用。该机制不承诺网络或硬件故障下的固定停机延迟。
 

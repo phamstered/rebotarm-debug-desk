@@ -266,7 +266,7 @@ Humble 容器使用 host 网络及独立 PID 命名空间，构建目录与 host
 Controller SSH helper 仅使用 Python 标准库，通过现有 SSH 传入固定 helper 及结构化请求，不安装额外守护进程。提交先在 `~/.cache/rebotarm-debug-desk/controller-operations-v1` 的私有目录持久化记录，再启动脱离 SSH 标准流的有限子进程。记录使用原子替换和 fsync；输出仅保留尾部 2048 字节。每条记录最多 16 KiB、至多保留 256 条，满时仅淘汰成功/启动前拒绝记录，未确认记录不自动淘汰。保留期内同编号同摘要的重复提交返回原记录；Mac 的恢复路径始终只查询，因此淘汰或记录丢失不会导致重新执行。CLI 自身最多等待 20 秒（既有 ROS 命令内部另有 10 秒 timeout）；超时停止本次 CLI 进程组，但不能据此宣称已取消 ROS 服务，故记录为 uncertain。目录和记录不是跨用户认证机制；访问仍由 SSH 用户权限控制。
 
 
-Controller 停止证明由 session/controller_stop.rs 持有，与远端完成记录分开。Tasks 在同一互斥锁内登记停止意图和远端完成时的动作编号；运行中提前发送的 DISABLE 不能作为最终证明，完成后需重新发送，并由持续存在的原生 HardwareStatus 订阅确认。watch 结果保留最终状态，使后台 Controller 工作在任务锁释放后仍可获知“输出已关闭”，避免向原调用者返回切换成功。此协调覆盖显式 DISABLE 和已确认支撑的 disable-stop；正常 RETURN 停止流程及其他 arm mode 任务的完整统一管理仍待实现。
+Controller 停止证明由 session/controller_stop.rs 持有，与远端完成记录分开。Tasks 在同一互斥锁内登记停止意图和远端完成时的动作编号；运行中提前发送的 DISABLE 不能作为最终证明，完成后需重新发送，并由持续存在的原生 HardwareStatus 订阅确认。watch 结果保留最终状态，使后台 Controller 工作在任务锁释放后仍可获知“输出已关闭”，避免向原调用者返回切换成功。此协调覆盖显式 DISABLE 和已确认支撑的 disable-stop；正常 RETURN 停止流程保留，其他 arm mode 工作由下文的 arm_operation 管理。
 
 
 rosbag 录制与回放的只读状态也由 `session/observations.rs` 调度，分别通过固定 SSH status 命令读取，所有 WebView 只消费带连接代次和帧龄的快照。窗口不发起启动时的重复 bag 查询，手动刷新及操作后复查走相同的串行源。查询不依赖主窗口存活；断开会话取消查询，不把取消只读探测等同于停止远端录制或回放。
@@ -275,7 +275,7 @@ rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 w
 
 整栈控制切换由 `session/arm_operation.rs` 负责，复用 Tasks 全局控制占用与完成后 DISABLE 屏障。命令记录使用独立 `arm-mode-` 编号，固定策略允许至多 128 KiB 命令和 600 秒远端步骤等待；原 Controller 策略仍为 32 KiB / 20 秒。两类共享原子记录容量上限和命令摘要核验，只能提交一次。远端进度是有界元数据，不转发完整持续日志。600 秒超时不会被解释为 ROS 服务停止；异常结果保留占用。该层不替换已有 arm 生命周期脚本的输出确认、进程归属、示教支撑确认及自检条件。
 
-Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。Episode 桌面重启恢复通过单独的持久化查询票据/进程检查点接入；外部录制的完整跨客户端生命周期仍在开发范围内。
+Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。Episode 桌面重启恢复通过单独的持久化查询票据/进程检查点接入；任意外部客户端的完整生命周期不由本桌面接管。
 
 多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。Bridge 的 `joint4_calibration.cpp` 持有互斥服务调用、姿态租约和有界回执/终态记录，复用 Controller Registry 与底层独立反馈及 DISABLE 序列分配。服务未返回时不允许 Release 越过它；状态和硬件证据确认后才释放任务。桌面拒绝旧能力入口；开发分支尚未作为已发布的实机控制链路验收。
 
@@ -285,7 +285,7 @@ Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快
 
 ### Bag ownership across desktop restarts
 
-The native session restores rosbag ownership from a bounded private write-ahead journal before creating functional workspaces. Only remote query tickets and process receipts persist; command text never does. Recovery uses the existing shared observations and requires an explicitly established connection to the original Profile. It does not auto-connect or replay controls. Durable terminal cleanup precedes releasing native occupancy. Corrupt recovery records keep a visible admission barrier with stop/DISABLE and offline editing available. This section applies to bag operations; Episode recovery follows below. Full restart recovery for remaining task kinds is still pending.
+The native session restores rosbag ownership from a bounded private write-ahead journal before creating functional workspaces. Only remote query tickets and process receipts persist; command text never does. Recovery uses the existing shared observations and requires an explicitly established connection to the original Profile. It does not auto-connect or replay controls. Durable terminal cleanup precedes releasing native occupancy. Corrupt recovery records keep a visible admission barrier with stop/DISABLE and offline editing available. This section applies to bag operations; Episode recovery follows below. Restart recovery for the other task kinds is described in their respective sections below.
 
 
 Episode tasks restore from `collection-recovery-v1.json` before Workspace startup, using the same private atomic-file utility as bag recovery. Pending remote work is query-only; running checkpoints consume existing shared status and never renew a robot-motion lease. Native ownership remains until matched completion and durable cleanup. Recorder process identity includes boot ID, PID and start ticks; finalization pins the process with pidfd before checking identity and signaling. Legacy or unmanaged processes are not automatically adopted across desktop restarts. Samples and dataset files remain on Jetson and are not serialized into this local recovery journal.
