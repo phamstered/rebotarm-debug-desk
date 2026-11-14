@@ -163,6 +163,13 @@ if(BUILD_TESTING)
   add_test(NAME topic_json COMMAND test_topic_json)
   if(moveit_msgs_FOUND AND control_msgs_FOUND AND controller_manager_msgs_FOUND)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_package(controller_manager REQUIRED)
+    find_package(joint_trajectory_controller REQUIRED)
+    find_package(hardware_interface REQUIRED)
+    add_test(NAME jtc_receipt_timing_ros
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_jtc_receipt_timing_ros.py)
+    set_tests_properties(jtc_receipt_timing_ros PROPERTIES
+      ENVIRONMENT "ROS_DOMAIN_ID=224;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME trajectory_task_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_trajectory_task_ros.py $<TARGET_FILE:bridge_node>)
     set_tests_properties(trajectory_task_ros PROPERTIES

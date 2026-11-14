@@ -32,6 +32,7 @@ class Robot(MockRobot):
         self.follow = True
         self.reference_goal = {}
         self.ends = {}
+        self.starts = {}
         super().__init__()
         # Direct JTC must not depend on either MoveIt Action server being up.
         self.move.destroy()
@@ -44,10 +45,13 @@ class Robot(MockRobot):
     def trajectory(self, msg):
         self.trajectories.append(msg)
         duration = msg.points[-1].time_from_start
-        end = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9 + duration.sec + duration.nanosec / 1e9
+        assert msg.header.stamp.sec == 0 and msg.header.stamp.nanosec == 0, "JTC must start at consumption"
+        start = self.get_clock().now().nanoseconds / 1e9
+        end = start + duration.sec + duration.nanosec / 1e9
         for name, value in zip(msg.joint_names, msg.points[-1].positions):
             self.reference_goal[name] = value
             self.ends[name] = end
+            self.starts[name] = start
             if self.follow:
                 self.positions[name] = value
 
@@ -87,6 +91,9 @@ class Robot(MockRobot):
             state.actual.velocities = [0.] * len(names)
             if not self.omit_reference:
                 state.desired.positions = [self.reference_goal.get(j, self.positions[j]) for j in names]
+                elapsed = max(0, int((now - self.starts.get(names[0], now)) * 1e9))
+                state.desired.time_from_start.sec = elapsed // 1000000000
+                state.desired.time_from_start.nanosec = elapsed % 1000000000
                 state.desired.velocities = [0. if now >= self.ends.get(j, 0.) else .001 for j in names]
             publisher.publish(state)
         hw = HardwareStatus()

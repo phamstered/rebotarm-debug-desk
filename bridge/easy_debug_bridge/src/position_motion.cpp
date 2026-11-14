@@ -1107,8 +1107,11 @@ struct PositionMotion::Impl {
       // mutex. It cannot overtake this publication and leave a delayed start.
       std::lock_guard<std::mutex> lock(queue_mutex);
       if (!r.revoked || r.revoked->load()) throw std::runtime_error("直接轨迹已在发布前撤销");
-      message.header.stamp=node.now();
-      direct.sending(id,source_stamp(message.header.stamp),Clock::now());
+      // A nonzero publication stamp lets transport/update latency shorten
+      // the seed-to-first-point interval in JTC. Zero starts at consumption.
+      // Keep a separate publication clock baseline for terminal correlation.
+      message.header.stamp.sec=0;message.header.stamp.nanosec=0;
+      direct.sending(id,node.now().nanoseconds(),Clock::now());
       publisher->publish(message);
     } catch (...) {
       if (direct.active() && direct.active()->sent) direct.cancel(id);
@@ -1159,6 +1162,9 @@ struct PositionMotion::Impl {
     TrajectoryTaskCore::Feedback f;
     const auto sync=clock_snapshot();f.ros_now=node.now().nanoseconds();f.clock_valid=sync.healthy();f.clock_epoch=sync.generation;
     f.reference={source_stamp(feedback.header.stamp),received,feedback.joint_names,feedback.desired.positions,feedback.desired.velocities};
+    const auto &elapsed=feedback.desired.time_from_start;
+    if (elapsed.sec>=0 && elapsed.nanosec<1000000000U)
+      f.reference.trajectory_elapsed_ns=static_cast<int64_t>(elapsed.sec)*1000000000LL+elapsed.nanosec;
     f.actual={source_stamp(feedback.header.stamp),received,feedback.joint_names,feedback.actual.positions,feedback.actual.velocities};
     f.status_stamp=source_stamp(hardware.header.stamp);f.status_received=hardware_at;f.mode=hardware.mode;f.sequence=hardware.last_command_sequence;
     try {

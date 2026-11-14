@@ -26,6 +26,9 @@ class TrajectoryTaskCore {
     Time received{};
     std::vector<std::string> names;
     std::vector<double> positions, velocities;
+    // JTC publishes elapsed trajectory time even after its last point. Missing
+    // or negative values cannot prove consumption of a receipt-relative command.
+    int64_t trajectory_elapsed_ns{-1};
   };
   struct Feedback {
     int64_t ros_now{};
@@ -160,7 +163,14 @@ class TrajectoryTaskCore {
     // a delayed/unconsumed trajectory cannot resume when output is re-enabled.
     const bool reference_stopped=std::all_of(f.reference.velocities.begin(),f.reference.velocities.end(),
       [](double value){return std::isfinite(value) && std::abs(value)<=1e-9;});
-    bool settled=after_end && reference_stopped && values_match(f.reference,task,goal,true) &&
+    const auto duration_ns=static_cast<int64_t>(std::ceil(task.command.points.back().time_from_start*1e9));
+    const auto elapsed_ns=f.reference.trajectory_elapsed_ns;
+    // Zero-header trajectories start when JTC consumes them. The inferred
+    // controller origin must not precede this publication; an old stationary
+    // trajectory with the same endpoint must never release a new task.
+    const bool consumed_end=elapsed_ns>=duration_ns && elapsed_ns<=f.reference.stamp &&
+      f.reference.stamp-elapsed_ns>=task.sent_stamp;
+    bool settled=after_end && consumed_end && reference_stopped && values_match(f.reference,task,goal,true) &&
       values_match(f.actual,task,goal,!task.stopping) && values_match(f.joint,task,goal,!task.stopping,false);
     if (task.stopping) settled=settled && task.disable_sequence && f.mode==3 &&
       f.sequence>=*task.disable_sequence && f.status_received>=task.disable_at &&

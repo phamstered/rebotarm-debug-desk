@@ -18,6 +18,7 @@ Core::Feedback feedback(std::chrono::milliseconds elapsed) {
   Core::Feedback f;f.clock_epoch=7;f.clock_valid=true;
   f.ros_now=source+std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
   f.reference={f.ros_now,origin+elapsed,{"finger","joint1"},{.02,.5},{0.,0.}};
+  f.reference.trajectory_elapsed_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
   f.actual=f.reference;f.joint=f.reference;
   // Hardware JointState can include non-controller joints and another order.
   f.joint.names={"joint1","finger","extra"};f.joint.positions={.5,.02,8.};f.joint.velocities={0.,0.,1.};
@@ -85,7 +86,7 @@ int main() {
   assert(!normal.result("unknown"));
 
   // Each malformed/stale/future/wrong-unit sample resets the settling interval.
-  for (int fault=0;fault<16;++fault) {
+  for (int fault=0;fault<19;++fault) {
     Core task;start(task);assert(!task.observe(feedback(400ms),origin+400ms));
     auto f=feedback(650ms);
     switch(fault) {
@@ -104,11 +105,34 @@ int main() {
       case 12:f.mode=3;break; // unexpected output-off is not success
       case 13:f.actual.stamp-=1;break; // actual/reference must share one callback
       case 14:f.mode=2;break; // RETURN is not an arrived JTC target
+      case 16:f.reference.trajectory_elapsed_ns=-1;break;
+      case 17:f.reference.trajectory_elapsed_ns+=1000000000LL;break; // old controller origin
+      case 18:f.reference.trajectory_elapsed_ns=std::numeric_limits<int64_t>::max();break;
       case 15:f.reference.velocities[0]=.001;break; // low measured speed is not a stationary reference
     }
     assert(!task.observe(f,origin+650ms));assert(task.busy());
     assert(!task.observe(feedback(700ms),origin+700ms));
     assert(task.observe(feedback(950ms),origin+950ms));
+  }
+
+  // Same endpoint and fresh idle feedback from the previous trajectory do
+  // not prove that a delayed zero-header command was consumed, even on cancel.
+  for (bool cancel:{false,true}) {
+    Core delayed;start(delayed);
+    if(cancel){delayed.cancel("first");delayed.disabled_sent("first",12,origin+100ms,source,source,source);}
+    for (auto elapsed:{500ms,750ms}) {
+      auto old=feedback(elapsed);old.reference.trajectory_elapsed_ns+=1000000000LL;
+      if(cancel)old.mode=3;
+      assert(!delayed.observe(old,origin+elapsed));assert(delayed.busy());
+    }
+    // Actual JTC start is 700 ms after publication; 400 ms duration plus
+    // 200 ms settling is measured from that consumption, not from publish.
+    for (auto elapsed:{900ms,1100ms,1350ms}) {
+      auto frame=feedback(elapsed);frame.reference.trajectory_elapsed_ns-=700000000LL;
+      if(cancel)frame.mode=3;
+      auto result=delayed.observe(frame,origin+elapsed);
+      assert(bool(result)==(elapsed==1350ms));
+    }
   }
 
   // Source expiry alone and a fresh output-off ACK never release a pending

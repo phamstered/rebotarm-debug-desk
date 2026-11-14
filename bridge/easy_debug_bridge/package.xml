@@ -30,4 +30,8 @@
   <depend>microros_stm32h723_bridge</depend>
   <test_depend>rclpy</test_depend>
   <export><build_type>ament_cmake</build_type></export>
+  <test_depend>controller_manager</test_depend>
+  <test_depend>joint_trajectory_controller</test_depend>
+  <test_depend>hardware_interface</test_depend>
+  <test_depend>python3-yaml</test_depend>
 </package>

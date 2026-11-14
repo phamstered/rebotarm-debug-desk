@@ -473,3 +473,17 @@ Jetson 临时目录中运行 11 项 bag 测试、14 项 journal 测试和 3 项 
 最终完整 `npm test` 通过：920 前端 / 230 Rust / 3 运行库测试及其余脚本（`/tmp/260-external-activity-final-tests.log`）。前端、文档和隔离 Debug `.app` 构建及严格 codesign 核验通过（`/tmp/260-external-activity-final-{build,docs,bundle}.log`）。新变更是原生准入逻辑，未修改页面布局；本轮没有重新启动最新隔离包进行原生 UI 验证，也未把上一版本的图片/窗口验收计作本轮证据。正式应用、生产 Bridge 和机械臂未操作；无 Bridge 包源码变更，不需本轮 ROS colcon 验证。
 
 这是共享观察准入，不会接管或自动停止外部进程。bag 仍只探测私有身份记录中的实例，任意未登记终端进程不在范围；采集状态沿用 ROS status 服务及托管 PID 的现有发现语义。远端其他客户端可在查询后启动任务，当前门禁不证明全局互斥或即时检测。断线后离线页面可编辑，外部活动的跨连接归属、桌面重启恢复、未知任务恢复、真实 JTC 接收延迟、多屏/拔屏及九窗口持续运行验收、最终安装部署与 PR/CI/合并仍未完成，Issue #260 保持进行中。
+
+## 真实 JTC 接收延迟与首段时间修复
+
+本轮在 Jetson 安装版 JTC 2.53.1 上启动独立 ControllerManager，硬件仅为 mock_components/GenericSystem，使用 ROS_DOMAIN_ID=224、ROS_LOCALHOST_ONLY=1 和临时配置。200 ms 的首段移动 0.002 m：携带发布时绝对时间戳并延迟 150 ms 发送后，测得峰值速度约 0.06549 m/s、加速度约 5.8724 m/s²；零时间戳对应约 0.015 / 0.300。实际控制器证明了绝对时间戳压缩首段的风险，而非只依据模拟发布者推断。
+
+直接轨迹现在发布零时间戳，由 JTC 消费时开始计时，Bridge 单独保留发布时间。完成和取消释放新增 desired.time_from_start 检查：必须达到末点时长，且从 controller_state 的源时间减去轨迹已运行时间推得的起点不得早于本次发布。缺失/负值/过大值、旧轨迹相同末点以及延迟消费均不能提前释放占用。原有新鲜度、独立反馈、DISABLE 序列和 200 ms 停稳检查保留；不把发布时间后的简单等待作为消费完成证据。
+
+新增 test_jtc_receipt_timing_ros.py 已进入默认 ROS CTest，启动和清理的均是自己的模拟控制器进程。Core 新增旧轨迹、延迟消费及取消路径负例；原有 ROS 适配测试明确断言发布的 header 为零，并模拟控制器的消费时间。首次临时探测只在结果 JSON 输出时遇到 ROS array 类型不能序列化，转换为普通列表后重新运行；未修改控制器行为或弱化数值断言。
+
+最终本机完整 npm test 通过：920 前端 / 230 Rust / 3 运行库及其余脚本（/tmp/260-jtc-receipt-all-tests.log）。前端、文档、独立 Debug 应用构建与严格 codesign 核验通过（/tmp/260-jtc-receipt-{build,docs,bundle}.log）。本轮没有重开最新原生包或重复布局视觉验收，不将前轮窗口验证作为当前包的新证据。
+
+通过部署脚本仅同步独立 easy_debug_bridge_260_motion_observe 工作区，随后单线程 colcon build、完整 colcon test 与 colcon test-result --verbose 全部通过：30 tests，0 errors，0 failures，0 skipped（/tmp/260-jtc-receipt-ros.log）。隔离域 223 的安装二进制冒烟核对实际 /proc/PID/exe，并读回 build ID 3de66d6c389e、直接轨迹及 Joint4 能力、未知任务非终态和拒绝历史（/tmp/260-jtc-receipt-smoke.log）；进程已清理。
+
+这一轮补足了安装版真实 JTC 的首段接收延迟验证，硬件为模拟关节，不能据此保证实机最坏调度时延或延迟期间起点不变。正式应用和生产 Bridge 没有更新。完整目标仍包括外部活动跨连接归属、未知任务与桌面重启恢复、多屏/拔屏和九窗口持续运行验收，最终安装部署、PR/CI/合并继续待完成。

@@ -601,7 +601,9 @@ Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份�
 
 Bridge 在运动回调组串行处理发布、反馈和任务状态，最多保留 256 个终态。仅允许 `/arm_trajectory_controller/joint_trajectory` 和 `/gripper_trajectory_controller/joint_trajectory`，要求完整关节集合、active 控制器及 position/velocity 接口、新鲜反馈、TRACK、无故障和时钟健康。校验 JTC actual、desired 及独立测量到首点的插值；夹爪使用任务开始时保存的标定转换为米。有速度的段检查连续样条速度、加速度及位置界限。保留既有机械臂 position-only 线性路径，只能核验段内速度，不能证明结点速度跳变的加速度界限；夹爪缺失速度会拒绝。
 
-首段校验使用 Bridge 收到的起始快照与请求时间，不能视为控制器内的实时限幅器。[JTC 2.53.1 的采样实现](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/trajectory.cpp) 在实际更新时选取起始状态和起始时间，传输/调度延迟会改变到首点的时间。隔离模拟节点测试覆盖任务协议和反馈证据，不替代真实 JTC 的首段插值及硬件验证。
+首段校验使用 Bridge 收到的起始快照，不能视为控制器内的实时限幅器。直接轨迹发布 `header.stamp=0`，由 JTC 在实际消费时选取起始时间，避免发布到消费之间的延迟压缩起点到首点的时间；Bridge 独立保存发布时间用于完成核验。[JTC 2.53.1 的采样实现](https://github.com/ros-controls/ros2_controllers/blob/2.53.1/joint_trajectory_controller/src/trajectory.cpp) 的这项行为已用安装版真实控制器和 GenericSystem 模拟硬件验证：150 ms 延迟的绝对时间戳会压缩 200 ms 首段，零时间戳保留该时长。此测试不证明实机调度时延有上界，也不能保证延迟期间实测起点没有变化。
+
+完成和取消释放还要求 `desired.time_from_start` 非负并达到末点时长；由 `controller_state.header.stamp - desired.time_from_start` 推得的控制器轨迹起点不得早于本次发布时间。旧轨迹即使末点相同也不能作为本次消费完成证据；缺失或不一致的轨迹时间保留占用。
 
 取消、所属连接断开或 5 秒租约失效会请求共享序列分配器发送三帧零输出 DISABLE，必要时每秒重申；缺少订阅者或发布错误继续保留占用，不向 JTC 发送空轨迹。完成需原轨迹时长已过、JTC reference 已在末点且速度为零，actual 与独立测量连续新鲜停稳 200 ms；成功还核验目标误差，取消还核验 DISABLE 序列回执。时间基准改变保留 uncertain，不能只靠墙钟等待释放。排队取消/断连/DISABLE 与直接发布共用撤销屏障；重复编号不重发，已发布任务绝不返回 not_published。
 
