@@ -81,6 +81,7 @@ export function NativePageToolbar({ page, state, connected, busyReason, onAction
     <button type="button" disabled={Boolean(blocked)} title={blocked || (state?.recovery_required ? "重新恢复上次移动前的窗口，保留页面内容" : state?.detached ? "保留当前内容，收回主窗口" : "保留当前内容，移到独立窗口")}
       onClick={() => onAction(state?.recovery_required ? "workspace_recover" : state?.detached ? "workspace_dock" : "workspace_detach", page)}>{state?.recovery_required ? "恢复窗口" : state?.detached ? "收回主窗口" : "拆出窗口 ↗"}</button>
     {blocked && state?.ready && <span role="status">{blocked}</span>}
+    {state?.restore_pending && <span role="status">{state.restore_pending}</span>}
   </header>;
 }
 

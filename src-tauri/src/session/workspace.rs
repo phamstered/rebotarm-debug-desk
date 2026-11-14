@@ -25,6 +25,8 @@ pub struct PageState {
     pub busy_reason: String,
     #[serde(default)]
     pub recovery_required: bool,
+    #[serde(default)]
+    pub restore_pending: String,
 }
 
 impl PageState {
@@ -297,7 +299,6 @@ impl Workspace {
             for page in pages {
                 let _gate = workspace.gate.lock().await;
                 if let Err(error) = workspace.ensure(&app, page).await {
-                    workspace.restoring.lock().unwrap().remove(&page);
                     let _ = app.emit(
                         "workspace-error",
                         format!("恢复 {} 窗口失败：{error}", page.title()),
@@ -308,6 +309,10 @@ impl Workspace {
             let mut last_error = String::new();
             loop {
                 tokio::time::sleep(Duration::from_millis(750)).await;
+                let pending: Vec<_> = workspace.restoring.lock().unwrap().iter().copied().collect();
+                for page in pending {
+                    workspace.restore_window(&app, page).await;
+                }
                 if let Ok(current) = displays(&app) {
                     if !current.is_empty() && current != previous_displays {
                         let _gate = workspace.gate.lock().await;
@@ -356,7 +361,6 @@ impl Workspace {
 
     fn save_layout(&self, app: &AppHandle) {
         let snapshot = self.snapshot();
-        let restoring = self.restoring.lock().unwrap().clone();
         // Native queries can invoke window callbacks. Never hold the store lock
         // while calling them, or a resize callback could deadlock the UI thread.
         let geometries: BTreeMap<_, _> = snapshot
@@ -372,6 +376,11 @@ impl Workspace {
                 geometry(&window).ok().map(|g| (*page, g))
             })
             .collect();
+        self.record_layout(&snapshot, &geometries);
+    }
+
+    fn record_layout(&self, snapshot: &Snapshot, geometries: &BTreeMap<Page, Geometry>) {
+        let restoring = self.restoring.lock().unwrap().clone();
         self.layout.update(|saved| {
             saved.selected = snapshot.selected;
             for (page, state) in &snapshot.pages {
@@ -526,6 +535,53 @@ impl Workspace {
             .migration_allowed()
     }
 
+    // The caller holds the workspace gate. A deferred admission is not a failed
+    // native move: retain the saved layout and try again after the task ends.
+    fn restore_permit(&self, page: Page, tasks: &std::sync::Arc<super::tasks::Tasks>)
+        -> Result<Option<super::tasks::Migration>, String>
+    {
+        if !self.restoring.lock().unwrap().contains(&page)
+            || self.restore_started.lock().unwrap().contains(&page)
+            || !self.snapshot().pages.get(&page).is_some_and(|p| p.ready)
+        {
+            return Ok(None);
+        }
+        self.migration_allowed(page)?;
+        let permit = tasks.migration(page.label())?;
+        self.restore_started.lock().unwrap().insert(page);
+        Ok(Some(permit))
+    }
+
+    fn restore_message(&self, page: Page, message: String) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let Some(page) = state.pages.get_mut(&page) else { return false; };
+        if page.restore_pending == message { return false; }
+        page.restore_pending = message;
+        true
+    }
+
+    async fn restore_window(&self, app: &AppHandle, page: Page) {
+        let _gate = self.gate.lock().await;
+        let hub = app.state::<super::runtime::Runtime>();
+        let permit = match self.restore_permit(page, &hub.tasks) {
+            Ok(Some(permit)) => permit,
+            Ok(None) => return,
+            Err(reason) => {
+                if self.restore_message(page, format!("等待恢复独立窗口：{reason}")) {
+                    self.emit(app);
+                }
+                return;
+            }
+        };
+        // Keep both native and task migration guards through the whole move.
+        let _permit = permit;
+        if let Err(error) = self.detach_ready(app, page).await {
+            self.restore_message(page, format!("恢复独立窗口失败，可手动重试：{error}"));
+            self.emit(app);
+            let _ = app.emit("workspace-error", format!("恢复 {} 窗口失败：{error}", page.title()));
+        }
+    }
+
     async fn ensure(&self, app: &AppHandle, page: Page) -> Result<Webview, String> {
         if let Some(view) = app.get_webview(page.label()) {
             return Ok(view);
@@ -543,6 +599,7 @@ impl Workspace {
                 ready: false,
                 busy_reason: String::new(),
                 recovery_required: false,
+                restore_pending: String::new(),
             });
         let result = main
             .add_child(
@@ -633,6 +690,11 @@ impl Workspace {
             .tasks
             .migration(page.label())?;
         self.migration_allowed(page)?;
+        self.detach_ready(app, page).await
+    }
+
+    // Callers hold Workspace::gate and the ordinary Tasks migration permit.
+    async fn detach_ready(&self, app: &AppHandle, page: Page) -> Result<Snapshot, String> {
         let view = self.ensure(app, page).await?;
         if self
             .snapshot()
@@ -1022,24 +1084,8 @@ pub fn workspace_page_ready(
         state.busy_reason = busy_reason;
     }
     workspace.emit(&app);
-    let restore = workspace.restoring.lock().unwrap().contains(&page)
-        && workspace.restore_started.lock().unwrap().insert(page);
-    if restore {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = app.state::<Workspace>().detach(&app, page).await {
-                app.state::<Workspace>()
-                    .restoring
-                    .lock()
-                    .unwrap()
-                    .remove(&page);
-                let _ = app.emit(
-                    "workspace-error",
-                    format!("恢复 {} 窗口失败：{error}", page.title()),
-                );
-            }
-        });
-    }
+    // Startup restoration runs on the app worker. Ready/busy updates must not
+    // consume the one native attempt while task admission is still blocked.
     Ok(())
 }
 
@@ -1058,6 +1104,77 @@ pub async fn workspace_cover(
 mod tests {
     use super::*;
     #[test]
+    fn restored_task_defers_window_without_overwriting_saved_layout() {
+        use super::super::{tasks::{Kind, Tasks}, controller_journal::new_id};
+        use std::sync::Arc;
+        let workspace = Workspace::default();
+        let tasks = Arc::new(Tasks::default());
+        let profile = serde_json::json!({"host":"offline.invalid", "sshPort":22,
+            "username":"", "identityFile":"", "remotePort":8765, "rosDomainId":197,
+            "rosSetupScript":"test/install/setup.bash", "commandTopic":"/cmd",
+            "statusTopic":"/status", "jointStateTopic":"/joints"});
+        tasks.restore_finite(Kind::Controller, Page::Motion.label().into(), new_id().unwrap(), &profile).unwrap();
+        let path = std::env::temp_dir().join(format!("{}-layout.json", new_id().unwrap()));
+        workspace.layout.load(path.clone()).unwrap();
+        workspace.layout.update(|layout| {
+            layout.pages.insert(Page::Motion, PageLayout { detached: true, geometry: None });
+            layout.pages.insert(Page::Handeye, PageLayout { detached: true, geometry: None });
+        });
+        workspace.restoring.lock().unwrap().insert(Page::Motion);
+        let state = PageState { detached:false, visible:false, ready:true, busy_reason:String::new(),
+            recovery_required:false, restore_pending:String::new() };
+        workspace.state.lock().unwrap().pages.insert(Page::Motion, state.clone());
+        workspace.state.lock().unwrap().pages.insert(Page::Handeye, state);
+        for _ in 0..4 {
+            assert!(workspace.restore_permit(Page::Motion, &tasks).is_err());
+            assert!(!workspace.restore_started.lock().unwrap().contains(&Page::Motion));
+            // Selecting/resizing another page must save its change without
+            // persisting the temporary embedded location of the blocked page.
+            workspace.record_layout(&workspace.snapshot(), &BTreeMap::new());
+            workspace.layout.flush().unwrap();
+            let disk = LayoutStore::default(); disk.load(path.clone()).unwrap();
+            assert!(disk.snapshot().pages[&Page::Motion].detached);
+            assert!(!disk.snapshot().pages[&Page::Handeye].detached);
+        }
+        assert!(tasks.snapshot().is_some());
+        assert!(tasks.migration(Page::Motion.label()).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn startup_retries_admission_but_not_native_failures_and_keeps_atomic_permit() {
+        use super::super::{tasks::{Tasks, Owner}, windows::WindowToken};
+        use std::sync::Arc;
+        let workspace = Workspace::default();
+        let tasks = Arc::new(Tasks::default());
+        workspace.restoring.lock().unwrap().insert(Page::Motion);
+        workspace.state.lock().unwrap().pages.insert(Page::Motion, PageState {
+            detached:false, visible:false, ready:false, busy_reason:String::new(),
+            recovery_required:false, restore_pending:String::new(),
+        });
+        assert!(workspace.restore_permit(Page::Motion, &tasks).unwrap().is_none());
+        let owner = Owner {epoch:1, window:WindowToken {label:Page::Motion.label().into(), incarnation:1}};
+        let id = tasks.begin_controller(owner.clone()).unwrap();
+        workspace.state.lock().unwrap().pages.get_mut(&Page::Motion).unwrap().ready = true;
+        assert!(workspace.restore_permit(Page::Motion, &tasks).is_err());
+        assert!(tasks.controller_finish(id, true, "not submitted"));
+        workspace.state.lock().unwrap().pages.get_mut(&Page::Motion).unwrap().busy_reason = "sampling".into();
+        assert!(workspace.restore_permit(Page::Motion, &tasks).is_err());
+        workspace.state.lock().unwrap().pages.get_mut(&Page::Motion).unwrap().busy_reason.clear();
+        let permit = workspace.restore_permit(Page::Motion, &tasks).unwrap().unwrap();
+        assert!(tasks.begin_controller(owner.clone()).is_err());
+        assert!(tasks.migration(Page::Motion.label()).is_err());
+        // A failed native move keeps saved intent but is not retried in a loop.
+        drop(permit);
+        assert!(workspace.restoring.lock().unwrap().contains(&Page::Motion));
+        assert!(workspace.restore_permit(Page::Motion, &tasks).unwrap().is_none());
+        assert!(workspace.restore_message(Page::Motion, "retry manually".into()));
+        assert!(!workspace.restore_message(Page::Motion, "retry manually".into()));
+        // Manual retry uses the same ordinary migration gate and remains possible.
+        assert!(tasks.migration(Page::Motion.label()).is_ok());
+    }
+
+    #[test]
     fn only_ready_idle_pages_can_move_even_when_hidden() {
         let mut page = PageState {
             detached: false,
@@ -1065,6 +1182,7 @@ mod tests {
             ready: false,
             busy_reason: String::new(),
             recovery_required: false,
+            restore_pending: String::new(),
         };
         assert!(page.migration_allowed().unwrap_err().contains("加载"));
         page.ready = true;
@@ -1086,6 +1204,7 @@ mod tests {
             ready: false,
             busy_reason: String::new(),
             recovery_required: false,
+            restore_pending: String::new(),
         };
         workspace
             .state

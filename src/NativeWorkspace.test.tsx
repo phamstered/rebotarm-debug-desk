@@ -67,3 +67,19 @@ it("offers recovery in the main placeholder even if the failed page was original
   expect(mocks.invoke).toHaveBeenCalledWith("workspace_recover",{page:"handeye"});
   await waitFor(()=>expect(onError).toHaveBeenCalledWith("Error: 恢复失败"));
 });
+it("keeps deferred startup layout visible with a guarded manual retry", async () => {
+  const onAction = vi.fn();
+  const props = { page: "motion" as const, connected: false, onAction, busyReason: "", state: {
+    ready: true, detached: false, visible: true, busy_reason: "",
+    restore_pending: "等待恢复独立窗口：原任务尚未确认结束",
+  } };
+  const { rerender } = render(<NativePageToolbar {...props} />);
+  expect(screen.getByRole("status")).toHaveTextContent("等待恢复独立窗口");
+  await userEvent.click(screen.getByRole("button", { name: "拆出窗口 ↗" }));
+  expect(onAction).toHaveBeenCalledWith("workspace_detach", "motion");
+  rerender(<NativePageToolbar {...props} busyReason="正在采样" />);
+  expect(screen.getByRole("button", { name: "拆出窗口 ↗" })).toBeDisabled();
+  rerender(<NativePageToolbar {...props} state={{ ...props.state, detached: true, restore_pending: "" }} />);
+  expect(screen.queryByText(/等待恢复独立窗口/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "收回主窗口" })).toBeEnabled();
+});

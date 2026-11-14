@@ -629,6 +629,8 @@ Joint4 的服务仅限 `/joint4_calibration_controller/{begin_pose,capture_pose,
 
 窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready/show_main/recover`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_show_main` 只显示已有主窗口，不迁移页面或重建连接。页面状态的 `recovery_required` 表示自动回滚未完成；此时拒绝再次拆收，用 `workspace_recover` 重试恢复，仍需页面 ready、无采样等 busy 状态且通过原生任务迁移锁。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。
 
+页面状态的 `restore_pending` 为启动布局恢复的等待或失败说明（正常为空字符串）。应用工作线程每 750 ms 检查待恢复页；等待 ready、无 busy 且取得同一 Tasks 迁移许可后才尝试原生移动。任务阻止期间不消耗原生尝试次数、不覆盖保存的独立布局；原生失败后不循环重试，由用户通过既有拆出/恢复入口处理。移动成功清除待恢复说明和保存保护。此字段与 `busy_reason` 独立，不能由页面 ready 通知覆盖任务或窗口失败状态。
+
 ### 原生共享只读状态（多窗口开发分支）
 
 `native_observation_snapshot` 返回 `{epoch, revision, connected, entries}`。十一个固定 source 为 `agent`、`usb`、`arm`、`controllers`、`topics`、`clock`、`motion`、`pick`、`bag_record`、`bag_play`、`collection`；每项包含 `sequence/value/error/age_ms/ttl_ms`。Rust 统一调度查询，窗口收到 `native-observations-changed` 后合并读取快照，不建立各自的远端定时器。单项数据限制 2 MiB；失败项清空 value，不能把旧成功结果当新状态。断线取消在途查询并清空快照，连接代次及全局递增 revision 阻止旧结果覆盖新状态。

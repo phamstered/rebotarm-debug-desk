@@ -15,7 +15,7 @@ export const PAGE_TITLES: Record<AppPage, string> = {
   status: "Status", dashboard: "Topics", motion: "Motion", monitor: "Monitor", collection: "数据采集",
   handeye: "手眼标定", motor: "Motor", calibration: "Joint4 标定", gravity: "重力辨识",
 };
-export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string; recovery_required?: boolean };
+export type NativePageState = { detached: boolean; visible: boolean; ready: boolean; busy_reason: string; recovery_required?: boolean; restore_pending?: string };
 export type MotionNavigation = {revision:number;tab:"robot"|"positions"|"groups";profile_key:string};
 export type NativeWorkspaceSnapshot = { motion_navigation?: MotionNavigation | null; selected: AppPage; pages: Partial<Record<AppPage, NativePageState>> };
 /** Reparented WKWebViews can report a stale document.hidden; native window state owns visibility. */

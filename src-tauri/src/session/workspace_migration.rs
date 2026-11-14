@@ -314,6 +314,7 @@ impl Workspace {
             Ok(()) => {
                 self.commit_layout(&after.snapshot);
                 self.restoring.lock().unwrap().remove(&page);
+                self.restore_message(page, String::new());
                 self.save_layout(app);
                 self.emit(app);
                 if !detach {
@@ -483,6 +484,7 @@ mod tests {
             ready: true,
             busy_reason: String::new(),
             recovery_required: true,
+            restore_pending: String::new(),
         };
         let mut current = Snapshot {
             selected: Page::Motion,
@@ -496,6 +498,7 @@ mod tests {
                         visible: true,
                         busy_reason: "正在运动".into(),
                         recovery_required: false,
+            restore_pending: String::new(),
                         ..state.clone()
                     },
                 ),
