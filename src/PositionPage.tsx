@@ -8,17 +8,13 @@ import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, homeRow, type CustomPosition, type
 
 const blankJoints = () => ["0", "0", "0", "0", "0", "0"];
 
-export function PositionPage({
-  profileKey,
-  store,
-  urdfXml,
-  onUpdate,
-  onDelete,
-  onBack,
-  motion,
-  editRequest,
-  ready = true, saving = false, error = "",
-}: {
+type PoseEditorDraft = {
+  name: string; joints: string[]; gripper: string; includeGripper: boolean;
+  note: string; source: "manual" | "feedback"; editorOpen: boolean;
+  editingId: string | null; baseline: string; selectedId: string;
+  handledRequest?: {id:string;intent?:"edit"|"delete"};
+};
+type PositionPageProps = {
   editRequest?: {id:string;intent?:"edit"|"delete"};
   profileKey: string;
   store: PositionStore;
@@ -28,25 +24,49 @@ export function PositionPage({
   ready?: boolean; saving?: boolean; error?: string;
   onBack?: () => void;
   motion?: PositionMotionControls;
+};
+
+/** The editor instance changes with the robot; unsaved values and their
+ * conflict baseline remain scoped to that robot. Authorizations are not cached. */
+export function PositionPage(props: PositionPageProps) {
+  const drafts = useRef(new Map<string, PoseEditorDraft>());
+  return <PositionEditor key={props.profileKey} {...props} cached={drafts.current.get(props.profileKey)}
+    remember={draft => { drafts.current.set(props.profileKey, draft); }} />;
+}
+
+function PositionEditor({
+  profileKey,
+  store,
+  urdfXml,
+  onUpdate,
+  onDelete,
+  onBack,
+  motion,
+  editRequest,
+  cached, remember,
+  ready = true, saving = false, error = "",
+}: PositionPageProps & {
+  cached?: PoseEditorDraft;
+  remember(draft: PoseEditorDraft): void;
 }) {
-  const [name, setName] = useState("");
-  const [joints, setJoints] = useState<string[]>(blankJoints);
-  const [gripper, setGripper] = useState("");
-  const [includeGripper, setIncludeGripper] = useState(false);
-  const [note, setNote] = useState("");
-  const [source, setSource] = useState<"manual" | "feedback">("manual");
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [name, setName] = useState(cached?.name ?? "");
+  const [joints, setJoints] = useState<string[]>(cached?.joints ?? blankJoints);
+  const [gripper, setGripper] = useState(cached?.gripper ?? "");
+  const [includeGripper, setIncludeGripper] = useState(cached?.includeGripper ?? false);
+  const [note, setNote] = useState(cached?.note ?? "");
+  const [source, setSource] = useState<"manual" | "feedback">(cached?.source ?? "manual");
+  const [editorOpen, setEditorOpen] = useState(cached?.editorOpen ?? false);
+  const [editingId, setEditingId] = useState<string | null>(cached?.editingId ?? null);
   const [formError, setFormError] = useState("");
   const [pendingDelete, setPendingDelete] = useState("");
-  const baseline = useRef(""), deleteBaseline = useRef("");
+  const baseline = useRef(cached?.baseline ?? ""), deleteBaseline = useRef("");
+  const handledRequest = useRef(cached?.handledRequest);
   const busy = useRef(false), mounted = useRef(true), profile = useRef(profileKey);
   profile.current = profileKey;
   const [pending, setPending] = useState(false);
   const working = saving || pending;
   const editingDisabled = working || !ready;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { setEditorOpen(false); setEditingId(null); setPendingDelete(""); setFormError(""); }, [profileKey]);
   const home = homeRow();
   const positions = store.profiles[profileKey]?.positions ?? [];
   const moveReason = motion?.reason || (!motion?.armed ? "请先确认工作区安全并解锁点位执行" : "");
@@ -54,8 +74,10 @@ export function PositionPage({
   const homeReady = motion?.homePositions.length === 6;
 
   const compact=useMotionLayout()?.compact ?? false;
-  const [selectedId,setSelectedId]=useState("");
+  const [selectedId,setSelectedId]=useState(cached?.selectedId ?? "");
   const [menuId,setMenuId]=useState("");
+  useEffect(() => { remember({name, joints, gripper, includeGripper, note, source, editorOpen, editingId, selectedId, baseline: baseline.current, handledRequest: handledRequest.current}); },
+    [name, joints, gripper, includeGripper, note, source, editorOpen, editingId, selectedId, remember]);
   const target=positions.find(p=>p.id===(menuId||selectedId));
   function beginEdit(position: CustomPosition) {
     if (busy.current || saving || !ready) return;
@@ -68,7 +90,12 @@ export function PositionPage({
     if (busy.current || saving || !ready) return;
     deleteBaseline.current = positionFingerprint(position); setPendingDelete(position.id); setFormError("");
   }
-  useEffect(()=>{const p=positions.find(p=>p.id===editRequest?.id);if(p){setSelectedId(p.id);if(editRequest?.intent==='delete')askDelete(p);else beginEdit(p);}},[editRequest]);
+  useEffect(()=>{
+    if (!editRequest || handledRequest.current === editRequest) return;
+    handledRequest.current = editRequest;
+    const p=positions.find(p=>p.id===editRequest.id);
+    if(p){setSelectedId(p.id);if(editRequest.intent==='delete')askDelete(p);else beginEdit(p);}
+  },[editRequest]);
   const contextMenu=useWorkspaceMenu(target?[
     {label:"编辑姿态",disabled:motion?.busy || editingDisabled,run:()=>beginEdit(target)},
     {label:"删除姿态",danger:true,disabled:motion?.busy || editingDisabled,run:()=>{setSelectedId(target.id);askDelete(target);}}

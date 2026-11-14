@@ -325,6 +325,11 @@ describe("App workflow", () => {
       for (const [label,tab] of [["管理姿态库","positions"],["管理动作组","groups"]]) {
         await user.click(screen.getByRole("button", {name:label}));
         await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("workspace_open_motion",{tab,profileKey:"jetson||22"}));
+        const calls = doubles.invoke.mock.calls;
+        const handoff = calls.findIndex(([command]) => command === "native_offline_profile");
+        const navigation = calls.findIndex(([command,args]) => command === "workspace_open_motion" && (args as {tab:string})?.tab === tab);
+        expect(handoff).toBeGreaterThanOrEqual(0);
+        expect(handoff).toBeLessThan(navigation);
         expect(screen.getByLabelText("Motion 页面区域")).toBeVisible();
         expect(screen.queryByRole("region",{name:"姿态库"})).not.toBeInTheDocument();
         expect(screen.queryByRole("region",{name:"动作组编辑器"})).not.toBeInTheDocument();
@@ -332,6 +337,36 @@ describe("App workflow", () => {
       }
       expect(doubles.connect).not.toHaveBeenCalled();
     } finally {view.unmount(); delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__; globalThis.ResizeObserver=resize; doubles.invoke.mockImplementation(base);}
+  });
+
+  it("waits for offline profile handoff and keeps the connection form on rejection without connecting", async () => {
+    const user = userEvent.setup(), base = doubles.invoke.getMockImplementation()!;
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
+    let reject!: (reason: Error) => void;
+    const pending = new Promise((_resolve, fail) => {reject=fail;});
+    doubles.invoke.mockImplementation((command,args) => {
+      if (command === "native_offline_profile") return pending;
+      if (command === "workspace_snapshot") return Promise.resolve({selected:"status",pages:{}});
+      if (command === "native_task_snapshot") return Promise.resolve(null);
+      return base(command,args);
+    });
+    const view = render(<App />);
+    try {
+      await user.clear(screen.getByLabelText("SSH 主机"));
+      await user.type(screen.getByLabelText("SSH 主机"),"second-robot");
+      await user.click(screen.getByRole("button",{name:"管理姿态库"}));
+      expect(doubles.invoke).toHaveBeenCalledWith("native_offline_profile",{profile:expect.objectContaining({host:"second-robot"})});
+      expect(screen.getByText("正在同步离线配置…")).toBeVisible();
+      expect(screen.getByRole("button",{name:"连接 Jetson"})).toBeDisabled();
+      expect(screen.getByRole("button",{name:"管理动作组"})).toBeDisabled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("workspace_open_motion",expect.anything());
+      await act(async () => reject(new Error("任务尚未结束，不能切换离线配置")));
+      expect(await screen.findByText(/任务尚未结束，不能切换离线配置/)).toBeVisible();
+      expect(screen.getByLabelText("SSH 主机")).toHaveValue("second-robot");
+      expect(screen.getByRole("button",{name:"连接 Jetson"})).toBeEnabled();
+      expect(doubles.connect).not.toHaveBeenCalled();
+      expect(doubles.invoke).not.toHaveBeenCalledWith("check_ssh",expect.anything());
+    } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;doubles.invoke.mockImplementation(base);}
   });
 
   it("keeps an unsaved pose draft while switching Motion tabs", async () => {

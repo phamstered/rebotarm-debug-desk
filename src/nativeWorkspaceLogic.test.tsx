@@ -76,6 +76,39 @@ describe("page session attachment", () => {
     expect(handlers.connected).not.toHaveBeenCalled(); expect(client.listTopics).not.toHaveBeenCalled();
     expect(mocks.events.size).toBe(0); expect(client.close).toHaveBeenCalled();
   });
+
+  it("applies offline profile revisions without opening a socket and ignores duplicate notifications", async () => {
+    const { client, handlers, options, context } = setup();
+    context.connected = false;
+    const state = {...context, profile_revision:1};
+    mocks.invoke.mockResolvedValue(state);
+    renderHook(() => useNativePageSession(options));
+    await waitFor(() => expect(handlers.profile).toHaveBeenCalledExactlyOnceWith(defaultProfile));
+    expect(client.attach).not.toHaveBeenCalled();
+    await act(async () => mocks.events.get("native-session-changed")!({payload:null}));
+    expect(handlers.profile).toHaveBeenCalledOnce();
+    const next = {...state, profile_revision:2, profile:{...defaultProfile,host:"second-robot",rgbdRgbTopic:"/second/color"}};
+    mocks.invoke.mockResolvedValue(next);
+    await act(async () => mocks.events.get("native-session-changed")!({payload:null}));
+    expect(handlers.profile).toHaveBeenLastCalledWith(next.profile);
+    expect(handlers.reset).toHaveBeenCalledTimes(2);
+    expect(handlers.disconnected).toHaveBeenCalledTimes(2);
+    expect(client.attach).not.toHaveBeenCalled();
+    expect(client.listTopics).not.toHaveBeenCalled();
+  });
+
+  it("discards an older offline context while a later native context notification is pending", async () => {
+    const { client, handlers, options, context } = setup();
+    const old = deferred<unknown>();
+    mocks.invoke.mockReturnValueOnce(old.promise).mockResolvedValue({...context,connected:false,profile_revision:2,profile:{...defaultProfile,host:"new-robot"}});
+    renderHook(() => useNativePageSession(options));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+    act(() => mocks.events.get("native-session-changed")!({payload:null}));
+    await act(async () => old.resolve({...context,connected:false,profile_revision:1}));
+    await waitFor(() => expect(handlers.profile).toHaveBeenCalledOnce());
+    expect(handlers.profile.mock.calls[0][0].host).toBe("new-robot");
+    expect(client.attach).not.toHaveBeenCalled();
+  });
 });
 
 it("uses native visibility for reparented pages even when WebKit reports hidden", () => {
@@ -88,25 +121,27 @@ it("uses native visibility for reparented pages even when WebKit reports hidden"
 });
 
 it("applies retained Motion navigation once and never changes a different robot editor", () => {
-  const select = vi.fn(), error = vi.fn();
+  const select = vi.fn();
   const first = {revision:1,tab:"positions" as const,profile_key:"robot"};
-  const hook = renderHook(({intent}) => useMotionNavigation("motion", intent, "robot", select, error), {initialProps:{intent:first}});
+  const hook = renderHook(({intent, profile}) => useMotionNavigation("motion", intent, profile, select), {initialProps:{intent:first, profile:"robot"}});
   expect(select).toHaveBeenCalledExactlyOnceWith("positions");
-  hook.rerender({intent:{...first}}); expect(select).toHaveBeenCalledOnce();
-  hook.rerender({intent:{...first,revision:2,profile_key:"other"}});
-  expect(select).toHaveBeenCalledOnce(); expect(error).toHaveBeenCalledWith(expect.stringContaining("另一连接"));
-  hook.rerender({intent:{...first,revision:1}}); expect(select).toHaveBeenCalledOnce();
+  hook.rerender({intent:{...first}, profile:"robot"}); expect(select).toHaveBeenCalledOnce();
+  hook.rerender({intent:{...first,revision:2,profile_key:"other"}, profile:"robot"});
+  expect(select).toHaveBeenCalledOnce();
+  hook.rerender({intent:{...first,revision:1}, profile:"robot"}); expect(select).toHaveBeenCalledOnce();
+  hook.rerender({intent:{...first,revision:1}, profile:"other"}); expect(select).toHaveBeenCalledTimes(2);
+  hook.rerender({intent:{...first,revision:1}, profile:"robot"}); expect(select).toHaveBeenCalledTimes(2);
 });
 
 it("navigates an existing Motion page to Robot View without replaying older editor intents", () => {
-  const select=vi.fn(), error=vi.fn();
+  const select=vi.fn();
   const first: import("./nativeWorkspaceLogic").MotionNavigation = {revision:1,tab:"groups",profile_key:"robot"};
-  const hook=renderHook(({page,intent}) => useMotionNavigation(page,intent,"robot",select,error),
+  const hook=renderHook(({page,intent}) => useMotionNavigation(page,intent,"robot",select),
     {initialProps:{page:"motion" as "motion"|"handeye",intent:first}});
   expect(select).toHaveBeenLastCalledWith("groups");
   hook.rerender({page:"motion",intent:{...first,revision:2,tab:"robot"}});
   expect(select).toHaveBeenLastCalledWith("robot");expect(select).toHaveBeenCalledTimes(2);
   hook.rerender({page:"motion",intent:first});expect(select).toHaveBeenCalledTimes(2);
   hook.rerender({page:"handeye",intent:{...first,revision:3,tab:"robot"}});
-  expect(select).toHaveBeenCalledTimes(2);expect(error).not.toHaveBeenCalled();
+  expect(select).toHaveBeenCalledTimes(2);
 });

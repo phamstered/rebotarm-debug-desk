@@ -266,6 +266,16 @@ impl Tasks {
             .map(|task| task.snapshot.clone())
     }
 
+    /// Serialize an offline context change against native task/migration
+    /// admission. A retained uncertain task is still an active reservation.
+    pub fn with_idle_context<T>(&self, change: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let inner = self.inner.lock().unwrap();
+        if inner.task.is_some() || !inner.local_operations.is_empty() || !inner.migrations.is_empty() {
+            return Err("任务或窗口迁移尚未结束，不能切换离线配置".into());
+        }
+        change()
+    }
+
     pub fn local_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
         let mut inner = self.inner.lock().unwrap();
         if inner.migrations.contains(label) { return Err("页面正在迁移，不能开始本地任务".into()); }

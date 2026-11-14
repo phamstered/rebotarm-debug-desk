@@ -602,6 +602,8 @@ Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份�
 
 桌面原生 IPC 与 Jetson Bridge 操作分开。主 WebView 调用 `native_bridge_attach` 时传入当前 SSH 会话实际分配的端口及 Profile；Rust 核验端口归属、Profile 格式和 16 KiB 大小上限。功能 WebView 通过 `native_bridge_context` 读取连接代次/连接状态/Profile，再不带端口地附着当前会话，不能据此新建第二个上游连接。原生调用者身份取 WebView label，不取可变的父 Window label。取消中的附着完成清理后才能进行替代附着，旧 token 不允许覆盖新消费者。
 
+主 WebView 可通过 `native_offline_profile {profile}` 显式交接离线编辑配置；同样校验格式与 16 KiB 上限，保留相机等前端附加字段。仅在未连接且没有进行中的连接握手时执行；实际配置变化与原生任务、未确认任务、本地操作及页面迁移共用互斥检查。同配置重开不递增版本。返回与 `native_bridge_context` 相同的快照，新增 `profile_revision`；发送 `native-session-changed` 失效通知，页面离线时也应用 Profile，但不附着 socket。连接建立和离线交接串行，已有连接拒绝另一 Profile 的附着请求，不能只改配置而继续复用旧 socket。该 IPC 不连接机器人、不发送控制命令，也不恢复授权。
+
 窗口布局 IPC 为 `workspace_snapshot/select/detach/dock/bounds/cover/page_ready/show_main/recover`；调用方鉴权、页面白名单和有限尺寸在 Rust 校验。`workspace_show_main` 只显示已有主窗口，不迁移页面或重建连接。页面状态的 `recovery_required` 表示自动回滚未完成；此时拒绝再次拆收，用 `workspace_recover` 重试恢复，仍需页面 ready、无采样等 busy 状态且通过原生任务迁移锁。`workspace_bounds` 的 DOM 区域同时携带 CSS viewport 尺寸，以换算 macOS 标题栏 inset 和页面缩放。此 IPC 不改变 Bridge WebSocket 协议，也不授予机器人运动权限。
 
 ### 原生共享只读状态（多窗口开发分支）
@@ -658,7 +660,7 @@ Controller 的 SSH 记录协议（不经过 Bridge）：请求为 `{op: submit|q
 Controller 任务停止协调复用现有 joint_command mode=3 和 HardwareStatus 协议，不新增 Bridge 字段。显式 DISABLE 立即可下发；受支撑确认保护的 start_arm_mode(disable-stop) 仅向匹配原机器人身份的 Controller 任务登记停止意图。任务记录远端完成时已分配的原生停止动作编号，只有严格晚于该编号的 DISABLE ACK 可用于最终确认，防止完成前请求的迟到 ACK 解锁。确认要求原机器人及当前连接代次、mode=3、last_command_sequence 覆盖新 ACK、源时间推进、原生接收时刻不早于此次停止请求且接收龄小于 1 秒。发布失败、旧序列、旧源时间和另一机器人反馈不能完成任务；重连后重新发送并确认。这里证明固件输出关闭，不是机械静止，也不保证故障情况下的固定停止时延。普通 stop 的 RETURN 流程不登记立即 DISABLE 意图。
 
 
-workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebView 可请求三种导航，实际 page-handeye WebView 只可请求 robot；其他调用者拒绝。带 revision 和 profile_key 的 motion_navigation 保存在 Rust 快照，延迟创建的 Motion 页面也会应用；旧版本、他页面及不匹配连接不改变目标 Tab。导航不包含控制指令或运动授权。
+workspace_open_motion 的 tab 现在允许 robot / positions / groups。主 WebView 可请求三种导航，实际 page-handeye WebView 只可请求 robot；其他调用者拒绝。带 revision 和 profile_key 的 motion_navigation 保存在 Rust 快照，延迟创建的 Motion 页面也会应用。页面保留最新导航，等待对应配置后应用；配置通知与导航通知乱序、旧版本或他页面均不改变另一机器人的目标 Tab。导航不包含控制指令或运动授权。
 
 
 `bag_record` / `bag_play` 的 value 分别沿用 `RosbagStatus` / `RosbagPlayStatus`（camelCase 字段），每次查询结束后间隔 5 秒，超时 10 秒，新鲜度上限 8 秒且包含查询耗时。两源独立串行，共用现有 SSH Profile；只读 status 不创建目录或改 PID 文件。断线或超时丢弃探测 future 时终止其本机 SSH 子进程，启动/停止操作不套用这个行为。桌面录制/回放操作返回后使用 `afterPending:true` 复查并广播快照；命令返回值不作为其他窗口的当前状态。未知状态保留为 null，不等同于 idle。此处仅是状态查询协议，不提供录制/回放任务的全局互斥或退出恢复。

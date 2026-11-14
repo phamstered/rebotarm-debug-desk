@@ -1678,6 +1678,7 @@ body.native-page-body { min-width: 0; min-height: 0; }
 .native-hosted-page > .app-main-column { flex: 1 1 0; min-width: 0; min-height: 0; }
 .native-page-toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: #0a1721; font-size: 12px; }
 .native-page-toolbar > button { margin-left: auto; }
+.native-page-profile { min-width: 0; max-width: min(240px, 45vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .native-page-connected { color: #83d9c8; }
 .native-page-offline { color: #b8c7cf; }
 .native-workspace-host { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }

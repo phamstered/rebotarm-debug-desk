@@ -22,7 +22,7 @@ export type NativeWorkspaceSnapshot = { motion_navigation?: MotionNavigation | n
 export function pageWindowVisible(documentVisible: boolean, page: AppPage | undefined, snapshot: NativeWorkspaceSnapshot) {
   return page ? snapshot.pages[page]?.visible === true : documentVisible;
 }
-export type NativeSessionContext = { epoch: number; connected: boolean; profile: ConnectionProfile | null; error: string | null };
+export type NativeSessionContext = { epoch: number; connected: boolean; profile: ConnectionProfile | null; profile_revision?: number; error: string | null };
 
 /** Snapshots are authoritative; do not infer visibility from focus on a multi-monitor desktop. */
 export function useNativeWorkspace(enabled: boolean) {
@@ -69,6 +69,8 @@ export function useNativePageSession(options: {
     if (!options.page) return;
     let disposed = false;
     let epoch: number | undefined;
+    let profileRevision: number | undefined;
+    let disconnectedEpoch: number | undefined;
     let sequence = 0;
     let running = false;
     let pending = false;
@@ -85,15 +87,21 @@ export function useNativePageSession(options: {
           const current = sequence;
           const context = await invoke<NativeSessionContext>("native_bridge_context");
           if (disposed || current !== sequence) continue;
-          if (context.connected && context.epoch === epoch) continue;
+          if (context.connected && context.epoch === epoch && context.profile_revision === profileRevision) continue;
+          if (!context.connected && context.epoch === disconnectedEpoch && context.profile_revision === profileRevision) continue;
           epoch = undefined;
+          disconnectedEpoch = undefined;
           bridge.close();
           callbacks.current.reset();
+          // The native profile also owns offline editing. Reading it never
+          // attaches a transport or restores an execution confirmation.
+          profileRevision = context.profile_revision;
+          if (context.profile) callbacks.current.profile(context.profile);
           if (!context.connected || !context.profile) {
+            disconnectedEpoch = context.epoch;
             callbacks.current.disconnected(context.error || "机器人未连接，请在主窗口连接");
             continue;
           }
-          callbacks.current.profile(context.profile);
           const hello = await bridge.attach();
           if (disposed || current !== sequence) { bridge.close(); continue; }
           const topics = await bridge.listTopics();
@@ -117,12 +125,18 @@ export function useNativePageSession(options: {
 
 /** Navigation applies once after lazy mount; it never replaces a page's editor. */
 export function useMotionNavigation(page: AppPage | undefined, intent: MotionNavigation | null | undefined,
-  profileKey: string, select: (tab: "robot" | "positions" | "groups") => void, error: (message: string) => void) {
+  profileKey: string, select: (tab: "robot" | "positions" | "groups") => void) {
   const applied = useRef(0);
+  const latest = useRef<MotionNavigation | null>(null);
   useEffect(() => {
-    if (page !== "motion" || !intent || intent.revision <= applied.current) return;
-    applied.current = intent.revision;
-    if (intent.profile_key !== profileKey) { error("Motion 保留的是另一连接的编辑内容，请先连接所选机器人以同步配置，再重新打开编辑入口"); return; }
-    select(intent.tab);
-  }, [page, intent, profileKey, select, error]);
+    if (page !== "motion") return;
+    if (intent && intent.revision > (latest.current?.revision ?? 0)) latest.current = intent;
+    const pending = latest.current;
+    if (!pending || pending.revision <= applied.current) return;
+    // A navigation event can arrive before the matching session snapshot.
+    // Keep it pending instead of consuming it against the previous editor.
+    if (pending.profile_key !== profileKey) return;
+    applied.current = pending.revision;
+    select(pending.tab);
+  }, [page, intent, profileKey, select]);
 }

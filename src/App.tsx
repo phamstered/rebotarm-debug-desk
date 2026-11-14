@@ -402,6 +402,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const handeyeSession = useHandeyeSession(profile);
   const [manageHandeye, setManageHandeye] = useState(false);
   const [offlineWorkspace, setOfflineWorkspace] = useState(false);
+  const offlineEntry = useRef(false);
+  const [openingOffline, setOpeningOffline] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [failedStep, setFailedStep] = useState<ConnectStepId | null>(null);
   const [sshOk, setSshOk] = useState(false);
@@ -661,7 +663,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   const positionProfileKey = profileKeyFor(profile);
   const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status");
-  useMotionNavigation(hostedPage, workspace.snapshot.motion_navigation, positionProfileKey, setMotionTab, setError);
+  useMotionNavigation(hostedPage, workspace.snapshot.motion_navigation, positionProfileKey, setMotionTab);
   const positionStore = positionsEditor.store;
   const createPosition = positionsEditor.create, editPosition = positionsEditor.update, removePosition = positionsEditor.remove;
   const motionGroups = useMotionGroups(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion");
@@ -1299,6 +1301,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }, [hostedPage, migrationBusyReason]);
 
   async function connect() {
+    if (offlineEntry.current) return;
     clearConnectionData();
     setError("");
     setErrorCopied(false);
@@ -1715,7 +1718,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   });
   const domainHint = domainMismatchHint(profile.rosDomainId, lastKnownDomainId);
   const rosReady = isRosReady(jointState);
-  const connectBusy = ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
+  const connectBusy = openingOffline || ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
   const historyLine = formatConnectHistoryLine(connectHistory);
   const faultCode = hardwareStatus?.fault_code;
   const faultModeLabel = hardwareStatus ? formatHardwareMode(hardwareStatus) : "";
@@ -1753,10 +1756,20 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   async function openOfflineHandeye() {
     if (!nativeMain) { setManageHandeye(true); return; }
+    await openNativeOffline("handeye");
+  }
+
+  async function openNativeOffline(page: "handeye" | "motion", tab?: "positions" | "groups") {
+    if (offlineEntry.current || connectBusy) return;
+    offlineEntry.current = true; setOpeningOffline(true); setError("");
     try {
-      await invoke("workspace_select", {page: "handeye"});
-      setLocalAppPage("handeye"); setOfflineWorkspace(true);
+      await invoke("native_offline_profile", {profile});
+      localStorage.setItem("easy-debug-profile", JSON.stringify(profile));
+      if (tab) await invoke("workspace_open_motion", {tab, profileKey: positionProfileKey});
+      else await invoke("workspace_select", {page});
+      setLocalAppPage(page); setOfflineWorkspace(true);
     } catch (reason) { setError(String(reason)); }
+    finally { offlineEntry.current = false; setOpeningOffline(false); }
   }
 
   async function openRobotMotion() {
@@ -1768,10 +1781,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
 
   async function openOfflineMotion(tab: "positions" | "groups") {
     if (!nativeMain) { if (tab === "positions") setManagePositions(true); else setManageMotionGroups(true); return; }
-    try {
-      await invoke("workspace_open_motion", {tab, profileKey: positionProfileKey});
-      setLocalAppPage("motion"); setOfflineWorkspace(true);
-    } catch (reason) { setError(String(reason)); }
+    await openNativeOffline("motion", tab);
   }
 
   const renderGroupEditor = (offline = false) => <MotionGroupsPage active={offline || appPage === "motion" && motionTab === "groups" && windowVisible} profileKey={positionProfileKey} groups={motionGroups.groups}
@@ -1860,11 +1870,12 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
                 if (retained && !workspace.snapshot.pages[appPage]?.ready) setAppPage(retained);
                 setOfflineWorkspace(true);
               }}>返回已打开页面</button>}
-              <button type="button" className="ghost" onClick={() => void openOfflineMotion("positions")}>管理姿态库</button>
-              <button type="button" className="ghost" onClick={() => void openOfflineHandeye()}>手眼标定 / 离线样本</button>
-              <button type="button" className="ghost" onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
+              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("positions")}>管理姿态库</button>
+              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineHandeye()}>手眼标定 / 离线样本</button>
+              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
             </div>
           </div>
+          {openingOffline && <p role="status">正在同步离线配置…</p>}
           {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
           {error && (
             <div className="error-panel" role="alert">
@@ -1983,7 +1994,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {!hostedPage && appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
       <div className="app-main-column">
       {!hostedPage && (nativeMain || appPage !== "motion") && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
-      {hostedPage && <NativePageToolbar page={hostedPage} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
+      {hostedPage && <NativePageToolbar page={hostedPage} profileName={profile.host} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
       {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}

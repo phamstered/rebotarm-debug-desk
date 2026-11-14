@@ -233,3 +233,31 @@ it("waits for save and ignores an old completion after changing profiles", async
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("点位名称")).not.toBeInTheDocument();
 });
+
+it("restores each robot's unsaved pose draft and original conflict baseline without restoring delete confirmation", async () => {
+  const user = userEvent.setup(), store = emptyPositionStore();
+  const a = point("same-id", [0,0,0,0,0,0]);
+  const b = {...a, name:"第二台姿态", note:"另一配置"};
+  store.profiles[key] = {positions:[a]};
+  store.profiles.other = {positions:[b]};
+  const onUpdate = vi.fn(async () => "保存冲突，草稿已保留");
+  const props = {profileKey:key,store,urdfXml:"",onUpdate,onDelete:vi.fn()};
+  const view = render(<PositionPage {...props} />);
+  await user.click(screen.getByRole("button",{name:"编辑"}));
+  fireEvent.change(screen.getByLabelText("点位名称"),{target:{value:"第一台未保存"}});
+  await user.click(screen.getByRole("button",{name:"删除 same-id"}));
+  view.rerender(<PositionPage {...props} profileKey="other" />);
+  expect(screen.queryByLabelText("点位名称")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"编辑"}));
+  fireEvent.change(screen.getByLabelText("点位名称"),{target:{value:"第二台未保存"}});
+  const updated = {...store,profiles:{...store.profiles,[key]:{positions:[{...a,note:"其他窗口修改"}]}}};
+  view.rerender(<PositionPage {...props} store={updated} />);
+  expect(screen.getByLabelText("点位名称")).toHaveValue("第一台未保存");
+  expect(screen.queryByRole("button",{name:"确认删除 same-id"})).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"保存点位"}));
+  expect(onUpdate).toHaveBeenLastCalledWith(a.id,expect.objectContaining({name:"第一台未保存"}),JSON.stringify(a));
+  view.rerender(<PositionPage {...props} profileKey="other" />);
+  expect(screen.getByLabelText("点位名称")).toHaveValue("第二台未保存");
+  await user.click(screen.getByRole("button",{name:"保存点位"}));
+  expect(onUpdate).toHaveBeenLastCalledWith(b.id,expect.objectContaining({name:"第二台未保存"}),JSON.stringify(b));
+});

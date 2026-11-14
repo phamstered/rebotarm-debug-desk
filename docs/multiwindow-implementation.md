@@ -1,6 +1,6 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十一项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；其他控制任务与完整离线配置切换仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十一项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；离线配置交接已接入并完成隔离窗口验证；其他控制任务及完整运行验收仍未完成，不能按已交付多窗口功能验收。
 
 ## 完整交付范围
 
@@ -386,3 +386,18 @@ DISABLE 复用远端完成后的新确认屏障；成功目标状态不能覆盖
 前端构建与文档构建通过（`/tmp/260-direct-native-build.log`、`/tmp/260-direct-native-docs.log`）。`npm run tauri build -- --debug --no-bundle --config /tmp/260-native-window-test.json` 通过（`/tmp/260-direct-native-tauri.log`），这是原生二进制构建，未替换隔离 .app、正式安装包或生产 Bridge。CUA 返回 Mac 锁屏，新增取消按钮本轮仅有组件和原生运行链路测试，没有原生窗口 / ROS 实机验证；前轮的图片迁移验收不冒充本轮证据。
 
 完整目标继续包含直接 JTC ROS 适配器和隔离端到端、Joint4、外部采集 / 回放协调、桌面重启恢复、离线配置交接、多屏及持续运行，最后完成 PR/CI/安装部署。此次没有发布物理控制命令。
+
+
+## 离线配置交接与跨配置草稿保留
+
+主窗口的离线姿态库、动作组和手眼入口先提交 `native_offline_profile`，再导航原有功能页。原生保留完整 Profile（包括 RGBD 字段），维护独立 `profile_revision`，与连接握手串行；离线配置不能覆盖活动 socket。实际变化在 Tasks 同一互斥内检查运动、未确认任务、本地操作和迁移占用。同配置重开不增加版本，功能页离线时也读取共享配置，重复通知不反复清空页面。主窗口提交中禁止重复进入和连接，失败保留表单；“返回已打开页面”不提交新配置。
+
+Motion 保留最新导航，等对应配置到达后再应用，避免通知乱序时消耗导航或误切另一配置。姿态编辑器和已有动作组编辑器均按原有主机、用户名、SSH 端口标识保留本次页面会话的草稿；姿态草稿保留原记录冲突基线，重回配置不恢复删除确认。手眼样本保持既有来源隔离，不复制图像或原始样本到共享配置。未保存内容仍不承诺跨桌面进程重启保留。
+
+最终 `npm test` 全部通过：915 前端 / 208 Rust / 3 运行库测试及其余脚本（`/tmp/260-offline-profile-release-tests.log`）。覆盖离线授权及大小边界、版本、活动连接保护、任务和迁移占用、通知重入及迟到结果、按机器人恢复草稿与原基线、主窗口失败反馈。连接保护测试使用随机 loopback 假 Bridge；原生离线交接未发起连接。开发时新增 App 测试误用了未导入的 fireEvent，改用既有 userEvent 后完整重跑；最终记录来自修正和所有样式修改后的完整运行。
+
+`npm run build`、文档构建和 `npm run tauri build -- --debug --bundles app --config /tmp/260-native-window-candidate.json` 通过；日志 `/tmp/260-offline-profile-build.log`、`/tmp/260-offline-profile-docs.log`、`/tmp/260-offline-profile-bundle.log`。最新隔离包为 `Robot Console Window Test Candidate.app`，仍使用独立标识 `dev.easydebug.multiwindowtest`；严格 codesign 核验通过。旧 `Robot Console Window Test.app` 没有覆盖，启动前已退出旧隔离进程。
+
+窗口访问恢复后，通过真实 CUA 操作将主机改为 `offline-a.invalid`，离线进入手眼页，生成 1200×900 标定板、填写 16 mm、切到 100%，拆为独立窗口。主窗口改为 `offline-b.invalid` 后打开姿态库，确认 Motion 选中姿态库且显示新主机；返回独立手眼窗口，同样显示新主机，图片、输入和缩放均保留。大图截图确认工具栏与关闭按钮完整可见，Esc 返回正常；收回后 PageDown 截图确认底部 Save target、尺寸核对框、图片说明和滚动条可见。最后恢复原 `jetson` 草稿，手眼导航到已有 Motion 的 Robot View，确认未连接、运动确认未勾选、执行禁用，再返回手眼页。此次没有注入迁移故障或重复性能压力测试；姿态草稿的两个配置往返及冲突基线由组件回归验证。
+
+正式 `/Applications/Robot Console.app` 与生产 Bridge 未更新，没有连接机械臂或执行真实动作。完整方案继续包含直接 JTC ROS 适配器、Joint4、外部采集/回放协调、未知任务和桌面重启恢复、多屏与持续运行验收，以及最终 PR/CI/合并和正式安装部署。

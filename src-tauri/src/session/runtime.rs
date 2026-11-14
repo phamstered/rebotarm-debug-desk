@@ -49,7 +49,17 @@ struct Core {
     latest_topics: BTreeMap<String, (WireFrame, u64)>,
     cached_bytes: usize,
     profile: Value,
+    profile_revision: u64,
     monitor: super::monitor::History,
+}
+
+fn validate_profile(profile: &Value) -> Result<(), String> {
+    if serde_json::to_vec(profile).map_err(|e| e.to_string())?.len() > 16 * 1024 {
+        return Err("Profile 超出大小限制".into());
+    }
+    serde_json::from_value::<crate::ConnectionProfile>(profile.clone())
+        .map_err(|_| "Profile 格式无效".to_string())?;
+    Ok(())
 }
 
 impl Core {
@@ -113,6 +123,7 @@ impl Default for Runtime {
                 latest_topics: BTreeMap::new(),
                 cached_bytes: 0,
                 profile: Value::Null,
+                profile_revision: 0,
                 monitor: super::monitor::History::default(),
             })),
             connect_gate: AsyncMutex::new(()),
@@ -181,8 +192,32 @@ impl Runtime {
     pub fn set_changed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
         *self.changed.lock().unwrap() = Some(callback);
     }
+    #[cfg(test)]
     pub fn set_profile(&self, profile: Value) {
         self.core.lock().unwrap().profile = profile;
+    }
+
+    pub async fn select_offline_profile(&self, label: &str, profile: Value) -> Result<Value, String> {
+        if label != "main" { return Err("只有主窗口可以切换离线配置".into()); }
+        validate_profile(&profile)?;
+        let _gate = self.connect_gate.lock().await;
+        {
+            let mut core = self.core.lock().unwrap();
+            if core.transport.is_some() || core.error.is_none() {
+                return Err("请先断开共享连接，再切换离线配置".into());
+            }
+            if core.profile != profile {
+                self.tasks.with_idle_context(|| {
+                    core.profile_revision = core.profile_revision.checked_add(1).ok_or("配置版本已耗尽")?;
+                    core.profile = profile;
+                    Ok(())
+                })?;
+            }
+        }
+        // Synchronous listeners may read context; never notify under Core.
+        let changed = self.changed.lock().unwrap().clone();
+        if let Some(changed) = changed { changed(); }
+        Ok(self.context())
     }
     pub fn collection_owner(&self, label: &str, profile: &crate::ConnectionProfile) -> Result<Owner, String> {
         if label != "page-collection" { return Err("只有数据采集页面可操作 Episode".into()); }
@@ -258,7 +293,7 @@ impl Runtime {
 
     pub fn context(&self) -> Value {
         let core = self.core.lock().unwrap();
-        json!({ "epoch":core.epoch, "connected":core.transport.is_some() && core.error.is_none(), "profile":core.profile, "error":core.error })
+        json!({ "epoch":core.epoch, "connected":core.transport.is_some() && core.error.is_none(), "profile":core.profile, "profile_revision":core.profile_revision, "error":core.error })
     }
     pub fn close(&self) {
         self.close_matching(None);
@@ -303,8 +338,30 @@ impl Runtime {
 
     /// Only the main window can initiate a connection. The port must come from
     /// the already established SSH tunnel, validated at the native IPC boundary.
+    #[cfg(test)]
     pub async fn connect(&self, port: u16) -> Result<(), String> {
         let _gate = self.connect_gate.lock().await;
+        self.connect_locked(port).await
+    }
+
+    pub async fn connect_profile(&self, port: u16, profile: Value) -> Result<(), String> {
+        validate_profile(&profile)?;
+        let _gate = self.connect_gate.lock().await;
+        {
+            let mut core = self.core.lock().unwrap();
+            if core.transport.is_some() {
+                if core.profile != profile { return Err("共享连接仍在使用另一配置，请先断开".into()); }
+                return Ok(());
+            }
+            if core.profile != profile {
+                core.profile_revision = core.profile_revision.checked_add(1).ok_or("配置版本已耗尽")?;
+                core.profile = profile;
+            }
+        }
+        self.connect_locked(port).await
+    }
+
+    async fn connect_locked(&self, port: u16) -> Result<(), String> {
         if self.core.lock().unwrap().transport.is_some() {
             return Ok(());
         }
@@ -1098,6 +1155,79 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    fn offline_profile(host: &str) -> Value {
+        json!({"host":host,"sshPort":1,"username":"fixture","identityFile":"", "localPort":18765,
+            "remotePort":8765,"rosDomainId":220,"rosSetupScript":"test/install/setup.bash",
+            "commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints",
+            "rgbdRgbTopic":"/fixture/rgb", "rgbdMaxFps":30})
+    }
+
+    #[tokio::test]
+    async fn offline_profile_is_shared_versioned_and_never_connects_or_notifies_under_core_lock() {
+        let hub = Arc::new(Runtime::default());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let weak = Arc::downgrade(&hub); let out = seen.clone();
+        hub.set_changed(Arc::new(move || { out.lock().unwrap().push(weak.upgrade().unwrap().context()); }));
+        let a = offline_profile("fixture-a.invalid");
+        let first = hub.select_offline_profile("main", a.clone()).await.unwrap();
+        assert_eq!(first["profile"], a);
+        assert_eq!(first["profile_revision"], 1);
+        assert_eq!(first["connected"], false);
+        assert_eq!(first["epoch"], 0);
+        assert_eq!(hub.select_offline_profile("main", a).await.unwrap()["profile_revision"], 1);
+        let b = offline_profile("fixture-b.invalid");
+        assert_eq!(hub.select_offline_profile("main", b.clone()).await.unwrap()["profile_revision"], 2);
+        assert_eq!(seen.lock().unwrap().last().unwrap()["profile"], b);
+        assert!(hub.core.lock().unwrap().transport.is_none());
+        assert!(hub.tasks.snapshot().is_none());
+        for label in ["page-motion", "page-handeye", "unknown"] {
+            assert!(hub.select_offline_profile(label, b.clone()).await.is_err());
+        }
+        assert!(hub.select_offline_profile("main", json!({"host":"invalid"})).await.is_err());
+        let mut oversized = b.clone(); oversized["extra"] = json!("x".repeat(16*1024));
+        assert!(hub.select_offline_profile("main", oversized).await.is_err());
+        assert_eq!(hub.context()["profile"], b);
+        assert_eq!(hub.context()["profile_revision"], 2);
+    }
+
+    #[tokio::test]
+    async fn offline_profile_change_rejects_local_operations_migration_and_uncertain_control_tasks() {
+        let hub = Runtime::default();
+        let a = offline_profile("fixture-a.invalid"); let b = offline_profile("fixture-b.invalid");
+        hub.select_offline_profile("main", a.clone()).await.unwrap();
+        let local = hub.tasks.local_operation("page-handeye").unwrap();
+        assert!(hub.select_offline_profile("main", b.clone()).await.is_err());
+        drop(local);
+        let movement = hub.tasks.migration("page-motion").unwrap();
+        assert!(hub.select_offline_profile("main", b.clone()).await.is_err());
+        drop(movement);
+        let owner = Owner {epoch:0, window:WindowToken {label:"page-motion".into(), incarnation:1}};
+        let id = hub.tasks.begin_controller(owner).unwrap();
+        hub.tasks.stop_error(id, "fixture unknown outcome");
+        assert!(hub.select_offline_profile("main", b).await.is_err());
+        assert_eq!(hub.context()["profile"], a);
+        assert_eq!(hub.context()["profile_revision"], 1);
+        assert!(hub.tasks.snapshot().is_some());
+    }
+
+    #[tokio::test]
+    async fn connected_profile_cannot_be_overwritten_by_an_offline_request_or_second_attach() {
+        let (port, _events, _seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        let a = offline_profile("127.0.0.1"); let b = offline_profile("fixture-b.invalid");
+        hub.connect_profile(port, a.clone()).await.unwrap();
+        hub.attach("page-motion").unwrap(); hub.attach("page-handeye").unwrap();
+        assert!(hub.select_offline_profile("main", b.clone()).await.is_err());
+        assert!(hub.connect_profile(port, b.clone()).await.is_err());
+        assert_eq!(hub.context()["profile"], a);
+        assert_eq!(hub.context()["profile_revision"], 1);
+        assert_eq!(hub.context()["connected"], true);
+        hub.close();
+        assert_eq!(hub.select_offline_profile("main", b.clone()).await.unwrap()["profile"], b);
+        assert_eq!(hub.context()["connected"], false);
+        server.abort();
+    }
 
     async fn fake_bridge() -> (
         u16,

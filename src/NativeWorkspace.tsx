@@ -67,13 +67,14 @@ export function NativeWorkspaceHost({ page, snapshot, covered, onError }: {
   </div>;
 }
 
-export function NativePageToolbar({ page, state, connected, busyReason, onAction }: {
-  page: AppPage; state?: NativePageState; connected: boolean; busyReason: string;
+export function NativePageToolbar({ page, state, connected, busyReason, onAction, profileName }: {
+  page: AppPage; state?: NativePageState; connected: boolean; busyReason: string; profileName?: string;
   onAction(command: "workspace_detach" | "workspace_dock" | "workspace_show_main" | "workspace_recover", page: AppPage): void;
 }) {
   const blocked = busyReason || state?.busy_reason || (!state?.ready ? "页面加载中" : "");
   return <header className="native-page-toolbar" aria-label="页面窗口工具栏">
     <strong>{PAGE_TITLES[page]}</strong>
+    {profileName && <span className="native-page-profile" title={`当前页面配置：${profileName}`}>{profileName}</span>}
     <span className={connected ? "native-page-connected" : "native-page-offline"}>{connected ? "共享连接已就绪" : "未连接 · 在主窗口连接机器人"}</span>
     {state?.detached && <button type="button" title="显示导航和连接入口，保留当前独立窗口" onClick={() => onAction("workspace_show_main", page)}>主窗口</button>}
     <button type="button" disabled={Boolean(blocked)} title={blocked || (state?.recovery_required ? "重新恢复上次移动前的窗口，保留页面内容" : state?.detached ? "保留当前内容，收回主窗口" : "保留当前内容，移到独立窗口")}

@@ -26,20 +26,15 @@ pub async fn native_bridge_attach(
             return Err("本地端口不属于当前 SSH 会话".into());
         }
         let profile = profile.ok_or("连接缺少 Profile")?;
-        if serde_json::to_vec(&profile)
-            .map_err(|e| e.to_string())?
-            .len()
-            > 16 * 1024
-        {
-            return Err("Profile 超出大小限制".into());
-        }
-        serde_json::from_value::<crate::ConnectionProfile>(profile.clone())
-            .map_err(|_| "Profile 格式无效")?;
-        hub.set_profile(profile);
-        hub.connect(port).await?;
+        hub.connect_profile(port, profile).await?;
     }
     let (attachment, hello) = hub.attach(window.label())?;
     Ok(Attached { attachment, hello })
+}
+
+#[tauri::command]
+pub async fn native_offline_profile(window: Webview, hub: State<'_, Runtime>, profile: Value) -> Result<Value, String> {
+    hub.select_offline_profile(window.label(), profile).await
 }
 
 #[tauri::command]
