@@ -505,13 +505,14 @@ export function MonitorPage({
                 {bagBusy ? "处理中…" : bagStateUnknown ? "回放状态待确认" : "开始回放"}
               </button>
             )}
+            {bagStateUnknown && <button type="button" className="ghost danger" disabled={bagBusy} onClick={onStopBagPlay}>尝试停止回放</button>}
           </div>
 
           <div className="monitor-playbar" role="group" aria-label="回放控制条">
             <button
               type="button"
               className="monitor-playbar-btn"
-              disabled={bagBusy || playing}
+              disabled={bagBusy || playing || bagStateUnknown}
               title="以 1x 在 Jetson 上执行 ros2 bag play --clock"
               onClick={startPlay}
             >

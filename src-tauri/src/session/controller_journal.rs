@@ -22,6 +22,9 @@ pub fn new_arm_id() -> Result<String, String> {
 pub fn new_collection_id() -> Result<String, String> {
     Ok(new_id()?.replacen("controller-", "collection-", 1))
 }
+pub fn new_bag_id() -> Result<String, String> {
+    Ok(new_id()?.replacen("controller-", "bag-", 1))
+}
 #[derive(Debug, PartialEq, Eq)]
 pub enum Proof {
     Pending,
@@ -29,6 +32,7 @@ pub enum Proof {
     Unknown,
     Succeeded,
     CollectionSucceeded(Value),
+    BagSucceeded(Value),
     Rejected(String),
     Uncertain(String),
 }
@@ -39,7 +43,7 @@ pub struct Job {
 }
 impl Job {
     pub fn new(id: String, command: String) -> Result<Self, String> {
-        let suffix = id.strip_prefix("controller-").or_else(|| id.strip_prefix("arm-mode-")).or_else(|| id.strip_prefix("collection-"));
+        let suffix = id.strip_prefix("controller-").or_else(|| id.strip_prefix("arm-mode-")).or_else(|| id.strip_prefix("collection-")).or_else(|| id.strip_prefix("bag-"));
         let limit = if id.starts_with("arm-mode-") || id.starts_with("collection-") { 131072 } else { 32768 };
         if !suffix.is_some_and(|value| value.len() == 48 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             || command.is_empty() || command.len() > limit || command.contains('\0')
@@ -88,10 +92,10 @@ impl Job {
                     && value["exit_code"] == 0
                     && value["timed_out"] == false =>
             {
-                if self.id.starts_with("collection-") {
+                if self.id.starts_with("collection-") || self.id.starts_with("bag-") {
                     let receipt = value.get("receipt").filter(|v| v.is_object() && v.to_string().len() <= 1024)
                         .ok_or("采集完成记录缺少有效回执")?;
-                    Ok(Proof::CollectionSucceeded(receipt.clone()))
+                    Ok(if self.id.starts_with("bag-") { Proof::BagSucceeded(receipt.clone()) } else { Proof::CollectionSucceeded(receipt.clone()) })
                 } else { Ok(Proof::Succeeded) }
             }
             Some("rejected") if value["started"] == false => Ok(Proof::Rejected(detail)),
@@ -145,6 +149,17 @@ fn remote_command() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bag_success_requires_bound_receipt_and_cannot_repeat_submission() {
+        let mut job=Job::new(new_bag_id().unwrap(),"echo bag".into()).unwrap();
+        let request=job.submission().unwrap();assert!(job.submission().is_err());
+        let mut proof=json!({"version":1,"id":request["id"],"command_hash":request["command_hash"],
+            "phase":"succeeded","started":true,"exit_code":0,"timed_out":false});
+        assert!(job.proof(&proof).is_err());
+        proof["receipt"]=json!({"kind":"play"});
+        assert_eq!(job.proof(&proof).unwrap(),Proof::BagSucceeded(proof["receipt"].clone()));
+        proof["command_hash"]=json!("wrong");assert!(job.proof(&proof).is_err());
+    }
     #[test]
     fn collection_success_requires_its_bound_receipt_and_submission_is_one_shot() {
         assert!(Job::new(new_collection_id().unwrap(), "x".repeat(131073)).is_err());

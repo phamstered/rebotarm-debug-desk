@@ -142,7 +142,17 @@ export type RosControlStatus = {
   message: string;
 };
 
+export type RosbagProcessReceipt = {
+  kind: "record" | "play";
+  active: boolean;
+  pid: number;
+  domain: number | null;
+  processIdentity: string;
+  pathHash: string;
+};
+
 export type RosbagStatus = {
+  receipt?: RosbagProcessReceipt | null;
   recording: boolean;
   pid: number;
   outputPath: string;
@@ -150,6 +160,7 @@ export type RosbagStatus = {
 };
 
 export type RosbagPlayStatus = {
+  receipt?: RosbagProcessReceipt | null;
   playing: boolean;
   pid: number;
   bagPath: string;

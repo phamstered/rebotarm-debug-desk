@@ -27,3 +27,13 @@ it("shows query failures instead of claiming there is no pending operation",asyn
   mocks.invoke.mockRejectedValue(new Error("IPC unavailable"));render(<NativeBagOperationStatus/>);
   expect(await screen.findByRole("status")).toHaveTextContent("任务状态不可用");
 });
+
+it("keeps a running playback visible until process exit is confirmed",async()=>{
+  mocks.invoke.mockResolvedValue([{...task,kind:"play",window:"page-monitor",phase:"running",message:"进程组运行中"}]);
+  render(<NativeBagOperationStatus/>);
+  expect(await screen.findByRole("status")).toHaveTextContent("回放 · 运行中");
+  mocks.invoke.mockResolvedValue([{...task,kind:"play",phase:"uncertain",message:"进程身份待核验"}]);await act(async()=>changed());
+  expect(screen.getByRole("status")).toHaveTextContent("进程身份待核验");
+  mocks.invoke.mockResolvedValue([{...task,kind:"play",phase:"succeeded"}]);await act(async()=>changed());
+  expect(screen.queryByRole("status")).toBeNull();
+});

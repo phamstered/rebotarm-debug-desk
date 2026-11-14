@@ -1223,6 +1223,8 @@ describe("App workflow", () => {
       expect(doubles.invoke).not.toHaveBeenCalledWith("get_rosbag_play_status",expect.anything());
       failure=true;revision++;await act(async()=>changed!());
       expect(await screen.findByRole("button",{name:/录制状态待确认/})).toBeDisabled();
+      await user.click(screen.getByRole("button",{name:"尝试停止录制"}));
+      expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording",{profile:expect.any(Object)});
     } finally {view.unmount();delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;globalThis.ResizeObserver=resize;doubles.invoke.mockImplementation(base);doubles.listen.mockImplementation(originalListen);}
   });
 

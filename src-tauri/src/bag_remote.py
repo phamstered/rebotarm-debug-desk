@@ -4,6 +4,7 @@ No ROS Python dependency. All launch commands are fixed argv plus validated
 configuration. A missing/unreadable identity is never permission to signal a PID.
 """
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -179,7 +180,8 @@ class Manager:
         if not valid_path(history):
             raise RuntimeError("invalid bag history path")
         return {"active": bool(members), "pid": record["pid"] if members else 0,
-                "path": history, "domain": record["domain"] if record else None}
+                "path": history, "domain": record["domain"] if record else None,
+                "processIdentity": hashlib.sha256(json.dumps([record[k] for k in ("boot", "pid", "start", "token")]).encode()).hexdigest() if record else ""}
 
     def locked(self, operation):
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -291,6 +293,9 @@ def main():
             raise RuntimeError("bag belongs to another ROS domain")
     state = ("RECORDING" if manager.kind == "record" else "PLAYING") if result["active"] else "IDLE"
     print("%s|%s|%s" % (state, result["pid"], result["path"]))
+    receipt = {key: result[key] for key in ("active", "pid", "domain", "processIdentity")}
+    receipt.update(kind=manager.kind, pathHash=hashlib.sha256(result["path"].encode()).hexdigest())
+    print("ROBOT_CONSOLE_BAG_RECEIPT=" + json.dumps(receipt))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
-//! App-owned finite bag start/stop operations. Remote publication is single-shot;
+//! App-owned bag operations and process-bound running lifetime. Remote publication is single-shot;
 //! a lost SSH reply is recovered by journal query, never by replaying control.
 use super::{
+    bag_receipt::Receipt,
     controller_journal::{Job, Proof},
+    controller_task::same_profile,
     observations::{Snapshot as Observations, Source},
     runtime::Runtime,
     tasks::{LocalOperation, Owner, Tasks},
@@ -48,10 +50,11 @@ pub enum Phase {
     Submitting,
     Verifying,
     Uncertain,
+    Running,
     Succeeded,
     Failed,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Snapshot {
     pub id: u64,
     pub kind: Kind,
@@ -65,6 +68,8 @@ struct Entry {
     snapshot: Snapshot,
     owner: Owner,
     sent: bool,
+    profile: Value,
+    receipt: Option<Receipt>,
     permit: Option<LocalOperation>,
 }
 #[derive(Default)]
@@ -92,18 +97,40 @@ impl Operations {
         owner: Owner,
         kind: Kind,
         starting: bool,
-        host: String,
+        profile: Value,
     ) -> Result<u64, String> {
         if !kind.authorized(&owner.window.label) {
             return Err("当前页面无权执行此 rosbag 操作".into());
         }
-        let permit = tasks.local_operation(&owner.window.label)?;
         let mut inner = self.inner.lock().unwrap();
-        if inner.entries.get(&kind).is_some_and(|e| e.permit.is_some()) {
-            return Err("此 rosbag 操作仍在原生层核验，不能重复提交".into());
-        }
-        inner.sequence = inner.sequence.checked_add(1).ok_or("rosbag 操作编号耗尽")?;
-        let id = inner.sequence;
+        let id = inner.sequence.checked_add(1).ok_or("rosbag 操作编号耗尽")?;
+        let (permit, receipt) =
+            if let Some(previous) = inner.entries.get_mut(&kind).filter(|e| e.permit.is_some()) {
+                if starting
+                    || previous.sent
+                    || previous.receipt.is_none()
+                    || !same_profile(&previous.profile, &profile)
+                {
+                    return Err("此 rosbag 操作仍在原生层核验，或属于另一连接，不能重复提交".into());
+                }
+                // Explicit stop may transfer ownership to another authorized page.
+                previous
+                    .permit
+                    .as_mut()
+                    .unwrap()
+                    .transfer(&owner.window.label)?;
+                (previous.permit.take().unwrap(), previous.receipt.clone())
+            } else {
+                let permit = if kind == Kind::Play {
+                    tasks.playback_operation(&owner.window.label, starting)?
+                } else if starting {
+                    tasks.sampling_operation(&owner.window.label)?
+                } else {
+                    tasks.local_operation(&owner.window.label)?
+                };
+                (permit, None)
+            };
+        inner.sequence = id;
         inner.entries.insert(
             kind,
             Entry {
@@ -111,13 +138,15 @@ impl Operations {
                     id,
                     kind,
                     window: owner.window.label.clone(),
-                    host,
+                    host: profile["host"].as_str().unwrap_or("").into(),
                     starting,
                     phase: Phase::Submitting,
                     message: "等待原生提交".into(),
                 },
                 owner,
                 sent: false,
+                profile,
+                receipt,
                 permit: Some(permit),
             },
         );
@@ -156,6 +185,72 @@ impl Operations {
         };
         drop(permit);
     }
+    fn running(&self, kind: Kind, id: u64, receipt: Receipt) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(entry) = inner
+            .entries
+            .get_mut(&kind)
+            .filter(|e| e.snapshot.id == id && e.permit.is_some())
+        else {
+            return false;
+        };
+        entry.receipt = Some(receipt);
+        entry.sent = false;
+        entry.snapshot.phase = Phase::Running;
+        entry.snapshot.message = "进程组正在运行；停止或自然退出核验后释放占用".into();
+        true
+    }
+    fn retained(&self, kind: Kind, id: u64) -> Option<Receipt> {
+        self.inner
+            .lock()
+            .unwrap()
+            .entries
+            .get(&kind)
+            .filter(|e| e.snapshot.id == id && e.permit.is_some())
+            .and_then(|e| e.receipt.clone())
+    }
+    fn check_running(&self, kind: Kind, id: u64, context: &Value, snapshot: &Observations) -> bool {
+        let original = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .entries
+                .get(&kind)
+                .filter(|e| e.snapshot.id == id && e.permit.is_some() && !e.sent)
+                .and_then(|e| e.receipt.as_ref().map(|r| (e.profile.clone(), r.clone())))
+        };
+        let Some((profile, receipt)) = original else {
+            return false;
+        };
+        if context["connected"] == true
+            && same_profile(&profile, &context["profile"])
+            && context["epoch"].as_u64() == Some(snapshot.epoch)
+        {
+            if let Some((_, live)) =
+                current(snapshot, kind).filter(|(_, r)| receipt.same_instance(r))
+            {
+                if !live.active {
+                    self.update(kind, id, Phase::Succeeded, "已核验原 bag 进程组退出", true);
+                    return false;
+                }
+                self.update(
+                    kind,
+                    id,
+                    Phase::Running,
+                    "进程组运行中，原生层继续核验退出",
+                    false,
+                );
+                return true;
+            }
+        }
+        self.update(
+            kind,
+            id,
+            Phase::Uncertain,
+            "等待原连接的新鲜 bag 进程身份与退出状态",
+            false,
+        );
+        true
+    }
     fn abandoned(&self, kind: Kind, id: u64) {
         let sent = self
             .inner
@@ -166,6 +261,9 @@ impl Operations {
             .filter(|e| e.snapshot.id == id && e.permit.is_some())
             .map(|e| e.sent);
         if let Some(sent) = sent {
+            if !sent && self.retained(kind, id).is_some() {
+                return;
+            }
             self.update(
                 kind,
                 id,
@@ -184,7 +282,7 @@ impl Operations {
         }
     }
 }
-fn verified(snapshot: &Observations, kind: Kind, starting: bool, path: &str) -> Option<Value> {
+fn current(snapshot: &Observations, kind: Kind) -> Option<(Value, Receipt)> {
     if !snapshot.connected {
         return None;
     }
@@ -193,18 +291,39 @@ fn verified(snapshot: &Observations, kind: Kind, starting: bool, path: &str) -> 
         return None;
     }
     let value = entry.value.as_ref()?;
-    if value[kind.field()].as_bool() != Some(starting) {
+    let receipt = Receipt::parse(value.get("receipt")?.clone()).ok()?;
+    let path_field = if kind == Kind::Play {
+        "bagPath"
+    } else {
+        "outputPath"
+    };
+    if receipt.kind != kind
+        || value[kind.field()].as_bool() != Some(receipt.active)
+        || value["pid"].as_u64() != Some(receipt.pid.into())
+        || !receipt.path_matches(value[path_field].as_str()?)
+    {
         return None;
     }
-    let pid = value["pid"].as_u64()?;
-    if (starting && pid == 0) || (!starting && pid != 0) {
-        return None;
-    }
-    if kind == Kind::Play && starting && value["bagPath"].as_str() != Some(path) {
-        return None;
-    }
-    Some(value.clone())
+    Some((value.clone(), receipt))
 }
+fn verified(
+    snapshot: &Observations,
+    kind: Kind,
+    starting: bool,
+    path: &str,
+    proof: &Receipt,
+) -> Option<Value> {
+    let (value, receipt) = current(snapshot, kind)?;
+    if (!starting && (receipt.active || proof.active))
+        || (starting && !proof.active && receipt.active)
+        || !proof.same_instance(&receipt)
+        || (kind == Kind::Play && starting && !receipt.path_matches(path))
+    {
+        return None;
+    }
+    Some(value)
+}
+
 struct Guard {
     operations: Arc<Operations>,
     kind: Kind,
@@ -235,7 +354,7 @@ pub async fn start(
     path: String,
     remote: String,
 ) -> Result<Value, String> {
-    let mut journal = Job::new(super::controller_journal::new_id()?, remote)?;
+    let mut journal = Job::new(super::controller_journal::new_bag_id()?, remote)?;
     let (id, owner) = hub.begin_bag(&label, &profile, kind, starting)?;
     let guard = Guard {
         operations: hub.bag_operations.clone(),
@@ -246,16 +365,31 @@ pub async fn start(
     guard.update(Phase::Submitting, "操作已由原生层接管", false);
     owned(async move {
         let hub = guard.app.state::<Runtime>();
-        hub.send_bag(&owner, id, &profile, kind)?;
+        if let Err(message) = hub.send_bag(&owner, id, &profile, kind) {
+            rejected(guard, profile, &message);
+            return Err(message);
+        }
         // Exactly one attempt. Even a transport timeout may have started the job.
         let mut proof = journal.submit(&profile).await.ok();
         let original = serde_json::to_value(&profile).map_err(|e| e.to_string())?;
-        let mut completed = false;
+        let mut completed: Option<Receipt> = None;
         loop {
             match proof.take() {
-                Some(Proof::Succeeded) => completed = true,
+                Some(Proof::BagSucceeded(value)) => match Receipt::parse(value) {
+                    Ok(receipt)
+                        if receipt.kind == kind
+                            && (receipt.domain == Some(profile.ros_domain_id)
+                                || (!starting && receipt.domain.is_none())) =>
+                    {
+                        completed = Some(receipt)
+                    }
+                    _ => {
+                        guard.update(Phase::Uncertain, "bag 完成回执身份无效，保留占用", false);
+                        return Err("bag 完成回执无效".into());
+                    }
+                },
                 Some(Proof::Rejected(message)) => {
-                    guard.update(Phase::Failed, &message, true);
+                    rejected(guard, profile, &message);
                     return Err(message);
                 }
                 Some(Proof::Uncertain(message)) => guard.update(Phase::Uncertain, &message, false),
@@ -265,17 +399,38 @@ pub async fn start(
             if context["connected"] == true
                 && super::controller_task::same_profile(&original, &context["profile"])
             {
-                if completed {
+                if let Some(receipt) = &completed {
                     if let Some(epoch) = context["epoch"].as_u64() {
                         if let Ok(snapshot) =
                             hub.observations.refresh(epoch, kind.source(), true).await
                         {
-                            if let Some(value) = verified(&snapshot, kind, starting, &path) {
-                                guard.update(
-                                    Phase::Succeeded,
-                                    "远端操作完成，已核验新鲜状态",
-                                    true,
-                                );
+                            if let Some(value) = verified(&snapshot, kind, starting, &path, receipt)
+                            {
+                                if let Some(previous) = guard.operations.retained(kind, id) {
+                                    if !previous.same_instance(receipt) {
+                                        guard.update(
+                                            Phase::Uncertain,
+                                            "原运行实例与停止回执不一致，保留占用",
+                                            false,
+                                        );
+                                        return Err("rosbag 进程身份已改变".into());
+                                    }
+                                }
+                                if starting && value[kind.field()] == true {
+                                    guard.operations.running(kind, id, receipt.clone());
+                                    guard.update(
+                                        Phase::Running,
+                                        "进程组运行中，原生层继续核验退出",
+                                        false,
+                                    );
+                                    monitor(guard);
+                                } else {
+                                    guard.update(
+                                        Phase::Succeeded,
+                                        "远端操作完成，已核验进程组退出",
+                                        true,
+                                    );
+                                }
                                 return Ok(value);
                             }
                         }
@@ -285,12 +440,12 @@ pub async fn start(
                 }
             }
             guard.update(
-                if completed {
+                if completed.is_some() {
                     Phase::Verifying
                 } else {
                     Phase::Uncertain
                 },
-                if completed {
+                if completed.is_some() {
                     "远端命令已完成，等待原连接的新鲜 rosbag 状态"
                 } else {
                     "执行结果未确认；仅查询原连接的远端记录，不重发操作"
@@ -302,6 +457,39 @@ pub async fn start(
     })
     .await
 }
+fn rejected(guard: Guard, _profile: ConnectionProfile, message: &str) {
+    if let Some(receipt) = guard.operations.retained(guard.kind, guard.id) {
+        guard
+            .operations
+            .running(guard.kind, guard.id, receipt.clone());
+        guard.update(Phase::Running, message, false);
+        monitor(guard);
+    } else {
+        guard.update(Phase::Failed, message, true);
+    }
+}
+fn monitor(guard: Guard) {
+    tokio::spawn(async move {
+        loop {
+            let hub = guard.app.state::<Runtime>();
+            let before = guard.operations.snapshot();
+            let keep = guard.operations.check_running(
+                guard.kind,
+                guard.id,
+                &hub.context(),
+                &hub.observations.snapshot(),
+            );
+            if guard.operations.snapshot() != before {
+                let _ = guard.app.emit("native-bag-operations-changed", ());
+            }
+            if !keep {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
 async fn owned<F>(work: F) -> Result<Value, String>
 where
     F: std::future::Future<Output = Result<Value, String>> + Send + 'static,
@@ -323,6 +511,7 @@ mod tests {
     use super::super::{observations::Observation, windows::WindowToken};
     use super::*;
     use serde_json::json;
+    use sha2::Digest;
     fn owner(label: &str) -> Owner {
         Owner {
             epoch: 1,
@@ -385,7 +574,7 @@ mod tests {
             )
             .is_err());
         assert!(tasks.migration("page-dashboard").is_ok()); // Rejected admission did not leak its permit.
-        let play = operations
+        assert!(operations
             .begin(
                 &tasks,
                 owner("page-monitor"),
@@ -393,7 +582,7 @@ mod tests {
                 true,
                 "fixture".into(),
             )
-            .unwrap();
+            .is_err());
         assert!(operations
             .sending(Kind::Record, id, &owner("page-dashboard"))
             .is_err());
@@ -417,10 +606,20 @@ mod tests {
                 .phase,
             Phase::Uncertain
         );
-        operations.abandoned(Kind::Play, play);
         assert!(tasks.migration("page-monitor").is_ok());
         operations.update(Kind::Record, id, Phase::Succeeded, "confirmed", true);
         assert!(tasks.migration("page-motion").is_ok());
+        let play = operations
+            .begin(
+                &tasks,
+                owner("page-monitor"),
+                Kind::Play,
+                true,
+                "fixture".into(),
+            )
+            .unwrap();
+        operations.abandoned(Kind::Play, play);
+        assert!(tasks.migration("page-monitor").is_ok());
         let next = operations
             .begin(
                 &tasks,
@@ -435,34 +634,227 @@ mod tests {
         assert_ne!(id, next);
         operations.abandoned(Kind::Record, next);
     }
+    fn profile() -> Value {
+        json!({"host":"fixture","sshPort":22,"username":"","identityFile":"","localPort":18765,"remotePort":8765,
+        "rosDomainId":197,"rosSetupScript":"test/install/setup.bash","commandTopic":"/cmd","statusTopic":"/status","jointStateTopic":"/joints"})
+    }
+    fn proof(kind: Kind, active: bool) -> Receipt {
+        Receipt::parse(json!({"kind":kind,"active":active,"pid":if active {42}else{0},"domain":197,
+            "processIdentity":"a".repeat(64),"pathHash":format!("{:x}",sha2::Sha256::digest(b"bags/a"))})).unwrap()
+    }
+    fn observed(kind: Kind, active: bool) -> Observations {
+        Observations{epoch:1,connected:true,revision:1,handler_elapsed_ms:0,entries:[(kind.source(),Observation{sequence:1,
+            value:Some(json!({kind.field():active,"pid":if active {42}else{0},"bagPath":"bags/a","outputPath":"bags/a","receipt":proof(kind,active)})),
+            error:None,age_ms:0,ttl_ms:8000})].into_iter().collect()}
+    }
     #[test]
-    fn bag_completion_requires_fresh_correct_target_and_requested_playback_path() {
-        let make = |kind: Kind, starting: bool| {
-            Observations{epoch:1,connected:true,revision:1,handler_elapsed_ms:0,entries:[(kind.source(),Observation{sequence:1,value:Some(json!({kind.field():starting,"pid":if starting {42}else{0},"bagPath":"bags/a"})),error:None,age_ms:0,ttl_ms:8000})].into_iter().collect()}
-        };
+    fn bag_completion_requires_fresh_correct_instance_domain_and_requested_path() {
         for kind in [Kind::Record, Kind::Play] {
-            for starting in [true, false] {
-                let good = make(kind, starting);
-                assert!(verified(&good, kind, starting, "bags/a").is_some());
-                for fault in 0..6 {
-                    let mut bad = make(kind, starting);
+            for active in [true, false] {
+                let good = observed(kind, active);
+                let receipt = proof(kind, active);
+                assert!(verified(&good, kind, active, "bags/a", &receipt).is_some());
+                for fault in 0..10 {
+                    let mut bad = good.clone();
                     let entry = bad.entries.get_mut(&kind.source()).unwrap();
                     match fault {
                         0 => entry.age_ms = 8000,
                         1 => entry.error = Some("SSH".into()),
-                        2 => entry.value.as_mut().unwrap()[kind.field()] = json!(!starting),
-                        3 => {
-                            entry.value.as_mut().unwrap()["pid"] =
-                                json!(if starting { 0 } else { 42 })
-                        }
+                        2 => entry.value.as_mut().unwrap()[kind.field()] = json!(!active),
+                        3 => entry.value.as_mut().unwrap()["pid"] = json!(99),
                         4 => entry.value = None,
+                        5 => {
+                            entry.value.as_mut().unwrap()["receipt"]["processIdentity"] =
+                                json!("b".repeat(64))
+                        }
+                        6 => entry.value.as_mut().unwrap()["receipt"]["domain"] = json!(198),
+                        7 => entry.value.as_mut().unwrap()["receipt"] = Value::Null,
+                        8 => {
+                            entry.value.as_mut().unwrap()["receipt"]["pathHash"] =
+                                json!("f".repeat(64))
+                        }
                         _ => bad.connected = false,
                     }
-                    assert!(verified(&bad, kind, starting, "bags/a").is_none());
+                    assert!(
+                        verified(&bad, kind, active, "bags/a", &receipt).is_none(),
+                        "{kind:?}/{active}/{fault}"
+                    );
                 }
             }
         }
-        assert!(verified(&make(Kind::Play, true), Kind::Play, true, "bags/other").is_none());
+        assert!(verified(
+            &observed(Kind::Play, true),
+            Kind::Play,
+            true,
+            "other",
+            &proof(Kind::Play, true)
+        )
+        .is_none());
+        assert!(
+            verified(
+                &observed(Kind::Play, false),
+                Kind::Play,
+                true,
+                "bags/a",
+                &proof(Kind::Play, true)
+            )
+            .is_some(),
+            "fast natural exit is proven by the same identity"
+        );
+    }
+    #[test]
+    fn running_process_holds_migration_and_playback_excludes_motion_until_bound_exit() {
+        use std::time::Instant;
+        for kind in [Kind::Record, Kind::Play] {
+            let tasks = Arc::new(Tasks::default());
+            let ops = Operations::default();
+            let label = if kind == Kind::Play {
+                "page-monitor"
+            } else {
+                "page-motion"
+            };
+            let id = ops
+                .begin(&tasks, owner(label), kind, true, profile())
+                .unwrap();
+            ops.sending(kind, id, &owner(label)).unwrap();
+            ops.running(kind, id, proof(kind, true));
+            ops.abandoned(kind, id);
+            assert!(tasks.migration(label).is_err());
+            let motion = json!({"op":"position_move","command_id":"movement"});
+            if kind == Kind::Play {
+                assert!(tasks
+                    .admit(owner("page-motion"), &motion, Instant::now())
+                    .is_err());
+            }
+            let context = json!({"connected":true,"epoch":1,"profile":profile()});
+            for fault in 0..5 {
+                let mut ctx = context.clone();
+                let mut state = observed(kind, false);
+                match fault {
+                    0 => ctx["profile"]["host"] = json!("other"),
+                    1 => ctx["epoch"] = json!(2),
+                    2 => state.connected = false,
+                    3 => state.entries.get_mut(&kind.source()).unwrap().age_ms = 8000,
+                    _ => {
+                        state
+                            .entries
+                            .get_mut(&kind.source())
+                            .unwrap()
+                            .value
+                            .as_mut()
+                            .unwrap()["receipt"]["processIdentity"] = json!("b".repeat(64))
+                    }
+                }
+                assert!(ops.check_running(kind, id, &ctx, &state));
+                assert!(tasks.migration(label).is_err());
+            }
+            assert!(ops.check_running(kind, id, &context, &observed(kind, true)));
+            assert_eq!(ops.snapshot()[0].phase, Phase::Running);
+            assert!(!ops.check_running(kind, id, &context, &observed(kind, false)));
+            assert!(tasks.migration(label).is_ok());
+            assert!(tasks
+                .admit(owner("page-motion"), &motion, Instant::now())
+                .is_ok());
+        }
+    }
+    #[test]
+    fn stop_transfers_running_ownership_but_late_monitor_cannot_release_new_operation() {
+        let tasks = Arc::new(Tasks::default());
+        let ops = Operations::default();
+        let kind = Kind::Record;
+        let id = ops
+            .begin(&tasks, owner("page-motion"), kind, true, profile())
+            .unwrap();
+        ops.sending(kind, id, &owner("page-motion")).unwrap();
+        ops.running(kind, id, proof(kind, true));
+        assert!(ops
+            .begin(&tasks, owner("page-dashboard"), kind, true, profile())
+            .is_err());
+        let mut wrong = profile();
+        wrong["host"] = json!("other");
+        assert!(ops
+            .begin(&tasks, owner("page-dashboard"), kind, false, wrong)
+            .is_err());
+        let stop = ops
+            .begin(&tasks, owner("page-dashboard"), kind, false, profile())
+            .unwrap();
+        assert!(tasks.migration("page-dashboard").is_err());
+        assert!(tasks.migration("page-motion").is_ok());
+        let ctx = json!({"connected":true,"epoch":1,"profile":profile()});
+        assert!(!ops.check_running(kind, id, &ctx, &observed(kind, false)));
+        assert!(tasks.migration("page-dashboard").is_err());
+        // Proven pre-submit rejection restores monitoring; unknown submitted stop stays occupied.
+        ops.running(kind, stop, proof(kind, true));
+        ops.abandoned(kind, stop);
+        assert!(ops.check_running(kind, stop, &ctx, &observed(kind, true)));
+        ops.sending(kind, stop, &owner("page-dashboard")).unwrap();
+        ops.abandoned(kind, stop);
+        assert!(ops
+            .begin(&tasks, owner("page-dashboard"), kind, false, profile())
+            .is_err());
+        assert!(tasks.migration("page-dashboard").is_err());
+    }
+    #[test]
+    fn playback_excludes_sampling_but_allows_offline_image_computation() {
+        let tasks = Arc::new(Tasks::default());
+        let compute = tasks.local_operation("page-handeye").unwrap();
+        let playback = tasks.playback_operation("page-monitor", true).unwrap();
+        drop(compute);
+        assert!(tasks.local_operation("page-handeye").is_ok());
+        assert!(tasks.sampling_operation("page-handeye").is_err());
+        assert!(tasks.sampling_operation("page-collection").is_err());
+        drop(playback);
+        let capture = tasks.sampling_operation("page-handeye").unwrap();
+        assert!(tasks.playback_operation("page-monitor", true).is_err());
+        drop(capture);
+        assert!(tasks.playback_operation("page-monitor", true).is_ok());
+    }
+    #[test]
+    fn playback_admission_races_atomically_with_motion_and_keeps_disable_and_stop_available() {
+        use std::{sync::Barrier, thread, time::Instant};
+        for _ in 0..20 {
+            let tasks = Arc::new(Tasks::default());
+            let gate = Arc::new(Barrier::new(2));
+            let a = tasks.clone();
+            let b = gate.clone();
+            let motion = thread::spawn(move || {
+                b.wait();
+                a.admit(
+                    owner("page-motion"),
+                    &json!({"op":"position_move","command_id":"race"}),
+                    Instant::now(),
+                )
+                .is_ok()
+            });
+            let a = tasks.clone();
+            let b = gate.clone();
+            let playback = thread::spawn(move || {
+                b.wait();
+                a.playback_operation("page-monitor", true)
+            });
+            let moving = motion.join().unwrap();
+            let playing = playback.join().unwrap();
+            assert_ne!(moving, playing.is_ok());
+            assert!(tasks
+                .admit(
+                    owner("page-motor"),
+                    &json!({"op":"joint_command","mode":3}),
+                    Instant::now()
+                )
+                .is_ok());
+        }
+        let tasks = Arc::new(Tasks::default());
+        tasks
+            .admit(
+                owner("page-motion"),
+                &json!({"op":"position_move","command_id":"running"}),
+                Instant::now(),
+            )
+            .unwrap();
+        let stop = tasks.playback_operation("page-monitor", false).unwrap();
+        assert!(tasks.migration("page-monitor").is_err());
+        drop(stop);
+        assert!(tasks.migration("page-monitor").is_ok());
     }
     #[tokio::test]
     async fn bag_worker_survives_invoking_future_exit_and_retains_migration_until_finish() {

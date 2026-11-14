@@ -1525,13 +1525,13 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     setToolbarNotice("工作区布局已恢复默认值");
   }
 
-  async function toggleRosbagRecording() {
+  async function toggleRosbagRecording(forceStop = false) {
     const generation = connectionGenerationRef.current;
-    if (toolbarBusy || (nativeDesktop() && !rosbagStatus)) return;
+    if (toolbarBusy || (nativeDesktop() && !rosbagStatus && !forceStop)) return;
     setToolbarBusy("record");
     setToolbarNotice("");
     try {
-      const command = rosbagStatus?.recording ? "stop_rosbag_recording" : "start_rosbag_recording";
+      const command = forceStop || rosbagStatus?.recording ? "stop_rosbag_recording" : "start_rosbag_recording";
       const status = await invoke<RosbagStatus>(command, { profile });
       if (generation !== connectionGenerationRef.current) return;
       if (nativeDesktop()) await sharedObservations.refresh("bag_record", true);
@@ -1967,6 +1967,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             onClick={() => void toggleRosbagRecording()}
             title={(nativeDesktop() && bagObservations.record.error) || rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
           ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : nativeDesktop() && !rosbagStatus ? "录制状态待确认" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
+          {nativeDesktop() && !rosbagStatus && <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void toggleRosbagRecording(true)}>尝试停止录制</button>}
           <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
           <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title={appPage === "motion" ? "恢复 Motion 默认布局，保留当前 Tab 与编辑内容" : "恢复面板尺寸并展开全部面板"}><span>⊞</span>重置布局</button>
         </div>

@@ -72,6 +72,7 @@ struct RosControlStatus {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RosbagStatus {
+    receipt: Option<session::bag_receipt::Receipt>,
     recording: bool,
     pid: u32,
     output_path: String,
@@ -81,6 +82,7 @@ struct RosbagStatus {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RosbagPlayStatus {
+    receipt: Option<session::bag_receipt::Receipt>,
     playing: bool,
     pid: u32,
     bag_path: String,
@@ -332,6 +334,7 @@ fn parse_rosbag_status(output: &str) -> Result<RosbagStatus, String> {
     let output_path = fields.next().unwrap_or_default().to_string();
     let recording = matches!(state, "STARTED" | "RECORDING");
     Ok(RosbagStatus {
+        receipt: session::bag_receipt::Receipt::output(output, session::bag_operation::Kind::Record, recording, pid, &output_path)?,
         recording,
         pid: if recording { pid } else { 0 },
         output_path,
@@ -369,6 +372,7 @@ fn parse_rosbag_play_status(output: &str) -> Result<RosbagPlayStatus, String> {
     let bag_path = fields.next().unwrap_or_default().to_string();
     let playing = matches!(state, "STARTED" | "PLAYING");
     Ok(RosbagPlayStatus {
+        receipt: session::bag_receipt::Receipt::output(output, session::bag_operation::Kind::Play, playing, pid, &bag_path)?,
         playing,
         pid: if playing { pid } else { 0 },
         bag_path,
@@ -1780,6 +1784,7 @@ mod tests {
         assert_eq!(
             parse_rosbag_status("noise\nSTARTED|42|/home/robot/robot-console-bags/run\n").unwrap(),
             RosbagStatus {
+                receipt: None,
                 recording: true,
                 pid: 42,
                 output_path: "/home/robot/robot-console-bags/run".into(),
@@ -1789,6 +1794,7 @@ mod tests {
         assert_eq!(
             parse_rosbag_status("STOPPED|0|/home/robot/robot-console-bags/run\n").unwrap(),
             RosbagStatus {
+                receipt: None,
                 recording: false,
                 pid: 0,
                 output_path: "/home/robot/robot-console-bags/run".into(),
@@ -1818,7 +1824,7 @@ mod tests {
             let pid=cache.join(format!("{name}.pid"));let path=cache.join(format!("{name}.path"));
             std::fs::write(&pid,"invalid-pid\n").unwrap();std::fs::write(&path,"bags/retained\n").unwrap();
             let output=std::process::Command::new("bash").arg("-c").arg(body).env("HOME",&root).env("PYTHONDONTWRITEBYTECODE","1").output().unwrap();
-            assert!(output.status.success());assert_eq!(String::from_utf8_lossy(&output.stdout),"IDLE|0|bags/retained\n");
+            assert!(output.status.success());assert!(String::from_utf8_lossy(&output.stdout).starts_with("IDLE|0|bags/retained\nROBOT_CONSOLE_BAG_RECEIPT="));
             assert_eq!(std::fs::read_to_string(&pid).unwrap(),"invalid-pid\n");
             assert_eq!(std::fs::read_to_string(&path).unwrap(),"bags/retained\n");
             std::fs::remove_dir_all(root.join(".cache")).unwrap();
@@ -1850,6 +1856,7 @@ mod tests {
             )
             .unwrap(),
             RosbagPlayStatus {
+                receipt: None,
                 playing: true,
                 pid: 9,
                 bag_path: "/home/robot/robot-console-bags/run".into(),
@@ -1859,6 +1866,7 @@ mod tests {
         assert_eq!(
             parse_rosbag_play_status("STOPPED|0|/home/robot/robot-console-bags/run\n").unwrap(),
             RosbagPlayStatus {
+                receipt: None,
                 playing: false,
                 pid: 0,
                 bag_path: "/home/robot/robot-console-bags/run".into(),

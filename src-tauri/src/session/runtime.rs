@@ -251,7 +251,7 @@ impl Runtime {
         if core.error.is_some() || core.transport.is_none() || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 请求与当前共享连接不一致或已断开".into());}
         let window=core.clients.iter().find(|(token,client)|token.label==label && client.error.is_none()).map(|(token,_)|token.clone()).ok_or("功能页面尚未附着当前连接")?;
         let owner=Owner{epoch:core.epoch,window};
-        let id=self.bag_operations.begin(&self.tasks,owner.clone(),kind,starting,profile.host.clone())?;
+        let id=self.bag_operations.begin(&self.tasks,owner.clone(),kind,starting,serde_json::to_value(profile).map_err(|e|e.to_string())?)?;
         Ok((id,owner))
     }
     pub fn send_bag(&self,owner:&Owner,id:u64,profile:&crate::ConnectionProfile,kind:super::bag_operation::Kind)->Result<(),String> {

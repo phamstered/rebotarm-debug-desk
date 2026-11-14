@@ -22,7 +22,7 @@ VERSION = 1
 MAX_RECORDS = 256
 MAX_RECORD_BYTES = 16384
 COMMAND_TIMEOUT = 20
-ID = re.compile(r"(?:controller-|arm-mode-|collection-)[a-f0-9]{48}\Z")
+ID = re.compile(r"(?:controller-|arm-mode-|collection-|bag-)[a-f0-9]{48}\Z")
 PHASES = {"reserved", "running", "succeeded", "rejected", "uncertain"}
 
 
@@ -119,7 +119,7 @@ def reserve(root, job, digest):
         existing = query(root, job, digest)
         if existing["phase"] != "unknown":
             return existing, False
-        records = list(root.glob("controller-*.json")) + list(root.glob("arm-mode-*.json")) + list(root.glob("collection-*.json"))
+        records = list(root.glob("controller-*.json")) + list(root.glob("arm-mode-*.json")) + list(root.glob("collection-*.json")) + list(root.glob("bag-*.json"))
         if len(records) >= MAX_RECORDS:
             completed = []
             for path in records:
@@ -166,7 +166,7 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
                 else:
                     tail.extend(data)
                     del tail[:-2048]
-                    if record["id"].startswith(("arm-mode-", "collection-")):
+                    if record["id"].startswith(("arm-mode-", "collection-", "bag-")):
                         progress_buffer.extend(data)
                         while b"\n" in progress_buffer:
                             line, _, rest = progress_buffer.partition(b"\n")
@@ -176,7 +176,7 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
                                 # leave room for the separately bounded log tail.
                                 record["progress"] = line.decode("utf-8", errors="replace")[:512]
                                 write_record(root, record)
-                            if record["id"].startswith("collection-") and line.startswith(b"ROBOT_CONSOLE_COLLECTION_RECEIPT=") and len(line) <= 1024:
+                            if ((record["id"].startswith("collection-") and line.startswith(b"ROBOT_CONSOLE_COLLECTION_RECEIPT=")) or (record["id"].startswith("bag-") and line.startswith(b"ROBOT_CONSOLE_BAG_RECEIPT="))) and len(line) <= 1024:
                                 try:
                                     receipt = json.loads(line.split(b"=", 1)[1])
                                     if isinstance(receipt, dict) and len(json.dumps(receipt, ensure_ascii=True)) <= 1024:
@@ -202,7 +202,7 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
     record.update(phase="succeeded" if child.returncode == 0 and not expired else "uncertain",
                   exit_code=child.returncode, timed_out=expired,
                   message=tail.decode("utf-8", errors="replace"))
-    if record["id"].startswith("collection-") and "receipt" not in record:
+    if record["id"].startswith(("collection-", "bag-")) and "receipt" not in record:
         record["phase"] = "uncertain"
     write_record(root, record)
 

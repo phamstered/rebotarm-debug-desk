@@ -445,3 +445,18 @@ Release 终态要求服务成功后新的状态回调、独立六轴及 Hardware
 最终远端单线程 `colcon build`、完整 `colcon test` 和 `colcon test-result --verbose` 通过：29 tests，0 errors，0 failures，0 skipped（`/tmp/260-joint4-adapter-colcon-final.log`）。所有 ROS 测试使用各自隔离域和模拟节点，不等于真实 Joint4/JTC 或电机验证。完整 Issue #260 仍在进行：外部采集/回放运行期、未知任务与桌面重启恢复、真实 JTC 接收延迟边界、多显示器/拔屏及九窗口持续运行验收，最终正式安装部署、PR/CI/合并均未完成。
 
 提交前移除测试辅助文件末尾空行，包内容指纹更新为 `66cee9e4c20f`；控制代码没有再改动。该最终源码重新通过全量 `npm test`、前端和独立 Debug bundle 构建、严格 codesign（`/tmp/260-joint4-adapter-publish-{tests,build,bundle}.log`）。远端重新构建后，最终安装二进制再次通过 Joint4 隔离联调和实际 hello/未知查询/拒绝历史冒烟（`/tmp/260-joint4-adapter-publish-{colcon,ros,smoke}.log`）。上述 29 项完整 colcon 测试对应清理空行前的同一控制实现；最终格式及指纹变化后仅重跑受影响的联调与冒烟，没有宣称再次执行完整 colcon 测试。
+
+
+## Bag 进程运行期归属与回放互斥
+
+录制和回放的启动 ACK 不再释放原生任务占用。远端帮助程序为进程实例生成绑定 boot、PID、启动时间及随机 token 的哈希回执；一次性 bag journal 与共享只读状态必须核验同一实例、ROS domain 和路径。运行期间由应用 worker 消费已有共享状态，不另开 SSH 轮询；停止或自然退出得到同实例的新鲜证据后才释放。断线、状态过期、配置不符和同路径替换进程均保留待确认状态，不重发启动。
+
+明确停止可以在授权页面之间转移录制归属，旧监控不能释放后继操作。状态未知时提供尝试停止入口；未提交或已证明拒绝的停止可恢复原运行实例监控，结果未知的停止继续持锁。回放与运动、Controller 切换、在线手眼采样、Episode 采集和录制原子互斥；DISABLE 和停止入口保留，离线标定板生成/求解不受全局回放互斥影响。这一阶段覆盖本桌面启动并持有的 bag 实例，尚未完成外部进程接管和桌面重启恢复。
+
+开发时全量回归发现录制入口仍用了普通本地操作许可，导致未阻止回放；已改用采样许可并保留原断言。最终完整 `npm test` 通过：920 前端 / 226 Rust / 3 运行库测试及其余脚本（`/tmp/260-bag-lifetime-verified-tests.log`）。覆盖实例替换、过期状态、快速自然退出、停止归属转移、迟到监控、并发运动/回放准入、未知状态停止按钮，以及离线计算与在线采样的区分。
+
+Jetson 临时目录中运行 11 项 bag 测试、14 项 journal 测试和 3 项 Linux 真实进程测试，全部通过（`/tmp/260-bag-lifetime-linux.log`）。真实进程用例只启动私有 Python 子进程，验证子进程存活、改变 session 的后代和 PID 身份不匹配，不运行 ROS 或机械臂；临时目录自动清理。前端、文档、独立 Debug `.app` 构建及严格 codesign 核验通过（`/tmp/260-bag-lifetime-{build,docs,bundle}.log`）。
+
+用户解锁后已退出旧隔离应用并启动最新包（实际 PID 23630，标识 `dev.easydebug.multiwindowtest`）。真实 CUA 验证了标定板大图与 Esc 返回；注入拆窗及回滚双重失败后，恢复入口保留；再次注入恢复失败后重试成功。另注入收回 bounds 失败，页面回到独立窗口，重试收回成功。全过程 1200×900 标定板、12×9 / 15 mm / 11.25 mm 参数和 100% 缩放保留。收回后 PageDown 截图确认 Save target、尺寸核对框、图片说明和右侧滚动条完整可见。故障文件已消费，应用保持未连接。当前原生窗口验证不包含真实 RGB、bag 运行或多屏拔插。
+
+正式 `/Applications/Robot Console.app` 和生产 Bridge 没有替换，本阶段没有 Bridge 包源码变更。Issue #260 继续进行：外部采集/回放协调、未知任务和桌面重启恢复、真实 JTC 接收延迟边界、多显示器/拔屏及九窗口持续运行，最终正式安装部署和 PR/CI/合并仍未完成。

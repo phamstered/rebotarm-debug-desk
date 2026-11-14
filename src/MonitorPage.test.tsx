@@ -138,13 +138,15 @@ describe("MonitorPage", () => {
   });
 
   it("keeps refresh available while shared playback state is unknown", async () => {
-    const user=userEvent.setup(), refresh=vi.fn(), start=vi.fn();
+    const user=userEvent.setup(), refresh=vi.fn(), start=vi.fn(), stop=vi.fn();
     render(<MonitorPage workspace={createDefaultMonitorWorkspace("/stm32/joint_states")}
-      {...baseProps({bagStateUnknown:true,onRefreshBagStatus:refresh,onStartBagPlay:start})} />);
+      {...baseProps({bagStateUnknown:true,onRefreshBagStatus:refresh,onStartBagPlay:start,onStopBagPlay:stop})} />);
     await user.click(screen.getByRole("button",{name:"Bag 回放"}));
     expect(screen.getByRole("button",{name:"回放状态待确认"})).toBeDisabled();
     await user.click(screen.getByRole("button",{name:"刷新状态"}));
     expect(refresh).toHaveBeenCalledOnce();expect(start).not.toHaveBeenCalled();
+    expect(screen.getByRole("button",{name:"播放 1x"})).toBeDisabled();
+    await user.click(screen.getByRole("button",{name:"尝试停止回放"}));expect(stop).toHaveBeenCalledOnce();
   });
 
   it("adds a torque template dashboard and switches tabs", async () => {

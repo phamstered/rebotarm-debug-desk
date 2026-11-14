@@ -169,7 +169,7 @@ impl LocalTasks {
     {
         authorize(label)?;
         // The same lock arbitrates migration and operation admission, before work is polled.
-        let _page = tasks.local_operation(label)?;
+        let _page = if kind == "capture" { tasks.sampling_operation(label)? } else { tasks.local_operation(label)? };
         let mut lease = self.begin(label, operation_id, kind)?;
         let mut result = tokio::select! {
             biased;

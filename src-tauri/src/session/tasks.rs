@@ -72,6 +72,8 @@ struct Inner {
     task: Option<Task>,
     migrations: BTreeSet<String>,
     local_operations: BTreeSet<String>,
+    playback_conflicts: BTreeSet<String>,
+    playback: bool,
     motor_context: Option<super::motor_task::Context>,
     connection_identity: Option<(u64, String)>,
 }
@@ -100,10 +102,29 @@ pub struct Migration {
 pub struct LocalOperation {
     tasks: Arc<Tasks>,
     label: String,
+    playback: bool,
 }
 impl Drop for LocalOperation {
     fn drop(&mut self) {
-        self.tasks.inner.lock().unwrap().local_operations.remove(&self.label);
+        let mut inner = self.tasks.inner.lock().unwrap();
+        inner.local_operations.remove(&self.label);
+        inner.playback_conflicts.remove(&self.label);
+        if self.playback { inner.playback = false; }
+    }
+}
+
+impl LocalOperation {
+    pub fn transfer(&mut self, label: &str) -> Result<(), String> {
+        if self.label == label { return Ok(()); }
+        let mut inner = self.tasks.inner.lock().unwrap();
+        if inner.migrations.contains(label) || inner.local_operations.contains(label) {
+            return Err("接管页面正在迁移或已有任务".into());
+        }
+        inner.local_operations.remove(&self.label);
+        if inner.playback_conflicts.remove(&self.label) { inner.playback_conflicts.insert(label.into()); }
+        inner.local_operations.insert(label.into());
+        self.label = label.into();
+        Ok(())
     }
 }
 
@@ -189,7 +210,7 @@ impl Tasks {
             return Err("只有 Motion 或 Status 页面可以切换 Controller".into());
         }
         let mut inner = self.inner.lock().unwrap();
-        if inner.task.is_some() { return Err("已有共享运动或控制任务，等待终态后再切换 Controller".into()); }
+        if inner.task.is_some() || inner.playback { return Err("已有共享运动、回放或控制任务，等待终态后再切换 Controller".into()); }
         if inner.migrations.contains(&owner.window.label) { return Err("页面正在迁移，不能切换 Controller".into()); }
         inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
         let id = inner.sequence;
@@ -291,10 +312,29 @@ impl Tasks {
     }
 
     pub fn local_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
+        self.local_activity(label, false)
+    }
+    pub fn sampling_operation(self: &Arc<Self>, label: &str) -> Result<LocalOperation, String> {
+        self.local_activity(label, true)
+    }
+    fn local_activity(self: &Arc<Self>, label: &str, conflicts: bool) -> Result<LocalOperation, String> {
         let mut inner = self.inner.lock().unwrap();
         if inner.migrations.contains(label) { return Err("页面正在迁移，不能开始本地任务".into()); }
+        if conflicts && inner.playback { return Err("回放运行中或结果待确认，不能开始采样/录制".into()); }
         if !inner.local_operations.insert(label.into()) { return Err("此页面已有本地任务正在进行".into()); }
-        Ok(LocalOperation { tasks: self.clone(), label: label.into() })
+        if conflicts { inner.playback_conflicts.insert(label.into()); }
+        Ok(LocalOperation { tasks: self.clone(), label: label.into(), playback: false })
+    }
+
+    pub fn playback_operation(self: &Arc<Self>, label: &str, starting: bool) -> Result<LocalOperation, String> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.playback || inner.migrations.contains(label) || inner.local_operations.contains(label)
+            || (starting && (inner.task.is_some() || !inner.playback_conflicts.is_empty())) {
+            return Err("运动、采样、本地操作或页面迁移未结束，不能开始回放".into());
+        }
+        inner.local_operations.insert(label.into());
+        inner.playback = true;
+        Ok(LocalOperation { tasks: self.clone(), label: label.into(), playback: true })
     }
 
     pub fn migration(self: &Arc<Self>, label: &str) -> Result<Migration, String> {
@@ -362,6 +402,7 @@ impl Tasks {
     ) -> Result<Admission, String> {
         let op = message["op"].as_str().ok_or("请求缺少 op")?;
         let mut inner = self.inner.lock().unwrap();
+        if actuation(op, message) && inner.playback { return Err("回放仍在运行或退出未确认，不能提交运动".into()); }
         if actuation(op, message) && inner.migrations.contains(&owner.window.label) {
             return Err("页面正在迁移，不能提交运动".into());
         }

@@ -113,7 +113,7 @@ impl Operations {
         let permit = if recording {
             inner.entry.as_mut().unwrap().permit.take().unwrap()
         } else {
-            tasks.local_operation(&owner.window.label)?
+            tasks.sampling_operation(&owner.window.label)?
         };
         inner.sequence = id;
         inner.entry = Some(Entry {

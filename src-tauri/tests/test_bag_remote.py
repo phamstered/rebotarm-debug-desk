@@ -101,6 +101,17 @@ class BagTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "another bag"):
             other.start("project/install/setup.bash", 219, launch=self.launch)
 
+    def test_receipt_identity_survives_exit_and_changes_even_when_pid_and_path_are_reused(self):
+        first = self.start()
+        self.assertEqual(len(first["processIdentity"]), 64)
+        self.assertEqual(self.manager.status()["processIdentity"], first["processIdentity"])
+        ended = self.manager.stop(220, 0, 0)
+        self.assertFalse(ended["active"])
+        self.assertEqual(ended["processIdentity"], first["processIdentity"])
+        again = self.start()
+        self.assertEqual(again["pid"], first["pid"])
+        self.assertNotEqual(again["processIdentity"], first["processIdentity"])
+
     def test_stop_retains_identity_until_all_owned_processes_exit(self):
         self.start()
         self.processes.items.append({**self.processes.items[0], "pid": 43, "start": "110"})
