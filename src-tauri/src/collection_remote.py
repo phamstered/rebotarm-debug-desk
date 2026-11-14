@@ -37,14 +37,34 @@ def recorder_environment(python):
 
 def process_identity(pid):
     try:
-        # The comm field can contain spaces; fields after the last ')' start at state.
-        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-        if fields[0] == "Z" or b"rebotarm_vla.lerobot_recorder" not in cmdline:
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
             return None
-        return fields[19]
-    except (OSError, IndexError):
+        boot = str(uuid.UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip()))
+        # The comm field can contain spaces; fields after the last ')' start at state.
+        stat = Path(f"/proc/{pid}/stat")
+        fields = stat.read_text().rsplit(")", 1)[1].split()
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        after = stat.read_text().rsplit(")", 1)[1].split()
+        if fields[0] == "Z" or after[0] == "Z" or fields[19] != after[19] or not fields[19].isdigit() \
+                or b"rebotarm_vla.lerobot_recorder" not in cmdline:
+            return None
+        return hashlib.sha256(json.dumps([boot, pid, fields[19]], separators=(",", ":")).encode()).hexdigest()
+    except (OSError, IndexError, ValueError):
         return None
+
+
+@contextlib.contextmanager
+def recorder_pidfd(pid, identity):
+    """Pin the process before checking identity; never fall back to kill(PID)."""
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError("结束采集器需要 Linux/Python pidfd 支持；未发送信号")
+    fd = os.pidfd_open(pid)
+    try:
+        if not identity or process_identity(pid) != identity:
+            raise RuntimeError("采集器进程身份已改变；未发送信号")
+        yield fd
+    finally:
+        os.close(fd)
 
 
 class RosServices:
@@ -211,10 +231,11 @@ class RecorderControl:
             raise RuntimeError("仅能结束由本应用启动且进程身份匹配的采集器")
         if before["state"] != "idle" or before["recording"] or before["pendingFrames"]:
             raise RuntimeError("请先保存或丢弃当前 Episode，待采集器空闲后再结束")
-        metadata["finalizing"] = True
-        self.manifest.write_text(json.dumps(metadata))
-        # Signal only the recorder. Its video workers must be allowed to finalize.
-        os.kill(metadata["pid"], signal.SIGINT)
+        with recorder_pidfd(metadata["pid"], metadata["identity"]) as fd:
+            metadata["finalizing"] = True
+            self.manifest.write_text(json.dumps(metadata))
+            # Signal only the pinned recorder. Its video workers finalize normally.
+            signal.pidfd_send_signal(fd, signal.SIGINT)
         for _ in range(240):
             if not self.owned(metadata):
                 if before["savedEpisodes"] and "Dataset finalized" not in self.log():

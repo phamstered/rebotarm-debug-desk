@@ -512,3 +512,10 @@ export interface NativeBagOperation {
   message: string;
   recovery_error?: boolean;
 }
+
+export type NativeCollectionOperation = {
+  id: number; action: "launch" | "start_episode" | "save_episode" | "discard_episode" | "finish";
+  phase: "preparing" | "verifying" | "uncertain" | "recording" | "succeeded" | "failed";
+  host: string; message: string; busy: boolean;
+  recovery_error?: boolean;
+};

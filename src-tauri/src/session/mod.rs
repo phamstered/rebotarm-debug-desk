@@ -40,5 +40,7 @@ pub mod joint4_task;
 
 pub mod bag_receipt;
 pub mod bag_recovery;
+pub mod recovery_file;
+pub mod collection_recovery;
 
 pub mod activity;

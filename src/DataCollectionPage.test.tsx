@@ -8,7 +8,7 @@ import { COLLECTION_STORAGE_KEY, defaultCollectionConfig, type CollectionStatus 
 import { defaultProfile, type HardwareStatus } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
-const nativeOperation = vi.hoisted(() => ({ ready: true, task: null as null | { busy: boolean; phase: string }, error: "" }));
+const nativeOperation = vi.hoisted(() => ({ ready: true, task: null as null | { busy: boolean; phase: string; recovery_error?: boolean }, error: "" }));
 vi.mock("./NativeCollectionOperationStatus", () => ({ useNativeCollectionOperation: () => nativeOperation }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const config = { ...defaultCollectionConfig, repoId: "robot/demo", task: "pick cube" };
@@ -297,4 +297,20 @@ it("keeps Episode commands blocked while native work outlives the page request, 
   nativeOperation.ready = false; nativeOperation.error = "IPC unavailable";
   rerender(<DataCollectionPage {...props} />);
   expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
+});
+
+it("blocks new collection on journal corruption while preserving fresh explicit save and finish gates", () => {
+  nativeOperation.task={busy:false,phase:"uncertain",recovery_error:true};
+  const {rerender,props}=renderPage({observations:sharedCollection(recording)});
+  expect(screen.getByRole("button",{name:"保存成功 Episode"})).toBeEnabled();
+  expect(screen.getByRole("button",{name:"丢弃 Episode"})).toBeEnabled();
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle)}/>);
+  expect(screen.getByRole("button",{name:"开始 Episode"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"结束并完成数据集"})).toBeEnabled();
+  nativeOperation.task.busy=true;
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(idle)}/>);
+  expect(screen.getByRole("button",{name:"结束并完成数据集"})).toBeDisabled();
+  nativeOperation.task.busy=false;
+  rerender(<DataCollectionPage {...props} observations={sharedCollection(recording,2,{expired:true})}/>);
+  expect(screen.getByRole("button",{name:"保存成功 Episode"})).toBeDisabled();
 });

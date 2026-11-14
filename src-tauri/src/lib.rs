@@ -1572,6 +1572,7 @@ pub fn run() {
                     let _ = handle.emit("native-session-changed", ());
                 }));
             session::bag_operation::initialize(app.handle());
+            session::collection_operation::initialize(app.handle());
             session::workspace::Workspace::initialize(app.handle());
             Ok(())
         })

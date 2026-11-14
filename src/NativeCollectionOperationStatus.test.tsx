@@ -33,3 +33,11 @@ it("shows a failed snapshot read as unavailable rather than idle", async () => {
   mocks.invoke.mockRejectedValue(new Error("IPC unavailable")); render(<NativeCollectionOperationStatus />);
   expect(await screen.findByRole("status")).toHaveTextContent("采集任务状态不可用");
 });
+
+it("labels journal corruption as recovery failure without claiming a dataset finish", async () => {
+  mocks.invoke.mockResolvedValue({...task,id:0,action:"finish",recovery_error:true,busy:false,message:"采集恢复记录不可用"});
+  render(<NativeCollectionOperationStatus/>);
+  const status=await screen.findByRole("status");
+  expect(status).toHaveTextContent("任务恢复异常 · 采集恢复记录不可用");
+  expect(status).not.toHaveTextContent("完成数据集");
+});

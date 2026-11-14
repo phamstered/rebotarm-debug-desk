@@ -158,6 +158,7 @@ impl Operations {
         }
         snapshots
     }
+    #[cfg(test)]
     pub fn begin(
         &self,
         tasks: &Arc<Tasks>,
@@ -166,10 +167,21 @@ impl Operations {
         starting: bool,
         profile: Value,
     ) -> Result<u64, String> {
+        self.begin_validated(tasks, kind, starting, profile, || Ok((owner, ())))
+    }
+    pub fn begin_validated<G>(
+        &self,
+        tasks: &Arc<Tasks>,
+        kind: Kind,
+        starting: bool,
+        profile: Value,
+        validate: impl FnOnce() -> Result<(Owner, G), String>,
+    ) -> Result<u64, String> {
+        let mut inner = self.inner.lock().unwrap();
+        let (owner, _connection) = validate()?;
         if !kind.authorized(&owner.window.label) {
             return Err("当前页面无权执行此 rosbag 操作".into());
         }
-        let mut inner = self.inner.lock().unwrap();
         if starting {
             if let Some(error) = &inner.store.error {
                 return Err(error.clone());
@@ -268,8 +280,19 @@ impl Operations {
         inner.entries.get_mut(&kind).unwrap().prepared = true;
         Ok(())
     }
+    #[cfg(test)]
     pub fn sending(&self, kind: Kind, id: u64, owner: &Owner) -> Result<(), String> {
+        self.sending_validated(kind, id, owner, || Ok(()))
+    }
+    pub fn sending_validated<G>(
+        &self,
+        kind: Kind,
+        id: u64,
+        owner: &Owner,
+        validate: impl FnOnce() -> Result<G, String>,
+    ) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
+        let _connection = validate()?;
         let durable = inner.store.configured();
         let entry = inner
             .entries

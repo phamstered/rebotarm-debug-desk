@@ -233,34 +233,45 @@ impl Runtime {
         Ok(Owner { epoch: core.epoch, window })
     }
     pub fn send_collection(&self, owner: &Owner, id: u64, profile: &crate::ConnectionProfile) -> Result<(), String> {
-        // Keep the connection lock through admission so reconnect cannot replace
-        // the origin between validation and marking the one-shot send.
-        let core = self.core.lock().unwrap();
-        if core.error.is_some() || core.transport.is_none() || core.epoch != owner.epoch
-            || !core.clients.get(&owner.window).is_some_and(|client| client.error.is_none())
-            || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e| e.to_string())?) {
-            return Err("采集提交前页面或连接已失效".into());
-        }
-        self.collection_operations.sending(id, owner)
+        // Operation locks can be held by durable journal writes. Acquire them
+        // first; Core must stay available for DISABLE and incoming feedback.
+        self.collection_operations.sending_validated(id, owner, || {
+            let core = self.core.lock().unwrap();
+            if core.error.is_some() || core.transport.is_none() || core.epoch != owner.epoch
+                || !core.clients.get(&owner.window).is_some_and(|client| client.error.is_none())
+                || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e| e.to_string())?) {
+                return Err("采集提交前页面或连接已失效".into());
+            }
+            Ok(core)
+        })
     }
     pub fn finish_collection(&self, id: u64, profile: &crate::ConnectionProfile, epoch: u64, recording: bool) -> bool {
-        let core = self.core.lock().unwrap();
-        if core.error.is_some() || core.transport.is_none() || core.epoch != epoch
-            || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).unwrap_or(Value::Null)) { return false; }
-        self.collection_operations.finish(id, recording)
+        self.collection_operations.finish_validated(id, recording, || {
+            let core = self.core.lock().unwrap();
+            if core.error.is_some() || core.transport.is_none() || core.epoch != epoch
+                || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).unwrap_or(Value::Null)) { return None; }
+            Some(core)
+        })
     }
     pub fn begin_bag(&self,label:&str,profile:&crate::ConnectionProfile,kind:super::bag_operation::Kind,starting:bool)->Result<(u64,Owner),String> {
-        let core=self.core.lock().unwrap();
-        if core.error.is_some() || core.transport.is_none() || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 请求与当前共享连接不一致或已断开".into());}
-        let window=core.clients.iter().find(|(token,client)|token.label==label && client.error.is_none()).map(|(token,_)|token.clone()).ok_or("功能页面尚未附着当前连接")?;
-        let owner=Owner{epoch:core.epoch,window};
-        let id=self.bag_operations.begin(&self.tasks,owner.clone(),kind,starting,serde_json::to_value(profile).map_err(|e|e.to_string())?)?;
-        Ok((id,owner))
+        let mut origin = None;
+        let id = self.bag_operations.begin_validated(&self.tasks, kind, starting,
+            serde_json::to_value(profile).map_err(|e| e.to_string())?, || {
+                let core = self.core.lock().unwrap();
+                if core.error.is_some() || core.transport.is_none() || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 请求与当前共享连接不一致或已断开".into());}
+                let window=core.clients.iter().find(|(token,client)|token.label==label && client.error.is_none()).map(|(token,_)|token.clone()).ok_or("功能页面尚未附着当前连接")?;
+                let owner=Owner{epoch:core.epoch,window};
+                origin = Some(owner.clone());
+                Ok((owner, core))
+            })?;
+        Ok((id, origin.unwrap()))
     }
     pub fn send_bag(&self,owner:&Owner,id:u64,profile:&crate::ConnectionProfile,kind:super::bag_operation::Kind)->Result<(),String> {
-        let core=self.core.lock().unwrap();
-        if core.error.is_some() || core.transport.is_none() || core.epoch!=owner.epoch || !core.clients.get(&owner.window).is_some_and(|client|client.error.is_none()) || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 提交前连接或页面已失效".into());}
-        self.bag_operations.sending(kind,id,owner)
+        self.bag_operations.sending_validated(kind, id, owner, || {
+            let core=self.core.lock().unwrap();
+            if core.error.is_some() || core.transport.is_none() || core.epoch!=owner.epoch || !core.clients.get(&owner.window).is_some_and(|client|client.error.is_none()) || !super::controller_task::same_profile(&core.profile,&serde_json::to_value(profile).map_err(|e|e.to_string())?) {return Err("rosbag 提交前连接或页面已失效".into());}
+            Ok(core)
+        })
     }
     pub fn prepare_joint4(&self, label: &str, profile: &crate::ConnectionProfile, action: &str,
         confirmation: Option<&str>) -> Result<super::joint4_task::Prepared, String> {
@@ -1937,6 +1948,61 @@ mod tests {
         assert!(!seen.lock().unwrap().iter().any(|m|m["op"]=="unsubscribe" && m["topic"]=="/status"));
         hub.close();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn journal_contention_never_holds_core_or_delays_disable() {
+        use super::super::bag_operation::Kind;
+        use std::sync::mpsc as channel;
+        let (port, _events, seen, server) = fake_bridge().await;
+        let hub = Arc::new(Runtime::default());
+        let profile = offline_profile("fixture");
+        let request: crate::ConnectionProfile = serde_json::from_value(profile.clone()).unwrap();
+        hub.set_profile(profile); hub.connect(port).await.unwrap();
+        let (page, _) = hub.attach("page-motion").unwrap();
+        hub.attach("page-collection").unwrap();
+        let owner = hub.collection_owner("page-collection", &request).unwrap();
+        // A writer owns the operation mutex. Exercise every Runtime path that
+        // previously acquired Core before this potentially disk-bound lock.
+        for operation in 0..4 {
+            let (locked_tx, locked_rx) = channel::channel();
+            let (release_tx, release_rx) = channel::channel();
+            let writer_hub = hub.clone(); let writer_owner = owner.clone();
+            let writer = std::thread::spawn(move || {
+                let block = || -> Result<(), String> {
+                    locked_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Err("fixture writer complete".into())
+                };
+                if operation < 2 { writer_hub.collection_operations.sending_validated(0, &writer_owner, block) }
+                else { writer_hub.bag_operations.sending_validated(Kind::Record, 0, &writer_owner, block) }
+            });
+            locked_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            let waiting_hub = hub.clone(); let waiting_owner = owner.clone(); let waiting_profile = request.clone();
+            let (started_tx, started_rx) = channel::channel();
+            let waiter = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                match operation {
+                    0 => { let _ = waiting_hub.send_collection(&waiting_owner, 0, &waiting_profile); }
+                    1 => { waiting_hub.finish_collection(0, &waiting_profile, waiting_owner.epoch, false); }
+                    2 => { let _ = waiting_hub.begin_bag("page-motion", &waiting_profile, Kind::Record, true); }
+                    _ => { let _ = waiting_hub.send_bag(&waiting_owner, 0, &waiting_profile, Kind::Record); }
+                }
+            });
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let free = hub.core.try_lock().is_ok();
+            // Always release the fixture before reporting a failure.
+            if !free {
+                release_tx.send(()).unwrap(); writer.join().unwrap().unwrap_err(); waiter.join().unwrap();
+                panic!("operation {operation} held Core while waiting for journal I/O");
+            }
+            let response = hub.request("page-motion", &page, "test", json!({"op":"joint_command","mode":3}), Duration::from_secs(1)).await;
+            release_tx.send(()).unwrap(); writer.join().unwrap().unwrap_err(); waiter.join().unwrap();
+            response.unwrap();
+        }
+        assert_eq!(seen.lock().unwrap().iter().filter(|m| m["op"] == "joint_command" && m["mode"] == 3).count(), 4);
+        hub.close(); server.abort();
     }
 
     #[tokio::test]

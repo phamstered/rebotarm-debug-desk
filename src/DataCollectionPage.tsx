@@ -42,6 +42,7 @@ export function DataCollectionPage({
   const nativeBusy = shared && (!nativeOperation.ready || Boolean(nativeOperation.error)
     || Boolean(nativeOperation.task?.busy && nativeOperation.task.phase !== "recording"));
   const actionBusy = Boolean(busy) || nativeBusy;
+  const recoveryError = Boolean(nativeOperation.task?.recovery_error);
   nativeBusyRef.current = nativeBusy;
 
   const run = useCallback(async (action: CollectionAction, launchConfig?: CollectionConfig) => {
@@ -156,7 +157,7 @@ export function DataCollectionPage({
         <datalist id="collection-image-topics">{topics.filter((topic) => topic.types.includes("sensor_msgs/msg/Image")).map((topic) => <option key={topic.name} value={topic.name} />)}</datalist>
         <datalist id="collection-state-topics">{topics.filter((topic) => topic.types.includes("sensor_msgs/msg/JointState")).map((topic) => <option key={topic.name} value={topic.name} />)}</datalist>
         {!running && validationError && <p className="collection-hint">{validationError}</p>}
-        <button type="button" className="collection-primary" disabled={actionBusy || !can.launch || Boolean(validationError)} onClick={() => void run("launch", config)}>{busy === "launch" ? "正在检查就绪并启动…" : "启动采集器"}</button>
+        <button type="button" className="collection-primary" disabled={actionBusy || recoveryError || !can.launch || Boolean(validationError)} onClick={() => void run("launch", config)}>{busy === "launch" ? "正在检查就绪并启动…" : "启动采集器"}</button>
         <p className="collection-hint">先在 Status 启动 Teleop（含夹爪）和相机。默认关节状态 Topic 为 <code>/stm32/joint_states</code>（MCU/Agent 时间戳；host 时钟的 <code>/joint_states</code> 不适合 stamp 门禁）。腕部图像为 RGB。启动采集器与开始 Episode 前会在 Jetson 上硬跑 <code>scripts/check_collection_ready.sh</code>（不用 --warn-only）。续录须保持相机、分辨率、FPS 和状态/动作布局一致。</p>
       </section>
       <section className="collection-card collection-session">
@@ -180,7 +181,7 @@ export function DataCollectionPage({
         </dl>}
         {recordingHazard && <div className="collection-danger-banner" role="alert">{recordingHazard} 请点击「丢弃 Episode」（不会自动丢弃）。</div>}
         <div className="collection-actions">
-          <button type="button" className="collection-primary" disabled={actionBusy || nativeOperation.task?.phase === "recording" || !can.start} onClick={() => void run("start_episode")} title={startBlockedReason || undefined}>开始 Episode</button>
+          <button type="button" className="collection-primary" disabled={actionBusy || recoveryError || nativeOperation.task?.phase === "recording" || !can.start} onClick={() => void run("start_episode")} title={startBlockedReason || undefined}>开始 Episode</button>
           <button type="button" disabled={actionBusy || !can.save} onClick={() => void run("save_episode")}>保存成功 Episode</button>
           <button type="button" className="collection-danger" disabled={actionBusy || !can.discard} onClick={() => setDiscardRequested(true)}>丢弃 Episode</button>
           <button type="button" disabled={actionBusy || !can.finish} onClick={() => void run("finish")}>{busy === "finish" ? "正在完成数据集…" : "结束并完成数据集"}</button>

@@ -273,7 +273,7 @@ rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 w
 
 整栈控制切换由 `session/arm_operation.rs` 负责，复用 Tasks 全局控制占用与完成后 DISABLE 屏障。命令记录使用独立 `arm-mode-` 编号，固定策略允许至多 128 KiB 命令和 600 秒远端步骤等待；原 Controller 策略仍为 32 KiB / 20 秒。两类共享原子记录容量上限和命令摘要核验，只能提交一次。远端进度是有界元数据，不转发完整持续日志。600 秒超时不会被解释为 ROS 服务停止；异常结果保留占用。该层不替换已有 arm 生命周期脚本的输出确认、进程归属、示教支撑确认及自检条件。
 
-Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。进程重启恢复及外部录制的完整生命周期仍在开发范围内。
+Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。Episode 桌面重启恢复通过单独的持久化查询票据/进程检查点接入；外部录制的完整跨客户端生命周期仍在开发范围内。
 
 多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。Bridge 的 `joint4_calibration.cpp` 持有互斥服务调用、姿态租约和有界回执/终态记录，复用 Controller Registry 与底层独立反馈及 DISABLE 序列分配。服务未返回时不允许 Release 越过它；状态和硬件证据确认后才释放任务。桌面拒绝旧能力入口；开发分支尚未作为已发布的实机控制链路验收。
 
@@ -283,4 +283,9 @@ Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快
 
 ### Bag ownership across desktop restarts
 
-The native session restores rosbag ownership from a bounded private write-ahead journal before creating functional workspaces. Only remote query tickets and process receipts persist; command text never does. Recovery uses the existing shared observations and requires an explicitly established connection to the original Profile. It does not auto-connect or replay controls. Durable terminal cleanup precedes releasing native occupancy. Corrupt recovery records keep a visible admission barrier with stop/DISABLE and offline editing available. This applies to bag operations; full restart recovery for other task kinds is still pending.
+The native session restores rosbag ownership from a bounded private write-ahead journal before creating functional workspaces. Only remote query tickets and process receipts persist; command text never does. Recovery uses the existing shared observations and requires an explicitly established connection to the original Profile. It does not auto-connect or replay controls. Durable terminal cleanup precedes releasing native occupancy. Corrupt recovery records keep a visible admission barrier with stop/DISABLE and offline editing available. This section applies to bag operations; Episode recovery follows below. Full restart recovery for remaining task kinds is still pending.
+
+
+Episode tasks restore from `collection-recovery-v1.json` before Workspace startup, using the same private atomic-file utility as bag recovery. Pending remote work is query-only; running checkpoints consume existing shared status and never renew a robot-motion lease. Native ownership remains until matched completion and durable cleanup. Recorder process identity includes boot ID, PID and start ticks; finalization pins the process with pidfd before checking identity and signaling. Legacy or unmanaged processes are not automatically adopted across desktop restarts. Samples and dataset files remain on Jetson and are not serialized into this local recovery journal.
+
+Journal operation locks precede the shared connection lock. Durable I/O never retains the connection lock; Episode completion revalidates the current connection after persistence before publishing completion and releasing occupancy. A blocked journal writer therefore does not serialize incoming feedback or DISABLE behind fsync.

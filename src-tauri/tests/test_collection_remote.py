@@ -1,4 +1,5 @@
 """No ROS or hardware required; exercised from cargo test."""
+import contextlib
 import importlib.util
 import json
 from pathlib import Path
@@ -28,6 +29,14 @@ class RecorderTests(unittest.TestCase):
                            armCommandTopic="/arm/commands", gripperCommandTopic="/gripper/commands",
                            pythonPath=str(Path(self.temp.name) / "python"), resume=False)
         Path(self.config["pythonPath"]).touch()
+
+    @contextlib.contextmanager
+    def pidfd(self):
+        with patch.object(remote.os, "pidfd_open", return_value=91, create=True) as opened, \
+                patch.object(remote.signal, "pidfd_send_signal", create=True) as sent, \
+                patch.object(remote.os, "close") as closed, patch.object(remote.os, "kill") as numeric:
+            yield opened, sent, closed
+            numeric.assert_not_called()
 
     def owned(self, finalizing=False):
         self.control.cache.mkdir(parents=True, exist_ok=True)
@@ -153,9 +162,11 @@ class RecorderTests(unittest.TestCase):
     def test_finish_signals_only_owned_recorder_and_confirms_finalization(self):
         self.owned()
         self.control.log_path.write_text("Dataset finalized\n")
-        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", None]), patch.object(remote.os, "kill") as kill:
+        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", "old-start", None]), self.pidfd() as (opened, sent, closed):
             result = self.control.finish()
-        kill.assert_called_once_with(123, signal.SIGINT)
+        opened.assert_called_once_with(123)
+        sent.assert_called_once_with(91, signal.SIGINT)
+        closed.assert_called_once_with(91)
         self.assertEqual(result["state"], "stopped")
         self.assertEqual(result["processIdentity"], "")
         self.assertEqual(result["savedEpisodes"], 2)
@@ -164,7 +175,7 @@ class RecorderTests(unittest.TestCase):
 
     def test_finish_does_not_claim_success_without_finalize_marker(self):
         self.owned()
-        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", None]), patch.object(remote.os, "kill"):
+        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", "old-start", None]), self.pidfd():
             with self.assertRaisesRegex(RuntimeError, "未确认 finalize"):
                 self.control.finish()
 
@@ -237,17 +248,63 @@ class RecorderTests(unittest.TestCase):
 
     def test_finalization_timeout_never_escalates_to_force_kill(self):
         self.owned()
-        with patch.object(remote, "process_identity", return_value="old-start"), patch.object(remote.os, "kill") as kill, patch.object(remote.time, "sleep"):
+        with patch.object(remote, "process_identity", return_value="old-start"), self.pidfd() as (opened, sent, closed), patch.object(remote.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "未强制终止"):
                 self.control.finish()
-            kill.assert_called_once_with(123, signal.SIGINT)
+            sent.assert_called_once_with(91, signal.SIGINT)
+            closed.assert_called_once_with(91)
 
-    def test_process_identity_checks_module_and_linux_start_time(self):
-        fields = ["S"] + ["0"] * 18 + ["start-123"] + ["0"] * 5
-        with patch.object(Path, "read_text", return_value="123 (python worker) " + " ".join(fields)), patch.object(Path, "read_bytes", return_value=b"python\0-m\0rebotarm_vla.lerobot_recorder\0"):
-            self.assertEqual(remote.process_identity(123), "start-123")
-        with patch.object(Path, "read_text", return_value="123 (python) " + " ".join(fields)), patch.object(Path, "read_bytes", return_value=b"python\0other_module\0"):
+    def test_process_identity_binds_boot_pid_start_and_checks_races_and_module(self):
+        boot = "11111111-2222-4333-8444-555555555555"
+        fields = ["S"] + ["0"] * 18 + ["12345"] + ["0"] * 5
+        stat = "123 (python worker) " + " ".join(fields)
+        args = b"python\0-m\0rebotarm_vla.lerobot_recorder\0"
+        def identity(pid=123, boot_id=boot, after=stat, cmdline=args):
+            with patch.object(Path, "read_text", side_effect=[boot_id, stat, after]), patch.object(Path, "read_bytes", return_value=cmdline):
+                return remote.process_identity(pid)
+        expected = remote.hashlib.sha256(json.dumps([boot, 123, "12345"], separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(identity(), expected)
+        self.assertNotEqual(identity(pid=124), expected)
+        self.assertNotEqual(identity(boot_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), expected)
+        self.assertIsNone(identity(after=stat.replace("12345", "12346")))
+        self.assertIsNone(identity(after=stat.replace(") S", ") Z")))
+        self.assertIsNone(identity(cmdline=b"python\0other_module\0"))
+        self.assertIsNone(identity(boot_id="missing boot id"))
+        for pid in [0, 1, -1, True, "123"]:
+            self.assertIsNone(remote.process_identity(pid))
+        with patch.object(Path, "read_text", side_effect=OSError("missing proc")):
             self.assertIsNone(remote.process_identity(123))
+
+    def test_reboot_or_legacy_identity_cannot_claim_existing_recorder(self):
+        self.owned()
+        metadata = self.control.metadata()
+        for old in ["12345", "a" * 64]:
+            metadata["identity"] = old
+            with patch.object(remote, "process_identity", return_value="b" * 64):
+                self.assertFalse(self.control.owned(metadata))
+
+    def test_pid_reuse_after_open_refuses_signal_and_does_not_mark_finalizing(self):
+        self.owned()
+        with patch.object(remote, "process_identity", side_effect=["old-start", "old-start", "new-start"]), self.pidfd() as (opened, sent, closed):
+            with self.assertRaisesRegex(RuntimeError, "进程身份已改变"):
+                self.control.finish()
+            opened.assert_called_once_with(123)
+            sent.assert_not_called()
+            closed.assert_called_once_with(91)
+            self.assertFalse(self.control.metadata().get("finalizing"))
+
+    def test_missing_pidfd_or_signal_failure_never_falls_back_to_numeric_kill(self):
+        self.owned()
+        with patch.object(remote, "process_identity", return_value="old-start"), patch.object(remote, "os", Mock(spec=[])):
+            with self.assertRaisesRegex(RuntimeError, "pidfd"):
+                self.control.finish()
+        self.assertFalse(self.control.metadata().get("finalizing"))
+        with patch.object(remote, "process_identity", return_value="old-start"), self.pidfd() as (_, sent, closed):
+            sent.side_effect = ProcessLookupError("already exited")
+            with self.assertRaises(ProcessLookupError):
+                self.control.finish()
+            closed.assert_called_once_with(91)
+        self.assertTrue(self.control.metadata()["finalizing"])
 
 
 if __name__ == "__main__":

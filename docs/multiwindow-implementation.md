@@ -502,3 +502,20 @@ bag 提交前新增 0600、版本 1、最多两个资源/48 KiB 的本地 write-
 前一轮 fe2e547 包在解锁后另完成了原生图片与迁移复验：大图、100% 原始尺寸与 Esc 返回正常；拆窗 bounds 与回滚 reparent 双故障后可恢复，参数/图片/缩放保留，底部保存按钮和滚动条可见（/tmp/260-unlocked-native-verification.txt）。这些是该轮包的证据，不作为本轮 bag 逻辑的实机测试。
 
 正式 /Applications/Robot Console.app 和生产 Bridge 未替换。本轮无 Bridge 包修改，不需重复 colcon 或远端部署；此前真实 JTC 隔离结果仍见上节。完整 Issue #260 仍未完成：Controller/运动/标定/采集等其他任务的桌面重启恢复、外部活动跨连接归属、多屏/拔屏与九窗口持续运行、最终 PR/CI/合并和正式安装部署继续待完成。
+
+
+## Episode 重启恢复与磁盘等待隔离
+
+Episode 变更提交前保存最多 24 KiB、0600 的版本化恢复记录，内容为原 Profile、动作、远端查询票据和运行检查点，不保存可重发命令。应用先恢复采集页迁移及回放占用，再初始化 Workspace；待确认操作只查询原远端记录，已确认运行的检查点复用共享状态。保存核验同实例且计数增加一，丢弃核验计数不变；终态清理失败继续持有占用。损坏文件保持原样并阻止新任务，满足既有条件的收尾、DISABLE 和离线计算仍可用。
+
+采集器身份由 Linux boot ID、PID 和启动计数组合哈希；结束先打开 pidfd，再核对身份和发送 SIGINT，不退回数字 PID kill。旧版启动计数身份及未托管采集器不自动跨桌面重启接管，当前会话仍允许显式操作外部采集器。当前回执尚无独立 Episode UUID，外部同实例丢弃再开始而计数不变的变化不能唯一识别；不能把这部分称为完整跨客户端生命周期协调。
+
+审查发现恢复记录 fsync 和等待记录锁可能连带占用共享连接 Core。现调整为先取得操作锁，再短暂核对连接；持久化期间释放连接锁，结束写盘后重新检查代次再发布完成。新增文件写入注入用例确认断线时仍保留占用；真实 loopback WebSocket 用例在四条记录锁竞争路径下验证 DISABLE 到达模拟 Bridge。原有原子准入、原页面身份与连接代次检查保留。
+
+最终完整 `npm test` 通过：923 前端 / 246 Rust / 3 运行库测试及 Bridge、安装、部署、手眼等其余脚本（`/tmp/260-collection-recovery-verified-tests.log`）。新增测试覆盖查询票据与写前记录、重启恢复与跨配置/实例拒绝、保存计数、未托管实例边界、损坏及落盘失败、迟到操作和记录锁竞争。Jetson 临时目录中 23 项 helper 单测及 3 项 Linux 实进程测试通过（`/tmp/260-collection-recovery-linux.log`），仅用临时 Python 子进程验证 pidfd 与身份，不运行采集器或机械臂；所有临时子进程/目录清理。
+
+`npm run build`、文档构建、隔离 Debug `.app` 构建和严格 codesign 校验通过（`/tmp/260-collection-recovery-verified-{build,docs,bundle}.log`）。用户解锁后，CUA 启动最新候选包，配置中的模拟 `offline-collection.invalid` 查询票据显示“保存 Episode · 结果未确认”，保持未连接且退出后文件内容不变；改为明确创建的损坏测试文件后，显示“任务恢复异常”，离线手眼页仍可生成 1200×900 标定板。原始尺寸 100%、大图、Esc 返回均正常。
+
+在同一候选包注入拆窗 bounds 与回滚 reparent 故障，恢复入口可用，点击恢复后页面回到主窗口；12×9、15 mm / 11.25 mm 参数、图片和 100% 缩放保留。PageDown 后截图确认底部 Save target、尺寸核对框、图片说明和右侧滚动条完整可见。模拟损坏文件已移至 `/tmp/260-collection-native-corrupt-fixture.txt`，故障注入已消费；再次重启确认无恢复错误且未连接。未覆盖真实 RGB、多屏拔插或九窗口持续连接运行。
+
+正式 `/Applications/Robot Console.app` 和生产 Bridge 未替换。本轮无 Bridge 包源码变更；远端验证仅为临时 Python 测试，无 ROS colcon 或生产部署。Issue #260 仍需其他控制任务的桌面重启恢复、外部活动跨连接归属、多屏/拔屏及九窗口持续运行验证，以及最终 PR/CI/合并与正式安装部署。

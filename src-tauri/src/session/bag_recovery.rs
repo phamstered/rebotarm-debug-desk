@@ -2,12 +2,7 @@
 use super::{bag_operation::Kind, bag_receipt::Receipt, controller_journal::Ticket};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::{Read, Write},
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,22 +93,9 @@ impl Store {
     }
     fn read(&self) -> Result<BTreeMap<Kind, Record>, String> {
         let path = self.path.as_ref().unwrap();
-        let metadata = match fs::symlink_metadata(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-            result => result.map_err(|e| e.to_string())?,
+        let Some(bytes) = super::recovery_file::read(path, 49152)? else {
+            return Ok(BTreeMap::new());
         };
-        if !metadata.is_file() || metadata.len() > 49152 {
-            return Err("文件类型或大小无效".into());
-        }
-        let mut bytes = Vec::new();
-        fs::File::open(path)
-            .map_err(|e| e.to_string())?
-            .take(49153)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() > 49152 {
-            return Err("文件超出大小限制".into());
-        }
         let file: File = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         if file.version != 1 || file.records.len() > 2 {
             return Err("恢复文件版本或数量无效".into());
@@ -161,33 +143,12 @@ impl Store {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        let parent = path.parent().ok_or("恢复文件目录无效")?;
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let bytes = serde_json::to_vec(&File {
             version: 1,
             records: records.clone(),
         })
         .map_err(|e| e.to_string())?;
-        if bytes.len() > 49152 {
-            return Err("恢复文件超出大小限制".into());
-        }
-        let tmp = path.with_extension(format!("{}.tmp", super::controller_journal::new_bag_id()?));
-        let result = (|| -> std::io::Result<()> {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            fs::rename(&tmp, path)?;
-            fs::File::open(parent)?.sync_all()
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(tmp);
-        }
-        result.map_err(|e| format!("bag 恢复记录落盘失败：{e}"))
+        super::recovery_file::write(path, &bytes, 49152)
     }
 }
 
