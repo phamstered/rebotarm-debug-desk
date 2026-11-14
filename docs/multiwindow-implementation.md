@@ -543,3 +543,15 @@ Controller 单个/批量切换及 arm_mode 操作在提交前保存最多 24 KiB
 最终包真实 CUA 验证：同一模拟票据下，主窗口可查看 Motion 及等待原因，手动拆窗被拒绝；读盘确认 detached=true、原尺寸位置未变、任务文件字节未变。退出并移走自己的模拟票据后重启，Motion 自动恢复独立窗口且等待提示清除。另注入一次启动 detach:bounds 失败，页面回滚到主窗口，偏好仍为独立；不发生循环重试，点击“拆出窗口”成功并清除待恢复说明。故障已消费，原隔离布局从备份逐字节恢复，模拟任务文件移至 `/tmp/260-startup-layout-finite-fixture.json`。现场未连接机器人；真实控制任务在同进程完成后的自动迁移只由单元测试覆盖，不把删除模拟文件后的重启计作实机终态核验。
 
 本轮未更新正式应用或 Jetson，没有 Bridge 源码变更。完整 Issue #260 继续进行，剩余范围沿用上节；该组合场景的布局丢失问题已修复。
+
+## 九窗口共享实时数据的原生验证
+
+使用提交 `1d7bf39` 对应的隔离 Debug 候选包，在同一 Mac 恢复全部九个功能窗口和主窗口。测试连接使用 damiao 的独立 ROS_DOMAIN_ID=225、ROS_LOCALHOST_ONLY=1、loopback 28865 端口及已安装的 `easy_debug_bridge_260_motion_observe` 二进制；连接配置关闭 Bridge 自动启动。生产 Bridge PID 8367、8765 端口保持不变，未启动真实 Controller 或发送运动任务。临时发布器仅生成六轴模拟 JointState/关闭模式 HardwareStatus、简单 URDF、静态 TF、640×480 RGB/Depth/CameraInfo，不采集真实相机。
+
+临时发布器约 98 Hz 关节数据、30 Hz RGB。真实 CUA 确认九个独立窗口都在 Window 菜单中；手眼实时画面、Topics Inspector 同时显示同一 RGB，Motion Robot View 显示模型和 76,800 点点云（现场一次读数 8.3 Hz），Monitor 七面板中六个接收有界实时力矩数据，第七个因模拟输入只有六轴而无数据。新增 Topics 图像消费者前后 RGB ROS 订阅数保持 2（RGBD 接收器和普通 Image 接收器）；深度/内参各 1。`ss` 只见一个到测试 Bridge 的 WebSocket TCP 连接，Mac 只有一条对应转发隧道。
+
+通过主窗口原生关闭按钮隐藏主窗口后，Topics 仍显示共享连接及连续递增图像计数，约 30 Hz；诊断快照 `/tmp/260-nine-window-live-diagnostics.json` 已从实际 UI 导出。操作期间没有点击 Agent 重启、控制模式切换、运动授权、采样或录制。存盘对话框曾指向已有测试样本文件，已取消覆盖并核对唯一新文件名后再保存，原样本未覆盖。
+
+持续内存观察使用 `/tmp/260-window-load-sampler.py`，目标 1800 秒，每 10 秒记录候选应用、同次启动的 10 个 WebContent/GPU/Networking 进程、锁屏标记、测试 Bridge/发布器及订阅和连接数。初次发现锁屏字段名称不正确后已停止该采样器，旧记录归档为 warmup；更正 IOConsoleLocked 后启动独立正式计时，未重启应用或数据源。当前只完成前段采样，不能据此声明 30 分钟稳定性通过。RSS 求和会重复计算共享页，不等于物理内存 footprint；Debug 包数据也不等于发布包性能结论。结果文件位于 `/tmp/260-window-load-mac/`，后续必须核验 complete.json、完整采样跨度、进程身份、锁屏状态和末端实际画面，再下结论。
+
+当前只检测到内置 Color LCD，已向用户询问外接屏条件；真实多显示器和拔屏仍未验证。本轮没有生产代码变更；继续采样期间保留测试连接和临时发布器，结束后需断开测试会话、停止自己的发布器/Bridge，并从 `/tmp/260-load-original-layout.json` 恢复隔离应用原布局。正式应用、生产 Bridge 和硬件未更新。
