@@ -1,6 +1,21 @@
 # 多窗口实现记录（进行中）
 
-跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十一项公共查询、运动日志、Position/Pick 的原生任务归属与终态恢复、Monitor 独立历史已接入 Rust；离线配置交接已接入并完成隔离窗口验证；其他控制任务及完整运行验收仍未完成，不能按已交付多窗口功能验收。
+跟踪 Issue：[#260](https://github.com/phamstered/rebotarm-debug-desk/issues/260)。本文件是开发记录，不代表已发布功能。当前分支已接入原生传输和页面拆收入口，正在独立应用 `dev.easydebug.multiwindowtest` 中验证；`/Applications/Robot Console.app` 尚未更新。十一项公共查询、运动日志、各类控制任务的原生归属与恢复记录、Monitor 独立历史已接入 Rust；离线配置交接已接入并完成隔离窗口验证。最新代码的完整原生验收和发布流程仍未完成，不能按已交付多窗口功能验收。
+
+## 当前验收索引
+
+下文按开发时间保留证据，旧段落中的“待完成”只代表当时状态。当前按 Issue #260 原验收范围核对：
+
+| 验收项 | 已有证据 | 仍未证明的部分 |
+| --- | --- | --- |
+| 九页面单实例、拆收、状态保留、布局恢复 | 原生九窗口、手眼 50 次迁移、窄窗口滚动、迁移/回滚失败恢复及启动布局恢复实测 | 外接屏拔插按用户说明延期；不能以坐标约束单测替代真实拔屏 |
+| 一个 Rust 上游会话、订阅合并、主窗口不作数据中转 | 九窗口连接的 TCP 数与 ROS 订阅计数、主窗口隐藏后持续收帧 | 当前 Release 候选包尚无同等原生实测 |
+| 任务独立于页面、冲突互斥、断线代次和恢复记录 | 各类任务状态机、持久化与 loopback 回归；Controller/JTC/Joint4 等隔离 ROS 验证 | 最新窗口重载修复及任务恢复组合的原生复测仍待解锁 |
+| 有界图像/点云分发、共享资源、Monitor 历史 | 九窗口 30 分钟记录、两次慢消费者实验、帧龄区间、缓存及队列回归 | 测量来自旧 Debug 候选包和模拟数据，不是 Release 长期性能保证 |
+| 外部活动跨连接隔离 | 共享观察绑定连接 Profile/epoch，换连接重置；迟到回复及本桌面任务身份由回归验证 | 不接管任意外部进程、不保证其他客户端全局互斥；不能把观察当成本桌面所有权 |
+| 全量测试、构建、CI、合并和安装 | 各阶段本机全量测试、隔离 ROS 测试和候选包记录见末尾 | PR/CI/合并及生产安装未完成，生产 Bridge 未更新 |
+
+未知任务历史不构成结束证据；当前保留占用且不重放。这是已实现的失败处理边界，不声称能从被删除的 Bridge 历史恢复终态。继续验收时应验证这些提示和停止入口，不通过清空记录来伪造任务完成。
 
 ## 完整交付范围
 
@@ -637,3 +652,15 @@ hello 新增 `visual_pick_cancel_id_supported`；原生桌面在旧 Bridge 上�
 实际安装路径烟测使用 ROS_DOMAIN_ID=226、ROS_LOCALHOST_ONLY=1、127.0.0.1:28867。核验 `/proc/237872/exe` 与 install 符号链接解析到同一构建二进制；hello 返回构建 ID `f2339e317dd4` 和新取消能力。仅请求 hello、observe 和缺失/错误/非法/超长编号的取消，全部负例返回 error，前后均保持相同 idle 状态；没有请求开始抓取或发送硬件命令。活动任务不受旧编号影响由前述 C++ 模拟用例覆盖，此烟测不冒充实机抓取验证。证据 `/tmp/260-pick-cancel-smoke.log`；自己的测试进程 237872 经 SIGINT 正常退出，复核端口 28867 消失，生产 PID 8367 / 8765 未变。
 
 本轮只更新隔离工作区和候选包，不代表生产部署、原生窗口全部验收或整个 Issue #260 完成；剩余边界沿用上节。
+
+## 外部活动换连接回归与 Release 候选包
+
+复核共享观察的实际语义：reader 捕获其原连接 Profile，关闭/换连接丢弃旧 epoch 的观察；新连接必须重新查询。外部活动只参与当前来源的准入，不自动创建本桌面 bag/Episode 所有权记录，也不因换连接停止远端进程。本桌面实际提交过的任务仍通过各自持久化记录绑定原机器人，不能与只读外部观察混淆。
+
+新增双 loopback 连接回归，A 的录制/回放/采集均活跃，挂起一条将返回空闲的旧查询后切换到 B。验证 B 首帧前拒绝相关迁移，B 活跃状态不会被 A 的迟到查询或旧断线通知清除，旧页面不能向 B 发送 DISABLE，而当前页面显式 DISABLE 可以到达；只有 B 的新鲜空闲状态恢复迁移。全程不创建本桌面 bag/采集/运动所有权、不自动发布运动/抓取取消。这补强跨连接隔离证据，未新增外部进程接管能力，也不证明独立客户端之间的全局互斥。
+
+`npm test` 完整通过：927 前端、275 Rust、3 运行库及其余脚本；`npm run build` 通过。日志 `/tmp/260-activity-connection-{test,full-tests,build}.log`。本轮产品源码未变，仅新增 Rust 回归及验收记录；Bridge 构建 ID 仍为 `f2339e317dd4`，沿用前一节同源码的完整 ROS 测试证据，没有重复部署。
+
+首次为当前候选代码执行非 Debug 的 `npm run tauri build -- --bundles app --config /tmp/260-native-window-release.json`，完成 Release 构建，日志 `/tmp/260-window-release-bundle.log`。产物 `src-tauri/target/release/bundle/macos/Robot Console Window Release Test.app` 通过严格 codesign 校验，Info.plist 的标识确认为 `dev.easydebug.multiwindowtest`。未启动、未安装至生产位置；不能将此前 Debug 包的实际窗口或性能数据当作此 Release 包的验收结果。
+
+本轮 CUA 再次确认 Mac 锁屏。原生渲染进程退出后重新注册、最新恢复记录与窗口布局的组合交互、Release 实际运行仍缺少证据；外接屏拔插按用户说明延期。全量自动测试和构建不能替代这些原生验收，PR/CI/合并及正式安装仍未完成，Issue #260 不宣称完成。

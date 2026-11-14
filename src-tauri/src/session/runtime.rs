@@ -1417,6 +1417,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_activity_is_reobserved_per_connection_without_adoption_or_stale_release() {
+        use super::super::{activity::tests::{active, idle_value}, observations::Source};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::sync::Notify;
+        let sources = [Source::BagRecord, Source::BagPlay, Source::Collection];
+        let pages = ["page-motion", "page-monitor", "page-collection"];
+        let (port_a, _events_a, seen_a, server_a) = fake_bridge().await;
+        let hub = Arc::new(Runtime::default());
+        hub.connect_profile(port_a, offline_profile("robot-a.invalid")).await.unwrap();
+        let (old_page, _) = hub.attach("page-motion").unwrap();
+        let delay = Arc::new(AtomicBool::new(false));
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let (pending, started, finish) = (delay.clone(), entered.clone(), release.clone());
+        hub.observations.start(old_page.epoch, Arc::new(move |source, _| {
+            let wait = source == Source::BagPlay && pending.load(Ordering::Acquire);
+            let (started, finish) = (started.clone(), finish.clone());
+            Box::pin(async move {
+                if wait {
+                    started.notify_one();
+                    finish.notified().await;
+                    return Ok(idle_value(source));
+                }
+                Ok(active(source))
+            })
+        }));
+        for source in sources { hub.observations.read(old_page.epoch, source).await.unwrap(); }
+        for page in pages { assert!(hub.tasks.migration(page).is_err()); }
+        assert!(hub.bag_operations.snapshot().is_empty());
+        assert!(hub.collection_operations.snapshot().is_none());
+        delay.store(true, Ordering::Release);
+        let old_hub = hub.clone();
+        let old_epoch = old_page.epoch;
+        let old_reply = tokio::spawn(async move { old_hub.observations.refresh(old_epoch, Source::BagPlay, true).await });
+        tokio::time::timeout(Duration::from_secs(1), entered.notified()).await.unwrap();
+        hub.close();
+        assert!(hub.observations.activity_snapshot().entries.is_empty());
+        assert!(hub.tasks.local_operation("page-handeye").is_ok());
+        server_a.await.unwrap();
+
+        let (port_b, _events_b, seen_b, server_b) = fake_bridge().await;
+        hub.connect_profile(port_b, offline_profile("robot-b.invalid")).await.unwrap();
+        let (new_page, _) = hub.attach("page-motion").unwrap();
+        assert_ne!(new_page.epoch, old_epoch);
+        for page in pages { assert!(hub.tasks.migration(page).is_err(), "new source needs its own evidence"); }
+        let running = Arc::new(AtomicBool::new(true));
+        let state = running.clone();
+        hub.observations.start(new_page.epoch, Arc::new(move |source, _| {
+            let value = if state.load(Ordering::Acquire) { active(source) } else { idle_value(source) };
+            Box::pin(async move { Ok(value) })
+        }));
+        for source in sources { hub.observations.read(new_page.epoch, source).await.unwrap(); }
+        release.notify_one();
+        assert!(old_reply.await.unwrap().is_err());
+        hub.observations.stop(old_epoch);
+        for page in pages { assert!(hub.tasks.migration(page).is_err(), "old idle/failure cannot release B"); }
+        let disable = json!({"op":"joint_command","mode":3});
+        assert!(hub.request("page-motion", &old_page, "stale", disable.clone(), Duration::from_secs(1)).await.is_err());
+        hub.request("page-motion", &new_page, "stop", disable, Duration::from_secs(1)).await.unwrap();
+        running.store(false, Ordering::Release);
+        for source in sources { hub.observations.refresh(new_page.epoch, source, true).await.unwrap(); }
+        for page in pages { assert!(hub.tasks.migration(page).is_ok()); }
+        assert!(hub.bag_operations.snapshot().is_empty());
+        assert!(hub.collection_operations.snapshot().is_none());
+        assert!(hub.tasks.snapshot().is_none());
+        hub.close();
+        server_b.await.unwrap();
+        for seen in [seen_a, seen_b] {
+            assert!(!seen.lock().unwrap().iter().any(|m| matches!(m["op"].as_str(),
+                Some("position_move" | "visual_pick_start" | "visual_pick_cancel" | "trajectory_command" | "gravity_id_start"))));
+        }
+    }
+
+    #[tokio::test]
     async fn offline_profile_is_shared_versioned_and_never_connects_or_notifies_under_core_lock() {
         let hub = Arc::new(Runtime::default());
         let seen = Arc::new(Mutex::new(Vec::new()));
