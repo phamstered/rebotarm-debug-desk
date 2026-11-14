@@ -1590,6 +1590,7 @@ pub fn run() {
                     let _ = handle.emit("native-session-changed", ());
                 }));
             session::finite_recovery::initialize(app.handle());
+            session::motor_recovery::initialize(app.handle());
             session::bag_operation::initialize(app.handle());
             session::collection_operation::initialize(app.handle());
             session::workspace::Workspace::initialize(app.handle());

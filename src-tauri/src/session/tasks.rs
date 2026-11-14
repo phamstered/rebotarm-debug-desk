@@ -66,6 +66,9 @@ struct Task {
     controller: Option<super::controller_stop::Stop>,
     leased_origin: Option<String>,
     joint4: Option<super::joint4_task::State>,
+    motor_durable: bool,
+    motor_prepared: bool,
+    motor_terminal: bool,
     finite_durable: bool,
     finite_prepared: bool,
     finite_restored: bool,
@@ -75,6 +78,7 @@ struct Task {
 struct Inner {
     sequence: u64,
     finite_recovery_enabled: bool,
+    motor_recovery_enabled: bool,
     task: Option<Task>,
     migrations: BTreeSet<String>,
     local_operations: BTreeSet<String>,
@@ -205,6 +209,18 @@ fn finite_complete(inner: &mut Inner, outcome: super::controller_stop::Outcome) 
     }
 }
 
+fn motor_complete(inner: &mut Inner) {
+    let Some(task) = inner.task.as_mut() else { return; };
+    if task.motor_terminal { return; }
+    if task.motor_durable {
+        task.motor_terminal = true;
+        task.snapshot.phase = Phase::Stopping;
+        task.snapshot.message = "Motor 已停止或未下发，等待恢复记录清理".into();
+    } else {
+        inner.task = None;
+    }
+}
+
 impl Tasks {
     pub fn recovery_failed(&self, message: String) {
         *self.recovery_error.lock().unwrap() = Some(message);
@@ -242,6 +258,54 @@ impl Tasks {
         Ok(Some(task.snapshot.command_id.clone()))
     }
 
+    pub fn enable_motor_recovery(&self) {
+        self.inner.lock().unwrap().motor_recovery_enabled = true;
+    }
+    pub fn motor_needs_prepare(&self, id: u64) -> bool {
+        self.inner.lock().unwrap().task.as_ref().is_some_and(|t|
+            t.snapshot.id == id && t.motor_durable && !t.motor_prepared && !t.motor_terminal)
+    }
+    pub fn motor_prepared(&self, id: u64, command_id: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let task = inner.task.as_mut().filter(|t| t.snapshot.id == id && t.snapshot.command_id == command_id
+            && t.motor_durable && !t.sent && !t.motor_terminal && !stopped(t))
+            .ok_or("Motor 在恢复记录落盘期间已失效")?;
+        task.motor_prepared = true;
+        Ok(())
+    }
+    pub fn motor_terminal(&self) -> Option<Snapshot> {
+        self.inner.lock().unwrap().task.as_ref().filter(|t| t.motor_terminal).map(|t| t.snapshot.clone())
+    }
+    pub fn motor_release(&self, id: u64, command_id: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.task.as_ref().is_some_and(|t| t.snapshot.id == id && t.snapshot.command_id == command_id && t.motor_terminal) { return false; }
+        inner.task = None;
+        true
+    }
+    pub fn motor_cleanup_error(&self, id: u64, message: &str) {
+        if let Some(task) = self.inner.lock().unwrap().task.as_mut().filter(|t| t.snapshot.id == id && t.motor_terminal) {
+            task.snapshot.message = message.chars().take(512).collect();
+        }
+    }
+    pub fn restore_motor(&self, command_id: String, profile: &Value) -> Result<u64, String> {
+        let context = super::motor_task::Context::new(0, profile).ok_or("Motor 恢复配置缺少反馈身份")?;
+        let mut inner = self.inner.lock().unwrap();
+        if inner.task.is_some() { return Err("已有控制任务，不能覆盖 Motor 恢复记录".into()); }
+        inner.sequence = inner.sequence.checked_add(1).ok_or("原生任务编号耗尽")?;
+        let id = inner.sequence;
+        inner.task = Some(Task {
+            snapshot: Snapshot { id, epoch: 0, window: "page-motor".into(), command_id, kind: Kind::Motor,
+                phase: Phase::Uncertain, message: "桌面已重启，等待重连原机器人关闭输出并核验；不会重发运动指令".into(), recovery_error: false },
+            owner: Owner { epoch: 0, window: WindowToken { label: "page-motor".into(), incarnation: 0 } },
+            sent: true, admitted: false, stop_pending: true, seen: Instant::now(), probed: None,
+            heartbeat_at: None, action_next: 0, inflight: None,
+            motor: super::motor_task::Motor::for_confirmation(Some(&context), 0, Instant::now()), controller: None,
+            leased_origin: None, joint4: None, finite_durable: false, finite_prepared: false,
+            finite_restored: false, finite_terminal: None,
+            motor_durable: true, motor_prepared: true, motor_terminal: false,
+        });
+        Ok(id)
+    }
     pub fn enable_finite_recovery(&self) {
         self.inner.lock().unwrap().finite_recovery_enabled = true;
     }
@@ -261,7 +325,7 @@ impl Tasks {
             owner: Owner { epoch: 0, window: WindowToken { label: window, incarnation: 0 } },
             sent: true, admitted: false, stop_pending: false, seen: Instant::now(), probed: None,
             heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller),
-            leased_origin: None, joint4: None, finite_durable: true, finite_prepared: true,
+            leased_origin: None, joint4: None, motor_durable: false, motor_prepared: false, motor_terminal: false, finite_durable: true, finite_prepared: true,
             finite_restored: true, finite_terminal: None,
         });
         Ok(id)
@@ -314,7 +378,7 @@ impl Tasks {
                 phase: Phase::Submitting, message: "核验 Controller 切换前状态".into(), recovery_error: false },
             owner, sent: false, admitted: false, stop_pending: false, seen: Instant::now(),
             probed: None, heartbeat_at: None, action_next: 0, inflight: None, motor: None, controller: Some(controller), leased_origin: None, joint4: None,
-            finite_durable: inner.finite_recovery_enabled, finite_prepared: false, finite_restored: false, finite_terminal: None,
+            motor_durable: false, motor_prepared: false, motor_terminal: false, finite_durable: inner.finite_recovery_enabled, finite_prepared: false, finite_restored: false, finite_terminal: None,
         });
         Ok(id)
     }
@@ -483,11 +547,12 @@ impl Tasks {
             .as_mut()
             .filter(|task| owner.is_none_or(|owner| &task.owner == owner))
         {
-            if task.finite_terminal.is_some() { return; }
+            if task.finite_terminal.is_some() || task.motor_terminal { return; }
             // The writer uses this same lock before setting sent. Clearing an
             // unsent ticket therefore cannot race with a later transmission.
             if !task.sent {
                 if task.controller.is_some() { finite_complete(&mut inner, super::controller_stop::Outcome::Finished); }
+                else if task.motor.is_some() { motor_complete(&mut inner); }
                 else { inner.task = None; }
                 return;
             }
@@ -556,7 +621,7 @@ impl Tasks {
                     && task.snapshot.kind == Kind::Position
                     && message["command_id"] == task.snapshot.command_id);
             if cancel {
-                if task.finite_terminal.is_none() {
+                if task.finite_terminal.is_none() && !task.motor_terminal {
                     if let Some(control)=&mut task.controller {control.request();}
                     stop(task, "已请求停止，等待 Bridge 确认任务终态");
                 }
@@ -638,7 +703,7 @@ impl Tasks {
                 inflight: None,
                 motor,
                 controller: None,
-                finite_durable: false, finite_prepared: false, finite_restored: false, finite_terminal: None,
+                motor_durable: is_motor && inner.motor_recovery_enabled, motor_prepared: false, motor_terminal: false, finite_durable: false, finite_prepared: false, finite_restored: false, finite_terminal: None,
                 leased_origin,
                 joint4: (kind == Kind::Joint4).then(|| super::joint4_task::State {
                     action: message["action"].as_str().unwrap().into(), operation: None, capture_ready: false,
@@ -666,12 +731,14 @@ impl Tasks {
                 Arc::new(move || {
                     let mut inner = tasks.inner.lock().unwrap();
                     let identity = inner.connection_identity.clone();
+                    let motor_context = inner.motor_context.clone();
                     let Some(task) = inner.task.as_mut() else {
                         return ticket.is_none() && !is_continuation;
                     };
                     if !is_disable && !same_connection(task, identity.as_ref(), owner.epoch) {
                         return false;
                     }
+                    if !is_disable && task.motor.as_ref().is_some_and(|motor| !motor.matches(motor_context.as_ref(), owner.epoch)) { return false; }
                     if is_cancel {
                         return expected == Some(task.snapshot.id);
                     }
@@ -685,6 +752,7 @@ impl Tasks {
                     if expected != Some(task.snapshot.id) || task.owner != owner || stopped(task) {
                         return false;
                     }
+                    if task.motor_terminal || (task.motor_durable && !task.motor_prepared) { return false; }
                     if ticket.is_some() {
                         task.sent = true;
                         if let Some(motor) = &mut task.motor {
@@ -741,7 +809,7 @@ impl Tasks {
         let Some(task) = inner.task.as_mut() else {
             return;
         };
-        if task.controller.is_some() { return; }
+        if task.controller.is_some() || task.motor_terminal { return; }
         if task.snapshot.kind == Kind::Motor && ticket == Some(task.snapshot.id) {
             if request["op"] == "joint_command" && request["mode"] == 3 {
                 if let Ok(value) = response {
@@ -763,7 +831,7 @@ impl Tasks {
                     .unwrap()
                     .stopped(inner.motor_context.as_ref(), Instant::now());
                 if confirmed {
-                    inner.task = None;
+                    motor_complete(&mut inner);
                 }
                 return;
             }
@@ -786,10 +854,10 @@ impl Tasks {
                     }
                 }
                 Ok(value) if value["op"] == "error" && !task.admitted => {
-                    inner.task = None;
+                    motor_complete(&mut inner);
                 }
                 Err(_) if !task.sent => {
-                    inner.task = None;
+                    motor_complete(&mut inner);
                 }
                 _ => stop(task, "Motor 发布结果未确认，已请求 DISABLE"),
             }
@@ -944,7 +1012,7 @@ impl Tasks {
             .and_then(|task| task.motor.as_ref())
             .is_some_and(|motor| motor.stopped(inner.motor_context.as_ref(), Instant::now()))
         {
-            inner.task = None;
+            motor_complete(&mut inner);
             return;
         }
         let Some(task) = inner.task.as_mut().filter(|task| {
@@ -1017,7 +1085,7 @@ impl Tasks {
             task.snapshot.message = "任务结果未确认，请重连原机器人配置核验；未向其他连接发送控制请求".into();
             return None;
         }
-        if task.finite_terminal.is_some() { return None; }
+        if task.finite_terminal.is_some() || task.motor_terminal { return None; }
         if let Some(control)=&mut task.controller {
             if !control.requested() {return None;}
             if !task.sent {
@@ -1066,7 +1134,7 @@ impl Tasks {
                 return None;
             }
             if !task.sent {
-                inner.task = None;
+                motor_complete(&mut inner);
                 return None;
             }
             task.probed = Some(now);
@@ -1090,13 +1158,10 @@ impl Tasks {
                 recovery: false,
                 heartbeat: false,
                 permit: Arc::new(move || {
-                    tasks
-                        .inner
-                        .lock()
-                        .unwrap()
-                        .task
-                        .as_ref()
-                        .is_some_and(|task| task.snapshot.id == ticket)
+                    let inner = tasks.inner.lock().unwrap();
+                    inner.task.as_ref().is_some_and(|task| task.snapshot.id == ticket
+                        && task.inflight == Some(action) && !task.motor_terminal
+                        && task.motor.as_ref().is_some_and(|motor| motor.matches(inner.motor_context.as_ref(), epoch)))
                 }),
             });
         }

@@ -100,6 +100,7 @@ impl Core {
 /// not a static JS singleton (each WebView has a different JS heap).
 pub struct Runtime {
     pub tasks: Arc<Tasks>,
+    pub motor_recovery: Arc<super::motor_recovery::Recovery>,
     pub finite_recovery: Arc<super::finite_recovery::Recovery>,
     pub local_tasks: Arc<super::local_tasks::LocalTasks>,
     pub bag_operations: Arc<super::bag_operation::Operations>,
@@ -123,6 +124,7 @@ impl Default for Runtime {
         tasks.bind_observations(&observations);
         Self {
             tasks,
+            motor_recovery: Arc::new(super::motor_recovery::Recovery::default()),
             finite_recovery: Arc::new(super::finite_recovery::Recovery::default()),
             local_tasks: Arc::new(super::local_tasks::LocalTasks::default()),
             bag_operations: Arc::new(super::bag_operation::Operations::default()),
@@ -1145,13 +1147,23 @@ impl Runtime {
             }
             return Ok(result);
         }
-        let admission = {
+        let (admission, profile) = {
             let core = self.core.lock().unwrap();
             core.validate(native_label, attachment)?;
             self.tasks.touch(&attachment.owner(), Instant::now());
-            self.tasks
-                .admit(attachment.owner(), &message, Instant::now())?
+            (self.tasks.admit(attachment.owner(), &message, Instant::now())?, core.profile.clone())
         };
+        if message["op"] == "joint_command" && message["mode"] != 3 {
+            if let Some(id) = admission.ticket.filter(|id| self.tasks.motor_needs_prepare(*id)) {
+                let recovery = self.motor_recovery.clone(); let tasks = self.tasks.clone();
+                let prepared = tokio::task::spawn_blocking(move || recovery.prepare(&tasks, id, profile)).await
+                    .map_err(|e| e.to_string()).and_then(|result| result);
+                if let Err(error) = prepared {
+                    self.tasks.reply(Some(id), attachment.epoch, &message, Err(&error));
+                    return Err(error);
+                }
+            }
+        }
         let result = transport
             .request_guarded(message.clone(), timeout, admission.permit)
             .await;
@@ -1911,15 +1923,55 @@ mod tests {
         hub.close();server.abort();
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn motor_journal_wait_cannot_block_explicit_disable_or_publish_cancelled_command() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Arc::new(Runtime::default());
+        let path = std::env::temp_dir().join(super::super::controller_journal::new_id().unwrap()).join("motor.json");
+        hub.motor_recovery.restore(&hub.tasks, Ok(path.clone()));
+        hub.connect_profile(port, offline_profile("fixture.invalid")).await.unwrap(); seed_idle_activity(&hub).await;
+        let (motor, _) = hub.attach("page-motor").unwrap(); let (main, _) = hub.attach("main").unwrap();
+        events.send(json!({"op":"topic_message","topic":"/status","data":{"mode":3,"last_command_sequence":1,"header":{"stamp":{"sec":1,"nanosec":0}}}})).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !hub.core.lock().unwrap().latest_topics.contains_key("/status") { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let recovery = hub.motor_recovery.clone();
+        let disk = std::thread::spawn(move || {
+            let _lock = recovery.lock_for_test(); locked.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        ready.await.unwrap();
+        let worker_hub = hub.clone(); let worker_motor = motor.clone();
+        let starting = tokio::spawn(async move {
+            worker_hub.request("page-motor", &worker_motor, "control", json!({"op":"joint_command","mode":1}), Duration::from_secs(2)).await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while hub.tasks.snapshot().is_none() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert!(hub.motor_recovery.error_snapshot().is_none(), "UI error reads cannot wait on the disk lock");
+        let disabled = tokio::time::timeout(Duration::from_secs(1), hub.request("main", &main, "control",
+            json!({"op":"joint_command","mode":3}), Duration::from_secs(1))).await.unwrap().unwrap();
+        assert_eq!(disabled.op(), "joint_command_ack");
+        assert!(seen.lock().unwrap().iter().any(|m|m["op"] == "joint_command" && m["mode"] == 3));
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"] == "joint_command" && m["mode"] != 3));
+        hub.detach("page-motor", &motor).await.unwrap();
+        release.send(()).unwrap(); disk.join().unwrap();
+        assert!(starting.await.unwrap().is_err());
+        assert!(hub.motor_recovery.cleanup(&hub.tasks).unwrap());
+        assert!(!seen.lock().unwrap().iter().any(|m|m["op"] == "joint_command" && m["mode"] != 3));
+        hub.close(); server.await.unwrap();
+        if path.parent().unwrap().exists() { std::fs::remove_dir_all(path.parent().unwrap()).unwrap(); }
+    }
+
     #[tokio::test]
     async fn motor_owner_loss_disables_but_only_fresh_firmware_feedback_releases_task() {
         let (port, events, seen, server) = fake_bridge().await;
         let hub = Runtime::default();
-        // Deliberately incomplete ConnectionProfile: SSH readers cannot run.
-        hub.set_profile(
-            json!({"host":"isolated-invalid", "statusTopic":"/status", "commandTopic":"/command"}),
-        );
-        hub.connect(port).await.unwrap(); seed_idle_activity(&hub).await;
+        let path = std::env::temp_dir().join(super::super::controller_journal::new_id().unwrap()).join("motor.json");
+        hub.motor_recovery.restore(&hub.tasks, Ok(path.clone()));
+        hub.connect_profile(port, offline_profile("127.0.0.1")).await.unwrap(); seed_idle_activity(&hub).await;
         let (motor, _) = hub.attach("page-motor").unwrap();
         let (main, _) = hub.attach("main").unwrap();
         let timeout = Duration::from_secs(2);
@@ -1952,6 +2004,7 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("motor-"));
         assert!(hub.tasks.migration("page-motor").is_err());
         assert!(hub
             .request(
@@ -2007,12 +2060,15 @@ mod tests {
         }
         events.send(status(123, 3, 4)).unwrap();
         tokio::time::timeout(timeout, async {
-            while hub.tasks.snapshot().is_some() {
+            while hub.tasks.motor_terminal().is_none() {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
+        assert!(hub.tasks.migration("page-motor").is_err());
+        assert!(hub.motor_recovery.cleanup(&hub.tasks).unwrap());
+        assert!(hub.tasks.snapshot().is_none());
         assert!(hub.tasks.migration("page-motor").is_ok());
         assert_eq!(
             seen.lock()
@@ -2028,7 +2084,8 @@ mod tests {
             .iter()
             .any(|m| m["op"] == "unsubscribe" && m["topic"] == "/status"));
         hub.close();
-        server.abort();
+        server.await.unwrap();
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]

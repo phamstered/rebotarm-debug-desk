@@ -744,3 +744,9 @@ The fixed collection helper fingerprints `/proc/sys/kernel/random/boot_id`, PID 
 跨桌面恢复使用只读 Job::recover，不执行 submit；原 Profile 当前连接之外不查询。绑定远端 succeeded/rejected 后登记完成屏障，须显式新的 DISABLE 请求及完成后硬件关闭证明才能解锁；不会恢复以前的停止意图或运动授权并主动发出控制。unknown/uncertain 不能以普通 idle 或仅有 ACK 消除。当前进程内正常完成路径不变，但成功响应等待持久化收尾。
 
 `NativeTaskSnapshot` 增加 `recovery_error`（普通任务 false，损坏记录的合成快照 true），用于显示恢复错误而非虚构运行中的 Controller。恢复错误保留原文件和准入屏障。终态记录待清理时的显式 disable-stop 可走现有 `joint_command mode=3`，只有正确 ACK/模式/序列才报告“请求已受理”；不声称输出已关闭或环境已清理。
+
+### Motor stream desktop restart recovery (development branch)
+
+`motor-recovery-v1.json` is a private, bounded native write-ahead record containing the original connection profile and task ID. It contains no command payload, gain, or restored authorization. The first non-DISABLE Motor write requires a durable record; subsequent frames use the same record. The native writer rechecks the original Motor connection identity immediately before sending, including queued automatic DISABLE. Explicit user DISABLE remains available.
+
+Startup restores Motor occupancy before workspace initialization and never auto-connects. After an explicit connection to the original robot, recovery requests DISABLE and retains the task until a matching publish sequence and newer firmware source timestamp prove output-off. The record must then be durably cleared before admission or migration is released. Different connection identities, unknown feedback, disk failures, and malformed recovery records do not release occupancy. File I/O runs outside the shared connection/task locks and the transport executor; task error snapshots do not acquire the journal I/O lock.

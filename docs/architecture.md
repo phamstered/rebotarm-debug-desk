@@ -294,3 +294,7 @@ Journal operation locks precede the shared connection lock. Durable I/O never re
 
 
 Finite Controller and arm-environment operations use a separate one-record native recovery journal. Write-ahead persistence occurs outside Core/Tasks; submission admission requires its durable marker. A terminal task remains reserved while the app-owned cleanup worker atomically clears the file, including pre-send cancellation and hardware-confirmed DISABLE. New tasks cannot overtake that cleanup. On desktop restart only the original remote query ticket is recovered; there is no command replay or restored actuation authorization. After bound remote completion, a new explicit DISABLE and post-completion firmware proof are required. Ordinary controller state matching cannot stand in for remote completion. Corrupt records fail closed for new actuation while leaving DISABLE and offline editing available.
+
+### Motor 连续流的桌面重启恢复
+
+Motor 首条使能指令发送前，Rust 在阻塞工作线程持久化原连接身份及任务编号；记录不包含运动参数。原生发送许可与任务占用采用同一锁，磁盘返回后重新检查任务是否已撤销。关流终态先冻结任务，再由应用级清理线程持久化移除记录；磁盘等待不持有共享 Core/Tasks 锁。启动恢复先于页面布局初始化，保持旧任务占用且不恢复发送许可；显式重连原机器人后沿用 DISABLE 序列与新鲜 HardwareStatus 的确认路径。

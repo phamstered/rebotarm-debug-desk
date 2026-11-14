@@ -597,3 +597,17 @@ Controller 单个/批量切换及 arm_mode 操作在提交前保存最多 24 KiB
 最终代码通过 `npm test`（927 前端、260 Rust、3 运行库测试，以及 Bridge/安装/部署/运动诊断/手眼测试）、`npm run build`、`npm run docs:build`、隔离配置的 `npm run tauri build -- --debug --bundles app` 和 `codesign --verify --deep --strict`。日志位于 `/tmp/260-page-reload-{full-tests,build,docs,bundle}.log`。测试及构建过程没有修改生产应用。
 
 锁屏等待期间已清理本次 DOMAIN 225 的临时发布器 211238，由其退出处理清理 Bridge 211244；复核二者及 28866 监听消失，生产 PID 8367 / 8765 保持不变。临时源首次启动因未 source 隔离 Bridge overlay 导致 package not found；补齐 overlay 后监听正常，尚未有桌面连接，故不计作原生功能通过。
+
+## Motor 连续指令的桌面进程重启恢复
+
+原生 Motor 首条非 DISABLE 帧现在需要先持久化原连接 Profile 和任务编号，文件为 `motor-recovery-v1.json`，复用有大小限制、0600 权限、临时文件原子替换及 fsync 的恢复存储。不保存位置、速度、增益或发送授权；同一连续流后续帧不重复写盘。磁盘 I/O 在 blocking worker 中执行，不持有 Core/Tasks 锁，错误快照读取也不等待恢复文件锁。
+
+启动在 Workspace 之前恢复未确认 Motor 占用，不自动连接。用户显式连接原机器人后，仅沿用 DISABLE 关闭输出与新鲜 HardwareStatus 的确认流程；原身份不匹配时不发送自动控制。发送队列中的 Motor 帧和自动 DISABLE 在真正写出前再次核对连接身份及操作编号，显式用户 DISABLE 仍可用。核验终态后冻结任务，持久化清理成功才释放运动/迁移占用；损坏文件、落盘失败或清理失败均保留占用和可读原因。连续旧反馈不能覆盖磁盘清理错误提示。
+
+新增回归覆盖记录落盘前不能发送、重启不重发运动、七个身份字段分别变化、排队期间换连接、DISABLE ACK/旧时间戳/旧序列不释放占用、取消与落盘竞争、写入/清理失败、损坏版本/格式保留原文件、错误快照读取与 DISABLE 不被磁盘锁阻塞。真实 loopback WebSocket 验证恢复记录锁被占用时 DISABLE 到达模拟 Bridge，被取消的非 DISABLE 帧从未发布；原 Motor 端到端回归也改为经过生产持久化路径，直到反馈确认和记录清理后才解除占用。
+
+最终 `npm test` 通过：927 前端、265 Rust、3 运行库以及 Bridge/安装/部署/运动诊断/手眼脚本；`npm run build` 与 `npm run docs:build` 通过。日志 `/tmp/260-motor-recovery-{full-tests,build,docs}.log`。模拟 WebSocket 与磁盘错误注入不是实机电机验证。本轮 CUA 确认 Mac 仍锁屏，未重复索要解锁，也未替换生产应用；原生重载恢复的真实窗口复测仍待完成。
+
+完整目标继续进行。Motor 的桌面重启恢复已接入；Position/Pick/Gravity/直接轨迹/Joint4 的进程重启恢复、外部活动跨连接归属、外接屏拔插及最终发布验收等仍需完成，不把本阶段作为整个 Issue #260 的交付。
+
+本轮隔离配置 `npm run tauri build -- --debug --bundles app --config /tmp/260-native-motor-recovery.json` 及 `codesign --verify --deep --strict` 通过，产物 `Robot Console Motor Recovery Test.app`（标识仍为 `dev.easydebug.multiwindowtest`），构建日志 `/tmp/260-motor-recovery-bundle.log`。该包未启动、未安装到 `/Applications`；不能据此宣称原生恢复交互已验收。
