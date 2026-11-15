@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -216,7 +217,7 @@ export function Joint4CalibrationPage({
 
   return (
     <main className="calibration-page">
-      <header className="calibration-header">
+      <header className="calibration-header native-window-header">
         <div><strong>Joint4 Calibration</strong><span>多姿态重力与 camera_link 负载标定</span></div>
         <div className="calibration-connection">
           <span className={`connection-light ${controllerActive && availability.statusFresh ? "online" : "offline"}`} />
@@ -224,6 +225,7 @@ export function Joint4CalibrationPage({
           <small>{availability.statusFresh ? "status 10 Hz 正常" : "等待新鲜状态"}</small>
           <button className="ghost" onClick={onRefreshControllers}>重新检测</button>
         </div>
+        <NativePageActions />
       </header>
 
       <section className="calibration-safety-banner">

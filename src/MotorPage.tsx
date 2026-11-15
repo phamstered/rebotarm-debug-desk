@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import type { BridgeClient } from "./bridge";
 import { MotorControl } from "./MotorControl";
 import type { HardwareStatus } from "./types";
@@ -25,7 +26,7 @@ export function MotorPage({
 }) {
   return (
     <main className="motor-page">
-      <header className="motor-page-header">
+      <header className="motor-page-header native-window-header">
         <div>
           <h1>Motor Control</h1>
           <span>7 轴 MIT 独立控制</span>
@@ -34,6 +35,7 @@ export function MotorPage({
           <span>COMMAND TOPIC</span>
           <strong>{commandTopic}</strong>
         </div>
+        <NativePageActions />
       </header>
       <div className="motor-page-safety" role="note">
         <strong>发送前确认现场安全</strong>

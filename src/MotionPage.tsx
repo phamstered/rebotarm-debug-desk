@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import type { ReactNode } from "react";
 import { WorkspacePopover } from "./WorkspaceMenu";
 import { MotionDivider, MotionLayoutProvider } from "./MotionLayout";
@@ -23,7 +24,7 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
   log: ReactNode;
 }) {
   return <MotionLayoutProvider active={active} visible={visible} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!visible} aria-label="Motion">
-    <header className="motion-workspace-header">
+    <header className="motion-workspace-header native-window-header">
       <div className="motion-workspace-navigation">
         {!compact && <strong>Motion</strong>}
         {!compact && <button type="button" className="toolbar-action" aria-expanded={controllersOpen}
@@ -48,6 +49,7 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
         <button type="button" className="toolbar-action" aria-pressed={focusMode} onClick={onToggleFocus}>{focusMode ? "退出专注" : "专注模式"}</button>
         <WorkspacePopover active={active} label="更多工具" indicator="⋯">{tools}</WorkspacePopover>
       </div> : <div className="motion-readiness" aria-label="运动就绪状态">{readiness}</div>}
+      <NativePageActions />
     </header>
     <aside id="motion-controllers" className="motion-controller-sidebar" hidden={!controllersOpen || focusMode} aria-label="Motion Controllers">{active ? controllers : null}</aside>
     {controllersOpen && !focusMode && <MotionDivider size="controllersWidth" label="调整 Controllers 宽度" axis="x" panel=".motion-controller-sidebar" container=".motion-workspace" maxFraction={.5} className="motion-controllers-divider" />}
