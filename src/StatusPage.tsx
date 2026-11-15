@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import { controllerStatusFresh } from "./controllersInfoLogic";
 import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -237,7 +238,7 @@ export function StatusPage({
   const logSource = workflow?.mode === "moveit" || (workflow?.mode === "trajectory" && workflow.stage === "planner") ? "moveit" : logMode === "teaching" ? "teaching" : logMode === "vla" ? "vla" : logMode === "trajectory" ? "trajectory" : "teleop";
   return (
     <main className="status-page">
-      <header className="status-page-header">
+      <header className="status-page-header native-window-header">
         <div>
           <h1>Status</h1>
           <span>分区状态总览 · 控制模式与实时日志</span>
@@ -246,6 +247,7 @@ export function StatusPage({
           <span>NO FLASH</span>
           <strong>{profile.name || profile.host}</strong>
         </div>
+        <NativePageActions />
       </header>
       <p className="status-page-banner" role="note">
         选择控制模式后确认启动或切换。切换前会安全停止、关闭输出并清理旧控制进程；拖动示教退出需先支撑，不主动回零；失败时停止切换，详情见下方日志。

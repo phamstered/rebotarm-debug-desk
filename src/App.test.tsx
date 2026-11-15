@@ -228,6 +228,52 @@ describe("App workflow", () => {
     }
   });
 
+  it.each(["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "calibration", "gravity"] as const)("places %s window controls inside the existing page header without a duplicate toolbar", async page => {
+    const base = doubles.invoke.getMockImplementation()!, baseListen = doubles.listen.getMockImplementation()!, resize = globalThis.ResizeObserver;
+    let detached = false;
+    const listeners = new Set<(event: { payload: unknown }) => void>();
+    const snapshot = () => ({ selected: page, pages: { [page]: { ready: true, detached, visible: true, busy_reason: "" } } });
+    doubles.listen.mockImplementation(async (event, listener) => {
+      if (event !== "workspace-state") return baseListen(event, listener);
+      listeners.add(listener); return () => listeners.delete(listener);
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    doubles.invoke.mockImplementation((command, args) => {
+      if (command === "workspace_snapshot") return Promise.resolve(snapshot());
+      if (command === "native_observation_snapshot") return Promise.resolve({ epoch: 0, revision: 0, connected: false, entries: {} });
+      if (command === "native_task_snapshot" || command === "native_local_task_snapshot") return Promise.resolve(null);
+      return base(command, args);
+    });
+    const view = render(<App hostedPage={page} />);
+    try {
+      const detach = await screen.findByRole("button", { name: "拆出窗口" });
+      await waitFor(() => expect(detach).toBeEnabled());
+      expect(screen.getAllByRole("group", { name: "窗口操作" })).toHaveLength(1);
+      expect(detach.closest(".native-window-header")).not.toBeNull();
+      expect(document.querySelector(".native-page-toolbar")).toBeNull();
+      expect(screen.queryByText("共享连接已就绪")).toBeNull();
+      expect(screen.queryByRole("button", { name: "显示主窗口" })).toBeNull();
+      await userEvent.click(detach);
+      expect(doubles.invoke).toHaveBeenCalledWith("workspace_detach", { page });
+      detached = true;
+      await act(async () => { listeners.forEach(listener => listener({ payload: snapshot() })); });
+      expect(screen.getByRole("button", { name: "连接详情" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "显示主窗口" })).toBeEnabled();
+      const dock = screen.getByRole("button", { name: "收回主窗口" });
+      expect(dock.closest(".native-window-header")).not.toBeNull();
+      await userEvent.click(dock);
+      expect(doubles.invoke).toHaveBeenCalledWith("workspace_dock", { page });
+      detached = false;
+      await act(async () => { listeners.forEach(listener => listener({ payload: snapshot() })); });
+      expect(screen.queryByRole("button", { name: "连接详情" })).toBeNull();
+      expect(screen.getAllByRole("button", { name: "拆出窗口" })).toHaveLength(1);
+    } finally {
+      view.unmount(); delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver = resize; doubles.invoke.mockImplementation(base); doubles.listen.mockImplementation(baseListen);
+    }
+  });
+
   it("shows shared task banners once when embedded and restores them in detached or recovery windows", async () => {
     const base = doubles.invoke.getMockImplementation()!, baseListen = doubles.listen.getMockImplementation()!;
     const resize = globalThis.ResizeObserver;

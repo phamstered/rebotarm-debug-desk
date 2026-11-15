@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import { useHandeyeInvoke } from "./handeyeTaskLogic";
 import { useEffect, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
@@ -345,12 +346,13 @@ export function HandeyeCalibrationPage({
 
   return (
     <section className="handeye-page" aria-label="手眼标定">
-      <header className="handeye-header">
+      <header className="handeye-header native-window-header">
         <div>
           <h1>手眼标定</h1>
           <p>配置标定板 → 选择坐标系 → 采样与求解 · Mac 本地计算</p>
         </div>
         <button onClick={onMotion}>前往 Motion 调整姿态</button>
+        <NativePageActions />
       </header>
       <div className="handeye-tabs" role="tablist" aria-label="标定步骤">
         {(

@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import { useNativeCollectionOperation } from "./NativeCollectionOperationStatus";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -132,9 +133,10 @@ export function DataCollectionPage({
       : `${jointStateSample.hz > 0 ? `${jointStateSample.hz.toFixed(1)} Hz` : "有采样"} · 时间戳可用`;
 
   return <section className={`collection-page${running || status?.root ? " has-session" : ""}`} aria-label="数据采集">
-    <header className="collection-header">
+    <header className="collection-header native-window-header">
       <div><h1>数据采集</h1><p>LeRobot v3 · 记录已有遥操作的观测与实际发送的动作</p></div>
       <button type="button" disabled={Boolean(busy)} onClick={() => { setError(""); void run("status"); }}>{busy === "status" ? "刷新中…" : "刷新状态"}</button>
+      <NativePageActions />
     </header>
     <div className="collection-grid">
       <section className="collection-card">

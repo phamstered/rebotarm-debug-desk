@@ -1,8 +1,9 @@
+import { NativePageActions, NativePageActionsContext } from "./NativePageActions";
 import { NativeCollectionOperationStatus } from "./NativeCollectionOperationStatus";
 import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
 import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
 import { ownsPagePreference, usePagePreference } from "./pagePreferences";
-import { NativeWorkspaceHost, NativePageToolbar, NativeOfflineWorkspace } from "./NativeWorkspace";
+import { NativeWorkspaceHost, NativeOfflineWorkspace } from "./NativeWorkspace";
 import { NativeTaskStatus } from "./NativeTaskStatus";
 import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession, useNativeMainRecovery } from "./nativeWorkspaceLogic";
 import { sharedBagStatus } from "./nativeRosbagLogic";
@@ -1988,6 +1989,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
 
   return (
+    <NativePageActionsContext.Provider value={hostedPage ? { page: hostedPage, profileName: profile.host, state: workspace.snapshot.pages[hostedPage], connected: stage === "connected", busyReason: migrationBusyReason, onAction: workspace.action } : null}>
     <div className={`app-shell ${hostedPage ? "native-hosted-page" : ""} ${appPage === "motion" ? `motion-shell${motionFocus ? " motion-focus" : motionNav ? "" : " nav-icons"}` : navExpanded ? "" : "nav-collapsed"}`}>
       {!hostedPage && <AppNav
         page={appPage}
@@ -2004,7 +2006,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {!hostedPage && appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
       <div className="app-main-column">
       {!hostedPage && (nativeMain || appPage !== "motion") && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
-      {hostedPage && <NativePageToolbar page={hostedPage} profileName={profile.host} state={workspace.snapshot.pages[hostedPage]} connected={stage === "connected"} busyReason={migrationBusyReason} onAction={(command, page) => void workspace.action(command, page)} />}
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
       {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
@@ -2116,7 +2117,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           controlLockedReason={armMode?.teachingRunning ? "拖动示教运行中：禁止直接电机命令，请使用示教夹爪入口" : controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
         />
       ) : null}
-      {appPage === "dashboard" && <header className="app-toolbar" role="toolbar" aria-label="应用工具栏">{workspaceTools}</header>}
+      {appPage === "dashboard" && <header className="app-toolbar native-window-header" role="toolbar" aria-label="应用工具栏">{workspaceTools}<NativePageActions /></header>}
       {(appPage === "dashboard" || topicsVisited) && (
       <TopicsPage active={appPage === "dashboard" && windowVisible} className={sidebars.right ? "" : "right-sidebar-collapsed"} style={layoutStyle}>
       <aside
@@ -2354,5 +2355,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         </ModalShell>
       )}
     </div>
+    </NativePageActionsContext.Provider>
   );
 }

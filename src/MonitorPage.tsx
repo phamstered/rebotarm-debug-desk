@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
@@ -302,7 +303,7 @@ export function MonitorPage({
   return (
     <main className="monitor-page">
       {historyNotice && <p role="status" className="notice">{historyNotice}</p>}
-      <header className="monitor-page-header">
+      <header className="monitor-page-header native-window-header">
         <div>
           <h1>Monitor</h1>
           <span>Dashboard / Panel / Chart · 布局预设 · 共享准星 · Bag `/clock` 时间轴</span>
@@ -325,6 +326,7 @@ export function MonitorPage({
             Bag 回放
           </button>
         </div>
+        <NativePageActions />
       </header>
 
       <div className="monitor-panels-bar" role="tablist" aria-label="Monitor 仪表盘">

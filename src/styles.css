@@ -1676,11 +1676,6 @@ button.status-light:hover { border-color: #3b7d88; background: rgba(16, 38, 51, 
 body.native-page-body { min-width: 0; min-height: 0; }
 .app-shell.native-hosted-page { display: flex; flex-direction: column; }
 .native-hosted-page > .app-main-column { flex: 1 1 0; min-width: 0; min-height: 0; }
-.native-page-toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: #0a1721; font-size: 12px; }
-.native-page-toolbar > button { margin-left: auto; }
-.native-page-profile { min-width: 0; max-width: min(240px, 45vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.native-page-connected { color: #83d9c8; }
-.native-page-offline { color: #b8c7cf; }
 .native-workspace-host { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
 .native-workspace-placeholder { display: grid; align-content: center; justify-items: center; height: 100%; padding: 24px; text-align: center; }
 .native-workspace-placeholder > div { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -1693,3 +1688,38 @@ body.native-page-body { min-width: 0; min-height: 0; }
 .native-offline-toolbar select { width: auto; max-width: 50vw; }
 .native-offline-toolbar > span { flex: 1; min-width: 160px; color: var(--muted); }
 .native-offline-workspace > .native-workspace-error { flex-shrink: 0; }
+
+/* Compact window controls share the existing page header. */
+.native-window-header { min-width: 0; }
+.native-window-header > :first-child { min-width: 0; }
+.native-page-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; flex: 0 0 auto; min-width: 0; }
+.native-page-actions .native-window-icon, .native-window-connection .workspace-popover-toggle { position: relative; display: inline-flex; justify-content: center; align-items: center; width: 32px; height: 32px; min-width: 32px; padding: 6px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
+.native-page-actions .native-window-icon:hover:not(:disabled), .native-window-connection .workspace-popover-toggle:hover { color: #baf5eb; background: #15383a; border-color: #387773; }
+.native-page-actions .native-window-icon:focus-visible, .native-window-action-hint:focus-visible, .native-window-connection button:focus-visible { outline: 2px solid #44d6c5; outline-offset: 2px; }
+.native-page-actions .native-window-icon:disabled { opacity: .5; cursor: not-allowed; }
+.native-window-action-hint { position: relative; display: inline-flex; border-radius: 6px; }
+.native-window-lock { position: absolute; right: -1px; bottom: -1px; display: flex; background: #0a1721; border-radius: 3px; }
+.native-window-lock svg { width: 11px; height: 11px; }
+.native-window-tooltip { display: none; position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: max-content; max-width: min(280px, calc(100vw - 32px)); padding: 7px 10px; border: 1px solid #387773; border-radius: 6px; background: #10272f; color: #dcebf7; font-size: 12px; font-weight: normal; white-space: normal; overflow-wrap: anywhere; pointer-events: none; }
+.native-window-action-hint:hover .native-window-tooltip, .native-window-action-hint:focus-within .native-window-tooltip { display: block; }
+.native-window-connection.is-connected .workspace-popover-toggle { color: #70cdbd; }
+.native-window-connection.is-disconnected .workspace-popover-toggle { color: #efa76c; }
+.native-window-notice { max-width: min(240px, 32vw); color: #efb57d; font-size: 12px; overflow-wrap: anywhere; }
+.native-window-details { overflow-wrap: anywhere; }
+.native-window-header > .native-page-actions { align-self: center; }
+.native-hosted-page .native-window-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; height: auto; min-height: 54px; }
+.native-hosted-page .native-window-header > :first-child { flex: 1 1 180px; }
+.native-hosted-page .native-window-header > :first-child > :is(span,p) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) {
+  .native-hosted-page .native-window-header > :first-child > :is(span,p) { display: none; }
+  .native-hosted-page .native-window-header { gap: 8px; padding: 8px 12px; }
+  .native-hosted-page .native-window-header > :first-child { flex-basis: auto; }
+  .native-window-notice { max-width: 180px; }
+}
+
+.native-hosted-page .motion-workspace-tools { flex-wrap: wrap; }
+.native-hosted-page .motor-page-topic { min-width: 0; }
+.native-hosted-page .calibration-connection { flex-wrap: wrap; min-width: 0; }
+
+.native-hosted-page .app-toolbar.native-window-header { overflow: visible; }
+.native-hosted-page .app-toolbar.native-window-header .toolbar-actions { flex-wrap: wrap; }

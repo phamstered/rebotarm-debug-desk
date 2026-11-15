@@ -1,3 +1,4 @@
+import { NativePageActions } from "./NativePageActions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import {
@@ -194,7 +195,7 @@ export function GravityIdentificationPage({
 
   return (
     <main className="calibration-page gravity-id-page">
-      <header className="calibration-header">
+      <header className="calibration-header native-window-header">
         <div>
           <strong>重力辨识</strong>
           <span>/StartGravityID · FULL_ARM（stack #24）</span>
@@ -203,6 +204,7 @@ export function GravityIdentificationPage({
           <strong>SESSION</strong>
           <small>{statusText}{phase !== undefined ? ` · ${phaseLabel(phase)}` : ""}</small>
         </div>
+        <NativePageActions />
       </header>
 
       <div className="calibration-safety-banner" role="note">
