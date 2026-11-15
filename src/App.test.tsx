@@ -228,6 +228,56 @@ describe("App workflow", () => {
     }
   });
 
+  it("shows shared task banners once when embedded and restores them in detached or recovery windows", async () => {
+    const base = doubles.invoke.getMockImplementation()!, baseListen = doubles.listen.getMockImplementation()!;
+    const resize = globalThis.ResizeObserver;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    const workspaceListeners = new Set<(event: { payload: unknown }) => void>();
+    const page = { detached: false, ready: true, visible: true, busy_reason: "", recovery_required: false };
+    const snapshot = () => ({ selected: "status", pages: { status: { ...page } } });
+    doubles.listen.mockImplementation(async (event, listener) => {
+      if (event !== "workspace-state") return baseListen(event, listener);
+      workspaceListeners.add(listener);
+      return () => workspaceListeners.delete(listener);
+    });
+    doubles.invoke.mockImplementation((command, args) => {
+      if (command === "native_bridge_context") return Promise.resolve({ epoch: 9, connected: true, profile: defaultProfile, error: null });
+      if (command === "workspace_snapshot") return Promise.resolve(snapshot());
+      if (command === "native_observation_snapshot") return Promise.resolve({ epoch: 9, revision: 0, connected: true, entries: {} });
+      if (command === "native_task_snapshot") return Promise.resolve({ id: 1, epoch: 9, window: "page-status", command_id: "fixture", kind: "trajectory", phase: "running", message: "测试轨迹进度" });
+      if (command === "native_local_task_snapshot") return Promise.resolve({ id: 2, window: "page-handeye", kind: "compute", phase: "failed", message: "测试计算失败" });
+      if (command === "native_bag_operation_snapshot") return Promise.resolve([{ id: 3, window: "page-monitor", kind: "play", phase: "uncertain", message: "测试回放待核验" }]);
+      if (command === "native_collection_operation_snapshot") return Promise.resolve({ id: 4, action: "save_episode", phase: "uncertain", busy: true, message: "测试采集待核验" });
+      return base(command, args);
+    });
+    const main = render(<App />), child = render(<App hostedPage="status" />);
+    const labels = ["原生共享运动任务", "原生手眼任务", "原生 rosbag 操作", "原生采集操作"];
+    const assertCounts = async (count: number) => waitFor(() => {
+      for (const name of labels) expect(screen.getAllByRole("status", { name })).toHaveLength(count);
+      expect(within(main.container).getByRole("button", { name: "取消直接轨迹" })).toBeEnabled();
+    });
+    const publish = async () => act(async () => { workspaceListeners.forEach(listener => listener({ payload: snapshot() })); });
+    try {
+      await screen.findByRole("button", { name: "断开" });
+      await waitFor(() => expect(workspaceListeners.size).toBe(2));
+      await assertCounts(1);
+      expect(within(child.container).queryByRole("button", { name: "取消直接轨迹" })).toBeNull();
+      page.detached = true; await publish(); await assertCounts(2);
+      expect(within(child.container).getByRole("button", { name: "取消直接轨迹" })).toBeEnabled();
+      page.detached = false; await publish(); await assertCounts(1);
+      page.recovery_required = true; await publish(); await assertCounts(2);
+      expect(within(child.container).getByRole("status", { name: "原生手眼任务" })).toHaveTextContent("测试计算失败");
+      page.recovery_required = false; await publish(); await assertCounts(1);
+      expect(doubles.invoke.mock.calls.some(([command]) => ["start_session", "native_trajectory_cancel"].includes(command))).toBe(false);
+    } finally {
+      main.unmount(); child.unmount();
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      globalThis.ResizeObserver = resize;
+      doubles.invoke.mockImplementation(base); doubles.listen.mockImplementation(baseListen);
+    }
+  });
+
   it("restores a reloaded main window from the native connection without creating or stopping SSH", async () => {
     const base = doubles.invoke.getMockImplementation()!, resize = globalThis.ResizeObserver;
     Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{}, configurable:true});
