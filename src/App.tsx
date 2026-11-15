@@ -2008,7 +2008,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
       {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
-      {nativeDesktop() && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
+      {/* Embedded pages share the main window's banners; standalone/recovery windows need their own. */}
+      {nativeDesktop() && (!hostedPage || workspace.snapshot.pages[hostedPage]?.detached || workspace.snapshot.pages[hostedPage]?.recovery_required) && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>
