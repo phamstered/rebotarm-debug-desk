@@ -36,7 +36,7 @@ Robot View 支持可选的桌面物体几何检测与同帧三维框显示。确
 
 数据流概要：Topics / HardwareStatus / JointState **入站** → App；`joint_command` / `trajectory_command` **出站** → ROS（含 ACK）；断开时若电机命令流在运行，先请求 **DISABLE**。
 
-安装版由 Rust 原生会话持有 Bridge WebSocket；WebView 通过有界二进制拉取接收预览，并通过独立请求通道取得 ACK。连接与消费者代次会阻止旧会话数据进入新连接。九个功能页面可拆出独立窗口，复用同一连接、订阅和任务协调；完整范围与实际验证边界见 [多窗口实现记录](docs/multiwindow-implementation.md)。
+安装版由 Rust 原生会话持有 Bridge WebSocket；WebView 通过有界二进制拉取接收预览，并通过独立请求通道取得 ACK。连接与消费者代次会阻止旧会话数据进入新连接。八个功能页面可拆出独立窗口，复用同一连接、订阅和任务协调；完整范围与实际验证边界见 [多窗口实现记录](docs/multiwindow-implementation.md)。
 
 交互式分层图与标注数据流见用户文档 **[架构](https://phamstered.github.io/rebotarm-debug-desk/architecture)**（HTML 图，非 Mermaid）。源文件：[docs/architecture.md](docs/architecture.md)。
 
@@ -57,7 +57,6 @@ Bridge 只监听 Jetson 的 `127.0.0.1:8765`，不应直接开放到局域网。
 | Robot View（URDF） | [§3](docs/features.md#3-robot-viewurdf) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_3-robot-view-urdf) |
 | MIT 电机控制 | [§4](docs/features.md#4-mit-电机控制) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_4-mit-电机控制) |
 | TCP 拖拽轨迹 | [§5](docs/features.md#5-tcp-拖拽轨迹) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_5-tcp-拖拽轨迹) |
-| Joint4 标定 | [§6](docs/features.md#6-joint4-标定) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_6-joint4-标定) |
 | 重力辨识（Bridge/UI；stack #24 FULL_ARM；Jetson E2E pending） | [§8](docs/features.md#8-重力辨识) · [设计/实现说明](docs/gravity-identification.md) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/gravity-identification) |
 | 工具栏：rosbag / 诊断 / 布局 | [§7](docs/features.md#7-工具栏rosbag--诊断--布局) · [Pages](https://phamstered.github.io/rebotarm-debug-desk/features#_7-工具栏-rosbag-诊断-布局) |
 
@@ -169,7 +168,6 @@ node scripts/smoke-bridge.mjs 18765
 - TODO / 待办列表：[docs/todo.md](docs/todo.md)
 - 协议说明：[docs/protocol.md](docs/protocol.md)
 - 架构说明：[docs/architecture.md](docs/architecture.md)
-- Joint4 标定：[docs/joint4-calibration.md](docs/joint4-calibration.md)
 - 贡献 / Agent 规范：[AGENTS.md](AGENTS.md)
 
 ### Teleop 的 Graph / DDS 故障

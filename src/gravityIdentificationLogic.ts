@@ -69,7 +69,7 @@ export const PAYLOAD_MODE_REJECT_MESSAGE =
   "Rejecting PAYLOAD_SUBMODE: v1 only supports FULL_ARM_GRAVITY (use joint4_calibration_controller for payload)";
 
 export const PAYLOAD_MODE_UI_HINT =
-  "stack #24 v1 拒绝 PAYLOAD_SUBMODE。请打开 Joint4 标定（joint4_calibration_controller），勿在本页 Start。";
+  "stack #24 v1 拒绝 PAYLOAD_SUBMODE。本应用仅支持 FULL_ARM_GRAVITY。";
 
 export type GravityIdGoalForm = {
   jointMask: number;

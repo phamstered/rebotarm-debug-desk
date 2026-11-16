@@ -1,13 +1,16 @@
 //! Joint4's pose hold outlives the Trigger response. The Bridge owns the lease
 //! and service serialization; the desktop owns the invoking page and identity.
+#[cfg(test)]
 use super::{
     runtime::{Attachment, Runtime},
     tasks::Admission,
     transport::Transport,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
+#[cfg(test)]
 use std::{sync::Arc, time::Duration};
-use tauri::{AppHandle, Manager};
 
 pub struct State {
     pub capture_ready: bool,
@@ -79,6 +82,8 @@ pub fn capture_reply(v: &Value, request: &Value) -> bool {
         && v["message"].as_str().is_some_and(|s| s.len() <= 16384)
 }
 
+// Keep the old submission harness only for legacy recovery regression tests.
+#[cfg(test)]
 pub struct Job {
     pub attachment: Attachment,
     pub transport: Arc<Transport>,
@@ -87,11 +92,13 @@ pub struct Job {
     pub profile: Value,
 }
 
+#[cfg(test)]
 pub enum Prepared {
     Job(Job),
     Release(Value),
 }
 
+#[cfg(test)]
 impl Job {
     pub async fn run(self, hub: &Runtime) -> Result<Value, String> {
         if let Err(error)=hub.prepare_leased_record(self.admission.ticket,self.profile).await {
@@ -130,22 +137,7 @@ impl Job {
     }
 }
 
-pub async fn start(
-    app: AppHandle,
-    label: String,
-    hub: &Runtime,
-    profile: crate::ConnectionProfile,
-    action: String,
-    confirmation: Option<String>,
-) -> Result<Value, String> {
-    // Reservation and owner identity are captured before the first await. The
-    // detached worker handles any sent request even when the IPC future dies.
-    match hub.prepare_joint4(&label, &profile, &action, confirmation.as_deref())? {
-        Prepared::Release(reply) => Ok(reply),
-        Prepared::Job(job) => owned(async move { job.run(&app.state::<Runtime>()).await }).await,
-    }
-}
-
+#[cfg(test)]
 async fn owned<F>(work: F) -> Result<Value, String>
 where
     F: std::future::Future<Output = Result<Value, String>> + Send + 'static,

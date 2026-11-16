@@ -50,13 +50,11 @@ function EffortRow({
 
 export function GravityIdentificationPage({
   bridge,
-  onNavigateCalibration,
   onSessionActiveChange,
   connected = true,
 }: {
   bridge: BridgeClient;
   connected?: boolean;
-  onNavigateCalibration(): void;
   onSessionActiveChange?(active: boolean): void;
 }) {
   const [form, setForm] = useState<GravityIdGoalForm>(() => defaultGravityIdGoalForm());
@@ -214,9 +212,6 @@ export function GravityIdentificationPage({
             <span key={note} className="gravity-id-note-line">{note}</span>
           ))}
         </span>
-        <button type="button" className="ghost" onClick={onNavigateCalibration}>
-          Joint4 标定
-        </button>
       </div>
 
       <div className="calibration-notice gravity-id-bringup" role="note">
@@ -269,7 +264,7 @@ export function GravityIdentificationPage({
               onChange={(event) => updateForm("mode", Number(event.target.value))}
             >
               <option value={MODE_FULL_ARM_GRAVITY}>FULL_ARM_GRAVITY（默认）</option>
-              <option value={MODE_PAYLOAD_SUBMODE}>PAYLOAD_SUBMODE → Joint4</option>
+              <option value={MODE_PAYLOAD_SUBMODE}>PAYLOAD_SUBMODE（不支持）</option>
             </select>
           </label>
 
@@ -277,9 +272,6 @@ export function GravityIdentificationPage({
             <div className="gravity-id-payload-hint" role="status">
               <p>{PAYLOAD_MODE_UI_HINT}</p>
               <p className="gravity-id-note-line">与 stack 拒绝文案一致：v1 only supports FULL_ARM_GRAVITY。</p>
-              <button type="button" className="primary" onClick={onNavigateCalibration}>
-                打开 Joint4 标定
-              </button>
             </div>
           )}
 

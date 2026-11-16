@@ -277,7 +277,7 @@ rosbag 启动/停止及其运行期由 `session/bag_operation.rs` 的应用级 w
 
 Episode 采集状态也由 Rust 公共观察源调度，页面只读取有界快照；固定 SSH helper 的 status 路径只读，不创建文件或刷新元数据。查询退出不影响远端采集器。Episode 启动/保存/丢弃/结束另由应用级 worker 管理，通过一次性远端 journal 回执和新鲜状态完成核验；开始 Episode 后保留采集页迁移占用。同连接可接续保存，页面消失不丢弃已提交工作。Episode 桌面重启恢复通过单独的持久化查询票据/进程检查点接入；任意外部客户端的完整生命周期不由本桌面接管。
 
-多窗口开发分支的 Joint4 不再由 WebView IPC 直接调用 SSH Trigger；`joint4_task.rs` 在当前 Calibration 页面和连接身份校验后登记共享任务，应用 worker 发送能力门控的 Bridge 请求，原生看门狗续租/取消并验证终态。Begin 的姿态保持跨服务回复继续占用，Capture 作为同编号任务中的单个在途操作。Bridge 的 `joint4_calibration.cpp` 持有互斥服务调用、姿态租约和有界回执/终态记录，复用 Controller Registry 与底层独立反馈及 DISABLE 序列分配。服务未返回时不允许 Release 越过它；状态和硬件证据确认后才释放任务。桌面拒绝旧能力入口；开发分支尚未作为已发布的实机控制链路验收。
+Joint4 Calibration 的桌面页面及启动/导出 IPC 已移除。原生层仅保留旧任务状态、停止、终态核验及持久化恢复兼容；原有提交路径仅在测试构建中用于历史回归。旧窗口布局会丢弃 Calibration 项，窗口创建与迁移入口拒绝该页面。Bridge 的历史 Joint4 协议与 ROS Controller 未在本次移除中改变。
 
 
 共享外部活动准入由 `session/activity.rs` 解析已有 observations 的三个状态源，Tasks 在与任务/迁移互斥相同的临界区内检查；原生发送许可和 SSH 提交前复查。只复制 bag/collection 快照，不复制完整 Topics 等大对象，不增加 SSH 查询。此层不发出停止命令、不把外部活动收编成本桌面的任务；原有任务的进程回执及终态证据继续独立核验。远端状态是有时效的观察，不是所有 ROS 客户端共用的远端互斥锁，任意未登记 bag 进程和外部跨连接恢复仍属边界。
@@ -301,7 +301,7 @@ Motor 首条使能指令发送前，Rust 在阻塞工作线程持久化原连接
 
 ### Bridge 租约任务的桌面重启恢复
 
-Position（含动作组）、Pick、Gravity、直接 Trajectory 和 Joint4 共享 `leased_recovery` 持久化门禁。原生任务状态与真正写入 Bridge 的许可串行；提交前落盘及终态后清理在独立阻塞线程完成，不持有 Core/Tasks 锁。Joint4 的应用级 worker 与普通 Bridge IPC 均使用该入口，Capture 沿用原姿态任务记录。重启恢复仅保留原编号和来源，按已有查询协议核验终态；不恢复页面授权、任务续租或动作参数。Bridge 历史不可用时继续显示未知结果，普通空闲状态不能释放旧任务。
+Position（含动作组）、Pick、Gravity、直接 Trajectory 和 Joint4 共享 `leased_recovery` 持久化门禁。原生任务状态与真正写入 Bridge 的许可串行；提交前落盘及终态后清理在独立阻塞线程完成，不持有 Core/Tasks 锁。旧版 Joint4 记录也继续使用相同核验门禁，新版不再提供 Joint4 提交入口。重启恢复仅保留原编号和来源，按已有查询协议核验终态；不恢复页面授权、任务续租或动作参数。Bridge 历史不可用时继续显示未知结果，普通空闲状态不能释放旧任务。
 
 主 WebView 的重载恢复由 `useNativeMainRecovery` 在文档初始化时执行：读取 Runtime context，只在现有原生会话 connected 时调用无 port/profile 的 attach，读取 Topics 后再次核对 epoch 与 profile_revision，再恢复 UI。它不调用 `check_ssh`、`start_session` 或 `stop_session`，也不监听后续正常连接流程以免与用户主动连接竞争。恢复失败只释放自身 attachment，保留共享 transport 与其他消费者；原生进程重启后的离线行为不变。
 

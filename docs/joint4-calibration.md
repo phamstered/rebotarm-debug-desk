@@ -1,4 +1,6 @@
-# Joint4 多姿态标定操作指南
+# Joint4 多姿态标定操作指南（历史）
+
+> Joint4 Calibration 已从当前上位机移除。以下内容仅记录旧版行为，不再适用于当前应用；历史任务的停止与终态核验仍保留，已导出的报告不删除。
 
 适用于 **Rebotarm Debug Desk**（仓库 [`phamstered/rebotarm-debug-desk`](https://github.com/phamstered/rebotarm-debug-desk)）。
 

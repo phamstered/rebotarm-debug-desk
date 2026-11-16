@@ -114,7 +114,7 @@ impl Layout {
         if bytes.len() as u64 > MAX_BYTES {
             return Err("窗口布局文件过大".into());
         }
-        let layout: Self =
+        let mut layout: Self =
             serde_json::from_slice(bytes).map_err(|e| format!("窗口布局格式无效：{e}"))?;
         if layout.version != 1
             || layout
@@ -129,6 +129,9 @@ impl Layout {
         {
             return Err("窗口布局版本或坐标无效".into());
         }
+        // Retire only the removed page; preserve the user's other window layouts.
+        layout.pages.remove(&Page::Calibration);
+        if layout.selected == Page::Calibration { layout.selected = Page::Status; }
         Ok(layout)
     }
 }
@@ -277,6 +280,18 @@ mod tests {
         areas[0].area.width = f64::NAN;
         assert_eq!(g.restore(&areas, (640., 480.)).unwrap().outer.x, 1440.);
         assert!(g.restore(&[], (640., 480.)).is_none());
+    }
+    #[test]
+    fn retired_calibration_layout_is_removed_without_losing_other_pages() {
+        let original = serde_json::json!({"version":1,"selected":"calibration","main":null,
+            "pages":{"calibration":{"detached":true,"geometry":null},
+                     "handeye":{"detached":true,"geometry":geometry()}}});
+        let restored = Layout::decode(&serde_json::to_vec(&original).unwrap()).unwrap();
+        assert_eq!(restored.selected, Page::Status);
+        assert!(!restored.pages.contains_key(&Page::Calibration));
+        assert_eq!(restored.pages[&Page::Handeye].geometry, Some(geometry()));
+        assert!(restored.pages[&Page::Handeye].detached);
+        assert_eq!(Layout::decode(&serde_json::to_vec(&restored).unwrap()).unwrap(), restored);
     }
     #[test]
     fn layout_file_roundtrips_only_preferences_and_rejects_untrusted_or_future_state() {

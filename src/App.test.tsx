@@ -228,7 +228,7 @@ describe("App workflow", () => {
     }
   });
 
-  it.each(["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "calibration", "gravity"] as const)("places %s window controls inside the existing page header without a duplicate toolbar", async page => {
+  it.each(["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "gravity"] as const)("places %s window controls inside the existing page header without a duplicate toolbar", async page => {
     const base = doubles.invoke.getMockImplementation()!, baseListen = doubles.listen.getMockImplementation()!, resize = globalThis.ResizeObserver;
     let detached = false;
     const listeners = new Set<(event: { payload: unknown }) => void>();
@@ -1122,22 +1122,18 @@ describe("App workflow", () => {
     expect(screen.getByLabelText("Topic JSON").querySelector('[data-monitor-path="actual.positions"]')).toBeInTheDocument();
   });
 
-  it("opens Joint4 Calibration from the collapsible main toolbar", async () => {
+  it("retires Calibration navigation and restores an old preference to Topics", async () => {
+    localStorage.setItem("robot-console-page", "calibration");
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await user.click(screen.getByRole("button", { name: "Joint4 Calibration" }));
-
-    expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
-    expect(doubles.request).toHaveBeenCalledWith({
-      op: "subscribe",
-      topic: "/joint4_calibration_controller/status",
-      type: "std_msgs/msg/Float64MultiArray",
-    });
-
-    await user.click(screen.getByRole("button", { name: "完全收起主工具栏" }));
-    await user.click(screen.getByRole("button", { name: "展开主工具栏" }));
-    expect(screen.getByRole("navigation", { name: "主工具栏" })).toHaveClass("expanded");
+    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Joint4 Calibration" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "手眼标定" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "重力辨识" })).toBeVisible();
+    expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({
+      op: "subscribe", topic: "/joint4_calibration_controller/status",
+    }));
   });
 
   it("opens Motor from the left navigation and restores Dashboard independently", async () => {
@@ -1424,19 +1420,6 @@ describe("App workflow", () => {
     await user.type(interval, "45");
     await user.click(within(settingsDialog).getByRole("button", { name: "保存设置" }));
     expect(JSON.parse(localStorage.getItem("robot-console-toolbar-settings")!)).toMatchObject({ refreshIntervalSeconds: 45 });
-  });
-
-  it("uses only the left navigation to enter and leave Calibration", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await screen.findByText("joint_state_broadcaster");
-
-    await user.click(screen.getByRole("button", { name: "Joint4 Calibration" }));
-    expect(await screen.findByText("多姿态重力与 camera_link 负载标定")).toBeVisible();
-    expect(screen.queryByRole("group", { name: "页面切换" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Topics" }));
-    expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
   it("adds numeric fields from Topic Inspector into Monitor panels", async () => {

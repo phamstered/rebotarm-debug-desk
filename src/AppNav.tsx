@@ -46,7 +46,6 @@ const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () =
   { page: "collection", label: "数据采集", title: "LeRobot 数据采集", icon: CollectionIcon },
   { page: "handeye", label: "手眼标定", title: "Hand-eye Calibration", icon: CalibrationIcon },
   { page: "motor", label: "Motor", title: "Motor", icon: MotorIcon },
-  { page: "calibration", label: "Calibration", title: "Joint4 Calibration", icon: CalibrationIcon },
   { page: "gravity", label: "重力辨识", title: "重力辨识 /StartGravityID", icon: GravityIcon },
 ];
 
@@ -69,7 +68,7 @@ export function AppNav({ page, expanded, iconRail = false, rosReady = true, deta
             const gated = isRosGatedPage(item.page);
             const reason = gated ? rosGatedNavReason(item.page as RosGatedPage, rosReady) : "";
             const disabled = Boolean(reason);
-            const ariaLabel = item.page === "calibration" ? "Joint4 Calibration" : item.page === "gravity" ? "重力辨识" : item.label;
+            const ariaLabel = item.page === "gravity" ? "重力辨识" : item.label;
             return (
               <div key={item.page} className="app-nav-item">
                 <button

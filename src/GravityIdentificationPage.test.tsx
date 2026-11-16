@@ -7,7 +7,6 @@ const doubles = vi.hoisted(() => ({
   request: vi.fn().mockResolvedValue({ op: "gravity_id_send_goal_ack", accepted: true }),
   listener: undefined as ((message: unknown) => void) | undefined,
   onSession: vi.fn(),
-  onCalib: vi.fn(),
 }));
 
 const bridge = {
@@ -32,7 +31,6 @@ describe("GravityIdentificationPage", () => {
     render(
       <GravityIdentificationPage
         bridge={bridge}
-        onNavigateCalibration={doubles.onCalib}
         onSessionActiveChange={doubles.onSession}
       />,
     );
@@ -55,7 +53,6 @@ describe("GravityIdentificationPage", () => {
     render(
       <GravityIdentificationPage
         bridge={bridge}
-        onNavigateCalibration={doubles.onCalib}
         onSessionActiveChange={doubles.onSession}
       />,
     );
@@ -105,28 +102,26 @@ describe("GravityIdentificationPage", () => {
     expect(screen.getByText("/tmp/g.yaml")).toBeVisible();
   });
 
-  it("links PAYLOAD mode to Joint4 Calibration", async () => {
+  it("rejects unsupported PAYLOAD mode without a removed Calibration shortcut", async () => {
     const user = userEvent.setup();
     render(
       <GravityIdentificationPage
         bridge={bridge}
-        onNavigateCalibration={doubles.onCalib}
         onSessionActiveChange={doubles.onSession}
       />,
     );
     await user.selectOptions(screen.getByLabelText("辨识模式"), "1");
-    expect(screen.getByRole("button", { name: "打开 Joint4 标定" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Joint4/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
     expect(screen.getAllByText(/v1 only supports FULL_ARM|拒绝 PAYLOAD_SUBMODE/).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: "打开 Joint4 标定" }));
-    expect(doubles.onCalib).toHaveBeenCalled();
+    expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({ op: "gravity_id_send_goal" }));
   });
 });
 
 
 it("ignores an old task result and does not release on early DONE feedback", async () => {
   const user=userEvent.setup();
-  render(<GravityIdentificationPage bridge={bridge} onNavigateCalibration={doubles.onCalib} />);
+  render(<GravityIdentificationPage bridge={bridge} />);
   await user.click(screen.getByRole("checkbox",{name:"安全确认"}));
   await user.click(screen.getByRole("button",{name:"Start"}));
   act(() => doubles.listener?.({op:"gravity_id_result",command_id:"old",terminal:true,task_phase:"succeeded",success:true}));
@@ -145,11 +140,11 @@ it("keeps a matching pending task abortable across connection loss without late 
     if(message.op==="gravity_id_send_goal") return new Promise(done => {resolve=done;});
     return {op:message.op,busy:false};
   });
-  const view=render(<GravityIdentificationPage connected bridge={bridge} onNavigateCalibration={doubles.onCalib} />);
+  const view=render(<GravityIdentificationPage connected bridge={bridge} />);
   await user.click(screen.getByRole("checkbox",{name:"安全确认"}));
   await user.click(screen.getByRole("button",{name:"Start"}));
   act(() => doubles.listener?.({op:"disconnected"}));
-  view.rerender(<GravityIdentificationPage connected={false} bridge={bridge} onNavigateCalibration={doubles.onCalib} />);
+  view.rerender(<GravityIdentificationPage connected={false} bridge={bridge} />);
   await act(async () => resolve({op:"gravity_id_send_goal_ack",accepted:true,command_id:currentCommand()}));
   expect(screen.getByRole("button",{name:"Start"})).toBeDisabled();
   expect(screen.getByText("连接中断，停止未确认")).toBeVisible();

@@ -38,7 +38,6 @@ import { AppNav } from "./AppNav";
 import { HandeyeCalibrationPage, useHandeyeSession } from "./HandeyeCalibrationPage";
 import { DataCollectionPage } from "./DataCollectionPage";
 import type { AppPage } from "./AppNav";
-import { Joint4CalibrationPage } from "./Joint4CalibrationPage";
 import { GravityIdentificationPage } from "./GravityIdentificationPage";
 import { MotorPage } from "./MotorPage";
 import { MonitorPage } from "./MonitorPage";
@@ -1985,8 +1984,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const motionWarning = typeof faultCode === "number" && faultCode !== 0 ? `硬件故障 ${faultCode}` : agentError || (!rosReady ? "ROS 反馈未就绪" : "") ||
     (!controllerStatusFresh(rosControl) ? "Controller 状态待确认" : "") || positionMotion.reason || captureError ||
     (clockSync.state !== "synchronized" ? `时钟：${clockSync.message || clockSync.state}` : "");
-  const calibrationControllerState = controllerStatusFresh(rosControl) ? rosControl!.controllers
-    .find((controller) => controller.name === "joint4_calibration_controller")?.state : undefined;
+
 
   return (
     <NativePageActionsContext.Provider value={hostedPage ? { page: hostedPage, profileName: profile.host, state: workspace.snapshot.pages[hostedPage], connected: stage === "connected", busyReason: migrationBusyReason, onAction: workspace.action } : null}>
@@ -2057,17 +2055,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         <GravityIdentificationPage
           bridge={bridge}
           connected={stage === "connected"}
-          onNavigateCalibration={() => setAppPage("calibration")}
           onSessionActiveChange={setGravitySessionActive}
-        />
-      ) : appPage === "calibration" ? (
-        <Joint4CalibrationPage
-          profile={profile}
-          connected={stage === "connected"}
-          onBusyChange={setPageBusy}
-          bridge={bridge}
-          controllerState={calibrationControllerState}
-          onRefreshControllers={() => void refreshRosControllers()}
         />
       ) : appPage === "monitor" ? (
         <MonitorPage
