@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { controllerStatusFresh } from "./controllersInfoLogic";
 import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
@@ -92,7 +93,9 @@ function StatusCard({
         <div className="status-card-actions" aria-label={`${card.title} 操作`}>
           {card.actions.map((action) => (
             <div key={action.id} className="status-card-action-wrap">
-              <button
+              {action.kind === "refresh" ? <IconButton icon="refresh" label={action.label}
+                disabled={action.disabled} title={action.disabledReason || action.label}
+                onClick={() => onAction?.(action, card)} /> : <ActionButton
                 type="button"
                 className={`status-card-action ${action.kind}`}
                 disabled={action.disabled}
@@ -100,7 +103,7 @@ function StatusCard({
                 onClick={() => onAction?.(action, card)}
               >
                 {action.label}
-              </button>
+              </ActionButton>}
               {action.disabled && action.disabledReason && (
                 <p className="status-disabled-hint" data-testid={`status-disabled-${card.id}-${action.id}`}>
                   {action.disabledReason}
@@ -307,19 +310,19 @@ export function StatusPage({
                           onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}</button>
                       ))}
                     </div>
-                    <button type="button" className="status-quick-action primary" disabled={targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
-                      onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</button>
+                    <ActionButton type="button" className="status-quick-action primary" disabled={targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
+                      onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
                   <p className="status-mode-explanation">目标：{modeNames[targetMode]} · {activeMode === "teaching" ? "退出示教前先支撑机械臂与物体，解除输出后再切换。" : "切换流程：安全停止旧模式 → 清理旧进程 → 启动并核验。"}</p>
                   <div className="status-mode-stops">
-                    <div><button type="button" className="status-quick-action stop" disabled={quickActions.find((a) => a.id === "stop")?.disabled}
-                      onClick={() => { if (activeMode === "teaching" || armMode?.teachingRunning) { setSupported(false); setConfirmDisable(true); } else onQuickAction?.("stop"); }}>{activeMode === "teaching" || armMode?.teachingRunning ? "支撑并退出示教" : "回零并退出控制"}</button>
+                    <div><ActionButton type="button" className="status-quick-action stop" disabled={quickActions.find((a) => a.id === "stop")?.disabled}
+                      onClick={() => { if (activeMode === "teaching" || armMode?.teachingRunning) { setSupported(false); setConfirmDisable(true); } else onQuickAction?.("stop"); }}>{activeMode === "teaching" || armMode?.teachingRunning ? "支撑并退出示教" : "回零并退出控制"}</ActionButton>
                       <p>{activeMode === "teaching" || armMode?.teachingRunning ? "不会主动回零；确认支撑后关闭输出。" : "回到零位，确认输出关闭后退出。不是暂停或保持。"}</p></div>
                     <details><summary>直接关闭输出…</summary>
                       <p>不回零，机械臂与夹爪会失去电机输出；先在现场支撑。</p>
-                      <button type="button" className="status-quick-action disable-stop" disabled={quickActions.find((a) => a.id === "disable-stop")?.disabled}
-                        onClick={() => { setSupported(false); setConfirmDisable(true); }}>直接解除电机输出</button>
+                      <ActionButton type="button" className="status-quick-action disable-stop" disabled={quickActions.find((a) => a.id === "disable-stop")?.disabled}
+                        onClick={() => { setSupported(false); setConfirmDisable(true); }}>直接解除电机输出</ActionButton>
                     </details>
                   </div>
                   {actionNotice && <output className="status-action-notice" role="status">{actionNotice}</output>}
@@ -327,7 +330,7 @@ export function StatusPage({
                     <strong>六轴与夹爪手动示教</strong>
                     <p>六轴保留重力补偿与阻尼；夹爪不主动保持位置，可用手拨动。请托住夹爪中的物体。</p>
                     <div className="teaching-gripper-actions">
-                      <button disabled={Boolean(actionBusy) || !modeConfirmed || !onSaveTeachingPose} onClick={onSaveTeachingPose}>保存当前姿态</button>
+                      <ActionButton disabled={Boolean(actionBusy) || !modeConfirmed || !onSaveTeachingPose} onClick={onSaveTeachingPose}>保存当前姿态</ActionButton>
                     </div>
                     <p>保存同一帧的六轴与夹爪实测姿态，可在 Motion 姿态库查看；松手不保证机械臂保持原位。</p>
                   </section>}
@@ -348,7 +351,7 @@ export function StatusPage({
                     highlighted={highlightCardId === card.id && selectedTab === zone.id}
                     onAction={onCardAction}
                     compact={zone.id === "connection"}
-                  />
+                 />
                 ))}
               </div>
             </>
@@ -377,7 +380,7 @@ export function StatusPage({
         <header className="toolbar-modal-title"><strong>进入拖动示教</strong></header>
         <div className="toolbar-modal-content"><p>先按原模式安全停止，再启用六轴零位置刚度、阻尼与重力补偿。机械臂可能因模型误差或负载变化漂移；夹爪释放主动保持，可用手拨动；请托住夹爪中的物体。</p>
           <label className="safety-check"><input type="checkbox" checked={supported} onChange={(e) => setSupported(e.target.checked)} />已支撑机械臂与物体，运动区域安全，允许切换为柔顺模式</label></div>
-        <footer className="toolbar-modal-actions"><button onClick={() => setConfirmTeaching(false)}>取消</button><button disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmTeaching(false); onQuickAction?.("teaching"); }}>确认进入拖动示教</button></footer>
+        <footer className="toolbar-modal-actions"><ActionButton onClick={() => setConfirmTeaching(false)}>取消</ActionButton><ActionButton disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmTeaching(false); onQuickAction?.("teaching"); }}>确认进入拖动示教</ActionButton></footer>
       </section></div>}
       {confirmDisable && <div className="modal-backdrop">
         <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="解除电机输出确认">
@@ -387,8 +390,8 @@ export function StatusPage({
             <label className="safety-check"><input type="checkbox" checked={supported} onChange={(event) => setSupported(event.target.checked)} />机械臂已支撑，可以解除输出</label>
           </div>
           <footer className="toolbar-modal-actions">
-            <button type="button" onClick={() => setConfirmDisable(false)}>取消</button>
-            <button type="button" disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmDisable(false); onQuickAction?.("disable-stop"); }}>确认 DISABLE 并停止</button>
+            <ActionButton type="button" onClick={() => setConfirmDisable(false)}>取消</ActionButton>
+            <ActionButton type="button" disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmDisable(false); onQuickAction?.("disable-stop"); }}>确认 DISABLE 并停止</ActionButton>
           </footer>
         </section>
       </div>}

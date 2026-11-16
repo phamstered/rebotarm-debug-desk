@@ -1,3 +1,4 @@
+import { ActionIcon } from "./ActionButton";
 import { memo, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { RosImagePreview } from "./RosImagePreview";
@@ -15,17 +16,6 @@ type Props = {
   empty: string;
   details?: string;
 };
-
-function ImageToolIcon({ name }: { name: "fit" | "minus" | "plus" | "expand" | "close" }) {
-  const paths = {
-    fit: "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 8h8v8H8z",
-    minus: "M5 12h14",
-    plus: "M5 12h14M12 5v14",
-    expand: "M8 3H3v5m0-5 6 6m7-6h5v5m0-5-6 6M3 16v5h5m-5 0 6-6m12 1v5h-5m5 0-6-6",
-    close: "m6 6 12 12M18 6 6 18",
-  };
-  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={paths[name]} /></svg>;
-}
 
 // Source-key remount resets inspection transforms without resetting on every RGB frame.
 export const HandeyeImageViewer = memo(function HandeyeImageViewer(
@@ -185,7 +175,7 @@ function ImageViewport({
       aria-label="图片查看工具"
     >
       <button aria-label="适应窗口" title="适应窗口（0 / F）" disabled={!ready} onClick={fit}>
-        <ImageToolIcon name="fit" />
+        <ActionIcon name="fit" />
       </button>
       <button aria-label="原始尺寸" title="原始尺寸（1）" disabled={!ready} onClick={() => resizeZoom(1)}>
         <span aria-hidden="true">1:1</span>
@@ -196,7 +186,7 @@ function ImageViewport({
         disabled={!ready}
         onClick={() => resizeZoom(scale / 1.25)}
       >
-        <ImageToolIcon name="minus" />
+        <ActionIcon name="minus" />
       </button>
       <output aria-label="图片缩放比例">
         {ready ? `${Math.round(scale * 100)}%` : "—"}
@@ -207,11 +197,11 @@ function ImageViewport({
         disabled={!ready}
         onClick={() => resizeZoom(scale * 1.25)}
       >
-        <ImageToolIcon name="plus" />
+        <ActionIcon name="plus" />
       </button>
       {expanded ? (
         <button aria-label="关闭大图 · Esc" title="关闭大图（Esc）" ref={closeButton} onClick={() => setExpanded(false)}>
-          <ImageToolIcon name="close" />
+          <ActionIcon name="close" />
         </button>
       ) : (
         <button
@@ -221,7 +211,7 @@ function ImageViewport({
           disabled={!ready}
           onClick={() => setExpanded(true)}
         >
-          <ImageToolIcon name="expand" />
+          <ActionIcon name="expand" />
         </button>
       )}
     </div>
@@ -304,7 +294,7 @@ function ImageViewport({
                 setImageError(false);
               }}
               onError={() => setImageError(true)}
-            />
+           />
           ) : null}
         </div>
         {!ready && (

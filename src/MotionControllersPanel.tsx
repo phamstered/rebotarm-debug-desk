@@ -1,3 +1,4 @@
+import { IconButton, ActionButton } from "./ActionButton";
 import { useEffect, useState } from "react";
 import { controllerStatusFresh } from "./controllersInfoLogic";
 import { ControllerList } from "./ControllerList";
@@ -64,14 +65,12 @@ export function MotionControllersPanel({
     <section className="motion-controllers-panel" aria-label="Controller 管理">
       <header>
         <h2>Controller 管理</h2>
-        <button
+        <IconButton icon="refresh" label="刷新 Controllers" busy={refreshing}
           type="button"
           aria-busy={refreshing}
           disabled={Boolean(action) || refreshing || Boolean(disabledReason)}
           onClick={onRefresh}
-        >
-          刷新 Controllers
-        </button>
+        />
       </header>
       {disabledReason && (
         <p className="controller-disabled-reason">{disabledReason}</p>
@@ -103,7 +102,7 @@ export function MotionControllersPanel({
                 ? "仅 active/inactive 状态允许切换"
                 : "");
           return (
-            <button
+            <ActionButton
               type="button"
               disabled={Boolean(why)}
               title={why || undefined}
@@ -117,20 +116,20 @@ export function MotionControllersPanel({
                   : kind === "activate"
                     ? "Activate"
                     : "Deactivate"}
-            </button>
+            </ActionButton>
           );
         }}
-      />
+     />
       {pending && active && (
         <ModalShell
           title={`${pending.action === "activate" ? "激活" : "停用"} Controller`}
           onClose={() => setPending(null)}
           actions={
             <>
-              <button type="button" autoFocus onClick={() => setPending(null)}>
+              <ActionButton type="button" autoFocus onClick={() => setPending(null)}>
                 取消
-              </button>
-              <button
+              </ActionButton>
+              <ActionButton
                 type="button"
                 disabled={Boolean(confirmBlock)}
                 onClick={() => {
@@ -140,7 +139,7 @@ export function MotionControllersPanel({
                 }}
               >
                 {pending.action === "activate" ? "确认激活" : "确认停用"}
-              </button>
+              </ActionButton>
             </>
           }
         >

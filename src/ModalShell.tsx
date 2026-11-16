@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import { createPortal } from "react-dom";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
@@ -54,7 +55,7 @@ export function ModalShell({ title, onClose, children, actions }: ModalShellProp
 
   return createPortal(<div className="modal-backdrop">
     <section ref={dialog} className="toolbar-modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
-      <div className="toolbar-modal-title"><strong id={titleId}>{title}</strong><button type="button" aria-label={`关闭${title}`} onClick={onClose}>×</button></div>
+      <div className="toolbar-modal-title"><strong id={titleId}>{title}</strong><IconButton icon="close" label={`关闭${title}`} type="button" onClick={onClose} /></div>
       <div className="toolbar-modal-content">{children}</div>
       <div className="toolbar-modal-actions">{actions}</div>
     </section>

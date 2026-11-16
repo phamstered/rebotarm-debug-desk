@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
@@ -249,7 +250,7 @@ export function GravityIdentificationPage({
                     next[index] = event.target.checked;
                     updateForm("jointMask", jointMaskFromBits(next));
                   }}
-                />
+               />
                 {label}
               </label>
             ))}
@@ -327,17 +328,17 @@ export function GravityIdentificationPage({
               disabled={running}
               aria-label="安全确认"
               onChange={(e) => setArmed(e.target.checked)}
-            />
+           />
             我已确认机械臂周围安全，允许发送 GravityIdentification Goal（ARMED）
           </label>
 
           <div className="control-actions gravity-id-actions">
-            <button type="button" className="primary" disabled={!startAllowed || isPayloadModeBlocked(form.mode)} onClick={() => void start()}>
+            <ActionButton type="button" className="primary" disabled={!startAllowed || isPayloadModeBlocked(form.mode)} onClick={() => void start()}>
               {busy === "start" ? "发送中…" : "Start"}
-            </button>
-            <button type="button" className="danger" disabled={!abortAllowed && busy !== "abort"} onClick={() => void abort()}>
+            </ActionButton>
+            <ActionButton type="button" className="danger" disabled={!abortAllowed && busy !== "abort"} onClick={() => void abort()}>
               {busy === "abort" ? "中止中…" : "Abort"}
-            </button>
+            </ActionButton>
           </div>
           {isPayloadModeBlocked(form.mode) && (
             <small className="safety-note" role="status">{PAYLOAD_MODE_UI_HINT}</small>

@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import type { ReactNode } from "react";
 import { WorkspacePopover } from "./WorkspaceMenu";
@@ -27,10 +28,10 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
     <header className="motion-workspace-header native-window-header">
       <div className="motion-workspace-navigation">
         {!compact && <strong>Motion</strong>}
-        {!compact && <button type="button" className="toolbar-action" aria-expanded={controllersOpen}
+        {!compact && <ActionButton type="button" className="toolbar-action" aria-expanded={controllersOpen}
           aria-controls="motion-controllers" onClick={onToggleControllers}>
           {controllersOpen ? "收起 Controllers" : "展开 Controllers"}
-        </button>}
+        </ActionButton>}
         <div role="tablist" aria-label="Motion 视图" className="center-tab-list">
           <button type="button" role="tab" aria-selected={tab === "robot"} aria-controls="motion-robot"
             className={tab === "robot" ? "active" : ""} onClick={() => onTabChange("robot")}>Robot View</button>
@@ -45,8 +46,8 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
       {compact ? <div className="motion-workspace-tools">
         {indicators}
         <WorkspacePopover active={active} label="连接与运动状态" indicator={connectionLabel ?? "连接与状态"}>{connection}<div className="motion-readiness" aria-label="运动就绪状态">{readiness}</div></WorkspacePopover>
-        <WorkspacePopover active={active} label="面板"><button type="button" aria-expanded={controllersOpen && !focusMode} onClick={()=>{if(focusMode){onToggleFocus?.();if(!controllersOpen)onToggleControllers();}else onToggleControllers();}}>{controllersOpen && !focusMode ? "收起 Controllers" : "展开 Controllers"}</button></WorkspacePopover>
-        <button type="button" className="toolbar-action" aria-pressed={focusMode} onClick={onToggleFocus}>{focusMode ? "退出专注" : "专注模式"}</button>
+        <WorkspacePopover active={active} label="面板"><ActionButton type="button" aria-expanded={controllersOpen && !focusMode} onClick={()=>{if(focusMode){onToggleFocus?.();if(!controllersOpen)onToggleControllers();}else onToggleControllers();}}>{controllersOpen && !focusMode ? "收起 Controllers" : "展开 Controllers"}</ActionButton></WorkspacePopover>
+        <ActionButton type="button" className="toolbar-action" aria-pressed={focusMode} onClick={onToggleFocus}>{focusMode ? "退出专注" : "专注模式"}</ActionButton>
         <WorkspacePopover active={active} label="更多工具" indicator="⋯">{tools}</WorkspacePopover>
       </div> : <div className="motion-readiness" aria-label="运动就绪状态">{readiness}</div>}
       <NativePageActions />

@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import {
   useEffect,
   useRef,
@@ -1128,12 +1129,12 @@ function Editor({
       {selectionMenu.menu}
       {onBack && (
         <div className="motion-offline-back">
-          <button
+          <ActionButton
             disabled={working || saving}
             onClick={() => requestNavigate({ kind: "back" })}
           >
             返回连接
-          </button>
+          </ActionButton>
         </div>
       )}
       {(error || notice.includes("失败")) && (
@@ -1145,16 +1146,16 @@ function Editor({
         <MotionGroupDialog title="未保存修改" onClose={() => setPending(null)}>
           <p>当前动作组有未保存修改。保存成功后才会切换。</p>
           <footer>
-            <button
+            <ActionButton
               disabled={!!writeReason || working || saving}
               onClick={() => void save(pending)}
             >
               保存并切换
-            </button>
-            <button disabled={working} onClick={() => navigate(pending, true)}>
+            </ActionButton>
+            <ActionButton disabled={working} onClick={() => navigate(pending, true)}>
               放弃并切换
-            </button>
-            <button onClick={() => setPending(null)}>继续编辑</button>
+            </ActionButton>
+            <ActionButton onClick={() => setPending(null)}>继续编辑</ActionButton>
           </footer>
         </MotionGroupDialog>
       )}
@@ -1178,11 +1179,11 @@ function Editor({
                 }
               : undefined
           }
-        />
+       />
       )}
       {compact && (
         <div className="motion-editor-viewbar">
-          <button
+          <ActionButton
             type="button"
             aria-pressed={resourcesVisible}
             onClick={() => {
@@ -1193,7 +1194,7 @@ function Editor({
             }}
           >
             资源库
-          </button>
+          </ActionButton>
           <div role="group" aria-label="预览与时间轴布局">
             {(
               [
@@ -1212,7 +1213,7 @@ function Editor({
               </button>
             ))}
           </div>
-          <button
+          <ActionButton
             type="button"
             aria-pressed={inspectorVisible}
             onClick={() => {
@@ -1221,7 +1222,7 @@ function Editor({
             }}
           >
             属性
-          </button>
+          </ActionButton>
           {selectionMenu.trigger}
         </div>
       )}
@@ -1259,12 +1260,12 @@ function Editor({
                 placeholder="搜索名称…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-              />
+             />
             </>
           )}
           <section hidden={compact && resourceTab !== "groups"}>
             <h3>动作组</h3>
-            <button
+            <ActionButton
               aria-label="新建动作组"
               className="motion-primary"
               disabled={
@@ -1276,7 +1277,7 @@ function Editor({
               onClick={() => requestChoose("new")}
             >
               ＋ 新建动作组
-            </button>
+            </ActionButton>
             <div className="motion-group-library">
               {groups
                 .filter(
@@ -1360,7 +1361,7 @@ function Editor({
                         p.positions,
                         p.gripperPosition,
                       )}
-                    />
+                   />
                     <span>{p.name}</span>
                   </button>
                 ))}
@@ -1375,7 +1376,7 @@ function Editor({
             axis="x"
             panel=".motion-groups-list"
             container=".motion-groups-layout"
-          />
+         />
         )}
         <main className="motion-group-editor">
           <header className="motion-groups-header">
@@ -1391,20 +1392,17 @@ function Editor({
             </div>
             <div className="motion-groups-actions">
               {compact && (
-                <button
+                <IconButton icon="more" label="动作组操作菜单"
                   type="button"
                   className="workspace-more"
-                  aria-label="动作组操作菜单"
                   disabled={!draft}
                   onClick={(e) => {
                     setMenuTarget({ kind: "group", id: draft!.id });
                     selectionMenu.onContextMenu(e);
                   }}
-                >
-                  ⋯
-                </button>
+                />
               )}
-              <button
+              <IconButton icon="save" label="保存动作组" busy={saving}
                 disabled={
                   !draft ||
                   !!writeReason ||
@@ -1415,11 +1413,9 @@ function Editor({
                 }
                 onClick={() => void save()}
                 title="保存动作组 · ⌘/Ctrl+S"
-                aria-label="保存动作组"
-              >
-                {compact ? "保存" : "保存动作组"}
-              </button>
-              <button
+
+              />
+              <IconButton icon="undo" label="撤销"
                 disabled={!history.past.length || working || editingLocked}
                 onClick={() =>
                   setGroupEditorHistory((c) => ({
@@ -1429,10 +1425,8 @@ function Editor({
                     future: c.present ? [c.present, ...c.future] : c.future,
                   }))
                 }
-              >
-                撤销
-              </button>
-              <button
+              />
+              <IconButton icon="redo" label="重做"
                 disabled={!history.future.length || working || editingLocked}
                 onClick={() =>
                   setGroupEditorHistory((c) => ({
@@ -1442,9 +1436,7 @@ function Editor({
                     future: c.future.slice(1),
                   }))
                 }
-              >
-                重做
-              </button>
+              />
             </div>
           </header>
           <section className="motion-group-preview" aria-label="本地姿态预览">
@@ -1479,7 +1471,7 @@ function Editor({
                             pose?.positions,
                             pose?.gripperPosition,
                           )}
-                        />
+                       />
                         <span className="motion-preview-caption">
                           {track.name} ·{" "}
                           {pose
@@ -1497,23 +1489,19 @@ function Editor({
               </div>
             </div>
             <div className="motion-preview-controls">
-              <button
+              <IconButton icon={playing ? "pause" : "play"} label={playing ? "暂停预览" : "播放预览"}
                 disabled={!draft?.steps.length || motion.busy}
                 onClick={() => {
                   if (playhead >= displayTotal) setPlayhead(0);
                   setPlaying(!playing);
                 }}
-              >
-                {playing ? "暂停预览" : "播放预览"}
-              </button>
-              <button
+              />
+              <IconButton icon="reset" label="回到开始"
                 onClick={() => {
                   setPlaying(false);
                   setPlayhead(0);
                 }}
-              >
-                回到开始
-              </button>
+              />
               <strong>本地预览 · {seconds(playhead)}</strong>
               <input
                 aria-label="预览播放头"
@@ -1526,7 +1514,7 @@ function Editor({
                   setPlaying(false);
                   setPlayhead(Number(e.target.value));
                 }}
-              />
+             />
               <select
                 aria-label="预览速度"
                 value={speed}
@@ -1545,7 +1533,7 @@ function Editor({
             axis="y"
             panel=".motion-group-preview"
             container=".motion-group-editor"
-          />
+         />
           <section className="motion-timeline-panel" aria-label="动作块时间轴">
             <div className="motion-group-zoom">
               <strong>时间轴</strong>
@@ -1555,15 +1543,15 @@ function Editor({
                   label="添加与轨道"
                 >
                   {" "}
-                  <button
+                  <ActionButton
                     disabled={
                       !draft || editingLocked || draft.steps.length >= 100
                     }
                     onClick={() => setPicker("insert")}
                   >
                     ＋ Pose
-                  </button>
-                  <button
+                  </ActionButton>
+                  <ActionButton
                     disabled={
                       !selected ||
                       editingLocked ||
@@ -1574,8 +1562,8 @@ function Editor({
                     onClick={() => addCaptureAt(selectedStep)}
                   >
                     ＋ Action
-                  </button>
-                  <button
+                  </ActionButton>
+                  <ActionButton
                     disabled={
                       !draft ||
                       editingLocked ||
@@ -1585,34 +1573,34 @@ function Editor({
                     onClick={() => setSyncEditor("new")}
                   >
                     同步点
-                  </button>
-                  <button
+                  </ActionButton>
+                  <ActionButton
                     disabled={!draft || editingLocked}
                     onClick={() => setTrackEditor(true)}
                   >
                     设备轨道
-                  </button>
+                  </ActionButton>
                   <label>
                     <input
                       type="checkbox"
                       checked={snap}
                       onChange={(e) => setSnap(e.target.checked)}
-                    />
+                   />
                     0.1 s 吸附
                   </label>
                 </WorkspacePopover>
               ) : (
                 <>
                   {" "}
-                  <button
+                  <ActionButton
                     disabled={
                       !draft || editingLocked || draft.steps.length >= 100
                     }
                     onClick={() => setPicker("insert")}
                   >
                     ＋ Pose
-                  </button>
-                  <button
+                  </ActionButton>
+                  <ActionButton
                     disabled={
                       !selected ||
                       editingLocked ||
@@ -1623,8 +1611,8 @@ function Editor({
                     onClick={() => addCaptureAt(selectedStep)}
                   >
                     ＋ Action
-                  </button>
-                  <button
+                  </ActionButton>
+                  <ActionButton
                     disabled={
                       !draft ||
                       editingLocked ||
@@ -1634,22 +1622,18 @@ function Editor({
                     onClick={() => setSyncEditor("new")}
                   >
                     同步点
-                  </button>
-                  <button
+                  </ActionButton>
+                  <ActionButton
                     disabled={!draft || editingLocked}
                     onClick={() => setTrackEditor(true)}
                   >
                     设备轨道
-                  </button>
+                  </ActionButton>
                 </>
               )}
-              <button onClick={() => setZoom((v) => Math.max(0.01, v / 1.5))}>
-                缩小
-              </button>
-              <button onClick={() => setZoom((v) => Math.min(240, v * 1.5))}>
-                放大
-              </button>
-              <button
+              <IconButton icon="minus" label="缩小" onClick={() => setZoom((v) => Math.max(0.01, v / 1.5))} />
+              <IconButton icon="plus" label="放大" onClick={() => setZoom((v) => Math.min(240, v * 1.5))} />
+              <IconButton icon="fit" label="适应时间轴"
                 onClick={() =>
                   setZoom(
                     Math.max(
@@ -1662,9 +1646,7 @@ function Editor({
                     ),
                   )
                 }
-              >
-                适应时间轴
-              </button>
+              />
               {!compact && (
                 <>
                   {" "}
@@ -1673,7 +1655,7 @@ function Editor({
                       type="checkbox"
                       checked={snap}
                       onChange={(e) => setSnap(e.target.checked)}
-                    />
+                   />
                     0.1 s 吸附
                   </label>
                 </>
@@ -1845,7 +1827,7 @@ function Editor({
                                   style={{
                                     width: `${Math.min(100, (row.step.hold / Math.max(0.01, row.poseDeparture - row.start)) * 100)}%`,
                                   }}
-                                />
+                               />
                               </button>
                               {index > 0 && (
                                 <button
@@ -1856,7 +1838,7 @@ function Editor({
                                     left: 260 + row.arrival * effectiveZoom - 5,
                                   }}
                                   onPointerDown={(e) => startDrag(e, index)}
-                                />
+                               />
                               )}
                             </div>
                           );
@@ -1924,7 +1906,7 @@ function Editor({
                           top: 34 + Math.min(from, to) * 88 + 73,
                           height: Math.max(12, Math.abs(to - from) * 88 - 61),
                         }}
-                      />
+                     />
                     );
                   }),
                 )}
@@ -1952,7 +1934,7 @@ function Editor({
                 <div
                   className="motion-group-playhead"
                   style={{ left: 260 + playhead * effectiveZoom }}
-                />
+               />
               </div>
             </div>
             <div className="motion-timeline-summary">
@@ -1974,7 +1956,7 @@ function Editor({
             panel=".motion-group-properties"
             container=".motion-groups-layout"
             className="motion-group-properties-divider"
-          />
+         />
         )}
         {inspectorVisible && (
           <MotionDivider
@@ -1985,7 +1967,7 @@ function Editor({
             panel=".motion-group-properties"
             container=".motion-groups-layout"
             className="motion-group-properties-height-divider"
-          />
+         />
         )}
         <aside
           className="motion-group-properties"
@@ -1994,14 +1976,14 @@ function Editor({
         >
           {compact && (
             <div className="motion-inspector-tools">
-              <button
+              <ActionButton
                 type="button"
                 aria-pressed={inspectorPinned}
                 onClick={() => setInspectorPinned((v) => !v)}
               >
                 {inspectorPinned ? "取消固定" : "固定属性"}
-              </button>
-              <button
+              </ActionButton>
+              <ActionButton
                 type="button"
                 onClick={() => {
                   setInspectorOpen(false);
@@ -2009,7 +1991,7 @@ function Editor({
                 }}
               >
                 收起属性
-              </button>
+              </ActionButton>
             </div>
           )}
           {draft && (
@@ -2024,7 +2006,7 @@ function Editor({
                       <input
                         value={selectedAction.name}
                         onChange={(e) => editCapture({ name: e.target.value })}
-                      />
+                     />
                     </label>
                     <label>
                       执行设备
@@ -2048,7 +2030,7 @@ function Editor({
                       <input
                         value={selectedAction.topic}
                         onChange={(e) => editCapture({ topic: e.target.value })}
-                      />
+                     />
                     </label>
                     <label>
                       依赖 Pose
@@ -2081,10 +2063,10 @@ function Editor({
                         onChange={(e) =>
                           editCapture({ timeout: numberValue(e.target.value) })
                         }
-                      />
+                     />
                     </label>
                     <p>图像保存在 Jetson；超时或失败阻止后续动作。</p>
-                    <button
+                    <IconButton icon="trash" label="删除 Action"
                       onClick={() => {
                         edit((g) => ({
                           ...g,
@@ -2094,9 +2076,7 @@ function Editor({
                         }));
                         setSelectedActionId(null);
                       }}
-                    >
-                      删除 Action
-                    </button>
+                    />
                   </>
                 ) : selected ? (
                   <>
@@ -2108,7 +2088,7 @@ function Editor({
                         selected.positions,
                         selected.gripperPosition,
                       )}
-                    />
+                   />
                     <label>
                       机械臂轨道
                       <select
@@ -2140,7 +2120,7 @@ function Editor({
                         onChange={(e) =>
                           changeStep("duration", numberValue(e.target.value))
                         }
-                      />
+                     />
                     </label>
                     <label>
                       停留时长 (s)
@@ -2152,31 +2132,23 @@ function Editor({
                         onChange={(e) =>
                           changeStep("hold", numberValue(e.target.value))
                         }
-                      />
+                     />
                     </label>
                     <div className="motion-step-actions">
-                      <button
-                        aria-label={`上移关键帧 ${selectedStep + 1}`}
+                      <IconButton icon="up" label={`上移关键帧 ${selectedStep + 1}`}
                         disabled={!selectedStep}
                         onClick={() => moveStep(selectedStep, selectedStep - 1)}
-                      >
-                        上移
-                      </button>
-                      <button
-                        aria-label={`下移关键帧 ${selectedStep + 1}`}
+                      />
+                      <IconButton icon="down" label={`下移关键帧 ${selectedStep + 1}`}
                         disabled={selectedStep === rows.length - 1}
                         onClick={() => moveStep(selectedStep, selectedStep + 1)}
-                      >
-                        下移
-                      </button>
-                      <button onClick={() => removeStep(selectedStep)}>
-                        删除 Pose
-                      </button>
+                      />
+                      <IconButton icon="trash" label="删除 Pose" onClick={() => removeStep(selectedStep)} />
                     </div>
                     <details open={!compact}>
                       <summary>姿态快照</summary>
                       <p>{stepStatus}</p>
-                      <button
+                      <IconButton icon="refresh" label="刷新来源快照"
                         disabled={
                           !source || !sourceSnapshotChanged(selected, source)
                         }
@@ -2197,9 +2169,7 @@ function Editor({
                             return g;
                           })
                         }
-                      >
-                        刷新来源快照
-                      </button>
+                      />
                       <p>
                         关节快照：
                         {selected.positions.map((v) => v.toFixed(3)).join(", ")}
@@ -2230,7 +2200,7 @@ function Editor({
                       onChange={(e) =>
                         edit((g) => ({ ...g, name: e.target.value }))
                       }
-                    />
+                   />
                   </label>
                   <label>
                     备注
@@ -2240,7 +2210,7 @@ function Editor({
                       onChange={(e) =>
                         edit((g) => ({ ...g, note: e.target.value }))
                       }
-                    />
+                   />
                   </label>
                   <label>
                     首帧准备时长 (s)
@@ -2255,10 +2225,10 @@ function Editor({
                           preparationDuration: numberValue(e.target.value),
                         }))
                       }
-                    />
+                   />
                   </label>
                   <p>从实机当前位置移动到首姿态，独立于编排时间轴。</p>
-                  <button
+                  <IconButton icon="copy" label="复制动作组"
                     disabled={working}
                     onClick={() => {
                       const now = Date.now();
@@ -2276,10 +2246,8 @@ function Editor({
                         base: "",
                       });
                     }}
-                  >
-                    复制动作组
-                  </button>
-                  <button
+                  />
+                  <IconButton icon="trash" label="删除动作组"
                     disabled={
                       !ready ||
                       !!error ||
@@ -2288,9 +2256,7 @@ function Editor({
                       !groups.some((g) => g.id === draft.id)
                     }
                     onClick={() => setDeleting(true)}
-                  >
-                    删除动作组
-                  </button>
+                  />
                 </details>
               </fieldset>
               {(validation || duplicate) && (
@@ -2308,7 +2274,7 @@ function Editor({
                 <img
                   src={`data:image/png;base64,${captureResult.thumbnail}`}
                   alt="最近采集图像"
-                />
+               />
               )}
               <p>{captureResult.path}</p>
               <small>
@@ -2326,7 +2292,7 @@ function Editor({
         >
           <p>确认删除 {draft.name}？</p>
           <footer>
-            <button
+            <ActionButton
               disabled={working}
               onClick={() =>
                 void action(async () => {
@@ -2340,8 +2306,8 @@ function Editor({
               }
             >
               确认删除动作组
-            </button>
-            <button onClick={() => setDeleting(false)}>保留动作组</button>
+            </ActionButton>
+            <ActionButton onClick={() => setDeleting(false)}>保留动作组</ActionButton>
           </footer>
         </MotionGroupDialog>
       )}
@@ -2368,7 +2334,7 @@ function Editor({
                       ),
                     }))
                   }
-                />
+               />
               </label>
               <label>
                 设备绑定
@@ -2382,12 +2348,12 @@ function Editor({
                       ),
                     }))
                   }
-                />
+               />
               </label>
               <small>
                 {t.kind === "arm" ? "机械臂" : "相机"} · current 表示当前连接
               </small>
-              <button
+              <ActionButton
                 disabled={
                   draft.steps.some((s) => (s.trackId ?? "arm") === t.id) ||
                   draft.actions?.some((a) => a.trackId === t.id) ||
@@ -2402,11 +2368,11 @@ function Editor({
                 }
               >
                 删除空轨道
-              </button>
+              </ActionButton>
             </fieldset>
           ))}
           <footer>
-            <button
+            <ActionButton
               disabled={editingLocked || tracks.length >= 16}
               onClick={() =>
                 edit((g) => ({
@@ -2424,8 +2390,8 @@ function Editor({
               }
             >
               添加机械臂轨道
-            </button>
-            <button onClick={() => setTrackEditor(false)}>完成</button>
+            </ActionButton>
+            <ActionButton onClick={() => setTrackEditor(false)}>完成</ActionButton>
           </footer>
         </MotionGroupDialog>
       )}
@@ -2458,7 +2424,7 @@ function Editor({
                   setSyncEditor(null);
                 }
           }
-        />
+       />
       )}
       {review && draft && (
         <MotionGroupDialog title="执行前检查" onClose={closeReview}>
@@ -2481,26 +2447,26 @@ function Editor({
               type="checkbox"
               checked={motion.armed}
               onChange={(e) => motion.setArmed(e.target.checked)}
-            />
+           />
             已确认工作区安全，允许机械臂及夹爪运动
           </label>
           <footer>
-            <button onClick={closeReview}>返回编辑</button>
+            <ActionButton onClick={closeReview}>返回编辑</ActionButton>
             {dirty && (
-              <button
+              <ActionButton
                 disabled={!!executeReason || !!writeReason || working || saving}
                 onClick={() => void executeSnapshot(true)}
               >
                 保存并执行
-              </button>
+              </ActionButton>
             )}
-            <button
+            <ActionButton
               className="motion-primary"
               disabled={!!executeReason || working}
               onClick={() => void executeSnapshot(false)}
             >
               {dirty ? "执行当前未保存快照" : "确认并执行"}
-            </button>
+            </ActionButton>
           </footer>
         </MotionGroupDialog>
       )}
@@ -2521,9 +2487,9 @@ function Editor({
               {motionGroupPhaseLabels[resultState.phase]}
             </strong>
             {openReport && (
-              <button type="button" onClick={openReport}>
+              <ActionButton type="button" onClick={openReport}>
                 查看执行报告
-              </button>
+              </ActionButton>
             )}
           </div>
         )}
@@ -2533,10 +2499,10 @@ function Editor({
             checked={motion.armed}
             disabled={motion.busy}
             onChange={(e) => motion.setArmed(e.target.checked)}
-          />
+         />
           已确认工作区安全，允许机械臂及夹爪运动
         </label>
-        <button
+        <ActionButton
           className="motion-primary"
           disabled={
             !draft ||
@@ -2550,13 +2516,13 @@ function Editor({
           onClick={() => setReview(true)}
         >
           执行前检查
-        </button>
+        </ActionButton>
         {executeReason && (
           <span className="motion-execute-reason">{executeReason}</span>
         )}
         {groupActive && (
           <>
-            <button
+            <ActionButton
               disabled={
                 !motion.pauseGroup ||
                 motion.state.phase === "paused" ||
@@ -2566,8 +2532,8 @@ function Editor({
               onClick={() => void action(motion.pauseGroup)}
             >
               预约段间暂停
-            </button>
-            <button
+            </ActionButton>
+            <ActionButton
               disabled={
                 !motion.resumeGroup ||
                 motion.state.phase !== "paused" ||
@@ -2577,15 +2543,15 @@ function Editor({
               onClick={() => void action(motion.resumeGroup)}
             >
               恢复执行
-            </button>
-            <button
+            </ActionButton>
+            <ActionButton
               className="motion-stop"
               onClick={() =>
                 void motion.cancel().catch((c) => setNotice(String(c)))
               }
             >
               停止动作组
-            </button>
+            </ActionButton>
           </>
         )}
       </footer>
@@ -2610,6 +2576,6 @@ export function MotionGroupsPage(props: MotionGroupsPageProps) {
       {...props}
       cached={drafts.current.get(props.profileKey)}
       remember={remember}
-    />
+   />
   );
 }

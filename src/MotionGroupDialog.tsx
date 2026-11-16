@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import { useEffect, useRef, type ReactNode } from "react";
 
 export function MotionGroupDialog({
@@ -56,9 +57,7 @@ export function MotionGroupDialog({
       >
         <header>
           <h2>{title}</h2>
-          <button type="button" aria-label="关闭对话框" onClick={onClose}>
-            ×
-          </button>
+          <IconButton icon="close" label="关闭对话框" type="button" onClick={onClose} />
         </header>
         {children}
       </div>

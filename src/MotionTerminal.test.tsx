@@ -17,10 +17,10 @@ it("searches without discarding records, exports unfiltered history and reports 
   expect(screen.getByLabelText("规划日志输出")).not.toHaveTextContent("target joint1");
   mocks.save.mockResolvedValue("/tmp/motion.log");
   mocks.invoke.mockRejectedValueOnce(new Error("disk full"));
-  fireEvent.click(screen.getByText("导出日志"));
+  fireEvent.click(screen.getByRole("button", { name: "导出日志" }));
   await waitFor(() => expect(screen.getByText(/导出失败/)).toHaveTextContent("disk full"));
   expect(mocks.invoke).toHaveBeenCalledWith("save_motion_log", { localPath: "/tmp/motion.log", content: expect.stringContaining("target joint1=.2") });
-  fireEvent.click(screen.getByText("导出日志"));
+  fireEvent.click(screen.getByRole("button", { name: "导出日志" }));
   await waitFor(() => expect(screen.getByText(/日志已导出/)).toBeInTheDocument());
 });
 it("retains logs when collapsed, mounts raw planner only when selected, and follows only on request", () => {

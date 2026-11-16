@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useWorkspacePreference } from "./workspacePreferences";
 import { useMotionLayout } from "./MotionLayout";
@@ -86,11 +87,11 @@ export function ViewerFloatingPanels({ error, leading, children, rgbd, revealCon
   }
   return <div className={`viewer-heads-up viewer-floating-layer${layout?.focusMode ? " viewer-focus" : ""}`}>
     <div className="viewer-floating-toolbar" role="toolbar" aria-label="Robot View 浮窗">
-      {visibleIds.map(id => <button key={id} type="button" aria-pressed={!panel(id).collapsed} onClick={() => {
+      {visibleIds.map(id => <ActionButton key={id} type="button" aria-pressed={!panel(id).collapsed} onClick={() => {
         cleanup.current?.(); change(id, { collapsed: !panel(id).collapsed }); raise(id);
-      }}>{titles[id]}</button>)}
-      <button type="button" onClick={() => { cleanup.current?.(); setSaved({}); }}>重置浮窗</button>
-      <button type="button" aria-pressed={docked} onClick={()=>setDocked(v=>!v)}>{docked ? "切换为浮窗" : "固定到右侧"}</button>
+      }}>{titles[id]}</ActionButton>)}
+      <IconButton icon="layout" label="重置浮窗" type="button" onClick={() => { cleanup.current?.(); setSaved({}); }} />
+      <ActionButton type="button" aria-pressed={docked} onClick={()=>setDocked(v=>!v)}>{docked ? "切换为浮窗" : "固定到右侧"}</ActionButton>
     </div>
     <div ref={host} className="viewer-floating-area">
       {visibleIds.map(id => {

@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useHandeyeInvoke } from "./handeyeTaskLogic";
 import { useEffect, useRef, useState } from "react";
@@ -351,7 +352,7 @@ export function HandeyeCalibrationPage({
           <h1>手眼标定</h1>
           <p>配置标定板 → 选择坐标系 → 采样与求解 · Mac 本地计算</p>
         </div>
-        <button onClick={onMotion}>前往 Motion 调整姿态</button>
+        <ActionButton onClick={onMotion}>前往 Motion 调整姿态</ActionButton>
         <NativePageActions />
       </header>
       <div className="handeye-tabs" role="tablist" aria-label="标定步骤">
@@ -435,7 +436,7 @@ export function HandeyeCalibrationPage({
                         max="30"
                         value={board[key]}
                         onChange={(e) => editBoard(key, Number(e.target.value))}
-                      />
+                     />
                     </label>
                   ))}
                 </div>
@@ -449,7 +450,7 @@ export function HandeyeCalibrationPage({
                     onChange={(e) =>
                       editBoard("square_m", Number(e.target.value) / 1000)
                     }
-                  />
+                 />
                 </label>
                 <label>
                   Marker length · 实测 mm
@@ -460,7 +461,7 @@ export function HandeyeCalibrationPage({
                     onChange={(e) =>
                       editBoard("marker_m", Number(e.target.value) / 1000)
                     }
-                  />
+                 />
                 </label>
                 <label className="handeye-check">
                   <input
@@ -469,7 +470,7 @@ export function HandeyeCalibrationPage({
                     onChange={(e) =>
                       editBoard("legacy_pattern", e.target.checked)
                     }
-                  />
+                 />
                   兼容旧版 RViz / OpenCV 标定板排列
                 </label>
               </fieldset>
@@ -477,7 +478,7 @@ export function HandeyeCalibrationPage({
                 尺寸填写黑白格或标记本体的实测边长，不包含打印纸白边。更换布局后需要重新打印标定板。
               </p>
               <div className="handeye-actions">
-                <button
+                <ActionButton
                   disabled={Boolean(busy) || Boolean(configError)}
                   onClick={() =>
                     void run("生成标定板", async (valid) => {
@@ -493,17 +494,15 @@ export function HandeyeCalibrationPage({
                   }
                 >
                   Create target · 预览
-                </button>
-                <button
+                </ActionButton>
+                <IconButton icon="download" label="Save target"
                   disabled={!boardImage || Boolean(busy)}
                   onClick={() =>
                     void run("保存标定板", async () =>
                       saveFile("handeye-board.png", boardImage, "png"),
                     )
                   }
-                >
-                  Save target
-                </button>
+                />
               </div>
               <label className="handeye-check">
                 <input
@@ -511,7 +510,7 @@ export function HandeyeCalibrationPage({
                   disabled={locked}
                   checked={boardConfirmed}
                   onChange={(e) => setBoardConfirmed(e.target.checked)}
-                />
+               />
                 已核对实体标定板布局及实测尺寸
               </label>
               {samples.length > 0 && (
@@ -564,7 +563,7 @@ export function HandeyeCalibrationPage({
                       }
                       value={context[key]}
                       onChange={(e) => editContext(key, e.target.value)}
-                    />
+                   />
                   </label>
                 ))}
                 <label>
@@ -577,7 +576,7 @@ export function HandeyeCalibrationPage({
                   <option key={f} value={f} />
                 ))}
               </datalist>
-              <button
+              <IconButton icon="refresh" label="刷新 Frames" busy={busy === "读取 TF Frames"}
                 disabled={!connected || Boolean(busy) || Boolean(configError)}
                 onClick={() =>
                   void run("读取 TF Frames", async (valid) => {
@@ -593,9 +592,7 @@ export function HandeyeCalibrationPage({
                     }
                   })
                 }
-              >
-                刷新 Frames
-              </button>
+              />
               <p>
                 无需 RViz 或 MoveGroup。采样按原始 RGB 时间读取基座到末端
                 TF，不使用已有相机外参反推末端位置。
@@ -636,21 +633,19 @@ export function HandeyeCalibrationPage({
                 </select>
               </label>
               <div className="handeye-actions">
-                <button
+                <ActionButton
                   className="primary"
                   disabled={!canCapture}
                   onClick={() => capture(true)}
                 >
                   Take sample · 采样
-                </button>
-                <button
+                </ActionButton>
+                <IconButton icon="trash" label="Delete latest sample"
                   disabled={!samples.length || Boolean(busy)}
                   onClick={() => {
                     removeSample(samples[samples.length - 1].id);
                   }}
-                >
-                  Delete latest sample
-                </button>
+                />
               </div>
               {!boardConfirmed && (
                 <p className="handeye-warning">
@@ -658,7 +653,7 @@ export function HandeyeCalibrationPage({
                 </p>
               )}
               <div className="handeye-actions">
-                <button
+                <ActionButton
                   disabled={Boolean(busy)}
                   onClick={() => {
                     setSamples([]);
@@ -672,8 +667,8 @@ export function HandeyeCalibrationPage({
                   }}
                 >
                   Clear all samples
-                </button>
-                <button
+                </ActionButton>
+                <IconButton icon="download" label="Save samples"
                   disabled={!samples.length || Boolean(busy)}
                   onClick={() =>
                     void run("保存样本", async () =>
@@ -684,9 +679,7 @@ export function HandeyeCalibrationPage({
                       ),
                     )
                   }
-                >
-                  Save samples
-                </button>
+                />
                 <label className="handeye-file">
                   Load samples
                   <input
@@ -725,7 +718,7 @@ export function HandeyeCalibrationPage({
                       });
                       e.target.value = "";
                     }}
-                  />
+                 />
                 </label>
               </div>
               <label>
@@ -745,13 +738,13 @@ export function HandeyeCalibrationPage({
                   )}
                 </select>
               </label>
-              <button
+              <ActionButton
                 className="primary"
                 disabled={training < 8 || Boolean(busy)}
                 onClick={solve}
               >
                 Solve · 求解 / 复验
-              </button>
+              </ActionButton>
               {result && (
                 <div className="handeye-result">
                   <h3>
@@ -787,7 +780,7 @@ export function HandeyeCalibrationPage({
                       )
                       .join("\n")}
                   </pre>
-                  <button
+                  <IconButton icon="download" label="Save camera pose · 导出外参"
                     disabled={Boolean(busy)}
                     onClick={() =>
                       void run("导出外参", async () =>
@@ -802,9 +795,7 @@ export function HandeyeCalibrationPage({
                         ),
                       )
                     }
-                  >
-                    Save camera pose · 导出外参
-                  </button>
+                  />
                   <p>
                     导出包含光学帧及 camera body
                     换算。未写入生产配置，也不代表桌面/顶面几何已核验。
@@ -821,15 +812,15 @@ export function HandeyeCalibrationPage({
                 type="checkbox"
                 checked={live}
                 onChange={(e) => setLive(e.target.checked)}
-              />
+             />
               实时 RGB
             </label>
-            <button
+            <ActionButton
               disabled={!connected || Boolean(busy) || Boolean(configError)}
               onClick={() => capture(false)}
             >
               检测标定板
-            </button>
+            </ActionButton>
           </div>
           <div
             className="handeye-image-sources"
@@ -864,7 +855,7 @@ export function HandeyeCalibrationPage({
                 checked={overlay}
                 disabled={!observationQuality}
                 onChange={(e) => setOverlay(e.target.checked)}
-              />
+             />
               角点与坐标轴叠加
             </label>
           )}
@@ -920,7 +911,7 @@ export function HandeyeCalibrationPage({
                 ? `${observationQuality.corners} 个角点 · 重投影 RMS ${observationQuality.rms_px.toFixed(3)} px · 覆盖率 ${(observationQuality.coverage * 100).toFixed(1)}%`
                 : undefined
             }
-          />
+         />
           {samples.length > 0 && (
             <div className="handeye-table-wrap">
               <table>
@@ -983,15 +974,12 @@ export function HandeyeCalibrationPage({
                         <small>{s.capture.stamp_ns}</small>
                       </td>
                       <td>
-                        <button
+                        <IconButton icon="trash" label={`删除样本 ${i + 1}`}
                           disabled={Boolean(busy)}
-                          aria-label={`删除样本 ${i + 1}`}
                           onClick={() => {
                             removeSample(s.id);
                           }}
-                        >
-                          删除
-                        </button>
+                        />
                       </td>
                     </tr>
                   ))}

@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { useEffect, useRef, useState } from "react";
 import { ModalShell } from "./ModalShell";
 import { ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, type PositionDraft } from "./positionLogic";
@@ -33,8 +34,8 @@ export function SavePoseDialog({ initial, urdfXml, onSave, onClose }: {
     finally { busy.current = false; if (mounted.current) setSaving(false); }
   }
   return <ModalShell title="保存当前姿态" onClose={close} actions={<>
-    <button type="button" disabled={saving} onClick={close}>取消</button>
-    <button type="submit" disabled={saving} form="save-current-pose" className="primary">{saving ? "保存中…" : "保存点位"}</button>
+    <ActionButton type="button" disabled={saving} onClick={close}>取消</ActionButton>
+    <ActionButton type="submit" disabled={saving} form="save-current-pose" className="primary">{saving ? "保存中…" : "保存点位"}</ActionButton>
   </>}>
     <form id="save-current-pose" className="save-pose-form" onSubmit={event => { event.preventDefault(); save(); }}>
       <p>保存点击时的实测姿态；TCP 预览不会写入，也不会执行运动。</p>

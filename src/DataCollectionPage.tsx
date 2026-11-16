@@ -1,3 +1,4 @@
+import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useNativeCollectionOperation } from "./NativeCollectionOperationStatus";
 import { invoke } from "@tauri-apps/api/core";
@@ -135,7 +136,7 @@ export function DataCollectionPage({
   return <section className={`collection-page${running || status?.root ? " has-session" : ""}`} aria-label="数据采集">
     <header className="collection-header native-window-header">
       <div><h1>数据采集</h1><p>LeRobot v3 · 记录已有遥操作的观测与实际发送的动作</p></div>
-      <button type="button" disabled={Boolean(busy)} onClick={() => { setError(""); void run("status"); }}>{busy === "status" ? "刷新中…" : "刷新状态"}</button>
+      <IconButton icon="refresh" label={busy === "status" ? "刷新中…" : "刷新状态"} busy={busy === "status"} type="button" disabled={Boolean(busy)} onClick={() => { setError(""); void run("status"); }} />
       <NativePageActions />
     </header>
     <div className="collection-grid">
@@ -159,7 +160,7 @@ export function DataCollectionPage({
         <datalist id="collection-image-topics">{topics.filter((topic) => topic.types.includes("sensor_msgs/msg/Image")).map((topic) => <option key={topic.name} value={topic.name} />)}</datalist>
         <datalist id="collection-state-topics">{topics.filter((topic) => topic.types.includes("sensor_msgs/msg/JointState")).map((topic) => <option key={topic.name} value={topic.name} />)}</datalist>
         {!running && validationError && <p className="collection-hint">{validationError}</p>}
-        <button type="button" className="collection-primary" disabled={actionBusy || recoveryError || !can.launch || Boolean(validationError)} onClick={() => void run("launch", config)}>{busy === "launch" ? "正在检查就绪并启动…" : "启动采集器"}</button>
+        <ActionButton type="button" className="collection-primary" disabled={actionBusy || recoveryError || !can.launch || Boolean(validationError)} onClick={() => void run("launch", config)}>{busy === "launch" ? "正在检查就绪并启动…" : "启动采集器"}</ActionButton>
         <p className="collection-hint">先在 Status 启动 Teleop（含夹爪）和相机。默认关节状态 Topic 为 <code>/stm32/joint_states</code>（MCU/Agent 时间戳；host 时钟的 <code>/joint_states</code> 不适合 stamp 门禁）。腕部图像为 RGB。启动采集器与开始 Episode 前会在 Jetson 上硬跑 <code>scripts/check_collection_ready.sh</code>（不用 --warn-only）。续录须保持相机、分辨率、FPS 和状态/动作布局一致。</p>
       </section>
       <section className="collection-card collection-session">
@@ -183,13 +184,13 @@ export function DataCollectionPage({
         </dl>}
         {recordingHazard && <div className="collection-danger-banner" role="alert">{recordingHazard} 请点击「丢弃 Episode」（不会自动丢弃）。</div>}
         <div className="collection-actions">
-          <button type="button" className="collection-primary" disabled={actionBusy || recoveryError || nativeOperation.task?.phase === "recording" || !can.start} onClick={() => void run("start_episode")} title={startBlockedReason || undefined}>开始 Episode</button>
-          <button type="button" disabled={actionBusy || !can.save} onClick={() => void run("save_episode")}>保存成功 Episode</button>
-          <button type="button" className="collection-danger" disabled={actionBusy || !can.discard} onClick={() => setDiscardRequested(true)}>丢弃 Episode</button>
-          <button type="button" disabled={actionBusy || !can.finish} onClick={() => void run("finish")}>{busy === "finish" ? "正在完成数据集…" : "结束并完成数据集"}</button>
+          <ActionButton type="button" className="collection-primary" disabled={actionBusy || recoveryError || nativeOperation.task?.phase === "recording" || !can.start} onClick={() => void run("start_episode")} title={startBlockedReason || undefined}>开始 Episode</ActionButton>
+          <ActionButton type="button" disabled={actionBusy || !can.save} onClick={() => void run("save_episode")}>保存成功 Episode</ActionButton>
+          <ActionButton type="button" className="collection-danger" disabled={actionBusy || !can.discard} onClick={() => setDiscardRequested(true)}>丢弃 Episode</ActionButton>
+          <ActionButton type="button" disabled={actionBusy || !can.finish} onClick={() => void run("finish")}>{busy === "finish" ? "正在完成数据集…" : "结束并完成数据集"}</ActionButton>
         </div>
         {busy && busy !== "status" && <p className="collection-notice" role="status">{({ launch: "正在检查采集就绪并启动采集器…", start_episode: "正在检查采集就绪并开始 Episode…", save_episode: "正在保存 Episode，请等待写入完成…", discard_episode: "正在丢弃 Episode…", finish: "正在完成数据集，请等待编码与元数据收尾…" })[busy]}</p>}
-        {discardRequested && <div className="collection-confirm" role="alert">丢弃当前 Episode 的未保存帧？已保存 Episode 会保留。<div><button type="button" disabled={actionBusy || !can.discard} onClick={() => void run("discard_episode")}>确认丢弃</button><button type="button" onClick={() => setDiscardRequested(false)}>取消</button></div></div>}
+        {discardRequested && <div className="collection-confirm" role="alert">丢弃当前 Episode 的未保存帧？已保存 Episode 会保留。<div><ActionButton type="button" disabled={actionBusy || !can.discard} onClick={() => void run("discard_episode")}>确认丢弃</ActionButton><ActionButton type="button" onClick={() => setDiscardRequested(false)}>取消</ActionButton></div></div>}
         {fault11Blocked && <p className="collection-hint" role="alert">{COLLECTION_FAULT11_HINT}</p>}
         {!can.start && startBlockedReason && status?.state === "idle" && fresh && <p className="collection-hint" role="status">{startBlockedReason}</p>}
         {status?.recording && status.pendingFrames === 0 && <p className="collection-hint">尚未写入有效帧；请检查 Topic、数据新鲜度及日志。</p>}

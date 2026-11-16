@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import { useEffect, useRef, useState } from "react";
 import { positionFingerprint } from "./positionStore";
 import { useWorkspaceMenu } from "./WorkspaceMenu";
@@ -131,7 +132,7 @@ function PositionEditor({
           <p>{compact ? "双击 3D 缩略图移动；右键或 ⋯ 编辑、删除姿态。" : "保存六个关节角和可选夹爪行程；解锁后点击位置卡片，由 MoveIt2 检查碰撞并规划执行到目标。"}</p>
         </div>
         <div className="position-toolbar-actions">
-          {onBack && <button type="button" disabled={working} className="position-quiet" onClick={onBack}>返回连接</button>}
+          {onBack && <ActionButton type="button" disabled={working} className="position-quiet" onClick={onBack}>返回连接</ActionButton>}
 
         </div>
       </div>
@@ -143,7 +144,7 @@ function PositionEditor({
         {motion && motion.state.phase !== "idle" && <div role="status" aria-live="polite">
           <strong>{motion.state.label}</strong> · {motion.state.message}
         </div>}
-        {motion?.busy && positionMotionBusy(motion.state.phase) && <button type="button" className="position-danger" onClick={() => void motion.cancel()}>取消运动</button>}
+        {motion?.busy && positionMotionBusy(motion.state.phase) && <ActionButton type="button" className="position-danger" onClick={() => void motion.cancel()}>取消运动</ActionButton>}
       </section>
       <div className={`position-workspace${showEditor ? "" : " position-editor-closed"}`}>
         <div className="position-list" aria-label="点位列表">
@@ -191,7 +192,7 @@ function PositionEditor({
                 if(editingId===position.id){setEditorOpen(false);setEditingId(null);}
                 });
               }}
-            />
+           />
           ))}
           {positions.length === 0 && <p className="position-empty">还没有自定义点位。</p>}
         </div>
@@ -214,7 +215,7 @@ function PositionEditor({
                         next[index] = event.target.value;
                         setJoints(next);
                       }}
-                    />
+                   />
                   </label>
                 ))}
               </div>
@@ -222,8 +223,8 @@ function PositionEditor({
               {includeGripper && <label>夹爪（joint7）单指行程 mm<input disabled={working} aria-label="夹爪行程 mm" inputMode="decimal" value={gripper} onChange={(event) => setGripper(event.target.value)} /></label>}
               {!motion?.gripper?.fresh && source === "feedback" && <p>夹爪反馈不可用，当前仅采集六轴；可手动填写夹爪目标。</p>}
               <div className="position-editor-actions">
-                <button type="button" disabled={working} className="position-quiet" onClick={() => { setEditorOpen(false); setFormError(""); }}>取消</button>
-                <button type="submit" disabled={editingDisabled} className="position-primary">{working ? "保存中…" : "保存点位"}</button>
+                <ActionButton type="button" disabled={working} className="position-quiet" onClick={() => { setEditorOpen(false); setFormError(""); }}>取消</ActionButton>
+                <ActionButton type="submit" disabled={editingDisabled} className="position-primary">{working ? "保存中…" : "保存点位"}</ActionButton>
               </div>
             </form>
           ) : (
@@ -281,10 +282,10 @@ function PositionCard({
         <div className="position-card-head">
           <strong>{position.name}</strong>
           <div className="position-card-actions">
-            {compact ? <button type="button" disabled={editingDisabled} className="workspace-more" aria-label={`${position.name}更多操作`} onClick={onContextMenu}>⋯</button> : <button type="button" disabled={editingDisabled} className="position-quiet" onClick={onEdit}>编辑</button>}
+            {compact ? <IconButton icon="more" label={`${position.name}更多操作`} type="button" disabled={editingDisabled} className="workspace-more"  onClick={onContextMenu} /> : <IconButton icon="edit" label="编辑" type="button" disabled={editingDisabled} className="position-quiet" onClick={onEdit} />}
             {confirming
-              ? <button type="button" disabled={editingDisabled} className="position-danger" aria-label={`确认删除 ${position.name}`} onClick={onConfirmDelete}>确认删除</button>
-              : !compact && <button type="button" disabled={editingDisabled} className="position-quiet" aria-label={`删除 ${position.name}`} onClick={onAskDelete}>删除</button>}
+              ? <ActionButton type="button" disabled={editingDisabled} className="position-danger" aria-label={`确认删除 ${position.name}`} onClick={onConfirmDelete}>确认删除</ActionButton>
+              : !compact && <IconButton icon="trash" label={`删除 ${position.name}`} type="button" disabled={editingDisabled} className="position-quiet"  onClick={onAskDelete} />}
           </div>
         </div>
         <p>夹爪（joint7）：{position.gripperPosition === undefined ? "保持当前" : `${(position.gripperPosition * 1000).toFixed(2)} mm`}</p>

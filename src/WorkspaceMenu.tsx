@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import "./workspace.css";
 import { createPortal } from "react-dom";
 import {
@@ -155,18 +156,15 @@ export function useWorkspaceMenu(
         open(event);
     },
     trigger: (
-      <button
+      <IconButton icon="more" label={`${label}菜单`}
         type="button"
         className="workspace-more"
-        aria-label={`${label}菜单`}
         title={label}
         aria-haspopup="menu"
         aria-expanded={!!anchor}
         disabled={!active}
         onClick={open}
-      >
-        ⋯
-      </button>
+      />
     ),
   };
 }

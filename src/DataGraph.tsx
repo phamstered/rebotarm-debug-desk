@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import { useEffect, useRef } from "react";
 import type { DataSeries } from "./dataGraphLogic";
 import {
@@ -257,7 +258,7 @@ export function DataGraph({
             ? "从 Inspector 添加数值字段 · 默认窗口 30s"
             : `${topic} · ${seriesList.length} 条曲线 · 窗口 ${DATA_GRAPH_WINDOW_MS / 1000}s${followLabel}`}
         </span>
-        <button type="button" onClick={onClearSeries} disabled={seriesList.length === 0}>清空曲线</button>
+        <IconButton icon="clear" label="清空曲线" type="button" onClick={onClearSeries} disabled={seriesList.length === 0} />
       </div>}
       <div className="data-graph-body">
         <div className="data-graph-canvas-wrap">
@@ -272,7 +273,7 @@ export function DataGraph({
               <li key={series.id}>
                 <span className="data-graph-swatch" style={{ background: series.color }} />
                 <span className="data-graph-legend-label" title={series.label}>{series.fieldPath}</span>
-                <button type="button" className="data-graph-remove" onClick={() => onRemoveSeries(series.id)} aria-label={`移除 ${series.fieldPath}`}>×</button>
+                <IconButton icon="close" label={`移除 ${series.fieldPath}`} type="button" size="compact" className="data-graph-remove" onClick={() => onRemoveSeries(series.id)}  />
               </li>
             ))}
           </ul>

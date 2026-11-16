@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import type { ReactNode } from "react";
 import type { ControllerInfo, RosControlStatus } from "./types";
 import {
@@ -80,21 +81,21 @@ export function ControllerList({
           </div>
           <div className="controller-type">{controller.typeName}</div>
           <div className="controller-actions">
-            <button
+            <ActionButton
               type="button"
               onClick={() => onInspect(controller.name)}
               aria-label={`查看 ${controller.name} Graph`}
             >
               查看 Graph
-            </button>
+            </ActionButton>
             {onManage && (
-              <button
+              <ActionButton
                 type="button"
                 onClick={() => onManage(controller.name)}
                 aria-label={`管理 ${controller.name}`}
               >
                 管理
-              </button>
+              </ActionButton>
             )}
             {renderActions?.(controller)}
           </div>
