@@ -38,38 +38,33 @@
   gap: 20px;
 }
 .handeye-header h1 {
-  font-size: 24px;
-  margin: 0 0 8px;
+  font-size: 22px;
+  margin: 0 0 6px;
 }
 .handeye-header p {
-  margin: 0 0 18px;
+  margin: 0 0 12px;
   color: #90a9b6;
 }
 .handeye-tabs {
   display: flex;
-  gap: 8px;
+  gap: 16px;
   border-bottom: 1px solid #284451;
-  padding-bottom: 12px;
-  margin-bottom: 18px;
+  padding-bottom: 0;
+  margin: 8px 0 18px;
   flex-wrap: wrap;
-}
-.handeye-tabs [aria-selected="true"] {
-  background: #163c39;
-  border-color: #70c7b1;
-  color: #b2f4e3;
 }
 .handeye-workspace {
   display: grid;
   grid-template-columns: minmax(290px, 390px) minmax(0, 1fr);
-  gap: 22px;
+  gap: 18px;
 }
 .handeye-controls,
 .handeye-view {
   min-width: 0;
   background: #0d202b;
   border: 1px solid #294957;
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: 8px;
+  padding: 16px;
 }
 .handeye-page h2 {
   font-size: 17px;
@@ -118,7 +113,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0;
+  margin: 10px 0;
   align-items: center;
 }
 .handeye-page button {
@@ -191,7 +186,8 @@
   overflow-x: auto;
 }
 .handeye-page button.primary {
-  background: #1e6157;
+  background: #20514c;
+  border-color: #397a70;
   color: #e0fff4;
 }
 @media (max-width: 1100px) {
@@ -211,13 +207,45 @@
 }
 .handeye-page button,
 .handeye-offline > button {
-  border: 1px solid #365661;
-  border-radius: 7px;
-  padding: 8px 12px;
-  background: #102731;
+  min-height: 32px;
+  border: 1px solid #2b4653;
+  border-radius: 5px;
+  padding: 5px 10px;
+  background: #10232d;
   color: #c2dbe4;
-  font: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
   cursor: pointer;
+}
+.handeye-page button:hover:not(:disabled) {
+  background: #19343e;
+  border-color: #426672;
+  color: #e2f3f4;
+}
+.handeye-page button:focus-visible,
+.handeye-offline > button:focus-visible {
+  outline: 2px solid #70c7b1;
+  outline-offset: 2px;
+}
+.handeye-page .handeye-tabs button {
+  min-height: 36px;
+  padding: 6px 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #91a9b6;
+}
+.handeye-page .handeye-tabs button[aria-selected="true"] {
+  border-bottom-color: #70c7b1;
+  color: #b2f4e3;
+}
+.handeye-page .handeye-header > button {
+  background: transparent;
+  border-color: transparent;
+  color: #93bcbf;
 }
 .handeye-page button:disabled {
   opacity: 0.45;
@@ -225,11 +253,13 @@
 }
 .handeye-page select {
   border: 1px solid #365661;
-  border-radius: 7px;
-  padding: 8px;
+  border-radius: 5px;
+  padding: 5px 8px;
   background: #091b25;
   color: #d9e7ed;
   font: inherit;
+  font-size: 13px;
+  min-height: 32px;
 }
 .handeye-offline {
   width: 100%;
@@ -241,6 +271,12 @@
 }
 .handeye-page input {
   box-sizing: border-box;
+}
+.handeye-page input:not([type="checkbox"]):not([type="file"]) {
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 13px;
 }
 .handeye-page fieldset:disabled {
   opacity: 0.7;
@@ -254,25 +290,66 @@
   flex-wrap: wrap;
   margin: 10px 0;
 }
-.handeye-image-sources [aria-pressed="true"] {
-  background: #1e6157;
-  border-color: #70c7b1;
-  color: #e0fff4;
+.handeye-image-sources {
+  width: fit-content;
+  max-width: 100%;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 6px;
+  background: #081922;
+}
+.handeye-page .handeye-image-sources button {
+  border-color: transparent;
+  background: transparent;
+  color: #8faab7;
+}
+.handeye-page .handeye-image-sources [aria-pressed="true"] {
+  background: #1b353e;
+  color: #b2e3d9;
+}
+.handeye-image-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 12px 0 8px;
+}
+.handeye-image-tools {
+  gap: 2px;
+  margin: 0;
+}
+.handeye-page .handeye-image-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: #9ebac6;
+}
+.handeye-image-tools svg {
+  flex-shrink: 0;
 }
 .handeye-image-heading {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   color: #b5d4df;
-  font-size: 14px;
-  margin-top: 16px;
+  font-size: 13px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0;
 }
 .handeye-image-heading span {
   font-size: 12px;
   color: #90a9b6;
 }
 .handeye-image-tools output {
-  min-width: 48px;
+  min-width: 44px;
+  font-size: 12px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   color: #aad7d0;

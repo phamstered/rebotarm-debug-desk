@@ -29,6 +29,33 @@ function loaded() {
   });
   fireEvent.load(image);
 }
+it("keeps compact image tools named, explained and operable by keyboard", async () => {
+  const user = userEvent.setup();
+  render(<HandeyeImageViewer {...props} />);
+  for (const name of ["适应窗口", "原始尺寸", "缩小图片", "放大图片", "放大查看"]) {
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringContaining(name));
+  }
+  loaded();
+  await user.tab();
+  expect(screen.getByRole("button", { name: "适应窗口" })).toHaveFocus();
+  await user.tab();
+  await user.keyboard("{Enter}");
+  expect(screen.getByLabelText("图片缩放比例")).toHaveTextContent("100%");
+  await user.tab();
+  await user.keyboard("{Enter}");
+  expect(screen.getByLabelText("图片缩放比例")).toHaveTextContent("80%");
+  await user.tab();
+  await user.keyboard("{Enter}");
+  expect(screen.getByLabelText("图片缩放比例")).toHaveTextContent("100%");
+  await user.tab();
+  await user.keyboard("{Enter}");
+  expect(screen.getByRole("button", { name: "关闭大图 · Esc" })).toHaveFocus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("button", { name: "放大查看" })).toHaveFocus());
+});
 it("provides fit, pixel scale, keyboard zoom and source reset", async () => {
   const user = userEvent.setup();
   const { rerender } = render(<HandeyeImageViewer {...props} />);
