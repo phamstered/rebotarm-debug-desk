@@ -16,6 +16,17 @@ type Props = {
   details?: string;
 };
 
+function ImageToolIcon({ name }: { name: "fit" | "minus" | "plus" | "expand" | "close" }) {
+  const paths = {
+    fit: "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 8h8v8H8z",
+    minus: "M5 12h14",
+    plus: "M5 12h14M12 5v14",
+    expand: "M8 3H3v5m0-5 6 6m7-6h5v5m0-5-6 6M3 16v5h5m-5 0 6-6m12 1v5h-5m5 0-6-6",
+    close: "m6 6 12 12M18 6 6 18",
+  };
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={paths[name]} /></svg>;
+}
+
 // Source-key remount resets inspection transforms without resetting on every RGB frame.
 export const HandeyeImageViewer = memo(function HandeyeImageViewer(
   props: Props,
@@ -173,51 +184,57 @@ function ImageViewport({
       role="toolbar"
       aria-label="图片查看工具"
     >
-      <button disabled={!ready} onClick={fit}>
-        适应窗口
+      <button aria-label="适应窗口" title="适应窗口（0 / F）" disabled={!ready} onClick={fit}>
+        <ImageToolIcon name="fit" />
       </button>
-      <button disabled={!ready} onClick={() => resizeZoom(1)}>
-        原始尺寸
+      <button aria-label="原始尺寸" title="原始尺寸（1）" disabled={!ready} onClick={() => resizeZoom(1)}>
+        <span aria-hidden="true">1:1</span>
       </button>
       <button
         aria-label="缩小图片"
+        title="缩小图片（−）"
         disabled={!ready}
         onClick={() => resizeZoom(scale / 1.25)}
       >
-        −
+        <ImageToolIcon name="minus" />
       </button>
       <output aria-label="图片缩放比例">
         {ready ? `${Math.round(scale * 100)}%` : "—"}
       </output>
       <button
         aria-label="放大图片"
+        title="放大图片（+）"
         disabled={!ready}
         onClick={() => resizeZoom(scale * 1.25)}
       >
-        ＋
+        <ImageToolIcon name="plus" />
       </button>
       {expanded ? (
-        <button ref={closeButton} onClick={() => setExpanded(false)}>
-          关闭大图 · Esc
+        <button aria-label="关闭大图 · Esc" title="关闭大图（Esc）" ref={closeButton} onClick={() => setExpanded(false)}>
+          <ImageToolIcon name="close" />
         </button>
       ) : (
         <button
           ref={expandButton}
+          aria-label="放大查看"
+          title="放大查看"
           disabled={!ready}
           onClick={() => setExpanded(true)}
         >
-          放大查看
+          <ImageToolIcon name="expand" />
         </button>
       )}
     </div>
   );
   const content = (
     <>
-      <div className="handeye-image-heading">
-        <strong>{title}</strong>
-        <span>{ready ? `${size.width} × ${size.height}` : ""}</span>
+      <div className="handeye-image-toolbar">
+        <div className="handeye-image-heading">
+          <strong>{title}</strong>
+          <span>{ready ? `${size.width} × ${size.height}` : ""}</span>
+        </div>
+        {controls}
       </div>
-      {controls}
       <div
         ref={stage}
         className={`handeye-image-stage${ready ? " ready" : ""}`}
