@@ -11,11 +11,19 @@ pub enum Page {
     Collection,
     Handeye,
     Motor,
+    // Decode old layout identities; this page can no longer be opened.
     Calibration,
     Gravity,
 }
 
 impl Page {
+    pub fn ensure_available(self) -> Result<(), String> {
+        if self == Self::Calibration {
+            Err("Joint4 Calibration 功能已移除".into())
+        } else {
+            Ok(())
+        }
+    }
     pub fn title(self) -> &'static str {
         match self {
             Self::Status => "Status",
@@ -163,6 +171,16 @@ pub fn restore_bounds(saved: Rect, work_area: Rect, minimum: (f64, f64)) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retired_calibration_identity_is_readable_but_cannot_open() {
+        let legacy: Page = serde_json::from_str("\"calibration\"").unwrap();
+        assert_eq!(legacy, Page::Calibration);
+        assert!(legacy.ensure_available().is_err());
+        for page in [Page::Status, Page::Dashboard, Page::Motion, Page::Monitor,
+            Page::Collection, Page::Handeye, Page::Motor, Page::Gravity] {
+            assert!(page.ensure_available().is_ok());
+        }
+    }
     #[test]
     fn callers_cannot_impersonate_other_windows_or_reuse_closed_incarnations() {
         let mut windows = WindowRegistry::default();

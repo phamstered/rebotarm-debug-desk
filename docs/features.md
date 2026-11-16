@@ -12,7 +12,7 @@
 6. [Robot View（URDF）](#_3-robot-view-urdf)
 7. [MIT 电机控制](#_4-mit-电机控制)
 8. [TCP 拖拽轨迹](#_5-tcp-拖拽轨迹)
-9. [Joint4 标定](#_6-joint4-标定)
+9. [Joint4 功能移除说明](#_6-joint4-标定)
 10. [工具栏：rosbag / 诊断 / 布局](#_7-工具栏-rosbag-诊断-布局)
 10. [重力辨识（设计草案）](#_8-重力辨识设计草案)
 
@@ -277,28 +277,9 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 ## 6. Joint4 标定
 
-### 做什么
+Joint4 Calibration 已从上位机移除，包括页面、导航、重力辨识跳转和专用采样/报告导出入口。旧导航和窗口偏好会回退到可用页面，其他窗口布局保留。手眼标定及 [全臂重力辨识](#_8-重力辨识) 不受影响。
 
-左侧 **Calibration** 页订阅 `/joint4_calibration_controller/status`，经白名单 `std_srvs/srv/Trigger` 服务执行 Begin / Capture / Release / Fit / Reset，采集多姿态并请求重力与 camera_link 等效负载回归。结果只显示与导出，**不修改** URDF、控制器 YAML 或在线参数。
-
-### 怎么用（概要）
-
-1. 现场托住机械臂，急停可用；Jetson 以标定模式启动，`joint4_calibration_controller` 已 **active**（勿与普通 `gravity_compensation_controller` 同时激活）。
-2. 打开 Calibration 页，确认 `Controller active` 与约 10 Hz 状态刷新。
-3. 单姿态：托住 → Begin Pose → 撤支撑 → 稳定后 Capture → 再托住 → Release；重复至至少 4 个姿态（推荐 6–8）。
-4. 全部释放后执行 Fit；可导出 JSON / CSV 审计报告。
-
-<Joint4CalibrationFlow />
-
-### 注意与边界
-
-- Capture 仅在 Controller active、状态新鲜、姿态稳定且确认手部支撑已撤掉后开放。
-- `safety_fault` 会锁定采样与拟合；托住后可 Release 清除新版 Controller 的故障锁存。旧版兼容：姿态已释放且速度 ≤ 0.05 rad/s 时允许重新 Begin。
-- Rebotarm Debug Desk **不负责**自动激活控制器；请在 Topics 的 ROS Control 面板显式操作。
-
-完整步骤与故障恢复：[Joint4 标定操作指南](./joint4-calibration)。
-
-全臂一键重力 / 参数辨识（`/StartGravityID`）为**独立**页（Bridge/UI 就绪，orchestrator E2E pending），Joint4 负载细标定仅作其可选子模式入口，见 [§8 重力辨识](#_8-重力辨识)。
+历史未确认任务仍由原生层核验和停止，未知结果继续占用；已有报告不删除，Jetson Controller 不卸载。旧版操作文档仅作[历史参考](./joint4-calibration)。
 
 ---
 
@@ -340,7 +321,7 @@ Navigation → **数据采集** 将已有遥操作流保存为 Jetson 上的 LeR
 
 独立 **「重力辨识」** 导航页调用 ROS action `/StartGravityID`（`GravityIdentification`，接口冻结见 [rebotarm-ros2-stack#23](https://github.com/phamstered/rebotarm-ros2-stack/pull/23)）：
 
-- Goal：`joint_mask`（默认 0x3F）、`mode` **仅 FULL_ARM 可 Start**（PAYLOAD 禁用并链 Joint4；与 stack #24 拒绝一致）、settle/capture、YAML/hot_reload、`max_effort_nm` 默认 10、`lock_gripper`
+- Goal：`joint_mask`（默认 0x3F）、`mode` **仅 FULL_ARM 可 Start**（PAYLOAD 禁用，不提供标定入口；与 stack #24 拒绝一致）、settle/capture、YAML/hot_reload、`max_effort_nm` 默认 10、`lock_gripper`
 - 安全：`confirmation: "ARMED"`；Start / Abort（Abort 运行中始终可用）
 - Feedback：phase 名、pose 进度、residual/measured/model、`rmse_running`、fault
 - Result：scales / biases / per-joint RMSE、`yaml_path`

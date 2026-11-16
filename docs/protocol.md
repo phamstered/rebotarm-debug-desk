@@ -146,7 +146,7 @@ Send goal（**必须** `confirmation: "ARMED"`）：
 }
 ```
 
-- `mode`：仅 `0`（FULL_ARM）。`1`（PAYLOAD）由 Bridge 拒绝（与 [stack#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) 一致）；请用 Joint4 标定。
+- `mode`：仅 `0`（FULL_ARM）。`1`（PAYLOAD）由 Bridge 拒绝（与 [stack#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) 一致）；上位机不提供 PAYLOAD 标定入口。
 - `joint_mask` 默认 / 全 0 时按 `0x3F`。
 - `command_timeout_ms`：**仅 host/编排对齐**；MCU 仍为编译期约 100 ms HOLD / 500 ms fault 11，本字段不改固件超时。
 
@@ -612,7 +612,7 @@ Bridge 在运动回调组串行处理发布、反馈和任务状态，最多保�
 
 ### Joint4 原生任务协议（多窗口开发分支）
 
-桌面 `call_joint4_calibration_service` 已移除直接 SSH 服务调用，改由应用级工作持有请求。只允许当前附着的 `page-calibration`，请求 Profile 必须匹配共享连接；Begin / Release 要求 `confirmation:"SUPPORTED"`，Capture 要求 `"HANDS_CLEAR"`。原生入口要求 hello 显式声明 `joint4_task_supported:true`。具备 ControllerManager 查询能力的 Bridge 现已接入这套服务适配器并声明能力；不依赖 MoveIt Action。旧 Bridge 仍拒绝该入口并提示更新。正式部署和实机验收与隔离模拟测试分开记录。
+桌面 Joint4 Calibration 页面以及 `call_joint4_calibration_service` / `save_joint4_calibration_report` IPC 已退役，不再启动新标定任务。以下 Bridge 协议保留用于历史任务停止、恢复核验及兼容测试；原有 ControllerManager 服务适配器不依赖 MoveIt Action。
 
 - `joint4_start`：唯一 `command_id`、`action:begin_pose|release_pose|fit|reset` 和上述确认。请求发送前占用全局运动槽及本页迁移许可；原生 worker 不随 IPC future 退出而丢弃已发送请求。`joint4_start_ack` 必须匹配编号及 action，包含布尔 `accepted` / `success` 和至多 16 KiB 的 `message`；仅明确 `accepted:false,success:false,evidence:"not_called"` 可释放未受理的任务。普通错误或回执丢失请求取消，不重新调用服务。
 - `joint4_capture`：沿用本页面已受理的 Begin 任务编号，另有唯一 `operation_id` 和手离开确认；同一时刻至多一个在途 Capture。排队事件仅允许续租，须收到 Begin 成功回执或匹配的 running 事件后才开放 Capture。回复 `joint4_capture_ack` 必须同时匹配两编号，含布尔 success 和有界 message。采样回执不结束姿态任务；异常回复请求释放，不重发采样。Bridge 串行调用服务，当前姿态最多保存 64 项采样回执；重复已完成操作编号返回原回执，不重发。重复在途 Capture 返回错误，保持原请求在途。
@@ -758,3 +758,7 @@ The private `leased-recovery-v1.json` record stores `kind`, original native `win
 Startup restores occupancy before workspace initialization and does not connect. An explicit connection with the original identity permits only the existing task status/observe queries. It does not renew the old owner or replay/resume motion. Existing kind-specific terminal checks, including correlated nested result IDs and trajectory/Joint4 evidence, still apply. Unknown or evicted Bridge history is not completion evidence. Valid terminal proof freezes the task, and occupancy is released only after durable record cleanup. Corrupt or conflicting journals are preserved and block new actuation; explicit DISABLE remains available.
 
 多窗口桌面要求 hello 声明 `visual_pick_cancel_id_supported:true` 后才允许开始或取消视觉 Pick；旧 Bridge 可继续只读观察，但需升级后才能执行抓取。前端退出、异常清理及取消按钮始终发送其持有的原任务编号，原生层同时核对当前任务与最终发送许可，避免迟到取消影响后继任务。
+
+### Joint4 桌面入口退役
+
+`call_joint4_calibration_service` 与 `save_joint4_calibration_report` 已从 Tauri invoke 注册表移除。功能页白名单不再包含 Calibration，旧窗口布局仅作迁移读取，不能打开或拆出。通用 Bridge IPC 继续拒绝 `joint4_start` / `joint4_capture` / `joint4_cancel` 绕行；旧任务由原生恢复及停止核验路径处理，不自动重发采样或重建页面。Bridge 协议本身保留兼容。

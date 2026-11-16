@@ -275,21 +275,6 @@ fn controllers_switch_command(
 }
 
 
-fn validate_calibration_report(path: &str, content: &str) -> Result<(), String> {
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return Err("标定报告必须保存到绝对路径".into());
-    }
-    let extension = path.extension().and_then(|value| value.to_str());
-    if !matches!(extension, Some("json" | "csv")) {
-        return Err("标定报告只支持 .json 或 .csv".into());
-    }
-    if content.is_empty() || content.len() > 1_048_576 {
-        return Err("标定报告内容为空或超过 1 MiB".into());
-    }
-    Ok(())
-}
-
 fn validate_diagnostics_snapshot(path: &str, content: &str) -> Result<(), String> {
     let path = Path::new(path);
     if !path.is_absolute() {
@@ -934,20 +919,6 @@ async fn switch_ros_controllers(
 }
 
 #[tauri::command]
-async fn call_joint4_calibration_service(
-    app: AppHandle, window: tauri::Webview, hub: State<'_, session::runtime::Runtime>,
-    profile: ConnectionProfile, action: String, confirmation: Option<String>,
-) -> Result<serde_json::Value, String> {
-    session::joint4_task::start(app, window.label().into(), &hub, profile, action, confirmation).await
-}
-
-#[tauri::command]
-fn save_joint4_calibration_report(local_path: String, content: String) -> Result<(), String> {
-    validate_calibration_report(&local_path, &content)?;
-    std::fs::write(&local_path, content).map_err(|error| format!("标定报告保存失败：{error}"))
-}
-
-#[tauri::command]
 fn save_diagnostics_snapshot(local_path: String, content: String) -> Result<(), String> {
     validate_diagnostics_snapshot(&local_path, &content)?;
     std::fs::write(&local_path, content).map_err(|error| format!("诊断快照保存失败：{error}"))
@@ -1564,8 +1535,6 @@ pub fn run() {
             check_ros_controllers,
             switch_ros_controller,
             switch_ros_controllers,
-            call_joint4_calibration_service,
-            save_joint4_calibration_report,
             handeye::handeye_capture,
             handeye::handeye_local,
             handeye::handeye_save,
@@ -1795,15 +1764,6 @@ mod tests {
             &[],
         )
         .is_err());
-    }
-
-    #[test]
-    fn validates_joint4_calibration_report_paths_and_sizes() {
-        assert!(validate_calibration_report("/tmp/joint4.json", "{}").is_ok());
-        assert!(validate_calibration_report("/tmp/joint4.csv", "pose,q4").is_ok());
-        assert!(validate_calibration_report("relative.json", "{}").is_err());
-        assert!(validate_calibration_report("/tmp/joint4.yaml", "x").is_err());
-        assert!(validate_calibration_report("/tmp/joint4.json", "").is_err());
     }
 
     #[test]

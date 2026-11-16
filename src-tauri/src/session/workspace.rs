@@ -108,6 +108,7 @@ impl Default for Workspace {
 }
 
 fn authorize(view: &Webview, page: Option<Page>) -> Result<(), String> {
+    if let Some(page) = page { page.ensure_available()?; }
     if view.label() == "main" || page.is_some_and(|page| page.label() == view.label()) {
         Ok(())
     } else {
@@ -604,6 +605,7 @@ impl Workspace {
     }
 
     async fn ensure(&self, app: &AppHandle, page: Page) -> Result<Webview, String> {
+        page.ensure_available()?;
         if let Some(view) = app.get_webview(page.label()) {
             return Ok(view);
         }

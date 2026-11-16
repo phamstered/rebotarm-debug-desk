@@ -293,6 +293,7 @@ impl Runtime {
             Ok(core)
         })
     }
+    #[cfg(test)]
     pub fn prepare_joint4(&self, label: &str, profile: &crate::ConnectionProfile, action: &str,
         confirmation: Option<&str>) -> Result<super::joint4_task::Prepared, String> {
         use super::joint4_task::{Job, Prepared};
@@ -338,6 +339,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn finish_joint4(&self, attachment: &Attachment, ticket: Option<u64>, request: &Value, result: Result<&Value, &str>) {
         let core = self.core.lock().unwrap();
         if core.epoch == attachment.epoch {
@@ -999,7 +1001,7 @@ impl Runtime {
             return Err("任务续租由原生会话管理，页面不能直接调用".into());
         }
         if matches!(op, "joint4_start" | "joint4_capture" | "joint4_cancel") {
-            return Err("Joint4 操作须通过受限原生标定入口".into());
+            return Err("Joint4 Calibration 功能已移除；旧任务仅由原生会话核验和停止".into());
         }
         if op == "trajectory_cancel" {
             return Err("直接轨迹取消须通过原生任务入口登记，页面不能向当前连接直接发送".into());

@@ -21,7 +21,7 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 
 多窗口的共享任务状态（运动／控制环境、手眼计算、rosbag、数据采集）在内嵌模式下统一显示于主窗口，功能页不再重复显示。拆出为独立窗口或进入窗口迁移恢复状态时，页面显示自己的任务提示；收回后恢复由主窗口展示。任务错误、结果未确认和取消入口保持可见，任务互斥及安全条件不变。
 
-九个原生功能页的窗口操作统一并入已有标题／工具区，不再显示额外的“页面名、主机、共享连接”横条。内嵌时只显示拆出图标；独立窗口提供连接详情、显示主窗口和收回图标；迁移回滚未完成时用恢复图标替换拆收。Topics 使用现有全局工具栏右侧，Motion 使用现有工具栏，其余页面使用标题栏右侧。图标保留中文可访问名称、悬停说明、键盘焦点及至少 32 px 点击区；采样、保存或控制任务期间禁止迁移，禁用原因可用键盘聚焦查看。断线、迁移恢复和失败仍显示文字，现有任务提示、取消及 DISABLE 不变。窄窗口优先隐藏辅助说明并允许标题区换行，不把图标悬浮在图像上。
+八个原生功能页的窗口操作统一并入已有标题／工具区，不再显示额外的“页面名、主机、共享连接”横条。内嵌时只显示拆出图标；独立窗口提供连接详情、显示主窗口和收回图标；迁移回滚未完成时用恢复图标替换拆收。Topics 使用现有全局工具栏右侧，Motion 使用现有工具栏，其余页面使用标题栏右侧。图标保留中文可访问名称、悬停说明、键盘焦点及至少 32 px 点击区；采样、保存或控制任务期间禁止迁移，禁用原因可用键盘聚焦查看。断线、迁移恢复和失败仍显示文字，现有任务提示、取消及 DISABLE 不变。窄窗口优先隐藏辅助说明并允许标题区换行，不把图标悬浮在图像上。
 
 ## 0. Jetson Bridge 部署脚本
 
@@ -200,15 +200,11 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 
 **不标完整「已实现」。** Desk 已提供「重力辨识」页与 Bridge op（`gravity_id_*` → `/StartGravityID`）。stack [#24](https://github.com/phamstered/rebotarm-ros2-stack/pull/24) 提供 FULL_ARM 编排（12 姿态、TRACK 前馈、YAML+hot-reload）；PAYLOAD 拒绝。Jetson 实机 E2E 前不写入「已实现」矩阵。Bring-up：`state_only` + `gravity_identification.launch.py`。见 [重力辨识](./gravity-identification)。
 
-## 10. Joint4 重力标定
+## 10. Joint4 标定已移除
 
-- 左侧 Calibration 页面订阅 `/joint4_calibration_controller/status`，展示关节位置、速度、模型/修正/所需力矩、参考位置、稳定时间与保护状态。
-- 标定流程通过受限的 `std_srvs/srv/Trigger` 服务执行 Begin、Capture、Release、Fit 和 Reset，界面不直接写入 URDF 或控制参数。
-- Capture 仅在 Controller active、状态新鲜、姿态保持稳定且确认手部支撑已撤掉后开放。
-- `safety_fault` 会锁定采样和拟合；托住 joint4 后可执行 Release 清除新版 Controller 的故障锁存。对旧版 Controller，姿态已释放且速度不超过 0.05 rad/s 时允许重新 Begin，以当前安全位置重建参考，避免界面与 Controller 互相锁死。
-- 标定采样和拟合结果可保存为本机 JSON/CSV 审计报告。
-- 多窗口功能的 Joint4 已接入原生任务占用：Begin 的服务回复不释放姿态任务，Capture 只能属于同一任务，Release 显示“已请求、等待核验”。Begin/Capture 等待期间仍可在托住确认后请求 Release；迟到回复不会覆盖释放提示或写入另一连接的样本。页面失联停止续租并请求释放；不把解除软保持误称为关闭重力前馈。
-- 此路径要求 Bridge 的 `joint4_task_supported` 能力；ROS 适配器已接入，旧 Bridge 会得到更新提示。服务串行执行，采样编号去重，Release 和输出关闭分别核验。原 SSH 直调已移除，不回退绕过共享任务锁。隔离联调不等于实机标定验收。
+上位机不再提供 Joint4 Calibration 页面、导航、重力辨识跳转及专用采样/导出 IPC。旧页面偏好回退到 Topics，旧原生窗口布局中的 Calibration 项被忽略，选中项回退到 Status，其他窗口布局保留。手眼标定和全臂重力辨识继续可用。
+
+旧 Joint4 任务的停止、终态核验及恢复记录兼容逻辑仍保留；未知任务不能因页面删除而解除占用。已有 Controller 冲突检查仍生效。本次移除不卸载 Jetson Controller，也不删除用户已导出的报告。
 
 ## 11. TCP 拖拽轨迹下发
 
@@ -279,7 +275,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | 电机交互 | 独立导航页、7 个默认关节、安全确认、每关节滑块/使能、使用当前位置、20 Hz 流、切页 DISABLE | `src/App.test.tsx`、`src/MotorControl.test.tsx` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort、关节掩码解析/校验及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
-| Joint4 标定 | 状态解析、安全门控、fault 恢复、原生任务归属、服务协议、报告校验与导出 | `src/joint4CalibrationLogic.test.ts`、`src/Joint4CalibrationPage.test.tsx`、`src-tauri/src/session/joint4_task.rs`、`src-tauri/src/lib.rs` |
+| Joint4 历史兼容 | 旧布局迁移、入口移除、原生任务恢复与停止核验 | `src/App.test.tsx`、`src-tauri/src/session/layout.rs`、`src-tauri/src/session/leased_recovery.rs` |
 | 运动学 | URDF 关节链/限位解析、TCP link 解析、正运动学、位置/姿态逆解收敛与限位钳制、四元数/RPY 转换、拖拽坐标换算与射线求交 | `src/kinematicsLogic.test.ts` |
 | 轨迹规划 | 轨迹控制器识别与优先级、Topic 命名、时长估算、轨迹点构造、fixed joint/TCP 工具偏移、链关节改写与非链关节保持 | `src/trajectoryLogic.test.ts` |
 | 轨迹规划 | IK 目标与失败边界、TCP 松手预览后确认、夹爪能力门禁、Controller“轨迹”标记 | `src/trajectoryLogic.test.ts`、`src/App.test.tsx` |

@@ -7,7 +7,6 @@ import UiLayoutDiagram from '../components/UiLayoutDiagram.vue'
 import RobotViewDataFlow from '../components/RobotViewDataFlow.vue'
 import MotorControlFlow from '../components/MotorControlFlow.vue'
 import TcpTrajectoryFlow from '../components/TcpTrajectoryFlow.vue'
-import Joint4CalibrationFlow from '../components/Joint4CalibrationFlow.vue'
 import ToolbarOverview from '../components/ToolbarOverview.vue'
 import GravityIdentificationWireframe from '../components/GravityIdentificationWireframe.vue'
 import GravityIdentificationFlow from '../components/GravityIdentificationFlow.vue'
@@ -23,7 +22,6 @@ export default {
     app.component('RobotViewDataFlow', RobotViewDataFlow)
     app.component('MotorControlFlow', MotorControlFlow)
     app.component('TcpTrajectoryFlow', TcpTrajectoryFlow)
-    app.component('Joint4CalibrationFlow', Joint4CalibrationFlow)
     app.component('ToolbarOverview', ToolbarOverview)
     app.component('GravityIdentificationWireframe', GravityIdentificationWireframe)
     app.component('GravityIdentificationFlow', GravityIdentificationFlow)
