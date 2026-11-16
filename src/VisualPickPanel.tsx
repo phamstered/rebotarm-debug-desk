@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { useEffect, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { nativeDesktop } from "./nativeWorkspaceLogic";
@@ -147,9 +148,9 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
       <div>单指预张开 {(preview.opening_m*1000).toFixed(1)} mm · {preview.calibrated?"已标定":"未标定，仅预览"}</div><div>张开 → 分段接近 → 下降 → 闭合 → 抬升保持</div></>}
     {blocked&&<div style={{overflowWrap:"anywhere"}}>{blocked}</div>}
     <label><input type="checkbox" checked={motion?.armed??false} disabled={state.busy||!preview?.execution_ready} onChange={e=>motion?.setArmed(e.target.checked)}/> 已确认现场安全、夹爪为空，允许运动</label>
-    <div className="viewer-overlay-row"><button disabled={Boolean(blocked)||!motion?.armed||state.busy} onClick={()=>void start()}>接近、抓取并抬升</button>
-      <button disabled={!state.busy||!owns.current} onClick={()=>bridge.send({op:"visual_pick_cancel",command_id:owns.current})}>取消抓取</button>
-      <button disabled={state.busy||clearing} onClick={()=>void clear()}>清除选择</button></div>
+    <div className="viewer-overlay-row"><ActionButton disabled={Boolean(blocked)||!motion?.armed||state.busy} onClick={()=>void start()}>接近、抓取并抬升</ActionButton>
+      <ActionButton disabled={!state.busy||!owns.current} onClick={()=>bridge.send({op:"visual_pick_cancel",command_id:owns.current})}>取消抓取</ActionButton>
+      <ActionButton disabled={state.busy||clearing} onClick={()=>void clear()}>清除选择</ActionButton></div>
     {state.phase!=="idle"&&<div aria-live="polite">{state.phase} · {state.message}</div>}
     {error&&<div role="alert" style={{overflowWrap:"anywhere"}}>{error}</div>}
   </section>;

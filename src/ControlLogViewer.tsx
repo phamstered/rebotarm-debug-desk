@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -92,7 +93,7 @@ export function ControlLogViewer({ profile, active, connected, preferredSource =
       </select></label>
       <label className="control-log-search">搜索日志<input type="search" placeholder="输入关键词，不区分大小写" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
       <label className="control-log-follow"><input type="checkbox" checked={follow} onChange={(event) => { userScrollUntil.current = 0; setFollow(event.target.checked); }} />跟随最新</label>
-      <button type="button" disabled={!connected || !snapshot?.exists || downloading} onClick={() => void download()}>{downloading ? "下载中…" : "下载完整日志"}</button>
+      <IconButton icon="download" label={downloading ? "下载中…" : "下载完整日志"} busy={downloading} type="button" disabled={!connected || !snapshot?.exists || downloading} onClick={() => void download()} />
     </div>
     <div className="control-log-meta"><span title={snapshot?.path}>{snapshot?.path || "只读获取 Jetson 日志"}</span><span>{lines.length} / {totalLines} 行</span></div>
     <p className="control-log-note">仅显示本次应用会话的新日志；重启应用后重新开始，Jetson 原始日志保留。</p>

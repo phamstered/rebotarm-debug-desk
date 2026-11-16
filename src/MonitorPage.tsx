@@ -1,3 +1,4 @@
+import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
@@ -343,16 +344,13 @@ export function MonitorPage({
             <small>{entry.panels.length}</small>
           </button>
         ))}
-        <button
+        <IconButton icon="plus" label="新建空仪表盘"
           type="button"
           className="monitor-panel-add"
-          aria-label="新建空仪表盘"
           title="新建空仪表盘"
           onClick={() => onAddDashboard(createEmptyDashboard())}
-        >
-          +
-        </button>
-        <button
+        />
+        <ActionButton
           type="button"
           className="monitor-panel-add"
           aria-label="添加力矩模板仪表盘"
@@ -360,8 +358,8 @@ export function MonitorPage({
           onClick={() => onAddDashboard(createTorqueDashboard(jointStateTopic))}
         >
           +转矩
-        </button>
-        <button
+        </ActionButton>
+        <ActionButton
           type="button"
           className="monitor-panel-add"
           aria-label="添加 VLA Chunk 仪表盘"
@@ -369,9 +367,9 @@ export function MonitorPage({
           onClick={() => onAddDashboard(createVlaChunkDashboard())}
         >
           +VLA
-        </button>
-        <button type="button" className="monitor-panel-add" aria-label="添加运动误差仪表盘"
-          onClick={() => onAddDashboard(createMotionErrorDashboard())}>+运动误差</button>
+        </ActionButton>
+        <ActionButton type="button" className="monitor-panel-add" aria-label="添加运动误差仪表盘"
+          onClick={() => onAddDashboard(createMotionErrorDashboard())}>+运动误差</ActionButton>
       </div>
 
       <div className="monitor-panel-meta">
@@ -387,24 +385,19 @@ export function MonitorPage({
                 event.currentTarget.blur();
               }
             }}
-          />
+         />
         </label>
-        <button
+        <IconButton icon="trash" label={`删除仪表盘 ${dashboard.name}`}
           type="button"
           className="ghost"
-          aria-label={`删除仪表盘 ${dashboard.name}`}
           onClick={() => onDeleteDashboard(dashboard.id)}
-        >
-          删除仪表盘
-        </button>
-        <button
+        />
+        <IconButton icon="clear" label="清空面板"
           type="button"
           className="ghost monitor-clear-panels"
           disabled={dashboard.panels.length === 0}
           onClick={() => onClearPanels(dashboard.id)}
-        >
-          清空面板
-        </button>
+        />
         <span className="monitor-panel-hint">
           悬停任一 Chart 显示共享准星；双击 Panel 标题栏最大化。从 Topics → Inspector 添加 Panel。
         </span>
@@ -419,26 +412,20 @@ export function MonitorPage({
               aria-label="布局预设名称"
               placeholder={dashboard.name}
               onChange={(event) => setPresetName(event.target.value)}
-            />
+           />
           </label>
-          <button type="button" className="ghost" onClick={savePreset}>
-            保存布局
-          </button>
-          <button
+          <IconButton icon="save" label="保存布局" type="button" className="ghost" onClick={savePreset} />
+          <IconButton icon="download" label="导出 JSON"
             type="button"
             className="ghost"
             disabled={layoutPresets.length === 0}
             onClick={exportPresets}
-          >
-            导出 JSON
-          </button>
-          <button
+          />
+          <IconButton icon="upload" label="导入 JSON"
             type="button"
             className="ghost"
             onClick={() => importInputRef.current?.click()}
-          >
-            导入 JSON
-          </button>
+          />
           <input
             ref={importInputRef}
             type="file"
@@ -450,7 +437,7 @@ export function MonitorPage({
               void onImportFile(file);
               event.target.value = "";
             }}
-          />
+         />
         </div>
         {layoutPresets.length > 0 && (
           <ul className="monitor-layout-preset-list">
@@ -465,14 +452,11 @@ export function MonitorPage({
                   {preset.name}
                   <small>{preset.panels.length} Panel</small>
                 </button>
-                <button
+                <IconButton icon="trash" label={`删除布局 ${preset.name}`}
                   type="button"
                   className="ghost monitor-layout-preset-delete"
-                  aria-label={`删除布局 ${preset.name}`}
                   onClick={() => removePreset(preset.id)}
-                >
-                  删除
-                </button>
+                />
               </li>
             ))}
           </ul>
@@ -493,25 +477,23 @@ export function MonitorPage({
                   setBagPath(event.target.value);
                   setPathError("");
                 }}
-              />
+             />
             </label>
-            <button type="button" className="ghost" disabled={bagBusy} onClick={onRefreshBagStatus}>
-              刷新状态
-            </button>
+            <IconButton icon="refresh" label="刷新状态" busy={bagBusy} type="button" className="ghost" disabled={bagBusy} onClick={onRefreshBagStatus} />
             {playing ? (
-              <button type="button" className="primary danger" disabled={bagBusy} onClick={onStopBagPlay}>
+              <ActionButton type="button" className="primary danger" disabled={bagBusy} onClick={onStopBagPlay}>
                 {bagBusy ? "处理中…" : "停止回放"}
-              </button>
+              </ActionButton>
             ) : (
-              <button type="button" className="primary" disabled={bagBusy || bagStateUnknown} onClick={startPlay}>
+              <ActionButton type="button" className="primary" disabled={bagBusy || bagStateUnknown} onClick={startPlay}>
                 {bagBusy ? "处理中…" : bagStateUnknown ? "回放状态待确认" : "开始回放"}
-              </button>
+              </ActionButton>
             )}
-            {bagStateUnknown && <button type="button" className="ghost danger" disabled={bagBusy} onClick={onStopBagPlay}>尝试停止回放</button>}
+            {bagStateUnknown && <ActionButton type="button" className="ghost danger" disabled={bagBusy} onClick={onStopBagPlay}>尝试停止回放</ActionButton>}
           </div>
 
           <div className="monitor-playbar" role="group" aria-label="回放控制条">
-            <button
+            <ActionButton
               type="button"
               className="monitor-playbar-btn"
               disabled={bagBusy || playing || bagStateUnknown}
@@ -519,8 +501,8 @@ export function MonitorPage({
               onClick={startPlay}
             >
               播放 1x
-            </button>
-            <button
+            </ActionButton>
+            <ActionButton
               type="button"
               className="monitor-playbar-btn"
               disabled={bagBusy || !playing}
@@ -528,7 +510,7 @@ export function MonitorPage({
               onClick={onStopBagPlay}
             >
               暂停
-            </button>
+            </ActionButton>
             <span className="monitor-playbar-rate" title="当前仅支持 1x">
               {playbar.rateLabel}
             </span>
@@ -540,7 +522,7 @@ export function MonitorPage({
                     ? undefined
                     : { width: `${Math.round(playbar.progressRatio * 100)}%` }
                 }
-              />
+             />
             </div>
             <span className="monitor-playbar-time" aria-label="已播放时长">
               {playbar.elapsedLabel}
@@ -581,25 +563,21 @@ export function MonitorPage({
             {timelineHint}
           </span>
           <div className="monitor-grid-actions">
-            <button
+            <IconButton icon={liveUpdates ? "pause" : "play"} label={liveUpdates ? "暂停跟随" : "跟随实时"}
               type="button"
               className={liveUpdates ? "" : "active"}
               aria-pressed={!liveUpdates}
               title={liveUpdates ? "暂停采样并冻结时间窗，便于查看尖峰" : "恢复采样并跳回实时尾部"}
               onClick={onToggleLiveUpdates}
-            >
-              {liveUpdates ? "暂停跟随" : "跟随实时"}
-            </button>
-            <button
+            />
+            <IconButton icon={layoutLocked ? "unlock" : "lock"} label={layoutLocked ? "解锁布局" : "锁定布局"}
               type="button"
               className={layoutLocked ? "active" : ""}
               aria-pressed={layoutLocked}
               title="锁定后禁止拖拽与缩放"
               onClick={() => onSetLayoutLocked(!layoutLocked)}
-            >
-              {layoutLocked ? "解锁布局" : "锁定布局"}
-            </button>
-            <button
+            />
+            <ActionButton
               type="button"
               className={compactType === "vertical" ? "active" : ""}
               aria-pressed={compactType === "vertical"}
@@ -609,25 +587,20 @@ export function MonitorPage({
               }
             >
               紧凑排列
-            </button>
-            <button
+            </ActionButton>
+            <IconButton icon="layout" label="重置布局"
               type="button"
               disabled={dashboard.panels.length === 0 || Boolean(maximizedPanel)}
               title="恢复默认 12 列网格打包（如 Motor Torque 7 Panel）"
               onClick={() => onResetLayout(dashboard.id)}
-            >
-              重置布局
-            </button>
+            />
             {maximizedPanel && (
-              <button
+              <IconButton icon="restore" label="恢复网格"
                 type="button"
                 className="active"
-                aria-label="恢复网格"
                 title="退出最大化，回到网格"
                 onClick={() => setMaximizedPanelId(null)}
-              >
-                恢复网格
-              </button>
+              />
             )}
           </div>
         </div>
@@ -644,23 +617,19 @@ export function MonitorPage({
             >
               <span className="monitor-panel-drag-label">{maximizedPanel.title}</span>
               {renderChartControls(maximizedPanel)}
-              <button
+              <IconButton icon="restore" label="退出最大化"
                 type="button"
-                className="monitor-panel-restore"
-                aria-label="退出最大化"
+                size="compact" className="monitor-panel-restore"
                 onClick={() => setMaximizedPanelId(null)}
                 onDoubleClick={(event) => event.stopPropagation()}
-              >
-                恢复
-              </button>
-              <button
+              />
+              <IconButton icon="close" label={`移除 ${maximizedPanel.title}`}
                 type="button"
-                className="monitor-panel-remove"
-                aria-label={`移除 ${maximizedPanel.title}`}
+                size="compact" className="monitor-panel-remove"
                 title="移除 Panel"
                 onClick={() => onRemovePanel(dashboard.id, maximizedPanel.id)}
                 onDoubleClick={(event) => event.stopPropagation()}
-              >×</button>
+              />
             </div>
             {renderPanelChart(maximizedPanel)}
           </div>
@@ -691,14 +660,13 @@ export function MonitorPage({
                 >
                   <span className="monitor-panel-drag-label">{panel.title}</span>
                   {renderChartControls(panel)}
-                  <button
+                  <IconButton icon="close" label={`移除 ${panel.title}`}
                     type="button"
-                    className="monitor-panel-remove"
-                    aria-label={`移除 ${panel.title}`}
+                    size="compact" className="monitor-panel-remove"
                     title="移除 Panel"
                     onClick={() => onRemovePanel(dashboard.id, panel.id)}
                     onDoubleClick={(event) => event.stopPropagation()}
-                  >×</button>
+                  />
                 </div>
                 {renderPanelChart(panel)}
               </div>

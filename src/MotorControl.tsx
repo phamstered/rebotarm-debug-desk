@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import type { HardwareStatus } from "./types";
@@ -219,7 +220,7 @@ export function MotorControl({
       <section className="motor-joints-card">
         <div className="motor-card-title">
           <div><strong>关节目标</strong><span>逐关节设置 Position、使能状态与滑块行程</span></div>
-          <button className="use-current" onClick={useCurrentPositions}>使用当前位置</button>
+          <ActionButton className="use-current" onClick={useCurrentPositions}>使用当前位置</ActionButton>
         </div>
         <div className="motor-list" role="list">
           {motors.map((motor, index) => {
@@ -240,7 +241,7 @@ export function MotorControl({
                     disabled={streaming}
                     aria-label={`${name} 使能`}
                     onChange={(event) => updateMotor(index, { enabled: event.target.checked })}
-                  />
+                 />
                   <span>{name}</span>
                 </label>
                 <label className="motor-position">
@@ -254,7 +255,7 @@ export function MotorControl({
                     value={Number(motor.position) || 0}
                     aria-label={`${name} Position 滑块`}
                     onChange={(event) => updateMotor(index, { position: event.target.value })}
-                  />
+                 />
                   <input
                     type="text"
                     inputMode="decimal"
@@ -265,7 +266,7 @@ export function MotorControl({
                       const normalized = normalizeDecimal(event.target.value);
                       if (normalized !== null) updateMotor(index, { position: normalized });
                     }}
-                  />
+                 />
                 </label>
                 <div className="motor-travel">
                   <label>min
@@ -276,7 +277,7 @@ export function MotorControl({
                       value={motor.min}
                       aria-label={`${name} 行程 min`}
                       onChange={(event) => updateDecimal(event.target.value, (value) => updateMotor(index, { min: value }))}
-                    />
+                   />
                   </label>
                   <label>max
                     <input
@@ -286,7 +287,7 @@ export function MotorControl({
                       value={motor.max}
                       aria-label={`${name} 行程 max`}
                       onChange={(event) => updateDecimal(event.target.value, (value) => updateMotor(index, { max: value }))}
-                    />
+                   />
                   </label>
                   <span className="motor-feedback" title="当前反馈">
                     p {Number.isFinite(feedback) ? Number(feedback).toFixed(4) : "-"}
@@ -321,10 +322,10 @@ export function MotorControl({
         </label>
 
         <div className="control-actions">
-          <button className="send-command" disabled={mode !== 3 && (streaming || controlLocked || !active || !armed)} onClick={start}>
+          <ActionButton className="send-command" disabled={mode !== 3 && (streaming || controlLocked || !active || !armed)} onClick={start}>
             {mode === 3 ? "发送 DISABLE" : "开始 20 Hz 发送"}
-          </button>
-          <button className="stop-command" onClick={disable}>停止并 DISABLE</button>
+          </ActionButton>
+          <ActionButton className="stop-command" onClick={disable}>停止并 DISABLE</ActionButton>
         </div>
         {streaming && <div className="streaming-indicator"><span /> 正在发送 {selected.label}（{enabledCount} 关节）</div>}
         {result && <div className="command-result">{result}</div>}

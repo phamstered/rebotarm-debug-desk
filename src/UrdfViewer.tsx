@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { VisualPickPanel } from "./VisualPickPanel";
 import { VisualPickPreviewLayer } from "./VisualPickPreviewLayer";
 import type { VisualPickPreview, ObjectBox } from "./types";
@@ -506,8 +507,8 @@ export function UrdfViewer({
         )}>
         {loading && <div className="viewer-overlay-status" role="status">{loading}</div>}
         <div className="viewer-interaction" aria-label="Robot View 操作方式">
-          <button type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("tcp"); }}>TCP 拖拽</button>
-          <button type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("joint"); }}>关节调整</button>
+          <ActionButton type="button" aria-pressed={interaction === "tcp"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("tcp"); }}>TCP 拖拽</ActionButton>
+          <ActionButton type="button" aria-pressed={interaction === "joint"} disabled={dragging} onClick={() => { previewJoint(null); handleDragCancel(); setInteraction("joint"); }}>关节调整</ActionButton>
         </div>
         {interaction === "joint" && <JointRotationPanel joints={rotationJoints} selected={selectedJoint}
           jointState={jointState} active={active && Boolean(robot) && !overlayError} motion={jointMotion} hasPreview={Boolean(jointPreview)} resetKey={jointPreviewReset}
@@ -553,9 +554,9 @@ export function UrdfViewer({
         {jointMotion?.gripper && !jointMotion.gripper.available && <p>{jointMotion.gripper.message}</p>}
         <label><input type="checkbox" checked={jointMotion?.armed ?? false} disabled={!jointMotion || jointMotion.busy}
           onChange={(event) => jointMotion?.setArmed(event.target.checked)} />已确认工作区安全，允许运动</label>
-        <button type="button" disabled={!active || dragging || (!tcpPending && gripperTarget === undefined) || Boolean(preview?.error) || Boolean(poseInputError) || !jointMotion?.armed || jointMotion.busy || Boolean(tcpPending ? jointMotion.tcpPoseReason || !jointMotion.executeTcpPose : jointMotion.jointTargetsReason) || (gripperTarget !== undefined && (!Number.isFinite(gripperTarget) || !jointMotion.gripper?.available || !jointMotion.gripper.fresh || gripperTarget < jointMotion.gripper.lower || gripperTarget > jointMotion.gripper.upper))}
-          onClick={() => void confirmTcp()}>确认执行</button>
-        <button type="button" disabled={!tcpPending && gripperTarget === undefined} onClick={handleDragCancel}>恢复实时</button>
+        <ActionButton type="button" disabled={!active || dragging || (!tcpPending && gripperTarget === undefined) || Boolean(preview?.error) || Boolean(poseInputError) || !jointMotion?.armed || jointMotion.busy || Boolean(tcpPending ? jointMotion.tcpPoseReason || !jointMotion.executeTcpPose : jointMotion.jointTargetsReason) || (gripperTarget !== undefined && (!Number.isFinite(gripperTarget) || !jointMotion.gripper?.available || !jointMotion.gripper.fresh || gripperTarget < jointMotion.gripper.lower || gripperTarget > jointMotion.gripper.upper))}
+          onClick={() => void confirmTcp()}>确认执行</ActionButton>
+        <ActionButton type="button" disabled={!tcpPending && gripperTarget === undefined} onClick={handleDragCancel}>恢复实时</ActionButton>
         {(jointMotion?.tcpPoseReason || !jointMotion?.executeTcpPose) && <p>{jointMotion?.tcpPoseReason || "当前 Bridge 不支持 TCP 位姿规划，请更新 Bridge"}</p>}
         {preview?.error && <div className="viewer-overlay-row error">{preview.error}</div>}
         {preview && !preview.error && dragging && (
@@ -568,8 +569,8 @@ export function UrdfViewer({
         )}
         {status && <div className={`viewer-overlay-status ${status.kind}`}>{status.text}</div>}
         {onSavePose && <div className="viewer-save-pose">
-          <button type="button" className="position-primary" disabled={!active || dragging || Boolean(savePoseDisabledReason)}
-            title={savePoseDisabledReason || "保存当前实测关节姿态，不保存未执行的 TCP 预览"} onClick={onSavePose}>保存当前姿态</button>
+          <ActionButton type="button" className="position-primary" disabled={!active || dragging || Boolean(savePoseDisabledReason)}
+            title={savePoseDisabledReason || "保存当前实测关节姿态，不保存未执行的 TCP 预览"} onClick={onSavePose}>保存当前姿态</ActionButton>
           {savePoseError && <p role="alert" className="error">{savePoseError}</p>}
         </div>}
         </>}
@@ -589,7 +590,7 @@ export function UrdfViewer({
             colorMode={rgbdColorMode}
             nearM={rgbdNearM}
             farM={rgbdFarM}
-          />
+         />
           {active && interaction === "joint" && robot && rotationJoint && <JointAxisMarker robot={robot} joint={rotationJoint} />}
           {active && interaction === "tcp" && robot && tcp.name && (targetPose ?? actualPose) && (
             <TcpPoseHandle key={handleSession} pose={(targetPose ?? actualPose)!} frame={handleFrame}

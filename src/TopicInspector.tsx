@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { TopicSample } from "./appLogic";
@@ -183,7 +184,7 @@ export function TopicInspector({
         )}
       </>}
       {tab === "details" && <div className="inspector-details" aria-label="ROS 详情">
-        <div className="inspector-details-toolbar"><span>当前 ROS Graph 详情</span><button type="button" disabled={detailsLoading || (!selected && !selectedNode)} onClick={() => setDetailsRevision((value) => value + 1)}>刷新详情</button></div>
+        <div className="inspector-details-toolbar"><span>当前 ROS Graph 详情</span><IconButton icon="refresh" label="刷新详情" busy={detailsLoading} type="button" disabled={detailsLoading || (!selected && !selectedNode)} onClick={() => setDetailsRevision((value) => value + 1)} /></div>
         {detailsLoading && <p className="inspector-detail-message">读取中…</p>}
         {detailsError && <p className="inspector-detail-message error">详情读取失败：{detailsError}</p>}
         {!bridge && <p className="inspector-detail-message">详情暂不可用</p>}

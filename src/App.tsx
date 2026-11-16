@@ -1,3 +1,4 @@
+import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions, NativePageActionsContext } from "./NativePageActions";
 import { NativeCollectionOperationStatus } from "./NativeCollectionOperationStatus";
 import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
@@ -280,17 +281,14 @@ function PanelTitle({
         <span className="panel-meta">{meta}</span>
         {onCollapseSidebar && <button className="sidebar-rail-toggle" type="button" aria-label={collapseSidebarLabel} title={collapseSidebarLabel} onClick={onCollapseSidebar}>{collapseSidebarLabel === "收起右侧栏" ? "›" : "‹"}</button>}
         {onRefresh && (
-          <button
-            className={`panel-refresh ${refreshing ? "refreshing" : ""}`}
+          <IconButton icon="refresh" label={`刷新${title}`} busy={refreshing}
+            size="compact" className={`panel-refresh ${refreshing ? "refreshing" : ""}`}
             type="button"
-            aria-label={`刷新${title}`}
             title={`刷新 ${title}`}
             aria-busy={refreshing}
             disabled={refreshing}
             onClick={onRefresh}
-          >
-            <span>↻</span>
-          </button>
+          />
         )}
         <button
           className="panel-toggle"
@@ -338,7 +336,7 @@ function ResizeHandle({
       aria-valuenow={Math.round(value)}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-    />
+   />
   );
 }
 
@@ -346,7 +344,7 @@ function ModalShell({ title, onClose, children, actions }: { title: string; onCl
   return (
     <div className="modal-backdrop">
       <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="toolbar-modal-title"><strong>{title}</strong><button type="button" aria-label={`关闭${title}`} onClick={onClose}>×</button></div>
+        <div className="toolbar-modal-title"><strong>{title}</strong><IconButton icon="close" label={`关闭${title}`} type="button" onClick={onClose} /></div>
         <div className="toolbar-modal-content">{children}</div>
         <div className="toolbar-modal-actions">{actions}</div>
       </section>
@@ -1805,7 +1803,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       onDismissError={() => { workspace.dismissError(); setError(""); }} />;
   }
   if (!hostedPage && stage !== "connected" && manageHandeye) {
-    return <main className="handeye-offline"><button onClick={() => setManageHandeye(false)}>返回连接</button><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
+    return <main className="handeye-offline"><ActionButton onClick={() => setManageHandeye(false)}>返回连接</ActionButton><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
   }
 
   if (!hostedPage && stage !== "connected" && manageMotionGroups) {
@@ -1826,7 +1824,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           onDelete={removePosition}
           motion={positionMotion}
           onBack={() => setManagePositions(false)}
-        />
+       />
       </main>
     );
   }
@@ -1867,35 +1865,31 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             <span className={`status ${stage}`}>{stageNames[stage]}</span>
             <div className="connect-action-buttons">
               {stage === "failed" && (
-                <button type="button" className="ghost retry-connect" onClick={() => void connect()} disabled={connectBusy} title="从检查 SSH 起重新连接（非整步断点续传）">
+                <ActionButton type="button" className="ghost retry-connect" onClick={() => void connect()} disabled={connectBusy} title="从检查 SSH 起重新连接（非整步断点续传）">
                   重试
-                </button>
+                </ActionButton>
               )}
-              <button type="button" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</button>
-              {nativeMain && Object.values(workspace.snapshot.pages).some(page => page?.ready) && <button type="button" className="ghost" onClick={() => {
+              <ActionButton type="button" className="primary" onClick={() => void connect()} disabled={connectBusy}>连接 Jetson</ActionButton>
+              {nativeMain && Object.values(workspace.snapshot.pages).some(page => page?.ready) && <ActionButton type="button" className="ghost" onClick={() => {
                 const retained = (Object.keys(workspace.snapshot.pages) as AppPage[]).find(page => workspace.snapshot.pages[page]?.ready);
                 if (retained && !workspace.snapshot.pages[appPage]?.ready) setAppPage(retained);
                 setOfflineWorkspace(true);
-              }}>返回已打开页面</button>}
-              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("positions")}>管理姿态库</button>
-              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineHandeye()}>手眼标定 / 离线样本</button>
-              <button type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("groups")}>管理动作组</button>
+              }}>返回已打开页面</ActionButton>}
+              <ActionButton type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("positions")}>管理姿态库</ActionButton>
+              <ActionButton type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineHandeye()}>手眼标定 / 离线样本</ActionButton>
+              <ActionButton type="button" className="ghost" disabled={connectBusy} onClick={() => void openOfflineMotion("groups")}>管理动作组</ActionButton>
             </div>
           </div>
           {mainRecovery.pending && <p role="status">正在恢复共享会话…</p>}
-          {mainRecovery.error && <div role="alert">{mainRecovery.error}<button type="button" onClick={mainRecovery.retry}>重试恢复共享会话</button></div>}
+          {mainRecovery.error && <div role="alert">{mainRecovery.error}<ActionButton type="button" onClick={mainRecovery.retry}>重试恢复共享会话</ActionButton></div>}
           {openingOffline && <p role="status">正在同步离线配置…</p>}
           {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
           {error && (
             <div className="error-panel" role="alert">
               <pre className="error-box">{error}</pre>
               <div className="error-panel-actions">
-                <button type="button" className="copy-error" onClick={() => void copyConnectError()}>
-                  {errorCopied ? "已复制" : "复制错误"}
-                </button>
-                <button type="button" className="dismiss-error" onClick={() => { setError(""); setErrorCopied(false); }} title="Esc 也可关闭">
-                  关闭
-                </button>
+                <IconButton icon="copy" label={errorCopied ? "已复制" : "复制错误"} type="button" className="copy-error" onClick={() => void copyConnectError()} />
+                <IconButton icon="close" label="关闭" type="button" className="dismiss-error" onClick={() => { setError(""); setErrorCopied(false); }} title="Esc 也可关闭" />
               </div>
             </div>
           )}
@@ -1905,7 +1899,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }
 
   const connectionPanel = hostedPage ? <span>{profile.host} · {stage === "connected" ? "共享会话" : "未连接"}</span> : <div className="connection-panel">
-        <button
+        <ActionButton
           type="button"
           className="toolbar-action switch-host"
           aria-label="断开并重连…"
@@ -1913,13 +1907,9 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           title="断开当前会话并返回连接页；不会保留本会话，可再选主机重连"
         >
           <span aria-hidden="true">⇄</span>断开并重连…
-        </button>
-        <button type="button" className="toolbar-action" aria-label="连接配置" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效">
-          <span aria-hidden="true">⌁</span>连接配置
-        </button>
-        <button type="button" className="toolbar-action" aria-label="设置" onClick={openToolbarSettings} title="配置自动刷新、诊断快照与连接后导航">
-          <span aria-hidden="true">⚙</span>设置
-        </button>
+        </ActionButton>
+        <IconButton icon="link" label="连接配置" type="button" className="toolbar-action" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效" />
+        <IconButton icon="settings" label="设置" type="button" className="toolbar-action" onClick={openToolbarSettings} title="配置自动刷新、诊断快照与连接后导航" />
         {toolbarNotice && <output className="toolbar-notice" title={toolbarNotice}>{toolbarNotice}</output>}
         <ConnectStatusStrip
           lights={statusLights}
@@ -1931,7 +1921,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           faultCode={typeof faultCode === "number" ? faultCode : null}
           faultMode={faultMode}
           onFaultClick={openFaultOnStatus}
-        />
+       />
         <span className="toolbar-spacer" />
         <span className="connected-dot" />
         <span className="connected-host-name">{profile.name || profile.host}</span>
@@ -1942,23 +1932,20 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         >
           <span /> micro-ROS Agent：{isAgentOnline(agentStatus) ? "运行中" : agentError ? "检查失败" : agentStatus ? "未运行" : "检查中"}
         </span>
-        <button className="ghost disconnect-btn" onClick={() => void disconnect()} title="断开 SSH 隧道与 Bridge">断开</button>
+        <ActionButton className="ghost disconnect-btn" onClick={() => void disconnect()} title="断开 SSH 隧道与 Bridge">断开</ActionButton>
 </div>;
   const workspaceTools = <>        <div className="toolbar-actions" role="group" aria-label="全局操作">
-        <button
+        <IconButton icon="refresh" label="刷新全部状态" busy={topicRefreshing || rosControlRefreshing}
           type="button"
           className="toolbar-action"
-          aria-label="刷新全部状态"
           title="刷新 Topics 与 Controller 列表"
           disabled={topicRefreshing || rosControlRefreshing}
           onClick={() => {
             void refreshTopics();
             void refreshRosControllers();
           }}
-        >
-          <span className={topicRefreshing || rosControlRefreshing ? "spin" : ""}>↻</span>全部刷新
-        </button>
-          <button
+        />
+          <IconButton icon={liveUpdates ? "pause" : "play"} label={liveUpdates ? "暂停显示" : "继续显示"}
             type="button"
             className={`toolbar-action ${liveUpdates ? "" : "active"}`}
             aria-pressed={!liveUpdates}
@@ -1967,18 +1954,18 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
               setToolbarNotice(liveUpdates ? "实时数据显示已暂停；连接和 rosbag 录制不受影响" : "实时数据显示已恢复");
             }}
             title="暂停或恢复 Topic、JointState 与状态消息的界面更新"
-          ><span>{liveUpdates ? "Ⅱ" : "▶"}</span>{liveUpdates ? "暂停显示" : "继续显示"}</button>
-          <button
+          />
+          <ActionButton
             type="button"
             className={`toolbar-action record ${rosbagStatus?.recording ? "active" : ""}`}
             aria-pressed={Boolean(rosbagStatus?.recording)}
             disabled={Boolean(toolbarBusy) || (nativeDesktop() && !rosbagStatus)}
             onClick={() => void toggleRosbagRecording()}
             title={(nativeDesktop() && bagObservations.record.error) || rosbagStatus?.outputPath || "在 Jetson 上录制全部 ROS Topics"}
-          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : nativeDesktop() && !rosbagStatus ? "录制状态待确认" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</button>
-          {nativeDesktop() && !rosbagStatus && <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void toggleRosbagRecording(true)}>尝试停止录制</button>}
-          <button type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计"><span>⇩</span>{toolbarBusy === "diagnostics" ? "保存中…" : "诊断快照"}</button>
-          <button type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title={appPage === "motion" ? "恢复 Motion 默认布局，保留当前 Tab 与编辑内容" : "恢复面板尺寸并展开全部面板"}><span>⊞</span>重置布局</button>
+          ><span>{rosbagStatus?.recording ? "■" : "●"}</span>{toolbarBusy === "record" ? "处理中…" : nativeDesktop() && !rosbagStatus ? "录制状态待确认" : rosbagStatus?.recording ? "停止录制" : "开始录制"}</ActionButton>
+          {nativeDesktop() && !rosbagStatus && <ActionButton type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void toggleRosbagRecording(true)}>尝试停止录制</ActionButton>}
+          <IconButton icon="download" label="诊断快照" busy={toolbarBusy === "diagnostics"} type="button" className="toolbar-action" disabled={Boolean(toolbarBusy)} onClick={() => void saveDiagnostics()} title="导出连接、Topics、Controller、Fault 和消息统计" />
+          <IconButton icon="layout" label="重置布局" type="button" className="toolbar-action" onClick={resetWorkspaceLayout} title={appPage === "motion" ? "恢复 Motion 默认布局，保留当前 Tab 与编辑内容" : "恢复面板尺寸并展开全部面板"} />
         </div>
 </>;
   const motionWarning = typeof faultCode === "number" && faultCode !== 0 ? `硬件故障 ${faultCode}` : agentError || (!rosReady ? "ROS 反馈未就绪" : "") ||
@@ -2004,15 +1991,15 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {!hostedPage && appPage !== "motion" && !navExpanded && <button className="nav-reopen" aria-label="展开主工具栏" onClick={() => setNavExpanded(true)}>›</button>}
       <div className="app-main-column">
       {!hostedPage && (nativeMain || appPage !== "motion") && <header className="connected-topbar" role="banner" aria-label="已连接工具条">{connectionPanel}</header>}
-      {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<button onClick={workspace.dismissError}>关闭提示</button></div>}
+      {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<IconButton icon="close" label="关闭提示" onClick={workspace.dismissError} /></div>}
       {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
       {/* Embedded pages share the main window's banners; standalone/recovery windows need their own. */}
       {nativeDesktop() && (!hostedPage || workspace.snapshot.pages[hostedPage]?.detached || workspace.snapshot.pages[hostedPage]?.recovery_required) && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
-        <button type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</button>
-        {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <button type="button" onClick={() => void positionMotion.cancel()}>取消运动</button>}
+        <ActionButton type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</ActionButton>
+        {positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId && <ActionButton type="button" onClick={() => void positionMotion.cancel()}>取消运动</ActionButton>}
       </div>}
       <div className="app-page-content">
       {nativeMain ? <NativeWorkspaceHost page={appPage} snapshot={workspace.snapshot}
@@ -2048,7 +2035,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           actionNotice={statusActionNotice}
           onCardAction={handleStatusCardAction}
           onQuickAction={handleStatusQuickAction}
-        />
+       />
       ) : appPage === "collection" ? (
         <DataCollectionPage observations={nativeDesktop() ? sharedObservations : undefined} connected={stage === "connected"} onBusyChange={setPageBusy} profile={profile} topics={topics} rosReady={rosReady} hardwareStatus={hardwareStatus} topicSamples={messages} />
       ) : appPage === "gravity" ? (
@@ -2056,7 +2043,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           bridge={bridge}
           connected={stage === "connected"}
           onSessionActiveChange={setGravitySessionActive}
-        />
+       />
       ) : appPage === "monitor" ? (
         <MonitorPage
           workspace={monitorWorkspace}
@@ -2092,7 +2079,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           onRefreshBagStatus={() => void refreshBagPlayStatus()}
           onStartBagPlay={(bagPath) => void startBagPlay(bagPath)}
           onStopBagPlay={() => void stopBagPlay()}
-        />
+       />
       ) : appPage === "motor" ? (
         <MotorPage
           bridge={bridge}
@@ -2103,7 +2090,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           onStreamingChange={setControlStreaming}
           controlLocked={Boolean(armMode?.teachingRunning) || gravitySessionActive || Boolean(controllerAction)}
           controlLockedReason={armMode?.teachingRunning ? "拖动示教运行中：禁止直接电机命令，请使用示教夹爪入口" : controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}
-        />
+       />
       ) : null}
       {appPage === "dashboard" && <header className="app-toolbar native-window-header" role="toolbar" aria-label="应用工具栏">{workspaceTools}<NativePageActions /></header>}
       {(appPage === "dashboard" || topicsVisited) && (
@@ -2123,7 +2110,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             onCollapseSidebar={() => setSidebars((current) => ({ ...current, left: false }))}
             collapseSidebarLabel="收起左侧栏"
             onToggle={() => togglePanel("topics")}
-          />
+         />
           <div className="section-content topic-filter">
             <input
               type="search"
@@ -2131,7 +2118,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
               placeholder="搜索 Topic 或消息类型"
               value={topicFilter}
               onChange={(event) => setTopicFilter(event.target.value)}
-            />
+           />
             <span>{filteredTopics.length}/{topics.length}</span>
           </div>
           <div className="section-content topic-list">
@@ -2153,7 +2140,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
                 nudgeSplit(event.key === "ArrowUp" ? -0.03 : 0.03);
               }
             }}
-          />
+         />
         )}
         <section className={`sidebar-section ros-control-panel ${panels.rosControl ? "expanded" : "collapsed"}`} aria-label="ROS Control Controllers">
           <PanelTitle
@@ -2163,7 +2150,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             onRefresh={() => void refreshRosControllers()}
             refreshing={rosControlRefreshing}
             onToggle={() => togglePanel("rosControl")}
-          />
+         />
           <div className="section-content ros-control-content">
             <ControllerList status={rosControl} onInspect={inspectController} onManage={manageController} focusController={focusController} />
           </div>
@@ -2183,7 +2170,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             onCollapseSidebar={() => setSidebars((current) => ({ ...current, right: false }))}
             collapseSidebarLabel="收起右侧栏"
             onToggle={() => togglePanel("inspector")}
-          />
+         />
           {appPage === "dashboard" && panels.inspector && sidebars.right && <TopicInspector onDataVisibilityChange={setInspectorDataVisible} bridge={bridge} selected={selected} selectedNode={selectedNode} topicType={selectedTopicType} sample={messages[selected]} subscribeError={topicSubscribeError} monitorPanels={monitorWorkspace.dashboards} selectedMonitorPanelId={monitorWorkspace.selectedDashboardId} onAddToDataGraph={addToMonitor} />}
         </section>
       </section>
@@ -2221,7 +2208,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       )}
       {(!hostedPage || hostedPage === "motion") && <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
         connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
-        tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <button className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</button>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
+        tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <ActionButton className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</ActionButton>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
         resetVersion={motionLayoutReset} visible={appPage === "motion"} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
@@ -2277,7 +2264,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
               onRgbdPointSizeChange={(pointSize) => setRgbdSession((c) => ({ ...c, pointSize }))}
               onRgbdColorModeChange={setRgbdColorMode}
               onRgbdNearFarChange={(nearM, farM) => setRgbdSession((c) => ({ ...c, nearM, farM }))}
-            />
+           />
           )}
 </>}
         urdf={<UrdfInspectorPage active={appPage === "motion" && motionTab === "urdf" && windowVisible} xml={urdf} bridge={bridge} jointState={jointState} receivedAt={messages[profile.jointStateTopic]?.lastAt} topic={profile.urdfTopic} liveUpdates={liveUpdates} />}
@@ -2289,7 +2276,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             onUpdate={editPosition}
             onDelete={removePosition}
             motion={positionMotion}
-          />
+         />
 </>}
         groups={renderGroupEditor()}
         log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
@@ -2306,8 +2293,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           onClose={skipBridgeUpgrade}
           actions={(
             <>
-              <button type="button" onClick={skipBridgeUpgrade}>跳过</button>
-              <button type="button" className="primary" onClick={() => void upgradeBridge()}>升级</button>
+              <ActionButton type="button" onClick={skipBridgeUpgrade}>跳过</ActionButton>
+              <ActionButton type="button" className="primary" onClick={() => void upgradeBridge()}>升级</ActionButton>
             </>
           )}
         >
@@ -2322,7 +2309,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         <ModalShell
           title="连接配置"
           onClose={() => setConnectionDialogOpen(false)}
-          actions={<><button type="button" className="ghost" onClick={() => setConnectionDialogOpen(false)}>取消</button><button type="button" className="primary" onClick={saveConnectionSettings}>保存配置</button></>}
+          actions={<><ActionButton type="button" className="ghost" onClick={() => setConnectionDialogOpen(false)}>取消</ActionButton><ActionButton type="button" className="primary" onClick={saveConnectionSettings}>保存配置</ActionButton></>}
         >
           <p className="modal-hint">当前连接不会被中断；保存的配置将在下次重连时生效。</p>
           <ProfileForm profile={profileDraft} onChange={setProfileDraft} />
@@ -2332,7 +2319,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         <ModalShell
           title="应用设置"
           onClose={() => setSettingsDialogOpen(false)}
-          actions={<><button type="button" className="ghost" onClick={() => setSettingsDialogOpen(false)}>取消</button><button type="button" className="primary" onClick={saveToolbarSettings}>保存设置</button></>}
+          actions={<><ActionButton type="button" className="ghost" onClick={() => setSettingsDialogOpen(false)}>取消</ActionButton><ActionButton type="button" className="primary" onClick={saveToolbarSettings}>保存设置</ActionButton></>}
         >
           <div className="settings-form">
             <p>Controller 固定每 1 秒读取 Bridge 缓存；手动刷新会查询最新状态。</p>

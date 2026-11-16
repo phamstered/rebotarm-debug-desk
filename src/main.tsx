@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { hostedPageFromSearch, nativeDesktop } from "./nativeWorkspaceLogic";
 import "./styles.css";
+import "./buttons.css";
 
 const hostedPage = nativeDesktop() ? hostedPageFromSearch(window.location.search) : undefined;
 if (hostedPage) document.body.classList.add("native-page-body");

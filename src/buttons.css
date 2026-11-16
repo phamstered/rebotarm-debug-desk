@@ -1,0 +1,95 @@
+/* Shared action controls. Navigation, tabs, cards and drag handles keep their own layout. */
+:root {
+  --button-height: 32px;
+  --button-radius: 5px;
+  --button-text: #b6cbd5;
+  --button-line: #2a414d;
+  --button-surface: #10212b;
+}
+:root .ui-button.ui-button {
+  min-height: var(--button-height);
+  height: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--button-line);
+  border-radius: var(--button-radius);
+  background: var(--button-surface);
+  color: var(--button-text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 550;
+  letter-spacing: 0;
+  box-shadow: none;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color .12s, border-color .12s, color .12s;
+}
+:root .ui-button.ui-button:hover:not(:disabled) {
+  color: #e0eeeF;
+  border-color: #476873;
+  background: #19333e;
+}
+:root .ui-button.ui-button:is(.primary, .position-primary, .collection-primary, .motion-primary, .send-command, .joint-execute) {
+  color: #d8f7ee;
+  border-color: #367a6f;
+  background: #194a42;
+}
+:root .ui-button.ui-button:is(.danger, .position-danger, .collection-danger, .stop-command, .motion-stop, .stop, .disable-stop, .disconnect-btn) {
+  color: #f2b4ad;
+  border-color: #70403d;
+  background: #2d1c1e;
+}
+:root .ui-button.ui-button:is(.danger, .position-danger, .collection-danger, .stop-command, .motion-stop, .stop, .disable-stop, .disconnect-btn):hover:not(:disabled) {
+  color: #ffd1ca;
+  border-color: #966059;
+  background: #382225;
+}
+:root .ui-button.ui-button:is(.active, [aria-pressed="true"]) {
+  color: #aee6dc;
+  border-color: #3b746c;
+  background: #183c38;
+}
+:root .ui-button.ui-button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+:root .ui-button.ui-button[aria-busy="true"] { cursor: progress; }
+:root .ui-button.ui-button:focus-visible {
+  outline: 2px solid #74d4c4;
+  outline-offset: 2px;
+}
+:root .ui-button.ui-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--button-height);
+  width: var(--button-height);
+  min-width: var(--button-height);
+  height: var(--button-height);
+  padding: 0;
+  margin-left: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.action-icon { flex-shrink: 0; display: inline-block; vertical-align: middle; }
+.ui-button-compact { --button-height: 24px; }
+.ui-button-compact .action-icon { width: 14px; height: 14px; }
+.monitor-panel-drag { height: 28px; }
+:root .ui-icon-button.ui-icon-button.danger { border-color: transparent; background: transparent; }
+:root .ui-icon-button.ui-icon-button.danger:hover:not(:disabled) { background: #382225; border-color: #70403d; color: #ffd1ca; }
+.ui-icon-button[aria-busy="true"] .action-icon { animation: action-busy 1s linear infinite; }
+@keyframes action-busy { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  :root .ui-button.ui-button { transition: none; }
+  .ui-icon-button[aria-busy="true"] .action-icon { animation: none; }
+}
+/* Buttons can wrap without pushing narrow windows out of view. */
+.connect-action-buttons, .toolbar-actions, .monitor-grid-actions,
+.monitor-layout-presets-row, .monitor-panel-meta { flex-wrap: wrap; }
+.graph-toolbar > span { overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+  /* The old 420px graph minimum pushed the refresh action outside detached windows. */
+  .native-hosted-page .topics-workspace {
+    grid-template-columns: min(var(--left-width, 270px), 40%) minmax(0, 1fr);
+  }
+}

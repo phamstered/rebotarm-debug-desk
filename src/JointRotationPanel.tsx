@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { useEffect, useState } from "react";
 import type { KinematicJoint } from "./kinematicsLogic";
 import { positionMotionBusy, type PositionMotionControls } from "./positionMotionLogic";
@@ -88,15 +89,15 @@ export function JointRotationPanel({ joints, selected, jointState, active, motio
     <label className="joint-safety"><input type="checkbox" checked={motion?.armed ?? false} disabled={!motion || motion.busy}
       onChange={(event) => motion?.setArmed(event.target.checked)} />已确认工作区安全，允许运动</label>
     <div className="joint-rotation-actions">
-      <button type="button" disabled={!Object.keys(edits).length || motion?.busy} onClick={() => { setEdits({}); onPreview(null); }}>恢复实时</button>
-      <button type="button" className="joint-execute" disabled={Boolean(block || inputError || durationError) || !hasPreview || motion?.busy}
+      <ActionButton type="button" disabled={!Object.keys(edits).length || motion?.busy} onClick={() => { setEdits({}); onPreview(null); }}>恢复实时</ActionButton>
+      <ActionButton type="button" className="joint-execute" disabled={Boolean(block || inputError || durationError) || !hasPreview || motion?.busy}
         title={block || "MoveIt 碰撞规划后按指定时长执行；未编辑轴保持"}
         onClick={() => {
           if (block || inputError || durationError || !hasPreview || !Object.keys(targets).length || motion?.busy) return;
           setEdits({}); onPreview(null); void motion?.executeJoints(targets, seconds);
-        }}>确认执行</button>
+        }}>确认执行</ActionButton>
     </div>
     {block && <p className="joint-rotation-block">{block}</p>}
-    {motion?.busy && positionMotionBusy(motion.state.phase) && <button type="button" className="joint-cancel" onClick={() => void motion.cancel()}>取消运动</button>}
+    {motion?.busy && positionMotionBusy(motion.state.phase) && <ActionButton type="button" className="joint-cancel" onClick={() => void motion.cancel()}>取消运动</ActionButton>}
   </section>;
 }

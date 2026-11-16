@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { useState } from "react";
 import { MotionGroupDialog } from "./MotionGroupDialog";
 import {
@@ -36,7 +37,7 @@ export function MotionSyncEditor({
           value={name}
           maxLength={128}
           onChange={(e) => setName(e.target.value)}
-        />
+       />
       </label>
       <p>每个机械臂选择一个参与 Pose，至少两个机械臂。</p>
       <div className="motion-sync-choices">
@@ -59,16 +60,16 @@ export function MotionSyncEditor({
                     : ids.filter((id) => id !== step.id),
                 )
               }
-            />
+           />
             {tracks.find((t) => t.id === (step.trackId ?? "arm"))?.name} · Pose{" "}
             {index + 1} · {step.positionName}
           </label>
         ))}
       </div>
       <footer>
-        {onDelete && <button onClick={onDelete}>删除同步点</button>}
-        <button onClick={onClose}>取消</button>
-        <button
+        {onDelete && <ActionButton onClick={onDelete}>删除同步点</ActionButton>}
+        <ActionButton onClick={onClose}>取消</ActionButton>
+        <ActionButton
           className="motion-primary"
           disabled={!name.trim() || selected.length < 2}
           onClick={() =>
@@ -80,7 +81,7 @@ export function MotionSyncEditor({
           }
         >
           保存同步点
-        </button>
+        </ActionButton>
       </footer>
     </MotionGroupDialog>
   );

@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import { UrdfPanelDivider } from "./UrdfPanelDivider";
 import { Component, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import type { URDFRobot } from 'urdf-loader';
@@ -102,7 +103,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
       <div><strong>{model.name}</strong><small>{topic} · {model.nodes.filter(n => n.kind === 'link').length} Links · {model.joints.length} Joints · 只读分析</small></div>
       <label>姿态 <select aria-label="URDF 姿态" value={mode} onChange={e => { setNow(performance.now()); setMode(e.target.value); }}><option value="zero">零位</option><option value="live">实时姿态</option><option value="manual">手动预览</option></select></label>
       <label>显示 <select aria-label="URDF 显示" value={display} onChange={e => setDisplay(e.target.value as InspectorDisplay)}><option value="overlay">外观＋碰撞体</option><option value="visual">外观</option><option value="collision">碰撞体</option><option value="frames">坐标系</option></select></label>
-      <button aria-expanded={treeOpen} onClick={() => setTreeOpen(v => !v)}>结构树</button><button aria-expanded={propertiesOpen} onClick={() => setPropertiesOpen(v => !v)}>参数</button>
+      <ActionButton aria-expanded={treeOpen} onClick={() => setTreeOpen(v => !v)}>结构树</ActionButton><ActionButton aria-expanded={propertiesOpen} onClick={() => setPropertiesOpen(v => !v)}>参数</ActionButton>
     </header>
     <div className="urdf-inspector-body">
       <aside className="urdf-tree" hidden={!treeOpen} aria-label="URDF 结构树">
@@ -112,7 +113,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
         <div className="urdf-tree-scroll">{roots.map(id => tree(id,0))}</div>
       </aside>
       <div className="urdf-scene-area">
-        <div className="urdf-scene-tools"><button onClick={() => setFocus(v => ({ selected: false, revision: v.revision+1 }))}>全景</button><button disabled={!node} onClick={() => setFocus(v => ({ selected: true, revision: v.revision+1 }))}>聚焦选中</button>
+        <div className="urdf-scene-tools"><IconButton icon="fit" label="全景" onClick={() => setFocus(v => ({ selected: false, revision: v.revision+1 }))} /><IconButton icon="focus" label="聚焦选中" disabled={!node} onClick={() => setFocus(v => ({ selected: true, revision: v.revision+1 }))} />
           <select aria-label="隔离显示" value={isolate} onChange={e => setIsolate(e.target.value as typeof isolate)}><option value="all">全部部件</option><option value="selected">仅选中</option><option value="subtree">选中子树</option></select>
           <label><input type="checkbox" checked={axes} onChange={e => setAxes(e.target.checked)}/>坐标轴</label><label><input type="checkbox" checked={inertia} onChange={e => setInertia(e.target.checked)}/>质心 / 惯性</label>
         </div>
@@ -126,7 +127,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
         <div className="urdf-scene-caption">{mode === 'manual' ? '本地预览 · 不发送运动指令' : mode === 'zero' ? '零位 · 按 URDF 原点装配' : `只读 JointState · ${Number.isFinite(age) ? `${Math.round(age)} ms` : '等待反馈'}`}<span>橙色：选中 · 青色：碰撞体 · XYZ：红绿蓝</span></div>
       </div>
       <aside className="urdf-properties" hidden={!propertiesOpen} aria-label="URDF 参数">
-        <header><small>{node?.kind}</small><strong>{node?.name ?? '选择模型对象'}</strong><button onClick={() => setPropertiesOpen(false)} aria-label="关闭 URDF 参数">×</button></header>
+        <header><small>{node?.kind}</small><strong>{node?.name ?? '选择模型对象'}</strong><IconButton icon="close" label="关闭 URDF 参数" onClick={() => setPropertiesOpen(false)}  /></header>
         <UrdfPanelDivider side="properties" value={propertiesWidth} active={active && propertiesOpen} onChange={setPropertiesWidth}/>
         <nav aria-label="URDF 属性视图">{[['parameters','参数'],['xml','XML']].map(([id,label]) => <button key={id} aria-pressed={details === id} onClick={() => setDetails(id)}>{label}</button>)}</nav>
         <div className="urdf-properties-scroll">{details === 'xml' ? <pre aria-label="URDF 原始 XML">{node ? new XMLSerializer().serializeToString(node.element) : ''}</pre> : <>
@@ -134,7 +135,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
           <p className="urdf-reference">当前基座坐标 xyz / rpy<br/>{mode === 'live' && !fresh || !robot ? '—' : world}</p>
           {node?.fields.map((f,i) => <div className="urdf-field" key={i}><span>{f.label}<small>{f.source}</small></span><code>{f.value}</code></div>)}
           {joint && <div className="urdf-joint-preview"><strong>关节预览</strong><p>{displayNumbers(String(pose[joint.name] ?? 0), unit)}</p>{joint.mimic && <p>跟随 {joint.mimic.joint}，不能独立调整</p>}
-            {previewable && <><input aria-label="关节预览滑块" type="range" min={lower} max={upper} step={(upper-lower)/1000 || .001} value={pose[joint.name] ?? 0} disabled={mode !== 'manual'} onChange={e => updateManual(Number(e.target.value))}/><label>位置 ({unit})<JointValueInput key={joint.id} value={pose[joint.name] ?? 0} lower={lower} upper={upper} disabled={mode !== 'manual'} onCommit={updateManual}/></label><button onClick={() => { setMode('manual'); setManual(pose); }}>启用手动预览</button><button onClick={() => setManual({})}>重置本地姿态</button></>}
+            {previewable && <><input aria-label="关节预览滑块" type="range" min={lower} max={upper} step={(upper-lower)/1000 || .001} value={pose[joint.name] ?? 0} disabled={mode !== 'manual'} onChange={e => updateManual(Number(e.target.value))}/><label>位置 ({unit})<JointValueInput key={joint.id} value={pose[joint.name] ?? 0} lower={lower} upper={upper} disabled={mode !== 'manual'} onCommit={updateManual}/></label><ActionButton onClick={() => { setMode('manual'); setManual(pose); }}>启用手动预览</ActionButton><ActionButton onClick={() => setManual({})}>重置本地姿态</ActionButton></>}
           </div>}
           {node?.kind === 'link' && <div className="urdf-related">{model.joints.filter(j => j.parent === node.name).map(j => <button key={j.id} onClick={() => select(j.id)}>子 Joint · {j.name}</button>)}</div>}
         </>}</div>

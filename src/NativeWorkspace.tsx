@@ -1,3 +1,4 @@
+import { ActionButton, IconButton } from "./ActionButton";
 import { NativeTaskStatus } from "./NativeTaskStatus";
 import { NativeCollectionOperationStatus } from "./NativeCollectionOperationStatus";
 import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
@@ -58,12 +59,12 @@ export function NativeWorkspaceHost({ page, snapshot, covered, onError }: {
     {recovering ? <div className="native-workspace-placeholder" role="alert">
       <h2>{PAGE_TITLES[page]} 窗口需要恢复</h2>
       <p>上次移动未完成，页面窗口已保留。</p>
-      <button disabled={!snapshot.pages[page]?.ready || Boolean(snapshot.pages[page]?.busy_reason)} onClick={() => void invoke("workspace_recover", { page }).catch(reason => error.current(String(reason)))}>恢复窗口</button>
+      <ActionButton disabled={!snapshot.pages[page]?.ready || Boolean(snapshot.pages[page]?.busy_reason)} onClick={() => void invoke("workspace_recover", { page }).catch(reason => error.current(String(reason)))}>恢复窗口</ActionButton>
     </div> : detached && <div className="native-workspace-placeholder">
       <h2>{PAGE_TITLES[page]} 已在独立窗口打开</h2>
       <p>页面内容保留在原窗口中。</p>
-      <div><button onClick={() => void invoke("workspace_select", { page }).catch(reason => error.current(String(reason)))}>前往窗口</button>
-        <button onClick={() => void invoke("workspace_dock", { page }).catch(reason => error.current(String(reason)))}>收回主窗口</button></div>
+      <div><ActionButton onClick={() => void invoke("workspace_select", { page }).catch(reason => error.current(String(reason)))}>前往窗口</ActionButton>
+        <ActionButton onClick={() => void invoke("workspace_dock", { page }).catch(reason => error.current(String(reason)))}>收回主窗口</ActionButton></div>
     </div>}
   </div>;
 }
@@ -87,9 +88,9 @@ export function NativeOfflineWorkspace({ page, snapshot, onSelect, onConnection,
         </select>
       </label>
       <span>未连接 · 页面内容已保留</span>
-      <button onClick={onConnection}>返回连接</button>
+      <ActionButton onClick={onConnection}>返回连接</ActionButton>
     </header>
-    {error && <div className="native-workspace-error" role="alert">{error}<button onClick={onDismissError}>关闭提示</button></div>}
+    {error && <div className="native-workspace-error" role="alert">{error}<IconButton icon="close" label="关闭提示" onClick={onDismissError} /></div>}
     <NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus />
     <NativeWorkspaceHost page={page} snapshot={snapshot} covered={false} onError={onError} />
   </main>;

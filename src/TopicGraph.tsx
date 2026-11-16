@@ -1,3 +1,4 @@
+import { IconButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import type { BridgeClient } from "./bridge";
 import {
@@ -292,11 +293,11 @@ export function TopicGraph({
           {visibleGraph.nodes.filter((node) => node.kind === "topic").length} Topics · 滚轮缩放 · 拖动画布 · 拖动节点
         </span>
         <div className="graph-camera-tools">
-          <button type="button" aria-label="缩小" onClick={() => zoomBy(1 / 1.2)}>−</button>
+          <IconButton icon="minus" label="缩小" type="button" onClick={() => zoomBy(1 / 1.2)} />
           <span className="graph-zoom-label">{Math.round(camera.scale * 100)}%</span>
-          <button type="button" aria-label="放大" onClick={() => zoomBy(1.2)}>+</button>
-          <button type="button" onClick={() => setCamera(fitCameraToNodes(displayNodes, viewport))}>Fit</button>
-          <button type="button" onClick={() => setCamera(resetCamera(viewport, displayNodes))}>Reset</button>
+          <IconButton icon="plus" label="放大" type="button" onClick={() => zoomBy(1.2)} />
+          <IconButton icon="fit" label="Fit" type="button" onClick={() => setCamera(fitCameraToNodes(displayNodes, viewport))} />
+          <IconButton icon="reset" label="Reset" type="button" onClick={() => setCamera(resetCamera(viewport, displayNodes))} />
         </div>
         <label className="graph-bridge-toggle">
           <input
@@ -306,12 +307,10 @@ export function TopicGraph({
               setShowBridge(event.target.checked);
               localStorage.setItem(GRAPH_BRIDGE_VISIBILITY_KEY, String(event.target.checked));
             }}
-          />
+         />
           显示调试 Bridge
         </label>
-        <button type="button" onClick={() => void refresh()} disabled={loading}>
-          {loading ? "刷新中…" : "刷新 Graph"}
-        </button>
+        <IconButton icon="refresh" label={loading ? "刷新中…" : "刷新 Graph"} busy={loading} type="button" onClick={() => void refresh()} disabled={loading} />
       </div>
       {graphError && <div className="graph-error">Graph 加载失败：{graphError}</div>}
       {focusController && controllerFocus.nodes.size === 0 && (
@@ -361,7 +360,7 @@ export function TopicGraph({
                       cy={particle.y}
                       r={edge.relation === "publish" ? 2.6 : 2.2}
                       data-hz={particle.hz}
-                    />
+                   />
                   ))}
                 </g>
               );
@@ -405,7 +404,7 @@ export function TopicGraph({
                     width={node.radius * 2}
                     height={node.radius * 1.36}
                     rx={Math.min(12, node.radius * 0.35)}
-                  />
+                 />
                 ) : (
                   <ellipse rx={node.radius} ry={node.radius * 0.65} />
                 )}

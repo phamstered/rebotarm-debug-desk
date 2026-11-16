@@ -1,3 +1,4 @@
+import { ActionButton } from "./ActionButton";
 import { useState } from "react";
 import type { CustomPosition } from "./positionLogic";
 import { UrdfPoseThumbnail } from "./UrdfPoseThumbnail";
@@ -38,7 +39,7 @@ export function MotionPosePicker({
             value={name}
             maxLength={128}
             onChange={(e) => setName(e.target.value)}
-          />
+         />
         </label>
       )}
       <label>
@@ -47,12 +48,12 @@ export function MotionPosePicker({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="按姿态名称搜索"
-        />
+       />
       </label>
       {!sources.length && (
         <p>
           姿态库为空，请先在「姿态库」保存当前姿态。
-          {onOpenLibrary && <button onClick={onOpenLibrary}>前往姿态库</button>}
+          {onOpenLibrary && <ActionButton onClick={onOpenLibrary}>前往姿态库</ActionButton>}
         </p>
       )}
       <div className="motion-pose-choices">
@@ -75,7 +76,7 @@ export function MotionPosePicker({
                 xml={xml}
                 label={p.name}
                 {...motionPoseThumbnailProps(p.positions, p.gripperPosition)}
-              />
+             />
               <strong>{p.name}</strong>
               <small>
                 {selected.includes(p.id)
@@ -87,14 +88,14 @@ export function MotionPosePicker({
       </div>
       <p>选入顺序：{poses.map((p) => p.name).join(" → ") || "尚未选择"}</p>
       <footer>
-        <button onClick={onClose}>取消</button>
-        <button
+        <ActionButton onClick={onClose}>取消</ActionButton>
+        <ActionButton
           className="motion-primary"
           disabled={!poses.length || !name.trim()}
           onClick={() => onChoose(name.trim(), poses)}
         >
           {create ? "创建动作组" : single ? "替换所选 Pose" : "添加所选 Pose"}
-        </button>
+        </ActionButton>
       </footer>
     </MotionGroupDialog>
   );
