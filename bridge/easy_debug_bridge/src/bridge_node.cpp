@@ -1,6 +1,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <boost/asio.hpp>
 #include "easy_debug_bridge/controller_registry.hpp"
+#include "easy_debug_bridge/motor_control.hpp"
+#include "easy_debug_bridge/motor_control_core.hpp"
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/property_tree/json_parser.hpp>
@@ -300,6 +302,20 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
     return !error && open_.load();
   }
 
+  bool send_motor(const std::string &payload, easy_debug_bridge::motor_delivery::Time generated) {
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    if (!open_.load()) return false;
+    const auto at = std::chrono::steady_clock::now();
+    const auto aged = easy_debug_bridge::motor_delivery::age_payload(payload, generated, at);
+    if (!aged) return false;
+    WriteDeadline lease(*this, at + std::chrono::milliseconds(250));
+    beast::error_code error;
+    socket_.text(true);
+    socket_.write(asio::buffer(*aged), error);
+    if (error) { open_.store(false); ::shutdown(socket_.next_layer().native_handle(), SHUT_RDWR); }
+    return !error && open_.load();
+  }
+
   bool send_binary(const std::vector<uint8_t> &payload,
                    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max()) {
     std::lock_guard<std::mutex> lock(write_mutex_);
@@ -410,7 +426,8 @@ class BridgeNode : public rclcpp::Node {
           latest_status_ = *message;
           have_status_ = true;
           status_received_at_ = std::chrono::steady_clock::now();
-          if (sequence_ < message->last_command_sequence) {
+          if (!motor_sequence_v2_ && (!have_remote_sequence_ || easy_debug_bridge::motor_v2::sequence_after(message->last_command_sequence, sequence_))) {
+            have_remote_sequence_ = true;
             sequence_ = message->last_command_sequence;
           }
         }, safety_options);
@@ -439,6 +456,16 @@ class BridgeNode : public rclcpp::Node {
     ensure_gravity_id_client();
     gravity_id_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { gravity_id_tick(); });
 #endif
+    motor_control_ = std::make_unique<easy_debug_bridge::MotorControl>(*this, command_topic_,
+      [this] { return publish_task_disable(); },
+      [this] { std::lock_guard<std::mutex> lock(control_mutex_); return ++sequence_; },
+      [this](uint32_t sequence, bool boot_changed) { std::lock_guard<std::mutex> lock(control_mutex_);
+        motor_sequence_v2_ = true;
+        if (boot_changed || !have_remote_sequence_ || easy_debug_bridge::motor_v2::sequence_after(sequence, sequence_)) sequence_ = sequence;
+        have_remote_sequence_ = true; },
+      [this](uint32_t mask) { std::lock_guard<std::mutex> lock(control_mutex_); const auto at=std::chrono::steady_clock::now();
+        return easy_debug_bridge::motor_v2::mask_valid(mask) && have_status_ && have_joint_state_ && latest_status_.fault_code == 0 &&
+          (latest_status_.active_joint_mask & mask) == mask && at-status_received_at_<std::chrono::seconds(1) && at-joint_received_at_<std::chrono::seconds(1); });
     controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_, [this] { return publish_task_disable(); });
     joint4_calibration_ = std::make_unique<easy_debug_bridge::Joint4Calibration>(*this, controller_registry_,
@@ -494,6 +521,8 @@ class BridgeNode : public rclcpp::Node {
   int port() const { return port_; }
 
   void add_session(const std::shared_ptr<WebSocketSession> &session) {
+    const std::weak_ptr<WebSocketSession> weak = session;
+    motor_control_->connected(session->id(), [weak](const std::string &reply, easy_debug_bridge::motor_delivery::Time generated) { if (const auto target=weak.lock()) target->send_motor(reply, generated); });
     std::lock_guard<std::mutex> lock(session_mutex_);
     sessions_.push_back(session);
   }
@@ -522,6 +551,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void remove_session(uint64_t client) {
+    motor_control_->disconnected(client);
     gravity_id_disconnect(client);
     if(joint4_calibration_)joint4_calibration_->disconnected(client);
     if(visual_pick_)visual_pick_->cancel(client);
@@ -569,14 +599,19 @@ class BridgeNode : public rclcpp::Node {
     }
     const std::string op = request.get<std::string>("op", "");
     const std::string request_id = request.get<std::string>("request_id", "");
+    const auto motor_generation = motor_stop_generation_.load();
     try {
-      const bool starts=op=="position_move" || op=="position_group_start" || op=="position_group_resume" ||
+      const bool motor_v2=op=="motor_set_control_mode" || op=="motor_control_lease" || op=="motor_command_v2";
+      const bool starts=motor_v2 || op=="position_move" || op=="position_group_start" || op=="position_group_resume" ||
         op=="visual_pick_start" || op=="trajectory_command" || op=="gravity_id_send_goal" || op=="joint4_start" || op=="joint4_capture" ||
         (op=="joint_command" && request.get<int>("mode",-1)!=3);
       // Serialize admission across socket clients. DISABLE bypasses this lock.
       std::unique_lock<std::mutex> ingress(actuation_ingress_mutex_,std::defer_lock);
       if (starts) ingress.lock();
       std::string admission_error;
+      if (starts && !motor_v2) motor_control_->require_mit();
+      if (motor_v2 && (position_motion_->busy() || visual_pick_->busy() || gravity_id_busy()))
+        admission_error="已有运动任务，需等待停止确认后操作 Motor";
       if (joint4_calibration_->busy() && starts && op!="joint4_start" && op!="joint4_capture")
         admission_error="Joint4 标定持有任务锁，需等待释放确认";
       if (gravity_id_busy() && (op=="position_move" || op=="position_group_start" || op=="position_group_resume" || op=="visual_pick_start" || op=="trajectory_command" || (op=="joint_command" && request.get<int>("mode",-1)!=3)))
@@ -596,6 +631,7 @@ class BridgeNode : public rclcpp::Node {
                      EASY_DEBUG_BRIDGE_VERSION + "\",\"bridge_build_id\":\"" +
                      EASY_DEBUG_BRIDGE_BUILD_ID + "\",\"ros_distro\":\"humble\",\"motion_observation_supported\":true,\"gravity_task_supported\":true,\"rgbd_subscription_id_supported\":true,\"controllers_info_supported\":" +
                      (controller_registry_->supported() ? "true" : "false") +
+                     ",\"motor_control_supported\":" + (motor_control_->supported() ? "true" : "false") +
                      ",\"joint4_task_supported\":" + (joint4_calibration_->supported() ? "true" : "false") +
                      ",\"trajectory_task_supported\":" + (position_motion_->trajectory_supported() ? "true" : "false") +
                      ",\"rgb_target_tracking_supported\":" + (easy_debug_bridge::rgb_target_supported()?"true":"false") + ",\"visual_pick_supported\":true,\"visual_pick_cancel_id_supported\":true,\"object_detection_supported\":" + (easy_debug_bridge::object_detection_supported() ? "true}" : "false}"));
@@ -664,8 +700,12 @@ class BridgeNode : public rclcpp::Node {
         unsubscribe_rgbd(session, request_id);
       } else if (op == "resource") {
         send_resource(session, request.get<std::string>("uri", ""), request_id, request.get<std::string>("encoding", "base64"));
+      } else if (motor_v2 || op == "motor_capabilities") {
+        const std::weak_ptr<WebSocketSession> weak=session;
+        motor_control_->request(session->id(), request, [weak](const std::string &reply, easy_debug_bridge::motor_delivery::Time generated) { if (const auto target=weak.lock()) target->send_motor(reply, generated); },
+          [this,motor_generation] { return motor_stop_generation_.load() == motor_generation; });
       } else if (op == "joint_command") {
-        publish_joint_command(session, request, request_id);
+        publish_joint_command(session, request, request_id, motor_generation);
       } else if (op == "trajectory_command" || op == "trajectory_heartbeat" || op == "trajectory_cancel" || op == "trajectory_task_status") {
         if (op=="trajectory_command" && visual_pick_->busy()) throw std::runtime_error("视觉抓取持有运动锁");
         const std::weak_ptr<WebSocketSession> weak=session;
@@ -1069,15 +1109,22 @@ class BridgeNode : public rclcpp::Node {
 
   void publish_joint_command(const std::shared_ptr<WebSocketSession> &session,
                              const boost::property_tree::ptree &request,
-                             const std::string &request_id) {
+                             const std::string &request_id, uint64_t generation) {
     const int mode_value = request.get<int>("mode", -1);
-    const double velocity = request.get<double>("velocity", 0.0);
-    const double kp = request.get<double>("kp", 0.0);
-    const double kd = request.get<double>("kd", 0.0);
-    const double effort = request.get<double>("effort", 0.0);
+    const bool stopping = mode_value == 3;
+    if (stopping) motor_stop_generation_.fetch_add(1);
+    if (!stopping) {
+      for (const auto *field : {"control_mode", "drive_mode", "pos_vel", "boot_id", "control_epoch", "lease_id", "source_id"})
+        if (request.get_child_optional(field)) throw std::runtime_error("V1 JointCommand 只支持 MIT；POS_VEL 必须使用 V2 入口");
+      motor_control_->require_mit();
+    }
+    const double velocity = stopping ? 0.0 : request.get<double>("velocity", 0.0);
+    const double kp = stopping ? 0.0 : request.get<double>("kp", 0.0);
+    const double kd = stopping ? 0.0 : request.get<double>("kd", 0.0);
+    const double effort = stopping ? 0.0 : request.get<double>("effort", 0.0);
     const bool disable = mode_value == microros_stm32h723_bridge::msg::JointCommand::MODE_DISABLE;
     if ((position_motion_->busy() || visual_pick_->busy()) && !disable) { session->send(error_message(request_id, "MoveIt 点位运动正在执行，请先取消")); return; }
-    if (disable) { joint4_calibration_->disable(); gravity_id_disable(); visual_pick_->cancel(); position_motion_->disconnected(0); }
+    if (disable) { motor_control_->stopping(); joint4_calibration_->disable(); gravity_id_disable(); visual_pick_->cancel(); position_motion_->disconnected(0); }
 
     easy_debug_bridge::CommandFields fields;
     fields.mode = mode_value;
@@ -1087,7 +1134,7 @@ class BridgeNode : public rclcpp::Node {
     fields.kd = kd;
     fields.effort = effort;
     fields.confirmation = request.get<std::string>("confirmation", "");
-    if (const auto position_node = request.get_child_optional("position")) {
+    if (!disable) if (const auto position_node = request.get_child_optional("position")) {
       if (!position_node->empty()) {
         for (const auto &item : *position_node) {
           fields.positions.push_back(item.second.get_value<double>());
@@ -1096,7 +1143,7 @@ class BridgeNode : public rclcpp::Node {
         fields.position = position_node->get_value<double>();
       }
     }
-    if (request.get_child_optional("active_joint_mask")) {
+    if (!disable && request.get_child_optional("active_joint_mask")) {
       fields.mask_specified = true;
       fields.requested_joint_mask = request.get<uint32_t>("active_joint_mask", 0);
     }
@@ -1127,62 +1174,60 @@ class BridgeNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(control_mutex_);
       const auto now_steady = std::chrono::steady_clock::now();
       if (!disable) {
+        if (generation != motor_stop_generation_.load()) throw std::runtime_error("较早的 Motor 请求已被 DISABLE 撤销");
         if (!have_status_ || !have_joint_state_) {
-          session->send(error_message(request_id, "尚未收到 STM32 status 或 joint feedback"));
-          return;
+          throw std::runtime_error("尚未收到 STM32 status 或 joint feedback");
         }
         const auto status_age = std::chrono::duration_cast<std::chrono::milliseconds>(
             now_steady - status_received_at_).count();
         const auto joint_age = std::chrono::duration_cast<std::chrono::milliseconds>(
             now_steady - joint_received_at_).count();
         if (status_age > 1000 || joint_age > 1000) {
-          session->send(error_message(request_id, "STM32 status 或 joint feedback 已过期"));
-          return;
+          throw std::runtime_error("STM32 status 或 joint feedback 已过期");
         }
         const uint32_t requested = easy_debug_bridge::requested_command_mask(fields);
         effective_mask = easy_debug_bridge::resolve_command_mask(
             requested, latest_status_.active_joint_mask);
         if (effective_mask == 0) {
-          session->send(error_message(
-              request_id, "所选关节未全部处于固件 active_joint_mask"));
-          return;
+          throw std::runtime_error("所选关节未全部处于固件 active_joint_mask");
         }
       }
       sequences = easy_debug_bridge::allocate_sequences(sequence_, disable ? 3U : 1U);
       command.sequence = sequences.front();
-    }
 
-    command.header.stamp = now();
-    command.header.frame_id = "base_link";
-    command.mode = static_cast<uint8_t>(mode_value);
-    command.position.fill(0.0F);
-    command.velocity.fill(0.0F);
-    command.kp.fill(0.0F);
-    command.kd.fill(0.0F);
-    command.effort.fill(0.0F);
-    if (!disable) {
-      const size_t joint_count = command.position.size();
-      std::vector<double> positions(joint_count, 0.0);
-      std::vector<double> velocities(joint_count, 0.0);
-      std::vector<double> kps(joint_count, 0.0);
-      std::vector<double> kds(joint_count, 0.0);
-      std::vector<double> efforts(joint_count, 0.0);
-      easy_debug_bridge::fill_joint_command_channels(
-          effective_mask, fields, joint_count,
-          positions.data(), velocities.data(), kps.data(), kds.data(), efforts.data());
-      for (size_t index = 0; index < joint_count; ++index) {
-        command.position[index] = static_cast<float>(positions[index]);
-        command.velocity[index] = static_cast<float>(velocities[index]);
-        command.kp[index] = static_cast<float>(kps[index]);
-        command.kd[index] = static_cast<float>(kds[index]);
-        command.effort[index] = static_cast<float>(efforts[index]);
-      }
-    }
-    for (const uint32_t sequence : sequences) {
-      command.sequence = sequence;
       command.header.stamp = now();
-      command_publisher_->publish(command);
-    }
+      command.header.frame_id = "base_link";
+      command.mode = static_cast<uint8_t>(mode_value);
+      command.position.fill(0.0F);
+      command.velocity.fill(0.0F);
+      command.kp.fill(0.0F);
+      command.kd.fill(0.0F);
+      command.effort.fill(0.0F);
+      if (!disable) {
+        const size_t joint_count = command.position.size();
+        std::vector<double> positions(joint_count, 0.0);
+        std::vector<double> velocities(joint_count, 0.0);
+        std::vector<double> kps(joint_count, 0.0);
+        std::vector<double> kds(joint_count, 0.0);
+        std::vector<double> efforts(joint_count, 0.0);
+        easy_debug_bridge::fill_joint_command_channels(
+            effective_mask, fields, joint_count,
+            positions.data(), velocities.data(), kps.data(), kds.data(), efforts.data());
+        for (size_t index = 0; index < joint_count; ++index) {
+          command.position[index] = static_cast<float>(positions[index]);
+          command.velocity[index] = static_cast<float>(velocities[index]);
+          command.kp[index] = static_cast<float>(kps[index]);
+          command.kd[index] = static_cast<float>(kds[index]);
+          command.effort[index] = static_cast<float>(efforts[index]);
+        }
+      }
+      for (const uint32_t sequence : sequences) {
+        command.sequence = sequence;
+        command.header.stamp = now();
+        command_publisher_->publish(command);
+      }
+    } // Allocation and publication share the short DISABLE critical section.
+    if (disable) motor_control_->disabled_published(command.sequence);
     session->send("{\"op\":\"joint_command_ack\",\"request_id\":" + json_quote(request_id) +
                   ",\"sequence\":" + std::to_string(command.sequence) +
                   ",\"mode\":" + std::to_string(command.mode) + "}");
@@ -1217,6 +1262,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   uint32_t publish_task_disable() {
+    motor_stop_generation_.fetch_add(1);
     if (!command_publisher_->get_subscription_count()) throw std::runtime_error("DISABLE 订阅不可用，仍保留轨迹占用");
     microros_stm32h723_bridge::msg::JointCommand command;
     command.mode=3;command.position.fill(0);command.velocity.fill(0);
@@ -2288,6 +2334,7 @@ class BridgeNode : public rclcpp::Node {
     return result;
   }
 
+  std::unique_ptr<easy_debug_bridge::MotorControl> motor_control_;
   std::shared_ptr<easy_debug_bridge::ControllerRegistry> controller_registry_;
   std::unique_ptr<easy_debug_bridge::PositionMotion> position_motion_;
   std::unique_ptr<easy_debug_bridge::Joint4Calibration> joint4_calibration_;
@@ -2334,6 +2381,9 @@ class BridgeNode : public rclcpp::Node {
   bool have_status_{false};
   bool have_joint_state_{false};
   uint32_t sequence_{0};
+  bool have_remote_sequence_{false};
+  bool motor_sequence_v2_{false};
+  std::atomic<uint64_t> motor_stop_generation_{0};
   std::chrono::steady_clock::time_point status_received_at_{};
   std::chrono::steady_clock::time_point joint_received_at_{};
 #if defined(EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID) && EASY_DEBUG_BRIDGE_HAS_GRAVITY_ID

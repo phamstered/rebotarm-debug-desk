@@ -16,9 +16,12 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct Record {
     pub command_id: String,
     pub profile: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 }
 impl Record {
     fn validate(&self) -> Result<(), String> {
+        if self.operation.as_deref().is_some_and(|op| !matches!(op,"configuration"|"release"|"stream")) { return Err("Motor 恢复操作无效".into()); }
         if !self.command_id.starts_with("motor-")
             || self.command_id.len() > 128
             || serde_json::to_vec(&self.profile)
@@ -84,7 +87,7 @@ impl Recovery {
             }
             if let Some(record) = file.record {
                 record.validate()?;
-                let owner = tasks.restore_motor(record.command_id.clone(), &record.profile)?;
+                let owner = tasks.restore_motor(record.command_id.clone(), &record.profile, record.operation.is_some())?;
                 store.owner = Some(owner);
                 store.record = Some(record);
             }
@@ -123,6 +126,7 @@ impl Recovery {
         let record = Record {
             command_id: task.command_id,
             profile,
+            operation: tasks.motor_record_kind(id),
         };
         record.validate()?;
         if store.owner.is_some_and(|owner| owner != id) {
@@ -330,6 +334,28 @@ mod tests {
         assert!(third.snapshot().is_none());
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
+    #[test]
+    fn v2_configuration_is_durable_before_send_and_recovery_contains_no_target_or_lease() {
+        use super::super::motor_v2_task::tests::{caps,acquire};
+        let path = path(); let tasks = Arc::new(Tasks::default()); let recovery = Recovery::default();
+        recovery.restore(&tasks, Ok(path.clone())); tasks.configure_motor(1, &profile());
+        tasks.observe(1, &status(1,3,1)); tasks.observe(1, &json!({"motor_control":caps()}));
+        let mut request=acquire(); request["op"]=json!("motor_set_control_mode"); request["support_confirmation"]=json!("SUPPORTED");
+        let admission=tasks.admit(owner(1), &request, Instant::now()).unwrap();
+        assert!(!admission.permit.as_ref().unwrap()(), "disk record precedes transport permission");
+        recovery.prepare(&tasks,admission.ticket.unwrap(),profile()).unwrap(); assert!(admission.permit.unwrap()());
+        let stored: Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["record"]["operation"],"configuration");
+        for forbidden in ["position","velocity_limit","lease_id","confirmation","support_confirmation","kp","kd","effort"] {
+            assert!(stored["record"].get(forbidden).is_none());
+        }
+        let restarted=Arc::new(Tasks::default()); Recovery::default().restore(&restarted,Ok(path.clone()));
+        restarted.configure_motor(2,&profile()); restarted.observe(2,&status(1,3,1));
+        assert!(restarted.admit(owner(2),&request,Instant::now()).is_err());
+        assert_eq!(restarted.poll(2,Instant::now()).unwrap().message,json!({"op":"joint_command","mode":3}));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     #[test]
     fn motor_write_and_cleanup_failures_keep_occupancy_without_blocking_tasks() {
         let path = path();

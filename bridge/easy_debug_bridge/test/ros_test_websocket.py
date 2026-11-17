@@ -4,7 +4,18 @@ import json
 import os
 import socket
 import struct
+import time
 import uuid
+
+
+def wait_for(check, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = check()
+        if value:
+            return value
+        time.sleep(.04)
+    raise AssertionError('condition timed out')
 
 
 class WebSocket:

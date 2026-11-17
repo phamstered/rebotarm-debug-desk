@@ -57,7 +57,7 @@ fn urgent_command(message: &Value) -> bool {
     matches!(
         message["op"].as_str(),
         Some("position_cancel" | "visual_pick_cancel" | "gravity_id_cancel" | "trajectory_cancel" | "joint4_cancel")
-    ) || (message["op"] == "joint_command" && message["mode"].as_i64() == Some(3))
+    ) || super::motor_command::disable(message)
 }
 
 fn message_frame(message: Message) -> Result<Option<WireFrame>, String> {

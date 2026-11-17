@@ -306,3 +306,11 @@ Position（含动作组）、Pick、Gravity、直接 Trajectory 和 Joint4 共�
 主 WebView 的重载恢复由 `useNativeMainRecovery` 在文档初始化时执行：读取 Runtime context，只在现有原生会话 connected 时调用无 port/profile 的 attach，读取 Topics 后再次核对 epoch 与 profile_revision，再恢复 UI。它不调用 `check_ssh`、`start_session` 或 `stop_session`，也不监听后续正常连接流程以免与用户主动连接竞争。恢复失败只释放自身 attachment，保留共享 transport 与其他消费者；原生进程重启后的离线行为不变。
 
 Tauri `RunEvent::Exit` 在保存布局后关闭 Runtime，并同步向 `SessionState` 持有的 SSH 子进程发出结束信号、清空本地端口记录。不能依赖托管状态 Drop 或在退出回调中另起异步清理任务：事件循环退出可能使两者都不执行。清理只使用该 Child 句柄，既不扫描进程名，也不停止远端 Bridge。
+
+### Motor V2 的兼容与停止证明
+
+Motor 页的驱动候选和执行状态分离；V1 MIT 保持原消息布局，V2 POS_VEL 使用独立 ROS 消息、能力状态与配置服务。Bridge 的 MotorControl 适配器用独立回调组推进非阻塞事务，ROS 收包/看门狗不等待 WebSocket 写入；状态按连接合并到有界发送队列。每连接 source_id 与固件 boot/epoch/lease 绑定，配置不能由周期运动帧触发。能力探测的“已观察到 V2”是会话内粘性的，状态消失不会重新启用旧协议宽松路径。
+
+模式申请先停机，再等待真实反馈，写入/读回配置后才发出终态结果；恢复 MIT 还需全组验证和 RELEASE。`disabled_verified` 由固件依据本次 CAN stop 之后的七轴反馈生成，而不是依据曾经缓存的零使能掩码。显式 DISABLE 撤销在途配置与流权限；晚到服务回调、旧 epoch 或 lease 不能重新使能。Bridge 在 V2 流中断时请求停止，Rust 也监视真正发出的指令并保留未知任务，均不补发旧目标。
+
+原生 Motor 恢复记录扩展为可选 operation 类别（configuration/release/stream），兼容已有 V1 记录。恢复只建立关闭输出的占用，V2 记录不能仅凭旧 HardwareStatus 解锁。Bridge 无页面订阅也推送 MotorControlStatus，因此所有 WebView 关闭后仍由原生会话接收停止证据。硬件资格验证由 executor 单独控制，默认 POS_VEL supported mask 为零；隔离模拟验收不改变真实电机资格。

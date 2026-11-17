@@ -1169,7 +1169,7 @@ impl Runtime {
             self.tasks.touch(&attachment.owner(), Instant::now());
             (self.tasks.admit(attachment.owner(), &message, Instant::now())?, core.profile.clone())
         };
-        if message["op"] == "joint_command" && message["mode"] != 3 {
+        if super::motor_command::mutation(&message) {
             if let Some(id) = admission.ticket.filter(|id| self.tasks.motor_needs_prepare(*id)) {
                 let recovery = self.motor_recovery.clone(); let tasks = self.tasks.clone(); let profile = profile.clone();
                 let prepared = tokio::task::spawn_blocking(move || recovery.prepare(&tasks, id, profile)).await
@@ -1326,6 +1326,7 @@ fn enqueue(client: &mut Client, epoch: u64, frame: WireFrame, at: u64, static_to
             frame.metadata["topic"].as_str().unwrap_or("")
         )),
         "rgbd_frame"
+        | "motor_control_status"
         | "visual_target_frame"
         | "native_position_info_changed"
         | "native_visual_pick_changed" => Some(frame.op().to_string()),
@@ -2161,6 +2162,46 @@ mod tests {
         assert!(!seen.lock().unwrap().iter().any(|m|m["op"] == "joint_command" && m["mode"] != 3));
         hub.close(); server.await.unwrap();
         if path.parent().unwrap().exists() { std::fs::remove_dir_all(path.parent().unwrap()).unwrap(); }
+    }
+
+    #[tokio::test]
+    async fn restored_v2_stops_with_no_webviews_and_waits_for_verified_broadcast_after_epoch_change() {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default(); let profile = offline_profile("fixture.invalid");
+        hub.connect_profile(port, profile.clone()).await.unwrap();
+        let (motor, _) = hub.attach("page-motor").unwrap();
+        let status = |stamp| json!({"op":"topic_message","topic":"/status","data":{"mode":3,"last_command_sequence":123,"header":{"stamp":{"sec":stamp,"nanosec":0}}}});
+        let mut caps = super::super::motor_v2_task::tests::caps();
+        for stamp in 100..300 {
+            caps["stamp_ns"] = json!(stamp.to_string());
+            events.send(json!({"op":"motor_control_status","motor_control":caps})).unwrap();
+        }
+        events.send(status(1)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !hub.core.lock().unwrap().latest_topics.contains_key("/status") { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert!(hub.core.lock().unwrap().clients[&motor.window].mailbox.queued_frames() <= 2,
+            "periodic motor evidence must coalesce even without a frontend pull");
+        hub.tasks.restore_motor("motor-recovered-configuration".into(), &profile, true).unwrap();
+        hub.detach("page-motor", &motor).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !seen.lock().unwrap().iter().any(|v|v["op"]=="joint_command" && v["mode"]==3) { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        caps["last_command_sequence"]=json!(123); caps["control_epoch"]=json!(8);
+        caps["stamp_ns"]=json!("300"); caps["disabled_verified"]=json!(false);
+        events.send(json!({"op":"motor_control_status","motor_control":caps})).unwrap(); events.send(status(2)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub.core.lock().unwrap().latest_topics["/status"].0.metadata != status(2) { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert!(hub.tasks.motor_terminal().is_none(), "cached mode/mask zero is not verified output-off");
+        caps["stamp_ns"]=json!("301"); caps["disabled_verified"]=json!(true);
+        events.send(json!({"op":"motor_control_status","motor_control":caps})).unwrap(); events.send(status(3)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub.tasks.motor_terminal().is_none() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert!(seen.lock().unwrap().iter().all(|v| !super::super::motor_command::mutation(v)),
+            "recovery must never replay configuration, acquire a lease or stream a target");
+        hub.close(); server.await.unwrap();
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ export function MotorPage({
   jointState,
   status,
   commandTopic,
+  statusTopic,
   onStreamingChange,
   controlLocked = false,
   active = true,
@@ -19,6 +20,7 @@ export function MotorPage({
   jointState: JointState | null;
   status: HardwareStatus | null;
   commandTopic: string;
+  statusTopic?: string;
   onStreamingChange(streaming: boolean): void;
   controlLocked?: boolean;
   active?: boolean;
@@ -29,7 +31,7 @@ export function MotorPage({
       <header className="motor-page-header native-window-header">
         <div>
           <h1>Motor Control</h1>
-          <span>7 轴 MIT 独立控制</span>
+          <span>MIT / POS_VEL 逐轴控制</span>
         </div>
         <div className="motor-page-topic">
           <span>COMMAND TOPIC</span>
@@ -39,7 +41,7 @@ export function MotorPage({
       </header>
       <div className="motor-page-safety" role="note">
         <strong>发送前确认现场安全</strong>
-        <span>只有已使能且被固件 active_joint_mask 覆盖的关节会写入控制量；离开此页面会停止持续发送并下发 DISABLE。</span>
+        <span>核对所选关节与现场支撑；停止或离开页面会请求关闭输出，结果以新鲜固件反馈为准。</span>
       </div>
       {controlLocked && controlLockedReason && (
         <div className="motor-page-safety motor-page-locked" role="status">
@@ -51,6 +53,8 @@ export function MotorPage({
         bridge={bridge}
         jointState={jointState}
         status={status}
+        statusTopic={statusTopic}
+        commandTopic={commandTopic}
         onStreamingChange={onStreamingChange}
         controlLocked={controlLocked}
         active={active}

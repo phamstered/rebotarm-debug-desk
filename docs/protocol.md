@@ -77,6 +77,38 @@ MIT joint command:
 
 HOLD、TRACK和RETURN必须携带 `confirmation: "ARMED"`。DISABLE忽略输入值并将所有通道写零；显式 `active_joint_mask: 0` 在非 DISABLE 下会被拒绝。
 
+### Motor V2：能力、模式事务与 POS_VEL
+
+V1 `JointCommand` 类型/Topic/布局冻结为 MIT。非 DISABLE 的 `joint_command` 若带 `control_mode`、`drive_mode`、`pos_vel`、boot/epoch/lease/source 字段会返回 error，不忽略这些字段后执行 MIT；DISABLE 仍忽略控制值、清零并在所有驱动模式下可请求。
+
+`hello.motor_control_supported` 仅表示 Bridge 构建包含 V2 IDL，不是固件能力。运行能力由 `{"op":"motor_capabilities","request_id":"uuid"}` 查询，响应为同名 op 和 `motor_control`；发现 V2 固件后每个 WebSocket 另收到 100 ms 合并推送 `motor_control_status`，无需页面 Topic 订阅。状态包含：
+
+- `supported/fresh/reason/age_ms/protocol_version`；age_ms 包括源时间年龄、发送排队及保守的 250 ms 写入预算，用作接收端新鲜度上界。发现过 V2 发布者或状态后不再返回旧固件降级路径，重复源时间戳不刷新有效期。
+- `boot_id/source_id/owner_source_id/stamp_ns` 为十进制字符串，避免 JS 丢失 uint64 精度；source 由 Bridge 为连接随机生成，客户端不能指定。
+- `control_epoch/lease_id/selected_joint_mask/enabled_joint_mask/verified_joint_mask/pos_vel_supported_mask`，七轴 `control_modes`（UNKNOWN/MIT/POS_VEL）、`velocity_limit_max/position_min/position_max`。
+- `switching/operation_id/operation_state/last_command_sequence/mode/fault_code/error_code/rejected_sequence/reject_code`；operation state 为 idle=0/pending=1/success=2/failure=3/cancelled=4。
+- `disabled_verified` 为全七轴在本次实际 CAN 停止之后收到新鲜 DISABLED 反馈的证明。旧使能掩码为零、发布成功或服务 ACK 不能替代它。
+
+```json
+{"op":"motor_set_control_mode","request_id":"uuid","control_mode":"POS_VEL","boot_id":"123","control_epoch":7,"active_joint_mask":3,"confirmation":"ARMED","support_confirmation":"SUPPORTED"}
+```
+
+模式操作要求新鲜身份、已核验关闭输出和现场支撑确认。Bridge 先发布三帧 V1 DISABLE，等待新状态及对应序列，再调用独立 ROS `MotorControl` 服务。服务 accepted 只代表受理；异步等待选中轴实际模式读回、operation SUCCESS 和新 epoch 后才回复 `motor_set_control_mode_result`，包含 `terminal:true,motor_control`。恢复 MIT 时还要求整组七轴读回 MIT，并自动 RELEASE V2 来源后才完成。事务最多等待 10 秒；取消、身份变化、超时或失败会请求 DISABLE，不重放模式申请，也不自动执行目标。
+
+```json
+{"op":"motor_control_lease","request_id":"uuid","lease_action":"acquire","control_mode":"POS_VEL","boot_id":"123","control_epoch":8,"active_joint_mask":3,"confirmation":"ARMED"}
+```
+
+先由同一连接完成 POS_VEL 配置，再申请 lease；回复 `motor_control_lease_ack` 需要新状态证明相同来源、非零 lease 与关节集合。`lease_action:"release"` 仅在整组恢复 MIT/关闭后可用；正常模式恢复流程已自动释放。旧 lease 不跨停止、断流、重启或重新配置复用。ACQUIRE 后仍关闭输出、尚无首帧时有独立 500 ms 启动窗口；首帧之后固件继续使用 100 ms 命令 watchdog，Bridge / 原生使用 250 ms 写流监视。状态查询和后续发布 ACK 不延长指令有效期。
+
+```json
+{"op":"motor_command_v2","request_id":"uuid","boot_id":"123","control_epoch":8,"lease_id":12,"control_mode":"POS_VEL","mode":1,"active_joint_mask":3,"position":[0.1,0.2,0,0,0,0,0],"pos_vel":{"velocity_limit":[0.2,0.2,0,0,0,0,0]},"confirmation":"ARMED"}
+```
+
+V2 仅 mode=0 HOLD / mode=1 TRACK，两个数组恰好七个有限 float32；未选轴字段必须为零，选中轴速度上限为正且不超过已验证值，TRACK 目标在固件报告范围内。HOLD 由固件锁存当前位置。Bridge 分配统一序列并返回 `motor_command_v2_ack`（sequence/mode/boot_id/control_epoch/lease_id）；该 ACK 只说明发布，不能证明执行或到位。
+
+ROS Topic 从实际 `command_topic` 派生：命令追加 `_v2`，同父 namespace 下的 `motor_control_status` 与 `motor_control` 分别用于状态及服务。旧 ROS overlay 不含 V2 头文件时 Bridge 仍可编译，能力明确不支持。所有模式配置、lease 与 V2 帧都参与原生全局任务锁，仍只允许 `page-motor` 发起；DISABLE 优先旁路。V2 停止完成需 HardwareStatus 加相同 boot 的新 MotorControlStatus 证明，包括本次序列、`disabled_verified`、lease=0、mode=3、无使能且无切换。恢复文件只保存原连接、任务编号和操作类别，不保存目标、lease 或恢复发送权限。
+
 JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint_trajectory` subscription):
 
 ```json
@@ -590,7 +622,7 @@ Position/动作组、Pick、Gravity、Trajectory、Joint4 的原生任务同时�
 
 Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
 
-Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 不小于该次 DISABLE ACK、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
+Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 按 uint32 串行序列覆盖该次 DISABLE ACK（允许回绕）、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
 
 ### 直接 JTC 的任务协议（多窗口开发分支）
 

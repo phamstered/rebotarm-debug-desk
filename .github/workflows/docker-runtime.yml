@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: phamstered/rebotarm-ros2-stack
-          ref: 4d0d10e118ac57753613ea906ce0e57dad74da0d
+          ref: 89be8249fa7a9ce87a90068c09269c29a6924ad6
           path: stack-runtime
       - name: Build paired stack runtime
         run: stack-runtime/scripts/docker-runtime.sh build

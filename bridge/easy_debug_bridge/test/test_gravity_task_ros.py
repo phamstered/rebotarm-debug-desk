@@ -17,7 +17,7 @@ from rclpy.qos import qos_profile_sensor_data
 from microros_stm32h723_bridge.action import GravityIdentification
 from microros_stm32h723_bridge.msg import HardwareStatus, JointCommand
 from sensor_msgs.msg import JointState
-from test_gripper_motion_ros import WebSocket, wait_for
+from ros_test_websocket import WebSocket, wait_for
 from test_image_topic import send_json
 
 

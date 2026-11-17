@@ -2087,6 +2087,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           jointState={jointState}
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
+          statusTopic={profile.statusTopic}
           onStreamingChange={setControlStreaming}
           controlLocked={Boolean(armMode?.teachingRunning) || gravitySessionActive || Boolean(controllerAction)}
           controlLockedReason={armMode?.teachingRunning ? "拖动示教运行中：禁止直接电机命令，请使用示教夹爪入口" : controllerAction ? "Controller 切换进行中，请等待完成" : gravitySessionActive ? "重力辨识运行中：禁用 Motor 滑块下发（Abort 重力辨识后恢复）" : ""}

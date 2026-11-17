@@ -10,6 +10,7 @@ pub type SendPermit = Arc<dyn Fn() -> bool + Send + Sync>;
 pub struct CommandQueue(Mutex<[u64; 6]>);
 
 fn domain(message: &Value) -> Option<usize> {
+    if super::motor_command::mutation(message) { return Some(0); }
     match message["op"].as_str()? {
         "joint_command" if message["mode"].as_i64() != Some(3) => Some(0),
         "trajectory_command" => Some(1),
@@ -82,6 +83,15 @@ mod tests {
         assert!(queue
             .prepare(&json!({"op":"joint_command","mode":1}), None)
             .unwrap()());
+    }
+    #[test]
+    fn disable_fences_v2_configuration_lease_and_frames_but_not_capability_queries() {
+        let queue = Arc::new(CommandQueue::default());
+        let permits: Vec<_> = ["motor_set_control_mode", "motor_control_lease", "motor_command_v2"].iter()
+            .map(|op| queue.prepare(&json!({"op":op}), None).unwrap()).collect();
+        assert!(queue.prepare(&json!({"op":"motor_capabilities"}), None).is_none());
+        queue.prepare(&json!({"op":"joint_command","mode":3}), None);
+        assert!(permits.iter().all(|permit| !permit()));
     }
     #[test]
     fn disable_revokes_all_actuation_domains_and_caller_permits_cannot_override_it() {
