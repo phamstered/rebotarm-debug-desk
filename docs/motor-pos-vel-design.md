@@ -1,7 +1,7 @@
 # MIT / POS_VEL 电机控制兼容方案（Draft）
 
-> 日期：2026-11-17 · 跟踪 [Issue #281](https://github.com/phamstered/rebotarm-debug-desk/issues/281)。
-> **本文全部新增接口及行为均为待实现方案。本 PR 只提交设计，保持 Draft，不部署、不驱动电机。** 当前功能仍以 [基本功能](./basic-features#_6-mit-电机控制) 和 [协议](./protocol) 为准。该 Issue 只验收方案；后续跨仓功能实施另建 Issue。
+> 日期：2026-11-17 · 跟踪 [Issue #281](https://github.com/phamstered/rebotarm-debug-desk/issues/281)。同日并入 rebotarm-debug-desk、rebotarm-ros2-stack、rebotarm-executor 三仓房间共识。
+> **本文全部新增接口及行为均为待实现方案。本 PR 只提交设计，保持 Draft，不部署、不驱动电机，也不开始实现。** 当前功能仍以 [基本功能](./basic-features#_6-mit-电机控制) 和 [协议](./protocol) 为准。该 Issue 只验收方案；后续跨仓功能实施另建 Issue。POS_VEL 不写入已交付功能文档。
 
 ## 1. 推荐结论
 
@@ -13,9 +13,64 @@
 | 驱动模式 `control_mode` | MIT / POS_VEL | 电机使用哪种 CAN 编码及内部控制器，必须由固件切换并核验 |
 | 参数预设 `preset` | 自定义、某组 MIT 增益、某组 POS_VEL 速度上限 | 只填写表单，不切驱动、不使能、不发命令；不进入固件状态枚举 |
 
-首版范围是 **Motor 页手动调试的 POS_VEL**：同一任务的所选关节使用同一种驱动模式，逐关节位置与速度上限，继续 20 Hz 命令流。内部能力和反馈按关节建模，后续可扩展混合模式；首版不开放逐轴混合模式、不将 Teleop / Trajectory / VLA / 重力辨识自动迁移到 POS_VEL，不写电机 PID/Flash 参数。
+首版范围是 **Motor 页手动调试的 POS_VEL**：同一任务的所选关节使用同一种驱动模式，逐关节位置与速度上限，继续 20 Hz 命令流。内部能力和反馈按关节建模。首版不开放逐轴混合模式，也不在周期命令流里交替 MIT 与 POS_VEL；以后若要分轴使用不同驱动，只能在任务边界经切换事务完成。`MicroRosSystem`、Teleop、Trajectory、JTC、VLA、示教与重力辨识留在 V1 MIT，不订阅 V2，不写电机 PID/Flash 参数。
 
-关键约束：旧协议永远只代表 MIT；POS_VEL 不得自动降级为 MIT；模式切换必须在已确认输出关闭时完成；任何模式下都保留现有 DISABLE 入口。
+关键约束：旧协议永远只代表 MIT；POS_VEL 不得自动降级为 MIT；模式切换必须在已确认输出关闭时完成；任何模式下都保留现有 DISABLE 入口。2026-11-17 三仓否决在旧 `JointCommand` 末尾追加 `uint8 drive_mode`，改为独立 V2。细节见下一节。
+
+## 房间共识（2026-11-17）
+
+2026-11-17，rebotarm-debug-desk、rebotarm-ros2-stack 与 rebotarm-executor 对齐下列约束。此前考虑过在旧 `JointCommand` 末尾追加 `uint8 drive_mode`，**该方案明确否决**；三仓改为独立 V2。本节记录已同意的边界。台架未核项仍标为未解决，记录共识不开始实现。
+
+### V1 协议冻结
+
+MCU 仍订阅 `/stm32/joint_commands`，类型为 `microros_stm32h723_bridge/msg/JointCommand`。布局保持不变：`header`、`sequence`、`mode`（0=HOLD，1=TRACK，2=RETURN，3=DISABLE），以及 `float32[7]` 的 `position`、`velocity`、`kp`、`kd`、`effort`（joint1–6 与夹爪）。V1 永远只表示 MIT。不向该消息增加 `drive_mode` 或任何 POS_VEL 字段。
+
+原地追加字段被否决。它会改变 ROS 2 CDR 与类型哈希，未重编译的节点无法互通。旧 Bridge 还可能忽略新的 JSON 字段，仍按 MIT 发布。Desk、Bridge 与固件经常分开升级，这是危险的混合部署。
+
+### 独立 V2 路径
+
+POS_VEL 走独立 V2：新类型如 `JointCommandV2` 与 `MotorControlStatus`、模式配置服务，以及 Topic `/stm32/joint_commands_v2`（或等价名称）。V2 IDL 放在现有 `microros_stm32h723_bridge` 包内，MCU 静态库与 Jetson typesupport 一起生成。任何实现之前先估算 micro-ROS 内存。
+
+首刀只做 Motor 页手动 POS_VEL。`MicroRosSystem`、Teleop、Trajectory、JTC、VLA、示教与重力辨识留在 V1 MIT，不得订阅 V2。
+
+### 专用驱动模式切换与寄存器读回
+
+切换是独立事务。不能从周期命令的类型推断当前驱动，也不能把切换塞进 `/stm32/joint_commands` 或 V2 周期帧。达妙 CTRL_MODE（RID=10）是寄存器事务，不是逐帧字段。
+
+约定顺序：
+
+1. 停止，并发送 DISABLE。
+2. 证明输出已经关闭。
+3. 固件写入 CTRL_MODE（RID=10）。
+4. 逐轴读回必须与目标一致。
+5. 状态只上报**已确认**的模式。
+6. 此后才允许该模式的周期命令。
+
+发布成功、ACK、界面下拉选择或“已请求切换”都不是成功。只有确认过的寄存器读回算数。读回失败时保持失能，报告逐轴实际模式，不进入 TRACK，也不假定切换已经发生。
+
+周期流中混用 MIT 与 POS_VEL 帧必须拒绝。做法是在任务边界分阶段切换（示教 / 阻抗 / MIT，相对 PTP / 位置+速度），不在 250 Hz 流里交替两种编码。
+
+已有 `damiao_ensure_control_mode` 不能原样用于在线切换：它不先核验 DISABLE，位置缺失时可能代以 0，会忽略部分 CAN 发送结果，并且可能阻塞。须把“失能态写入 + 逐轴读回”从 250 Hz 环拆出。若某电机只能在使能状态下改模式，该型号不支持 v1 在线切换。
+
+### 仲裁与控制栈
+
+实际驱动不是 MIT、切换进行中，或 V2 被占用时，V1 只接受 DISABLE（`mode=3`）。其他 V1 命令拒绝，避免 JTC 把 MIT 增益送进位置环。V1 `mode=3` 以及现有 `safe_stop` 的停机义务在任何驱动模式下仍然有效：非 MIT 时不能靠 V1 RETURN 把 MIT 增益写进位置环，但输出关闭必须仍能完成。
+
+放行旧 ros2_control 栈之前，整组必须确认回到 MIT，并且 V2 lease 已经释放。在此之前不启动 Teleop、JTC 或示教。`lease`、`boot_id`、`control_epoch` 在固件准入点强制执行，不能只靠藏起 Desk 按钮。禁止把 POS_VEL 静默降级为 MIT。
+
+Desk 与 Bridge 的 V2 操作必须走现有 Rust `motor_task`、控制占用、停止证明和重启恢复，不能只改 React 与 Bridge。Motor 页以固件确认的实际模式为真值；下拉框在“应用驱动模式”完成前只是候选。
+
+### 已同意的参数与范围
+
+POS_VEL 的 `velocity_limit` 是速度上限，不是 MIT 的有符号速度前馈，不复用 MIT 速度草稿。`kp`、`kd`、`effort` 不得进入 POS_VEL；非零是错误，不是静默丢弃。首版 POS_VEL 不提供 RETURN（回零以后再做）。joint7 可以等待单独验收。
+
+上电默认仍是 MIT。当前 250 Hz 输出只有 MIT（CAN ID 等于电机 ID，8 字节 MIT 打包）。固件库里已有 POS_VEL 编码（CAN ID `0x100 + motor_id`，小端 `position` 与 `velocity_limit`），尚未接到周期路径。这与 §2 已核对的“输出固定 MIT、编码未接入”一致；本轮没有为这句话重读固件源码。
+
+### 仍待台架，不视为已解决
+
+- POS_VEL 在 vel=0 时的保持语义，以及方向与单位。
+- 驱动处于失能时，寄存器是否真的可以改写。设计要求在失能态写入；若台架证明不能，该型号的在线切换不在 v1 范围内。
+- 当前固件 fault 11 锁存会拒绝新命令，包括 DISABLE。锁存期间仍受理、且不清锁存的幂等 DISABLE 是拟新增的固件行为。旧固件没有这一行为。
 
 ## 2. 已核对事实与证据
 
@@ -25,9 +80,9 @@
 | --- | --- | --- |
 | [Desk motorLogic.ts](https://github.com/phamstered/rebotarm-debug-desk/blob/273c8ec/src/motorLogic.ts)、[MotorControl.tsx](https://github.com/phamstered/rebotarm-debug-desk/blob/273c8ec/src/MotorControl.tsx) | `mode=0..3`；位置数组、共享 velocity/kp/kd/effort；默认 TRACK、Kp=8、Kd=2；模式选择本身没有自动套用一组新 Kp/Kd | UI 的“MIT 命令模式”名称容易混淆，需改为独立执行状态和驱动模式 |
 | [Bridge 发布入口](https://github.com/phamstered/rebotarm-debug-desk/blob/273c8ec/bridge/easy_debug_bridge/src/bridge_node.cpp) | `joint_command` 解析已知字段，发布旧 `JointCommand`；未知附加字段不会让旧路径识别 POS_VEL | 单纯附加 `control_mode` 到旧 op 不足以保证兼容安全 |
-| [ROS JointCommand.msg](https://github.com/phamstered/rebotarm-ros2-stack/blob/412d4f47c1cb0544b2390fbc09d2152d3c1525a2/src/plugin/microros_stm32h723_bridge/msg/JointCommand.msg)、[HardwareStatus.msg](https://github.com/phamstered/rebotarm-ros2-stack/blob/412d4f47c1cb0544b2390fbc09d2152d3c1525a2/src/plugin/microros_stm32h723_bridge/msg/HardwareStatus.msg) | 命令为 sequence、mode 和五组 `float32[7]`；状态没有驱动模式字段；命令没有逐轴 enable mask | 不原地修改旧 ROS 类型；V2 显式携带控制掩码与驱动反馈 |
+| [ROS JointCommand.msg](https://github.com/phamstered/rebotarm-ros2-stack/blob/412d4f47c1cb0544b2390fbc09d2152d3c1525a2/src/plugin/microros_stm32h723_bridge/msg/JointCommand.msg)、[HardwareStatus.msg](https://github.com/phamstered/rebotarm-ros2-stack/blob/412d4f47c1cb0544b2390fbc09d2152d3c1525a2/src/plugin/microros_stm32h723_bridge/msg/HardwareStatus.msg) | 命令为 sequence、mode 和五组 `float32[7]`；状态没有驱动模式字段；命令没有逐轴 enable mask | 不原地修改旧 ROS 类型。追加 `drive_mode` 会改变 CDR / 类型哈希，三仓已否决；V2 另立类型 |
 | [executor motor_bridge.c](https://github.com/phamstered/rebotarm-executor/blob/f50783251bd16218ad6fd1441a48be7545c38f9b/User/motor_bridge.c) | 初始化固定确保 MIT；控制输出固定 MIT。HOLD 锁存实测位置；TRACK/RETURN 当前共享目标输出路径；TRACK 指令超时 100 ms 后进入 HOLD；非 DISABLE 超过 500 ms 锁存 fault 11，仍有电机使能时保持 HOLD，否则进入 DISABLE | HOLD / DISABLE / watchdog 是状态机，不是增益模板；不能承诺当前固件 500 ms 后必然关闭输出 |
-| [executor damiao_protocol.c](https://github.com/phamstered/rebotarm-executor/blob/f50783251bd16218ad6fd1441a48be7545c38f9b/User/damiao_protocol.c) | 已有 `damiao_encode_pos_vel_cmd(target_position, velocity_limit)` 和模式切换工具，但 ROS 电机链路尚未接入 | 可复用编码，仍需完整实现准入、切换、状态反馈和停止 |
+| [executor damiao_protocol.c](https://github.com/phamstered/rebotarm-executor/blob/f50783251bd16218ad6fd1441a48be7545c38f9b/User/damiao_protocol.c) | 已有 `damiao_encode_pos_vel_cmd(target_position, velocity_limit)` 和模式切换工具，但 ROS 电机链路尚未接入 | 可复用编码。`damiao_ensure_control_mode` 不能原样做在线切换；准入、读回和停止仍须另做 |
 | [dmBots SDK control_Pos_Vel](https://github.com/dmBots/motor-sdk/blob/main/Python%E4%BE%8B%E7%A8%8B/u2can/DM_CAN.py) | 独立位置速度命令将两项浮点值写入 CAN 帧，使用 `0x100 + motor_id` | POS_VEL 是不同驱动协议，不是 MIT 换一组增益；SDK 示例不能证明现场速度零值或停止行为 |
 | [原生 Motor 任务](https://github.com/phamstered/rebotarm-debug-desk/blob/273c8ec/src-tauri/src/session/motor_task.rs)、[恢复记录](https://github.com/phamstered/rebotarm-debug-desk/blob/273c8ec/src-tauri/src/session/motor_recovery.rs) | 原生层持有 Motor 占用、指令流 watchdog、DISABLE 反馈确认与重启恢复 | 新 op 必须进入同一任务和恢复路径，不能只修改 React 与 Bridge |
 
@@ -50,7 +105,7 @@ ROS 栈的 [micro_ros_system.cpp](https://github.com/phamstered/rebotarm-ros2-st
 
 POS_VEL 的正值速度上限是新契约，不能靠对负数取绝对值、给零值偷偷补默认值或统一硬编码上限实现。`0` 的设备语义、单位、最大速度、加减速参数必须按实际型号/版本核验；未知时该轴 POS_VEL 显示“未就绪”。不改变 MIT 的 Position / Velocity / Kp / Kd 输入范围。滑块行程仍只是 UI 范围，真正限位由固件/已核验配置裁决。
 
-V2 只接收对应模式的参数块：POS_VEL 带 MIT 增益/effort 字段时返回明确错误。不能复用同一组隐藏输入；MIT 与 POS_VEL 草稿分开保存，切换后清除授权。
+V2 只接收对应模式的参数块。POS_VEL 中非零的 `kp`、`kd` 或 `effort` 是错误，不得静默丢弃后继续执行。`velocity_limit` 只表示速度上限，不得填入 MIT 有符号速度前馈草稿。不能复用同一组隐藏输入；MIT 与 POS_VEL 草稿分开保存，切换后清除授权。
 
 关节索引、符号、传动比、零偏以固件的既有映射为准，不能再次套一层 ROS 关节转换。首版不默认开放 joint7：Motor 原始夹爪电机坐标和 Motion 的米制夹爪目标不同，需有独立型号/映射验收才能将 joint7 标为 POS_VEL 可用。
 
@@ -59,11 +114,11 @@ V2 只接收对应模式的参数块：POS_VEL 带 MIT 增益/effort 字段时�
 | 执行状态 | MIT | POS_VEL 首版 |
 | --- | --- | --- |
 | TRACK | 保持当前五通道跟踪 | 位置 + 逐轴速度上限跟踪 |
-| HOLD | 保持固件实测位置锁存及现有控制策略 | 固件在进入时锁存新鲜实测位置，以已验证的 POS_VEL 保持策略控制；不能继续追旧目标 |
+| HOLD | 保持固件实测位置锁存及现有控制策略 | 进入时锁存新鲜实测位置，不得继续追旧目标。vel=0 的保持语义、方向与单位仍待台架，未核验前这一格不是已实现策略 |
 | RETURN | 保持原目标跟踪，不改现有 RETURN → DISABLE 生命周期 | 首版不开放用户选择；返回 `unsupported_state`。后续单独实现速度受控返回和到位/停稳条件 |
 | DISABLE | 现有零字段、三帧新序列及停止确认 | 同一高优先级入口；固件按各轴实际驱动模式关闭输出 |
 
-POS_VEL 的 HOLD 是上线前置条件，包含显式 HOLD 和 watchdog HOLD。失联锁存的保持/关闭策略须单独验收，不能沿用界面“500 ms 后 DISABLE”的文字作实现证据。不得将 `kp=kd=0` 当作 POS_VEL 的输出关闭，也不得在失联时自动切回 MIT。若无法验证 HOLD、失联锁存与明确 DISABLE 效果，整项 POS_VEL 能力不开放；不能通过隐藏 HOLD 按钮绕过固件停止验证。
+POS_VEL 的 HOLD 是上线前置条件，包含显式 HOLD 和 watchdog HOLD。失联锁存的保持/关闭策略、vel=0、方向与单位都须单独验收，不能沿用界面“500 ms 后 DISABLE”的文字作实现证据。不得将 `kp=kd=0` 当作 POS_VEL 的输出关闭，也不得在失联时自动切回 MIT。实际驱动不是 MIT 时，V1 的 RETURN 与其他非 DISABLE 命令不予准入。若无法验证 HOLD、失联锁存与明确 DISABLE 效果，整项 POS_VEL 能力不开放；不能通过隐藏 HOLD 按钮绕过固件停止验证。
 
 ## 4. 协议兼容策略
 
@@ -72,10 +127,10 @@ POS_VEL 的 HOLD 是上线前置条件，包含显式 HOLD 和 watchdog HOLD。�
 | 层 | 保留 | 新增（名称为提案） |
 | --- | --- | --- |
 | WebSocket | `joint_command` / `joint_command_ack`，只表示旧 MIT；`mode=3` 继续全局 DISABLE | `motor_capabilities`、`motor_set_control_mode`、`motor_control_lease`（申请/释放）、`motor_command_v2` 和对应状态事件 |
-| ROS | 原 `JointCommand` 类型、命令 Topic 与 `HardwareStatus` 布局 | 独立 `JointCommandV2` 类型及 `/stm32/joint_commands_v2`；独立模式配置服务；`MotorControlStatus` 类型及状态 Topic |
+| ROS | `/stm32/joint_commands` 上的 `microros_stm32h723_bridge/msg/JointCommand` 布局冻结；`HardwareStatus` 布局保留 | 同包内的 `JointCommandV2`、`/stm32/joint_commands_v2`、模式配置服务与 `MotorControlStatus` |
 | 固件 | 旧 MIT 与 DISABLE 的解码和处理 | 驱动适配、配置代次、V1/V2 命令仲裁、实际模式与切换错误反馈 |
 
-新 WS op 在旧 Bridge 上应明确返回未知操作，绝不改写为旧 `joint_command` 重试。旧 ROS 类型定义保持不变，新类型通过可选构建能力启用；旧 overlay 缺少 V2 typesupport 时，Bridge 应可构建 MIT-only 版本并报告 V2 不可用，不能仅因客户端是新版就宣称支持。新增 micro-ROS 类型/服务需要同步生成 MCU 静态库及 Jetson typesupport 并核对资源预算。
+新 WS op 在旧 Bridge 上应明确返回未知操作，绝不改写为旧 `joint_command` 重试。V1 类型与布局保持冻结：`header`、`sequence`、`mode`（0=HOLD，1=TRACK，2=RETURN，3=DISABLE）以及 `float32[7]` 的 `position`、`velocity`、`kp`、`kd`、`effort`。不追加 `drive_mode` 或 POS_VEL 字段；原地追加会改变 ROS 2 CDR 与类型哈希。V2 IDL 放在现有 `microros_stm32h723_bridge`，MCU 静态库与 Jetson typesupport 一起生成，实现前先估算 micro-ROS 内存。旧 overlay 缺少 V2 typesupport 时，Bridge 应可构建 MIT-only 版本并报告 V2 不可用，不能仅因客户端是新版就宣称支持。`MicroRosSystem`、Teleop、JTC 与示教不得订阅 V2。
 
 新 Bridge 对旧 `joint_command` 中意外携带的驱动模式字段主动报错，避免调用者误以为被采用。V1 标量位置、缺省 mask=joint1、共享数值字段和 ACK 继续兼容；V1 不接受 POS_VEL 语义。
 
@@ -117,9 +172,9 @@ Bridge、Rust 和 UI 都按连接身份/代次隔离该状态；重连、MCU 重
 
 数组严格匹配能力声明的关节数量，首版 ROS 固定 7 轴；拒绝缺项、超长、未知位、未选轴非零值，以及 mask 不完全受设备能力覆盖的请求。UI 可提供“统一速度上限”填写多个轴，但线上始终明确逐轴数值。示例数值仅说明格式，不是现场默认或推荐速度。
 
-`JointCommandV2` 对应携带 boot/config/source/lease 身份、sequence、执行状态、驱动模式、控制掩码及固定长参数数组。V2 MIT 使用独立 MIT 参数块；非当前模式的数组必须为零。Bridge 统一分配 V1/V2 sequence，并按新鲜硬件反馈同步，不能各建一个计数器；固件对所有来源统一进行序列、代次和归属校验。
+`JointCommandV2` 对应携带 boot/config/source/lease 身份、sequence、执行状态、控制掩码及固定长参数数组。周期帧可以带上已确认的驱动模式，用来核对，不能用来发起切换。与寄存器读回不一致的帧直接拒绝。同一条周期流不得交替 MIT 与 POS_VEL 编码。V2 MIT 使用独立 MIT 参数块；非当前模式的数组必须为零，POS_VEL 帧上非零 `kp` / `kd` / `effort` 是错误。Bridge 统一分配 V1/V2 sequence，并按新鲜硬件反馈同步，不能各建一个计数器；固件对所有来源统一进行序列、代次和归属校验。
 
-发布 ACK 只代表 ROS 已发布，含实际采用的协议、模式、代次及 sequence；**不代表驱动切换成功、固件已执行、目标已到达或机械静止**。`MotorControlStatus` 另行报告已接受/拒绝序列、错误、当前驱动模式与配置状态；原 `HardwareStatus` 继续供旧程序读取执行状态/故障/序列。模式确认不能只看旧 HardwareStatus 的 TRACK。
+发布成功或 ACK 只代表 ROS 已发布，含实际采用的协议、模式、代次及 sequence。它不代表驱动切换成功、固件已执行、目标已到达或机械静止。切换是否成功只看逐轴 CTRL_MODE（RID=10）读回。`MotorControlStatus` 另行报告已接受/拒绝序列、错误、已确认的当前驱动模式与配置状态；原 `HardwareStatus` 继续供旧程序读取执行状态/故障/序列。模式确认不能只看旧 HardwareStatus 的 TRACK，也不能看界面下拉或“已请求切换”。
 
 ### 4.4 V1 / V2 仲裁及降级
 
@@ -129,14 +184,14 @@ Bridge、Rust 和 UI 都按连接身份/代次隔离该状态；重连、MCU 重
 | 新 Desk + 旧 Bridge（无能力声明） | 默认旧 MIT；POS_VEL 禁用并解释缺少 Bridge 支持；V2 请求不降级 |
 | 新 Desk + 新 Bridge + 旧固件或旧 ROS overlay | MIT 可用；POS_VEL 不可用，指出缺少固件/接口能力 |
 | 旧 Desk/Bridge + 新固件，实际处于 MIT 且无 V2 占用 | 原 MIT 请求兼容 |
-| 任一旧发布者 + 新固件，实际非 MIT、正在切换或 V2 占用 | 固件拒绝 V1 非 DISABLE，不隐式改驱动模式、不抢占；旧 DISABLE 仍有效 |
-| 全链 V2、所选轴能力完整、已确认 POS_VEL | 允许 V2 POS_VEL，通过全部既有与新增安全门 |
+| 任一旧发布者 + 新固件，实际非 MIT、正在切换或 V2 占用 | V1 只接受 `mode=3`。其他 V1 命令拒绝，避免 JTC 把 MIT 增益送进位置环；不隐式改驱动模式、不抢占；DISABLE 仍有效 |
+| 全链 V2、所选轴能力完整、寄存器读回已确认 POS_VEL | 允许该模式的周期命令，通过全部既有与新增安全门；发布或 ACK 本身不算确认 |
 | 新固件所选轴驱动模式未知、不一致、反馈过期或部分切换失败 | 拒绝新控制，保留占用与诊断；DISABLE 仍可请求 |
 | 断线/重启/回退软件后仍残留 POS_VEL | 不恢复旧目标、不按 MIT 猜测；先完成新鲜停止证明，再显式恢复 MIT 配置 |
 
-同一 V2 任务的所选轴必须是统一且已验证的驱动模式；未选轴在已证明失能时可保留不同寄存器配置，不因全机配置不同而误拒该任务。恢复旧 MIT 控制栈前，则须按该栈会使用的完整轴集合核验 MIT。
+同一 V2 任务的所选轴必须是统一且已验证的驱动模式；未选轴在已证明失能时可保留不同寄存器配置，不因全机配置不同而误拒该任务。周期帧内不得混用 MIT 与 POS_VEL。放行旧 ros2_control 栈之前，整组必须确认回到 MIT，并且 V2 lease 已释放；此前不启动 Teleop、JTC 或示教。
 
-V1/V2 必须在 MCU 同一准入点仲裁。仅在桌面隐藏按钮或停止本进程发布者不能防止其他 ROS 发布者竞争。V2 期间拒绝 V1 非 DISABLE；显式 DISABLE 可中断任意来源。退出 V2 后也必须确认 MIT 已恢复，才能重新放行依赖 MIT 的旧 ros2_control 会话。对旧客户端拒绝时，新固件须在旧客户端能观察的状态/故障通道给出明确失败，而非只在 V2 日志记录。
+V1/V2 必须在 MCU 同一准入点仲裁。`lease`、`boot_id`、`control_epoch` 在该准入点校验。仅在桌面隐藏按钮或停止本进程发布者不能防止其他 ROS 发布者竞争。实际驱动不是 MIT、切换进行中或 V2 被占用时，V1 只接受 DISABLE；显式 `mode=3` 可中断任意来源，并须能在任何驱动模式下停机。禁止把 POS_VEL 静默降级为 MIT。对旧客户端拒绝时，新固件须在旧客户端能观察的状态/故障通道给出明确失败，而非只在 V2 日志记录。
 
 ## 5. 模式切换与停止
 
@@ -147,27 +202,31 @@ V1/V2 必须在 MCU 同一准入点仲裁。仅在桌面隐藏按钮或停止本
 UI 下拉框只选择候选模式；点击“应用驱动模式”才发起原生配置任务。任务与 Motor 连续流、Motion、Controller 启停、示教、标定等共享控制占用，双击、跨窗口请求及迟到 ACK 不能并发切换。
 
 ```text
-选择候选模式（仅编辑）
+选择候选模式（仅编辑，不是成功）
     → 用户确认现场支撑及本次切换
     → 原任务已停止并收尾，原生原子取得配置任务占用
     → 再次请求 DISABLE（覆盖准入前后的状态变化）
     → 新鲜反馈证明输出关闭
     → 固件原子校验仍失能并取得配置独占，拒绝竞争控制
-    → 固件逐轴配置驱动模式、读回验证（输出始终关闭）
-    → 全部成功，发布新的 control_epoch 和逐轴实际模式
+    → 固件写入达妙 CTRL_MODE（RID=10）；这是寄存器事务，不是周期帧字段
+    → 逐轴读回必须等于目标；状态只上报已确认模式
+    → 读回失败：保持失能，报告逐轴实际模式，不进入 TRACK
+    → 全部读回成功后才发布新的 control_epoch，才允许该模式的周期命令
     → 重新确认参数与安全授权
     → 点击开始，首帧准入成功后按 20 Hz 发送
 ```
+
+发布成功、ACK、下拉选择或“已请求切换”都不是切换成功。只有逐轴寄存器读回与目标一致才算成功。读回完成前不接受该模式的周期命令，周期流中也不接受 MIT 与 POS_VEL 交替帧。
 
 模式确认后清空旧命令缓存，使用新鲜实测位置准备经过验证的中性首帧；保持失能直到用户显式开始。使能到首帧期间不得短暂执行旧缓存目标，不能用“目标模式已经正确”跳过此检查。
 
 固件取得配置独占时须再次验证实际失能及停止证明代次；证明后若有其他来源重新使能，则拒绝配置，不在运动中改寄存器。
 
-配置操作采用幂等 request ID 和预期 boot/epoch，返回受理后以状态确认完成；超时表示结果未知，不能自动重发一项可能仍在执行的配置，也不能释放控制占用。已运行的其他控制栈不由 Motor 页强杀；需先走既有停止并退出流程并核验无竞争发布者，固件仲裁仍作为最终防线。
+配置操作采用幂等 request ID 和预期 boot/epoch。受理或发布只表示事务已提交；完成只看逐轴 CTRL_MODE 读回。超时表示结果未知，不能自动重发一项可能仍在执行的配置，也不能释放控制占用。已运行的其他控制栈不由 Motor 页强杀；需先走既有停止并退出流程并核验无竞争发布者，固件仲裁仍作为最终防线。
 
 切换中任一轴失败：停止后续使能/控制，保持全组输出关闭，报告逐轴实际模式及失败阶段。只有确认全组恢复 MIT 才标记“回退完成”；不可假设批量配置原子成功。切换可取消，但取消以停止/读回结果确认结束。中途用户 DISABLE 必须使该事务失去之后使能或自动开始的权限。
 
-已有 `damiao_ensure_control_mode` 会预加载命令，读取位置失败时可回退为零，忽略部分 CAN send 结果，并包含阻塞等待；它不发送 enable，但也不验证调用前已 DISABLE，**不能原样承担可抢占的在线切换事务**。实现时应拆出禁用状态配置/读回流程，对每步限时并检查发送结果，禁止用零值代替缺失反馈；若具体电机只能在使能状态切换，则该型号首版不支持在线切换，先完成专门安全设计与验证。不得为了复用 helper 弱化此边界。
+已有 `damiao_ensure_control_mode` 会预加载命令，读取位置失败时可回退为零，忽略部分 CAN send 结果，并包含阻塞等待；它不发送 enable，但也不验证调用前已 DISABLE，**不能原样用于在线切换**。须把失能态写入和逐轴读回从 250 Hz 环拆出，对每步限时并检查发送结果，禁止用零值代替缺失反馈。若具体电机只能在使能状态切换，该型号不支持 v1 在线切换。不得为了复用 helper 弱化此边界。失能态能否改寄存器仍待台架；设计先按“必须先失能再写 RID=10”执行，台架若证明做不到，就不开放在线切换。
 
 ### 5.2 命令源许可
 
@@ -175,11 +234,11 @@ UI 下拉框只选择候选模式；点击“应用驱动模式”才发起原�
 
 运动许可由有效运动帧续期，普通查询不续期；100/500 ms 策略仍由 MCU 单调时钟决定。DISABLE、故障、boot/epoch 变化或超时撤销许可，排队旧帧即使 sequence 更大也不能重新使能。用户重新开始需要新许可及安全确认。配置独占和运动许可分开：DISABLE 撤销运动许可，同时让在途配置停止推进；原生继续持有结果未知的任务，不能因许可失效就宣称配置已结束。
 
-旧 MIT 的放行还需显式恢复相关轴 MIT、确认无配置/运动任务并释放 V2 独占；POS_VEL 断流不能让遗留 V1 发布者立即接管。新旧序列比较须沿用统一 uint32 回绕规则，并用 boot/epoch/lease 排除别的来源；验证跨回绕、迟到 ACK 与重启重复序列。
+放行旧 MIT 控制栈前，整组必须确认回到 MIT，配置/运动任务已结束，并且 V2 lease 已释放。此前不启动 Teleop、JTC 或示教。POS_VEL 断流不能让遗留 V1 发布者立即接管。新旧序列比较须沿用统一 uint32 回绕规则，并用 boot/epoch/lease 排除别的来源；验证跨回绕、迟到 ACK 与重启重复序列。这些身份在固件准入点执行，不能只靠隐藏 Desk 按钮。
 
 ### 5.3 停止、watchdog 与恢复
 
-- 现有 `joint_command mode=3` 保持紧急高优先级路径，Bridge 归零所有通道并分配三帧新 sequence；新模式配置失败、能力缺失或错误都不能阻塞该路径。新固件必须能按各轴实际模式（未知时使用已验证的全模式禁用策略）停机。拟在新固件中把零输出 DISABLE 作为 fault 11 锁存下仍可受理的幂等停止动作，保持锁存与禁止重新使能，不能用它软恢复；这是需要明确实现和回归的扩展，不能声称旧固件已支持。
+- 现有 `joint_command mode=3` 与 `safe_stop` 的停机义务保持高优先级。Bridge 对 `mode=3` 归零所有通道并分配三帧新 sequence；新模式配置失败、能力缺失或错误都不能阻塞该路径。任何驱动模式下都要能停机。非 MIT 时 V1 不接受 RETURN，停机落到输出关闭，而不是把 MIT 增益送进位置环。新固件必须能按各轴实际模式（未知时使用已验证的全模式禁用策略）停机。拟在新固件中把零输出 DISABLE 作为 fault 11 锁存下仍可受理的幂等停止动作，保持锁存与禁止重新使能，不能用它软恢复。这是新固件行为。旧固件在 fault 11 锁存后拒绝新命令，包括 DISABLE，没有不清锁的幂等 DISABLE。
 - 保留既有 TRACK 100 ms 转 HOLD / 非 DISABLE 500 ms 指令丢失锁存边界；新驱动需验证保持与停止策略。500 ms 锁存并不等于输出关闭，不自动清锁、不自动恢复流。桌面仍是 20 Hz 发送，绝不把 POS_VEL 改成“一次下发目标后无限保持”。模式配置应有独立超时，在输出关闭状态执行，不靠伪造运动 heartbeat 延续任务。
 - Rust 当前 250 ms 指令流检查、至少 1 秒停止重试、所属窗口/原机器人绑定和反馈证明继续保留；普通能力/状态查询不能续运动租约。新增 V2 的实际 transport 写入必须更新同一流记录。
 - POS_VEL 反馈过期、CAN 失败或保持无法保证时，采用经过验证的故障关闭策略，不向旧目标继续运动、不自动切 MIT、不清除锁存故障。
@@ -207,7 +266,7 @@ Motor   固件执行状态：DISABLE   实际驱动：MIT   能力：已核验
 状态：切换中 / 等待驱动确认 / 已发布 / 等待输出关闭 / 失败原因
 ```
 
-MIT 下继续显示 position / velocity / kp / kd / effort；POS_VEL 下只显示位置、速度上限及设备能力。实际模式取自反馈，下拉候选值不能替代状态。能力不足时 POS_VEL 入口显示具体缺项，不让用户勾选一个实际无法执行的模式。
+MIT 下继续显示 position / velocity / kp / kd / effort；POS_VEL 下只显示位置、速度上限及设备能力。真值是固件读回确认的实际模式。下拉框在“应用驱动模式”完成前只是候选，不能替代读回。状态里的“已发布”只表示命令已发出。能力不足时 POS_VEL 入口显示具体缺项，不让用户勾选一个实际无法执行的模式。V2 操作走 Rust `motor_task`、控制占用、停止证明和重启恢复，不能只改本页与 Bridge。
 
 配置/连续流期间锁定驱动选择、执行状态、关节掩码和当前任务参数；首版继续使用启动时参数快照，编辑不在后台静默改变正在发送的目标。模式切换、断线、页面隐藏或能力失效撤销授权，重新显示页面不恢复发送。保持窄窗口单栏、停止按钮常驻、错误不覆盖按钮；宽屏关节表与操作区并排。
 
@@ -215,9 +274,9 @@ MIT 下继续显示 position / velocity / kp / kd / effort；POS_VEL 下只显�
 
 | 阶段 | 仓库与改动 | 完成条件 |
 | --- | --- | --- |
-| A：冻结契约 | executor + ROS 栈共同定义 V2 IDL、能力、单位、执行状态、错误、仲裁及切换事务 | 同一规范和 golden fixtures；原 V1 消息不变；具体电机 HOLD/切换策略得到验证方案 |
-| B：固件 | `motor_bridge.*` 驱动适配、POS_VEL 验证/编码、模式配置、状态、watchdog；重建 micro-ROS 库 | 无硬件单元测试及隔离台架验证；旧 MIT 回归通过；未验收轴不报可用 |
-| C：ROS 栈 | 安装新消息/服务类型；旧 ros2_control 启动/写入前显式核验 MIT；拒绝未知/POS_VEL | 现有 Teleop/Trajectory/VLA/示教/重力逻辑继续走 MIT，切换竞争与停止可测 |
+| A：冻结契约 | executor + ROS 栈在现有 `microros_stm32h723_bridge` 中定义 V2 IDL、能力、单位、执行状态、错误、仲裁及切换事务；实现前估算 micro-ROS 内存 | 同一规范和 golden fixtures；V1 话题与布局不变；不追加 `drive_mode`；HOLD / vel=0 / 失能改寄存器仍以台架为准 |
+| B：固件 | `motor_bridge.*` 驱动适配、POS_VEL 验证/编码、CTRL_MODE（RID=10）失能态写入与逐轴读回、状态、watchdog；重建 micro-ROS 库。不把 `damiao_ensure_control_mode` 原样放进在线切换 | 无硬件单元测试及隔离台架验证；旧 MIT 回归通过；未验收轴不报可用；fault 11 下不清锁的幂等 DISABLE 按新行为单测，不宣称旧固件已有 |
+| C：ROS 栈 | 安装新消息/服务类型；`MicroRosSystem`、Teleop、JTC、示教继续只订阅 V1；旧栈启动/写入前确认整组 MIT 且 V2 lease 已释放 | 这些路径不得订阅 V2；切换竞争与停止可测；非 MIT 时 V1 非 DISABLE 被拒 |
 | D：Bridge / Rust | Bridge 增加能力与 V2 操作；Rust 把新 op 纳入准入、优先级、停止、占用、配置恢复及身份隔离 | 新旧组合和直接 IPC/WS 绕过 UI 的负例测试通过 |
 | E：桌面 | `src/motorLogic.ts` / `MotorControl.tsx` / `types.ts` / `bridge.ts` 的类型、表单和能力提示 | MIT 行为回归，POS_VEL 状态与草稿分离，窄屏及跨窗口验证 |
 | F：部署验收 | 按固件、ROS typesupport、Bridge、桌面兼容矩阵分阶段升级 | 每层实际运行版本可核验；模式切换与回退都有证据；现场确认后才开放能力 |
@@ -228,7 +287,7 @@ Bridge 更改集中在 `bridge_core.hpp` / `bridge_node.cpp` 及新独立电机�
 
 ### 回退
 
-先停止并确认输出关闭，再由仍支持 V2 的工具确认全组恢复 MIT、无切换事务/占用，最后回退软件或固件。新版固件重启不能盲目假定电机寄存器恢复 MIT。仅回退桌面不改变实际驱动模式；如果已失去模式读回能力，应保持停止并通过受控维护恢复，不能让旧客户端试发 MIT 探路。
+先停止并确认输出关闭，再由仍支持 V2 的工具确认整组恢复 MIT、无切换事务、V2 lease 已释放，最后回退软件或固件。新版固件重启不能盲目假定电机寄存器恢复 MIT。仅回退桌面不改变实际驱动模式；如果已失去模式读回能力，应保持停止并通过受控维护恢复，不能让旧客户端试发 MIT 探路。确认回到 MIT 之前不启动 Teleop、JTC 或示教。
 
 ## 8. 验证与验收矩阵
 
@@ -250,14 +309,15 @@ Bridge 更改集中在 `bridge_core.hpp` / `bridge_node.cpp` 及新独立电机�
 | 选项 | 取舍 |
 | --- | --- |
 | 在旧 `mode` 增加 POS_VEL=4 | 不采用：将状态与驱动混为一体，既有停止/任务判定会误读 |
+| 在旧 `JointCommand` 末尾追加 `uint8 drive_mode` | **否决**（2026-11-17，三仓一致）：改变 ROS 2 CDR / 类型哈希，未重编译节点无法互通；旧 Bridge 可能忽略新 JSON 字段仍按 MIT 发布。改为独立 V2 |
 | 只给旧 JSON 加 `control_mode` | 不采用：旧 Bridge 可能忽略它后仍按 MIT 发布 |
-| 原地增加旧 ROS msg 字段 | 不采用：要求所有类型支持及 MCU 库同步升级，难以保证混合部署兼容 |
-| 新 V2 入口、旧 MIT 保留、固件统一仲裁 | 推荐：增加接口与测试成本，但版本不支持时可明确拒绝，既有 MIT 可继续使用 |
+| 原地增加旧 ROS msg 字段 | 不采用：与上一行同一类风险，V1 布局冻结 |
+| 新 V2 入口、旧 MIT 保留、固件统一仲裁 | 推荐，且为三仓共识：增加接口与测试成本，但版本不支持时可明确拒绝，既有 MIT 可继续使用 |
 | 在 ros2_control 中一次迁移所有控制模式 | 延后：POS_VEL 不接收现有重力前馈力矩和逐帧 MIT 增益，不能视为透明替换；轨迹跟踪和停止策略需另行设计 |
 
-实现开始前需落实以下硬件与协议决定；未落实不阻碍评审本方案，但会阻止宣称 POS_VEL 可运行：
+下列各项里，范围已经同意，台架结果还没有。未完成台架不阻碍评审本文，但会阻止宣称 POS_VEL 可运行，也不能把它们写成已解决：
 
-1. 现场每轴电机型号/固件、模式寄存器的读回与禁用状态切换能力，POS_VEL 速度零值和方向语义，HOLD 与 watchdog 的验证结果。
-2. 是否首版只开放已验证的六轴，joint7 等待独立验收；默认建议如此，且最终以逐轴能力为准。
-3. micro-ROS 服务/状态资源预算、V2 固定 IDL、启动身份与配置代次生成规则、原子命令源仲裁和故障码映射；不得用 UI 约定代替固件校验。
-4. 首版采用同一任务单一驱动模式、POS_VEL 暂不开放 RETURN、保持旧控制栈 MIT；这些是范围建议，后续若扩大需补充相应控制与停止验收。
+1. 仍待台架：现场每轴电机型号/固件、失能时能否改写模式寄存器、POS_VEL 速度零值的保持语义、方向与单位、HOLD 与 watchdog。读回失败时的行为按房间共识执行，不把“设计要求读回”写成“台架已经证明寄存器可写”。
+2. 已同意的首版范围：POS_VEL 不提供 RETURN；joint7 等待单独验收，运行时仍以逐轴能力为准。同一任务使用单一驱动模式，不在周期流中混用 MIT 与 POS_VEL。
+3. 实现前必须估算、但本文尚未给出数字：micro-ROS 服务/状态资源预算、V2 固定 IDL、启动身份与配置代次生成规则、原子命令源仲裁和故障码映射。不得用 UI 约定代替固件校验。
+4. 已同意：旧控制栈留在 V1 MIT。放行 Teleop / JTC / 示教之前，整组回到 MIT 且 V2 lease 已释放。扩大范围时另补控制与停止验收。fault 11 锁存下不清锁的幂等 DISABLE 是新固件行为，旧固件没有。
