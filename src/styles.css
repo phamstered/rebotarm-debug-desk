@@ -505,6 +505,24 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .motor-feedback { color: #8fa8b8; font: 10px/1.2 "SFMono-Regular", monospace; padding-bottom: 6px; }
 .shared-command-grid { margin-top: 4px; }
 
+.motor-drive-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 10px; padding: 0; border: 0; }
+.motor-drive-selector legend { margin-bottom: 6px; font-size: 11px; }
+.motor-drive-selector button { padding: 8px; border: 1px solid #294252; border-radius: 6px; color: #a9c4d1; background: #08131c; }
+.motor-drive-selector button[aria-pressed="true"] { border-color: #43b5a9; color: #c4fff3; background: #123b37; }
+.motor-drive-selector button:disabled { opacity: .45; }
+.motor-mode-application { display: grid; gap: 7px; margin: 8px 0 13px; font-size: 11px; overflow-wrap: anywhere; }
+.motor-mode-application button, .motor-mode-confirmation button, .motor-batch-velocity button { padding: 7px 10px; border: 1px solid #355566; border-radius: 6px; color: #c8e0e7; background: #102630; }
+.motor-mode-confirmation { padding: 10px; margin: 10px 0; border: 1px solid #806333; border-radius: 7px; color: #dec69b; background: #242015; font-size: 11px; overflow-wrap: anywhere; }
+.motor-mode-confirmation p { line-height: 1.5; }
+.motor-mode-confirmation button + button { margin-left: 7px; }
+.motor-batch-velocity { display: flex; align-items: end; gap: 8px; margin-bottom: 12px; }
+.motor-batch-velocity label, .motor-velocity-limit { display: grid; gap: 5px; color: #8ba7b7; font-size: 10px; }
+.motor-batch-velocity input, .motor-velocity-limit input { padding: 6px 8px; min-width: 0; }
+.motor-control-details { margin-top: 11px; color: #85a1b1; font-size: 10px; }
+.motor-control-details summary { cursor: pointer; padding: 5px 0; }
+.motor-control-details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; }
+.motor-control-details dd { margin: 0; overflow-wrap: anywhere; }
+
 .motor-page { height: 100%; min-width: 0; overflow: auto; color: #bdd0da; background: radial-gradient(circle at 78% 4%, rgba(30, 104, 111, .13), transparent 30%), #071019; }
 .motor-page-header { position: sticky; z-index: 8; top: 0; height: 54px; display: flex; align-items: center; gap: 16px; padding: 0 22px; border-bottom: 1px solid var(--line); background: rgba(10, 23, 33, .96); backdrop-filter: blur(14px); }
 .motor-page-header > div:first-child { display: flex; align-items: baseline; gap: 10px; }

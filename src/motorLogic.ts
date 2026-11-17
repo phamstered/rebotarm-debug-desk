@@ -111,7 +111,7 @@ export function parseCommandValues(
   const enabledIndexes = motors
     .map((motor, index) => (motor.enabled ? index : -1))
     .filter((index) => index >= 0);
-  if (enabledIndexes.length === 0) return { error: "请至少使能一个电机" };
+  if (enabledIndexes.length === 0) return { error: "请至少选择一个关节" };
 
   const positions = motors.map(() => 0);
   for (const index of enabledIndexes) {

@@ -14,6 +14,9 @@ pub struct Context {
     pub identity: String,
     pub topic: String,
     pub status: Option<Status>,
+    pub control: Option<super::motor_v2_task::Evidence>,
+    pub control_seen: bool,
+    pub retired_control_boots: Vec<String>,
 }
 impl Context {
     pub fn new(epoch: u64, profile: &Value) -> Option<Self> {
@@ -35,9 +38,29 @@ impl Context {
             .to_string(),
             topic,
             status: None,
+            control: None, control_seen: false, retired_control_boots: Vec::new(),
         })
     }
     pub fn observe(&mut self, epoch: u64, value: &Value, now: Instant) {
+        if epoch == self.epoch && value["motor_control"].is_object() {
+            self.control_seen |= value["motor_control"]["supported"] == true;
+            if let Some(control) = super::motor_v2_task::Evidence::parse(&value["motor_control"], now) {
+                let retired = self.retired_control_boots.contains(&control.boot);
+                let rollback = self.control.as_ref().is_some_and(|old| old.boot == control.boot
+                    && (control.stamp < old.stamp || control.value["control_epoch"].as_u64() < old.value["control_epoch"].as_u64()));
+                let new_boot = self.control.as_ref().is_some_and(|old| old.boot != control.boot);
+                if retired || rollback || (new_boot && self.retired_control_boots.len() >= 16) {
+                    if let Some(old) = &mut self.control { old.value["fresh"] = json!(false); }
+                } else if new_boot {
+                    self.retired_control_boots.push(self.control.as_ref().unwrap().boot.clone());
+                    self.status = None; self.control = Some(control);
+                } else if self.control.as_ref().is_none_or(|old| control.stamp > old.stamp) { self.control = Some(control); }
+            } else if self.control_seen {
+                // Keep the source watermark so a cached reply cannot make an
+                // explicitly invalidated snapshot fresh again.
+                if let Some(old) = &mut self.control { old.value["fresh"] = json!(false); }
+            }
+        }
         if epoch != self.epoch || value["op"] != "topic_message" || value["topic"] != self.topic {
             return;
         }
@@ -84,12 +107,17 @@ pub struct Motor {
     pub identity: String,
     pub last_command: Instant,
     stop: Option<Stop>,
+    pub v2: Option<super::motor_v2_task::Operation>,
+    pub requires_control_status: bool,
+    bound_control: Option<(String, u32)>,
 }
 struct Stop {
     epoch: u64,
     sent_at: Instant,
     stamp: u64,
     sequence: Option<u32>,
+    control_boot: Option<String>,
+    control_stamp: u64,
 }
 impl Motor {
     // Captures identity for future output-off confirmation only. It grants no
@@ -98,7 +126,7 @@ impl Motor {
         context.filter(|c| c.epoch == epoch).map(|c| Self {
             identity: c.identity.clone(),
             last_command: now,
-            stop: None,
+            stop: None, v2: None, requires_control_status: c.control_seen, bound_control: None,
         })
     }
     pub fn clear_confirmation(&mut self) {
@@ -118,9 +146,37 @@ impl Motor {
         Ok(Self {
             identity: context.identity.clone(),
             last_command: now,
-            stop: None,
+            stop: None, v2: None, requires_control_status: context.control_seen,
+            bound_control: context.control.as_ref().and_then(|e|e.value["control_epoch"].as_u64()
+                .and_then(|epoch|u32::try_from(epoch).ok()).map(|epoch|(e.boot.clone(),epoch))),
         })
     }
+    pub fn start_request(context: Option<&Context>, epoch: u64, now: Instant, request: &Value) -> Result<Self, String> {
+        let mut motor = Self::start(context, epoch, now)?;
+        if super::motor_command::v2(request) {
+            motor.v2 = Some(super::motor_v2_task::Operation::new(request, context.and_then(|c|c.control.as_ref()), now)?);
+            motor.requires_control_status = true;
+        } else if context.is_some_and(|c| c.control_seen) && !Self::mit_evidence(context, now) {
+            return Err("V2 驱动状态未确认整组 MIT 或租约尚未释放".into());
+        }
+        Ok(motor)
+    }
+    fn mit_evidence(context: Option<&Context>, now: Instant) -> bool {
+        context.and_then(|c| c.control.as_ref()).is_some_and(|e| e.fresh(now)
+            && e.matches_mode(0x7f, "MIT") && e.value["lease_id"] == 0
+            && e.value["owner_source_id"] == "0" && e.value["switching"] == false && e.value["fault_code"] == 0)
+    }
+    pub fn ready_to_write(&self, request: &Value, context: Option<&Context>, now: Instant) -> bool {
+        if now.saturating_duration_since(self.last_command) >= self.timeout() { return false; }
+        self.v2.as_ref().map_or_else(|| !context.is_some_and(|c| c.control_seen)
+            || (Self::mit_evidence(context, now) && self.bound_control.as_ref().is_some_and(|(boot,epoch)|
+                context.and_then(|c|c.control.as_ref()).is_some_and(|e| &e.boot == boot && e.value["control_epoch"] == *epoch))),
+            |op| op.ready_to_write(request, context.and_then(|c| c.control.as_ref()), now))
+    }
+    pub fn continuation(&self, request: &Value) -> bool {
+        self.v2.as_ref().map_or(request["op"] == "joint_command", |v|v.continuation(request))
+    }
+    pub fn timeout(&self) -> Duration { self.v2.as_ref().map_or(Duration::from_millis(250), |v|v.timeout()) }
     pub fn matches(&self, context: Option<&Context>, epoch: u64) -> bool {
         context.is_some_and(|c| c.epoch == epoch && c.identity == self.identity)
     }
@@ -136,6 +192,8 @@ impl Motor {
             sent_at: now,
             stamp,
             sequence: None,
+            control_boot: context.and_then(|c|c.control.as_ref()).map(|c|c.boot.clone()),
+            control_stamp: context.and_then(|c|c.control.as_ref()).map_or(0,|c|c.stamp),
         });
     }
     pub fn acknowledge_disable(&mut self, epoch: u64, value: &Value) {
@@ -159,15 +217,23 @@ impl Motor {
         let Some(status) = context.and_then(|c| c.status.as_ref()) else {
             return false;
         };
-        status.mode == 3
+        let control_off = if self.requires_control_status || context.is_some_and(|c|c.control_seen) {
+            context.and_then(|c|c.control.as_ref()).is_some_and(|c| c.fresh(now) && c.disabled()
+                && stop.control_boot.as_deref() == Some(c.boot.as_str()) && c.stamp > stop.control_stamp
+                && c.at >= stop.sent_at && stop.sequence.is_some_and(|seq| c.value["last_command_sequence"].as_u64()
+                    .and_then(|v|u32::try_from(v).ok()).is_some_and(|got| sequence_covers(got,seq))))
+        } else { true };
+        control_off && status.mode == 3
             && status.stamp > stop.stamp
             && status.at >= stop.sent_at
             && now.saturating_duration_since(status.at) < Duration::from_secs(1)
             && stop
                 .sequence
-                .is_some_and(|sequence| status.sequence >= sequence)
+                .is_some_and(|sequence| sequence_covers(status.sequence, sequence))
     }
 }
+
+pub fn sequence_covers(current: u32, expected: u32) -> bool { current.wrapping_sub(expected) < 0x8000_0000 }
 
 #[cfg(test)]
 mod tests {
@@ -221,5 +287,53 @@ mod tests {
         assert!(!motor.stopped(Some(&same), now));
         motor.acknowledge_disable(2, &json!({"op":"joint_command_ack","mode":3,"sequence":13}));
         assert!(motor.stopped(Some(&same), now));
+    }
+    #[test]
+    fn known_v2_cannot_fall_back_to_mit_or_v1_stop_when_evidence_is_lost() {
+        let now = Instant::now(); let mut context = Context::new(1, &profile("first")).unwrap();
+        context.observe(1, &status(1, 3, 1), now);
+        let mut caps = super::super::motor_v2_task::tests::caps();
+        context.observe(1, &json!({"op":"motor_control_status","motor_control":caps}), now);
+        assert!(Motor::start_request(Some(&context), 1, now, &json!({"op":"joint_command","mode":1})).is_err());
+        caps["control_modes"] = json!(["MIT","MIT","MIT","MIT","MIT","MIT","MIT"]); caps["owner_source_id"] = json!("0"); caps["stamp_ns"] = json!("101");
+        context.observe(1, &json!({"motor_control":caps}), now);
+        let mut motor = Motor::start_request(Some(&context), 1, now, &json!({"op":"joint_command","mode":1})).unwrap();
+        motor.stopping(Some(&context), 1, now); motor.acknowledge_disable(1, &json!({"op":"joint_command_ack","mode":3,"sequence":2}));
+        context.observe(1, &json!({"motor_control":{"supported":false,"fresh":false}}), now);
+        context.observe(1, &status(2, 3, 2), now);
+        assert!(context.control_seen); assert!(!motor.stopped(Some(&context), now));
+        assert!(!motor.ready_to_write(&json!({"op":"joint_command","mode":1}), Some(&context), now));
+    }
+    #[test]
+    fn v2_watermarks_survive_invalidation_and_reject_old_boot_and_epoch() {
+        let now=Instant::now(); let mut context=Context::new(1,&profile("first")).unwrap();
+        let mut caps=super::super::motor_v2_task::tests::caps();
+        context.observe(1,&json!({"motor_control":caps}),now);
+        context.observe(1,&json!({"motor_control":{"supported":false}}),now);
+        context.observe(1,&json!({"motor_control":caps}),now+Duration::from_millis(20));
+        assert!(!context.control.as_ref().unwrap().fresh(now));
+        caps["stamp_ns"]=json!("101"); caps["control_epoch"]=json!(6);
+        context.observe(1,&json!({"motor_control":caps}),now);
+        assert_eq!(context.control.as_ref().unwrap().value["control_epoch"],7);
+        caps["boot_id"]=json!("100"); caps["stamp_ns"]=json!("1"); caps["control_epoch"]=json!(0);
+        context.observe(1,&json!({"motor_control":caps}),now);
+        assert!(context.control.as_ref().unwrap().fresh(now));
+        context.observe(1,&json!({"motor_control":super::super::motor_v2_task::tests::caps()}),now);
+        assert_eq!(context.control.as_ref().unwrap().boot,"100");
+        assert!(!context.control.as_ref().unwrap().fresh(now));
+    }
+    #[test]
+    fn an_existing_mit_stream_cannot_resume_after_firmware_boot_or_configuration_changes() {
+        let now=Instant::now();
+        for (key,value) in [("boot_id",json!("100")),("control_epoch",json!(8))] {
+            let mut context=Context::new(1,&profile("first")).unwrap(); context.observe(1,&status(1,3,1),now);
+            let mut caps=super::super::motor_v2_task::tests::caps();
+            caps["control_modes"]=json!(["MIT","MIT","MIT","MIT","MIT","MIT","MIT"]); caps["owner_source_id"]=json!("0");
+            context.observe(1,&json!({"motor_control":caps}),now);
+            let frame=json!({"op":"joint_command","mode":1}); let motor=Motor::start_request(Some(&context),1,now,&frame).unwrap();
+            assert!(motor.ready_to_write(&frame,Some(&context),now));
+            caps[key]=value; caps["stamp_ns"]=json!("101"); context.observe(1,&json!({"motor_control":caps}),now);
+            assert!(!motor.ready_to_write(&frame,Some(&context),now));
+        }
     }
 }

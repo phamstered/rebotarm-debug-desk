@@ -14,6 +14,8 @@ macOS 上的 ROS 2 Humble 调试与受控操作控制台（Tauri + React + Three
 
 Robot View 支持可选的桌面物体几何检测与同帧三维框显示。确认目标可点击生成俯抓候选；分段视觉 Pick 执行默认因未标定而禁用，可先完成预览及隔离测试。Jetson 安装 `libpcl-dev` 后重新构建 Bridge 即可启用检测；使用限制和 ROI 配置见 [基础功能](docs/basic-features.md#桌面物体三维框几何检测)。
 
+Motor 页支持独立 MIT / POS_VEL 驱动选择与读回确认。旧 MIT 接口保持兼容；POS_VEL 需配套 V2 Bridge、ROS 消息与已验证的固件能力，默认未通过台架验证的轴不会开放。界面一次点击执行目标后后台仍周期续发，停止以真实反馈核验。见 [电机控制](docs/basic-features.md#_6-mit-pos-vel-电机控制) 与 [V2 协议](docs/protocol.md#motor-v2-能力、模式事务与-pos-vel)。
+
 ## 相关仓库 / 职责
 
 | 仓库 | 职责 | 文档 |

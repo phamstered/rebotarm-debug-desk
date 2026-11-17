@@ -575,7 +575,7 @@ mod tests {
         )
         .unwrap();
         let tasks = Tasks::default();
-        let motor = tasks.restore_motor("motor-old".into(), &profile()).unwrap();
+        let motor = tasks.restore_motor("motor-old".into(), &profile(), false).unwrap();
         let recovery = Recovery::default();
         recovery.restore(&tasks, Ok(path.clone()));
         assert!(recovery.error_snapshot().is_some());

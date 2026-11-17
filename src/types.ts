@@ -1,3 +1,17 @@
+export type MotorDriveMode = "UNKNOWN" | "MIT" | "POS_VEL";
+/** Runtime firmware evidence, never inferred from a requested drive mode. */
+export type MotorControlCapabilities = {
+  supported: boolean; fresh: boolean; reason: string; age_ms: number;
+  protocol_version: number; boot_id: string; control_epoch: number;
+  source_id: string; owner_source_id: string; lease_id: number;
+  selected_joint_mask: number; enabled_joint_mask: number; verified_joint_mask: number;
+  pos_vel_supported_mask: number; control_modes: MotorDriveMode[];
+  velocity_limit_max: number[]; position_min: number[]; position_max: number[];
+  switching: boolean; disabled_verified: boolean; operation_id: number; operation_state: number;
+  last_command_sequence: number; mode: number; fault_code: number;
+  error_code: number; rejected_sequence: number; reject_code: number;
+  stamp_ns: string;
+};
 export type VisualPickPose = { position: [number,number,number]; orientation: [number,number,number,number] };
 export type RgbTargetState = {
   target_id: string; object_id: number; sequence: number; generation: number;
@@ -219,6 +233,15 @@ export type MotionArrivalError = {
 };
 
 export type BridgeEnvelope = {
+  motor_control?: MotorControlCapabilities;
+  motor_control_supported?: boolean;
+  control_mode?: MotorDriveMode;
+  boot_id?: string;
+  control_epoch?: number;
+  lease_id?: number;
+  support_confirmation?: string;
+  lease_action?: "acquire" | "release";
+  pos_vel?: { velocity_limit: number[] };
   /** Desktop-only receipt time in this WebView's performance clock; not sent to ROS. */
   desktop_received_at_ms?: number;
   controllers_info_supported?: boolean;

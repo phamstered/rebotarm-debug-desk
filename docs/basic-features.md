@@ -163,26 +163,24 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Robot View 的 URDF 错误与轨迹控制器状态使用同一个响应式 heads-up 网格排版，在常规和窄面板下不会互相覆盖。
 - Tauri CSP 同时允许 Three.js 通过 `connect-src blob:` 获取 STL/DAE/OBJ Blob；网格解析失败时显示 Blob 路径和底层错误原因。
 
-## 6. MIT 电机控制
+<span id="_6-mit-电机控制"></span>
 
-- 左侧 Navigation 的 Motor 打开独立控制页面，默认提供 7 个关节控制行；收到更多 JointState 关节时会扩展列表，最多 32 个。
-- 页面采用关节目标区和共享 MIT 参数/安全操作区的双栏布局；较窄窗口自动改为单栏，操作区在宽屏滚动时保持可见。
-- 发布 Topic 默认为 `/stm32/joint_commands`，消息类型为 `JointCommand`。
-- 默认模式为 TRACK，默认 `Kp=8`、`Kd=2`。
-- 支持 HOLD、TRACK、RETURN、DISABLE 四种 `JointCommand.mode`。
-- 多电机列表：每个关节可单独使能；Position 提供滑块与数值输入，行程 min/max 默认为 `±0.35 rad` 且可按关节配置（仅约束滑块，不做 Bridge 限幅）。
-- 仅对用户使能的关节发送非零命令通道，并通过 `active_joint_mask` 告知 Bridge；未使能通道保持 0。
-- Velocity、Kp、Kd、Effort 在 v1 仍为全局共享；Effort 限制为 `[-1, 1] Nm`，所有字段必须为有限数字。Position / Velocity / Kp / Kd 不由上位机限幅。
-- 允许自然输入负数、小数、输入中的末尾小数点以及逗号小数。
-- “使用当前位置”会把各关节反馈写入对应 Position；这是唯一自动写入 Position 的操作。
-- 安全确认在一次连接会话中只需勾选一次；DISABLE 后不会自动取消。
-- TRACK 等非 DISABLE 命令预检成功后以 20 Hz 连续发送；至少使能一个电机。
-- 离开 Motor 页面时停止定时发送；若正在发送或预检尚未完成，会额外请求 DISABLE，避免隐藏页面继续控制。
-- Bridge 要求 command subscriber、最新 status/joint feedback（<1 s），且请求掩码全部落在固件 `active_joint_mask` 内；STM32 fault 由界面展示，最终执行安全由固件裁决。
-- DISABLE 将控制字段清零并发布 3 帧，各帧使用连续递增的 sequence，避免 `STALE_SEQUENCE`。
-- 显示 STM32 fault code 0–11 的英文名称和中文原因；未知编号显示 UNKNOWN。
+## 6. MIT / POS_VEL 电机控制
 
-> STM32 固件仍有自己的最终限幅。例如当前固件 Position 上限约为 `±0.35 rad`，超出可能报告 `FAULT 3 · COMMAND_LIMIT`。界面默认行程与此对齐，但用户可放宽滑块范围。
+- Motor 页把**驱动模式**（MIT / POS_VEL）与**执行状态**分开。选择驱动模式只编辑候选；“实际驱动”显示固件读回结果，点击“应用驱动模式…”并确认现场支撑后才发起配置。
+- 配置先发送 DISABLE，等待本次停止后的新鲜、真实关闭反馈，再逐轴写寄存器并读回。模式申请、服务 ACK、消息发布均不代表切换成功；部分失败或结果未知时保持禁止开始，需核验停止后重新操作。
+- 旧 Bridge / 固件继续使用 V1 MIT。POS_VEL 需要新 Bridge、ROS V2 消息/服务及支持固件；本连接一旦观察到 V2，能力丢失或过期就禁止新控制，不自动退回 MIT。当前固件默认不开放未经台架验证的 POS_VEL 轴，joint7 不默认开放。
+- 关节目标区与控制区在宽屏分为两栏；窄窗口控制区在前。MIT 和 POS_VEL 分别保留参数草稿，改变模式、所选轴或参数后需要重新确认；运行中冻结本次参数快照，停止后重新确认才能开始。
+- Position 提供滑块及数值输入，min/max 默认 `±0.35 rad`，只约束滑块编辑范围。“使用当前位置”明确把反馈写入目标，不自动跟随或启动。支持自然输入负数、小数及逗号小数。
+- MIT 保持 HOLD / TRACK / RETURN，默认 TRACK、`Kp=8`、`Kd=2`；Velocity / Kp / Kd / Effort 全局共享，Effort 限制 `[-1,1] Nm`，数值必须有限。上位机不另加 MIT Position / Velocity / Kp / Kd 限幅，固件仍最终校验。
+- POS_VEL 首版只支持 TRACK / HOLD，参数为逐轴 Position 和正速度上限（rad/s），范围来自固件能力状态；不显示 MIT Kp / Kd / Effort。HOLD 由固件锁存新鲜当前位置，未选轴通过显式掩码保持关闭，不把零目标当作“未选”。
+- 主按钮为 MIT“开始控制”、POS_VEL“执行目标并保持”，HOLD 为“保持当前位置”。点击一次后界面后台仍以 20 Hz 续发本次获准快照；频率、sequence、lease、反馈龄及 Topic 放在“控制详情”。发送 ACK 不表示到位，到位也不自动结束保持。
+- “停止并 DISABLE”常驻，不需要安全勾选。停止、离开页面、能力失效、首帧或许可结果未知时停止续发并请求关闭输出；重新显示页面不恢复发送。DISABLE 清零控制字段，发送三帧且每帧分配新 sequence。
+- 停止反馈区区分“已请求 DISABLE”与“已确认输出关闭”。V2 完成还要求 `disabled_verified`：全部七轴的新鲜关闭反馈均来自本次真正 CAN 停止之后。真实停稳和负载支撑仍需核对现场，不能把输出关闭当作保持姿态。
+- Bridge 保留订阅者、新鲜 status / JointState（<1 s）、固件 active 轴及确认门禁；V2 另校验 boot、配置代次、连接来源、租约与范围。切换、租约、持续流纳入原生任务锁及重启恢复，未知结果不释放占用；Rust 不自动补发旧目标。
+- V1 `/stm32/joint_commands` 永远只表示 MIT。新 V2 默认使用 `/stm32/joint_commands_v2`；停止仍走 V1 mode=3。恢复旧 Controller / Teleop / JTC 前必须整组读回 MIT 且释放 V2 来源与租约；本次不增加这些模块的 POS_VEL 路径。
+
+当前验证使用隔离 ROS 模拟器与固件主机测试；这不等于电机的速度单位、方向、零速、载荷、在线切换及停止行为已通过台架验收。旧固件断流 500 ms 可锁存 fault 11 并保持 HOLD，不能笼统承诺“500 ms 后自动 DISABLE”；新固件允许 fault 11 下幂等 DISABLE，但不清故障锁。
 
 ## 7. WebSocket 协议
 

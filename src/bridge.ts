@@ -1,6 +1,7 @@
 import type { BridgeEnvelope, ConnectionProfile, NodeDetails, RosGraph, TopicDetails, TopicInfo, NativeMonitorConfig, MonitorHistoryPage } from "./types";
 
 export type BridgeHello = {
+  motor_control_supported?: boolean;
   controllers_info_supported?: boolean;
   rgbd_subscription_id_supported?: boolean;
   object_detection_supported?: boolean;
@@ -81,6 +82,7 @@ export class BridgeClient {
         if (message.op !== "resource") this.listeners.forEach((listener) => listener(message));
         if (!helloResolved && message.op === "hello") {
           finishHello({
+            motor_control_supported: message.motor_control_supported,
             controllers_info_supported: message.controllers_info_supported,
             bridge_version: message.bridge_version,
             bridge_build_id: message.bridge_build_id,

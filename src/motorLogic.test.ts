@@ -52,7 +52,7 @@ describe("motor command input", () => {
       .toContain("Effort");
     motors[0].enabled = false;
     expect(parseCommandValues({ velocity: "0", kp: "8", kd: "2", effort: "0" }, motors).error)
-      .toContain("至少使能");
+      .toContain("至少选择");
   });
 
   it("builds mask bits and zeros DISABLE payload", () => {
