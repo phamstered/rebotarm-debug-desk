@@ -7,24 +7,21 @@ import {
   DEFAULT_KD,
   DEFAULT_KP,
   DEFAULT_MODE,
-  DEFAULT_TRAVEL,
   faultInfo,
   motorFaults,
   normalizeDecimal,
   parseCommandValues,
-  parseTravelBound,
   resizeMotors,
 } from "./motorLogic";
 
 describe("motor command input", () => {
-  it("defaults to TRACK with Kp 8 and Kd 2 and ±0.35 travel", () => {
+  it("defaults to TRACK with Kp 8 and Kd 2 without invented travel bounds", () => {
     expect(DEFAULT_MODE).toBe(1);
     expect(DEFAULT_KP).toBe("8");
     expect(DEFAULT_KD).toBe("2");
-    expect(DEFAULT_TRAVEL).toBe(0.35);
     expect(DEFAULT_JOINT_COUNT).toBe(7);
-    expect(createDefaultMotors()[0]).toMatchObject({
-      enabled: false, position: "0", min: "-0.35", max: "0.35",
+    expect(createDefaultMotors()[0]).toEqual({
+      enabled: false, position: "0",
     });
   });
 
@@ -104,14 +101,7 @@ describe("STM32 fault catalog", () => {
 });
 
 
-describe("motor travel bounds and multi-joint enable", () => {
-  it("parses travel bounds and rejects blanks", () => {
-    expect(parseTravelBound("-0.5", "min")).toEqual({ value: -0.5 });
-    expect(parseTravelBound("0.35", "max")).toEqual({ value: 0.35 });
-    expect(parseTravelBound(" ", "min").error).toContain("有效数字");
-    expect(parseTravelBound("abc", "max").error).toContain("有效数字");
-  });
-
+describe("motor multi-joint enable", () => {
   it("builds a multi-joint mask and zeros disabled positions", () => {
     const motors = createDefaultMotors(7);
     motors[0].enabled = true;

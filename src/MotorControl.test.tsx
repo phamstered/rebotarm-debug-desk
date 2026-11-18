@@ -22,6 +22,10 @@ async function flush() { await act(async () => {}); }
 function select(index = 1) { fireEvent.click(screen.getByLabelText(`joint${index} 选择控制`)); }
 function arm() { fireEvent.click(screen.getByLabelText("安全确认")); }
 function start(name = "开始控制") { fireEvent.click(screen.getByRole("button", { name })); }
+function urdfJoint(name: string, lower: string | number = -1, upper: string | number = 1, type = "revolute", extra = "") {
+  return `<link name="${name}_link"/><joint name="${name}" type="${type}"><parent link="base"/><child link="${name}_link"/><limit lower="${lower}" upper="${upper}" effort="1" velocity="2"/>${extra}</joint>`;
+}
+function motorUrdf(...joints: string[]) { return `<robot name="motor-test"><link name="base"/>${joints.join("")}</robot>`; }
 afterEach(() => vi.useRealTimers());
 
 describe("MotorControl legacy MIT", () => {
@@ -58,7 +62,7 @@ describe("MotorControl legacy MIT", () => {
     expect(screen.getByText(/已确认输出关闭/)).toBeVisible(); expect(screen.getByRole("button", { name: "开始控制" })).toBeDisabled();
   });
   it("rejects empty selection and excessive effort, preserving unrestricted MIT numeric targets", async () => {
-    const { bridge } = mount(); await flush(); arm(); start(); expect(screen.getByText("请至少选择一个关节")).toBeVisible(); expect(bridge.command).not.toHaveBeenCalled();
+    const { bridge } = mount(bridgeDouble(), { urdfXml: motorUrdf(urdfJoint("joint1", -0.3, 0.3)) }); await flush(); arm(); start(); expect(screen.getByText("请至少选择一个关节")).toBeVisible(); expect(bridge.command).not.toHaveBeenCalled();
     select(); fireEvent.change(screen.getByLabelText("Effort · Nm"), { target: { value: "1.1" } }); arm(); start(); expect(screen.getByText("Effort 必须在 -1 到 1 之间")).toBeVisible(); expect(bridge.command).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("Effort · Nm"), { target: { value: "1" } }); fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "12" } });
     fireEvent.change(screen.getByLabelText("Velocity · rad/s"), { target: { value: "30" } }); fireEvent.change(screen.getByLabelText("Kp"), { target: { value: "80" } }); fireEvent.change(screen.getByLabelText("Kd"), { target: { value: "12" } }); arm(); start(); await flush();
@@ -77,13 +81,22 @@ describe("MotorControl legacy MIT", () => {
     await act(async () => bridge.emit(feedback("/arm/status", 2))); expect(screen.queryByText(/已确认输出关闭/)).not.toBeInTheDocument();
     await act(async () => bridge.emit(feedback("/arm/status", 3))); expect(screen.getByText(/已确认输出关闭/)).toBeVisible();
   });
-  it("edits slider travel separately and retains seven rows", async () => {
-    mount(); await flush(); expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(7);
-    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-0.35"); expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("0.35");
-    fireEvent.change(screen.getByLabelText("joint1 行程 min"), { target: { value: "-0.1" } }); fireEvent.change(screen.getByLabelText("joint1 行程 max"), { target: { value: "0.2" } });
-    expect(screen.getByLabelText("joint1 Position 滑块")).toHaveAttribute("min", "-0.1"); expect(screen.getByLabelText("joint1 Position 滑块")).toHaveAttribute("max", "0.2");
-    expect(screen.getByLabelText("joint1 Position 滑块")).toBeDisabled(); select(); select(3); arm(); start(); await flush();
-    expect(screen.getByLabelText("joint2 Position 滑块")).toBeDisabled();
+  it("shows read-only model bounds by joint name while preserving the seven command slots", async () => {
+    const urdfXml = motorUrdf(urdfJoint("joint3", -2, 2), urdfJoint("joint1", -0.1, 0.2));
+    mount(bridgeDouble(), { urdfXml }); await flush();
+    expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(7);
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-0.1");
+    expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("0.2");
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("joint1 行程 max")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("joint3 行程 min")).toHaveValue("-2");
+    expect(screen.getByLabelText("joint2 行程 min")).toHaveValue("");
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeDisabled(); select();
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeEnabled();
+    expect(screen.getByLabelText("joint1 Position 滑块")).toHaveAttribute("min", "-0.1");
+    expect(screen.getByLabelText("joint1 Position 滑块")).toHaveAttribute("max", "0.2");
+    select(2); expect(screen.getByLabelText("joint2 Position 滑块")).toBeDisabled();
+    expect(screen.getByLabelText("joint2 Position · rad")).toBeEnabled();
   });
   it("never resumes late preflight after hiding/showing or unmounting", async () => {
     vi.useFakeTimers(); const bridge = bridgeDouble(); let complete!: (value: BridgeEnvelope) => void;
@@ -106,6 +119,132 @@ describe("MotorControl legacy MIT", () => {
     rerender(<MotorControl {...props} active={kind !== "hidden"} controlLocked={kind === "locked"} />); await flush(); await act(async () => vi.advanceTimersByTimeAsync(300));
     expect(bridge.send).toHaveBeenCalledTimes(2); expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 })); expect(screen.getByLabelText("安全确认")).not.toBeChecked();
     expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.2");
+  });
+});
+
+describe("MotorControl live model ranges", () => {
+  it.each([
+    ["not loaded", ""],
+    ["missing joint", motorUrdf(urdfJoint("other_joint"))],
+    ["continuous joint", motorUrdf(urdfJoint("joint1", -1, 1, "continuous"))],
+    ["fixed joint", motorUrdf(urdfJoint("joint1", -1, 1, "fixed"))],
+    ["mimic joint", motorUrdf(urdfJoint("joint1", -1, 1, "revolute", '<mimic joint="joint2"/>'))],
+    ["unmapped prismatic joint", motorUrdf(urdfJoint("joint1", 0, 0.05, "prismatic"))],
+    ["missing limits", motorUrdf('<link name="tip"/><joint name="joint1" type="revolute"><parent link="base"/><child link="tip"/></joint>')],
+    ["infinite limits", motorUrdf(urdfJoint("joint1", "-Infinity", "Infinity"))],
+    ["reversed limits", motorUrdf(urdfJoint("joint1", 1, -1))],
+    ["invalid XML", "<robot><joint"],
+  ])("disables only the slider for %s without inventing a range", async (_reason, urdfXml) => {
+    const { bridge } = mount(bridgeDouble(), { urdfXml }); await flush(); select();
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("");
+    expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("");
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeDisabled();
+    expect(screen.getByLabelText("joint1 Position · rad")).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "12" } });
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("12");
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
+  });
+
+  it("adopts a late model without changing the selected target or starting control", async () => {
+    const { bridge, props, rerender } = mount(); await flush(); select();
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "0.6" } });
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeDisabled();
+    rerender(<MotorControl {...props} urdfXml={motorUrdf(urdfJoint("joint1", -0.1, 0.2))} />); await flush();
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeEnabled();
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-0.1");
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.6");
+    expect(screen.getByLabelText("joint1 选择控制")).toBeChecked();
+    expect(screen.getByLabelText("joint2 选择控制")).not.toBeChecked();
+    expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
+  });
+
+  it("shows calibrated raw joint7 radians and never copies a prismatic metre limit into Motor", async () => {
+    const name = "gripper_finger_left_joint";
+    const jointState = { name: [...Array.from({ length: 6 }, (_, index) => `joint${index + 1}`), name], position: [0, 0, 0, 0, 0, 0, 0.5] };
+    const gripper = urdfJoint(name, 0, 0.0715, "prismatic");
+    const calibration = `<ros2_control name="arm" type="system"><hardware>
+      <plugin>microros_stm32h723_bridge/MicroRosSystem</plugin>
+      <param name="gripper_position_scale">-0.008612826752</param>
+      <param name="gripper_position_offset">0.004282757541</param>
+      </hardware><joint name="${name}"><command_interface name="position">
+      <param name="min">0</param><param name="max">0.05</param>
+      </command_interface></joint></ros2_control>`;
+    const { props, rerender, bridge } = mount(bridgeDouble(), { jointState, urdfXml: motorUrdf(gripper) }); await flush();
+    fireEvent.click(screen.getByLabelText(`${name} 选择控制`));
+    expect(screen.getByLabelText(`${name} 行程 min`)).toHaveValue("");
+    expect(screen.getByLabelText(`${name} Position 滑块`)).toBeDisabled();
+    rerender(<MotorControl {...props} urdfXml={motorUrdf(gripper, calibration)} />); await flush();
+    const min = screen.getByLabelText<HTMLInputElement>(`${name} 行程 min`);
+    const max = screen.getByLabelText<HTMLInputElement>(`${name} 行程 max`);
+    expect(Number(min.value)).toBeCloseTo(-5.308041573, 6);
+    expect(Number(max.value)).toBeCloseTo(0.497253418, 6);
+    expect(min).toHaveAttribute("readonly"); expect(max).toHaveAttribute("readonly");
+    const slider = screen.getByLabelText<HTMLInputElement>(`${name} Position 滑块`);
+    expect(slider).toBeEnabled(); expect(slider).toHaveAttribute("step", "any");
+    expect(Number(slider.min)).toBeCloseTo((0.05 - 0.004282757541) / -0.008612826752, 12);
+    expect(Number(slider.max)).toBeCloseTo((0 - 0.004282757541) / -0.008612826752, 12);
+    expect(screen.getByLabelText(`${name} Position · rad`)).toHaveValue("0");
+    expect(screen.getByText("实测 0.5000")).toBeVisible();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
+  });
+
+  it("shares updated ranges between MIT and POS while preserving their independent target drafts", async () => {
+    const { bridge, props, rerender } = mount(bridgeDouble(capabilities()), { urdfXml: motorUrdf(urdfJoint("joint1", -1, 1)) }); await flush(); select();
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "0.6" } });
+    fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-1");
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "0.3" } });
+    fireEvent.change(screen.getByLabelText("joint1 速度上限 · rad/s"), { target: { value: "0.2" } });
+    rerender(<MotorControl {...props} urdfXml={motorUrdf(urdfJoint("joint1", -0.1, 0.1))} />); await flush();
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-0.1");
+    expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("0.1");
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.3");
+    expect(screen.getByLabelText("joint1 速度上限 · rad/s")).toHaveValue("0.2");
+    fireEvent.click(screen.getByRole("button", { name: "MIT" }));
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-0.1");
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.6");
+    expect(screen.getByLabelText("joint1 选择控制")).toBeChecked();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
+  });
+
+  it("drops old model limits when the live model or feedback joint name changes", async () => {
+    const urdfXml = motorUrdf(urdfJoint("joint1", -1, 1));
+    const { props, rerender } = mount(bridgeDouble(), { urdfXml }); await flush(); select();
+    rerender(<MotorControl {...props} jointState={{ name: ["replacement_joint"], position: [0.15] }} />); await flush();
+    expect(screen.getByLabelText("replacement_joint 行程 min")).toHaveValue("");
+    expect(screen.getByLabelText("replacement_joint Position 滑块")).toBeDisabled();
+    rerender(<MotorControl {...props} urdfXml={motorUrdf(urdfJoint("replacement_joint", -2, 2))} />); await flush();
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("");
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeDisabled();
+    rerender(<MotorControl {...props} urdfXml="" />); await flush();
+    expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("");
+    expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("");
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeDisabled();
+  });
+
+  it("keeps an already approved MIT payload unchanged when model bounds refresh", async () => {
+    vi.useFakeTimers();
+    const { bridge, props, rerender } = mount(bridgeDouble(), { urdfXml: motorUrdf(urdfJoint("joint1", -1, 1)) }); await flush(); select();
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "0.6" } }); arm(); start(); await flush();
+    rerender(<MotorControl {...props} urdfXml={motorUrdf(urdfJoint("joint1", -0.1, 0.1))} />); await flush();
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.6");
+    expect(bridge.command).toHaveBeenCalledTimes(1);
+    expect(bridge.send).toHaveBeenCalledTimes(2);
+    for (const [payload] of bridge.send.mock.calls) expect(payload).toMatchObject({ mode: 1, active_joint_mask: 1, position: [0.6, 0, 0, 0, 0, 0, 0] });
+  });
+
+  it("still rejects a POS target outside firmware capability even inside the model slider range", async () => {
+    const current = capabilities({ control_modes: Array(7).fill("POS_VEL"), position_min: Array(7).fill(-1), position_max: Array(7).fill(1) });
+    const { bridge } = mount(bridgeDouble(current), { urdfXml: motorUrdf(urdfJoint("joint1", -3, 3)) }); await flush(); select();
+    fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
+    expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("3");
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("joint1 速度上限 · rad/s"), { target: { value: "0.2" } }); arm(); start("执行目标并保持"); await flush();
+    expect(screen.getByText(/joint1 Position 超过已验证范围/)).toBeVisible();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
   });
 });
 

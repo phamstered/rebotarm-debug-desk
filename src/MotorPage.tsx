@@ -8,6 +8,7 @@ type JointState = { name?: string[]; position?: number[]; velocity?: number[]; e
 export function MotorPage({
   bridge,
   jointState,
+  urdfXml = "",
   status,
   commandTopic,
   statusTopic,
@@ -18,6 +19,7 @@ export function MotorPage({
 }: {
   bridge: BridgeClient;
   jointState: JointState | null;
+  urdfXml?: string;
   status: HardwareStatus | null;
   commandTopic: string;
   statusTopic?: string;
@@ -52,6 +54,7 @@ export function MotorPage({
       <MotorControl
         bridge={bridge}
         jointState={jointState}
+        urdfXml={urdfXml}
         status={status}
         statusTopic={statusTopic}
         commandTopic={commandTopic}
