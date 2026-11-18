@@ -8,8 +8,6 @@ export type SharedCommandInput = {
 export type MotorRowInput = {
   enabled: boolean;
   position: string;
-  min: string;
-  max: string;
 };
 export type CommandValues = {
   positions: number[];
@@ -31,7 +29,6 @@ export const modes: { value: CommandMode; label: string; description: string }[]
 export const DEFAULT_MODE: CommandMode = 1;
 export const DEFAULT_KP = "8";
 export const DEFAULT_KD = "2";
-export const DEFAULT_TRAVEL = 0.35;
 export const DEFAULT_JOINT_COUNT = 7;
 const decimalPattern = /^-?\d*(?:\.\d*)?$/;
 
@@ -63,8 +60,6 @@ export function createDefaultMotors(count = DEFAULT_JOINT_COUNT): MotorRowInput[
   return Array.from({ length: count }, () => ({
     enabled: false,
     position: "0",
-    min: String(-DEFAULT_TRAVEL),
-    max: String(DEFAULT_TRAVEL),
   }));
 }
 
@@ -82,12 +77,6 @@ export function buildActiveJointMask(enabled: boolean[]): number {
     if (enabled[index]) mask |= 1 << index;
   }
   return mask;
-}
-
-export function parseTravelBound(raw: string, label: string): { value?: number; error?: string } {
-  const value = Number(raw);
-  if (raw.trim() === "" || !Number.isFinite(value)) return { error: `${label} 请输入有效数字` };
-  return { value };
 }
 
 export function parseCommandValues(

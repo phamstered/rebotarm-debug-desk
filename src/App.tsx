@@ -2085,6 +2085,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           bridge={bridge}
           active={stage === "connected" && windowVisible}
           jointState={jointState}
+          urdfXml={urdf}
           status={hardwareStatus}
           commandTopic={profile.commandTopic}
           statusTopic={profile.statusTopic}

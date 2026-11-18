@@ -104,7 +104,7 @@ vi.mock("./UrdfViewer", () => ({
     </div>
   ),
 }));
-vi.mock("./MotorControl", () => ({ MotorControl: () => <div data-testid="motor">motor</div> }));
+vi.mock("./MotorControl", () => ({ MotorControl: ({ urdfXml }: { urdfXml?: string }) => <div data-testid="motor">motor<output data-testid="motor-urdf">{urdfXml ?? "missing prop"}</output></div> }));
 
 import App from "./App";
 
@@ -1153,6 +1153,31 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "Topics" }));
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
     expect(screen.queryByTestId("motor")).not.toBeInTheDocument();
+  });
+
+  it("passes only the current live URDF to Motor and clears it on reconnect", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("banner", { name: "已连接工具条" });
+    emitRosReady();
+    await user.click(screen.getByRole("button", { name: "Motor" }));
+    expect(screen.getByTestId("motor-urdf")).toBeEmptyDOMElement();
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/other_robot_description", data: "wrong-topic-model" }));
+    expect(screen.getByTestId("motor-urdf")).toBeEmptyDOMElement();
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "live-model-one" }));
+    expect(screen.getByTestId("motor-urdf")).toHaveTextContent("live-model-one");
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "live-model-two" }));
+    expect(screen.getByTestId("motor-urdf")).toHaveTextContent("live-model-two");
+
+    await user.click(screen.getByRole("button", { name: "断开" }));
+    await user.click(await screen.findByRole("button", { name: "连接 Jetson" }));
+    await screen.findByRole("banner", { name: "已连接工具条" });
+    emitRosReady();
+    if (!screen.queryByTestId("motor")) await user.click(screen.getByRole("button", { name: "Motor" }));
+    expect(screen.getByTestId("motor-urdf")).toBeEmptyDOMElement();
+    act(() => doubles.listener?.({ op: "topic_message", topic: "/robot_description", data: "new-session-model" }));
+    expect(screen.getByTestId("motor-urdf")).toHaveTextContent("new-session-model");
   });
 
   it("refuses to send a trajectory while no trajectory controller is active", async () => {

@@ -1,8 +1,9 @@
 import { ActionButton } from "./ActionButton";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
 import type { BridgeEnvelope, HardwareStatus, MotorControlCapabilities } from "./types";
-import { createCommandPayload, createDefaultMotors, DEFAULT_JOINT_COUNT, DEFAULT_KD, DEFAULT_KP, DEFAULT_MODE, faultInfo, jointLabel, modes, normalizeDecimal, parseCommandValues, parseTravelBound, resizeMotors } from "./motorLogic";
+import { createCommandPayload, createDefaultMotors, DEFAULT_JOINT_COUNT, DEFAULT_KD, DEFAULT_KP, DEFAULT_MODE, faultInfo, jointLabel, modes, normalizeDecimal, parseCommandValues, resizeMotors } from "./motorLogic";
+import { motorRangeFor, parseMotorUrdfRanges } from "./motorRangeLogic";
 import type { CommandMode, MotorRowInput } from "./motorLogic";
 import { actualDriveMode, acceptMotorEvidence, controlGate, type MotorEvidenceWatermark, createPosVelPayload, hasStopProof, parsePosVelValues, selectedMotorMask } from "./motorControlLogic";
 
@@ -16,10 +17,11 @@ function sourceStamp(value: unknown): bigint | null {
   return BigInt(stamp!.sec as number) * 1_000_000_000n + BigInt(stamp!.nanosec as number);
 }
 
-export function MotorControl({ bridge, jointState, status, statusTopic = "/stm32/status", commandTopic = "/stm32/joint_commands", onStreamingChange, controlLocked = false, active = true }: {
+export function MotorControl({ bridge, jointState, urdfXml = "", status, statusTopic = "/stm32/status", commandTopic = "/stm32/joint_commands", onStreamingChange, controlLocked = false, active = true }: {
   bridge: BridgeClient; jointState: JointState | null; status: HardwareStatus | null; statusTopic?: string; commandTopic?: string;
-  onStreamingChange(streaming: boolean): void; controlLocked?: boolean; active?: boolean;
+  onStreamingChange(streaming: boolean): void; controlLocked?: boolean; active?: boolean; urdfXml?: string;
 }) {
+  const modelRanges = useMemo(() => parseMotorUrdfRanges(urdfXml), [urdfXml]);
   const [drive, setDrive] = useState<"MIT" | "POS_VEL">("MIT");
   const [mitMode, setMitMode] = useState<CommandMode>(DEFAULT_MODE);
   const [posMode, setPosMode] = useState<0 | 1>(1);
@@ -266,13 +268,17 @@ export function MotorControl({ bridge, jointState, status, statusTopic = "/stm32
       <div className="motor-card-title"><div><strong>关节目标</strong><span>选择控制轴，核对实测位置与目标；两种驱动分别保留草稿</span></div><ActionButton className="use-current" disabled={busy} onClick={useCurrentPositions}>使用当前位置</ActionButton></div>
       {drive === "POS_VEL" && <div className="motor-batch-velocity"><label>统一速度上限 · rad/s<input aria-label="统一速度上限 · rad/s" type="text" inputMode="decimal" value={batchVelocity} disabled={busy} onChange={event => decimal(event.target.value, setBatchVelocity)} /></label><ActionButton disabled={busy || !mask} onClick={() => { edited(); setVelocityLimits(values => values.map((value, i) => motors[i]?.enabled ? batchVelocity : value)); }}>填写所选轴</ActionButton></div>}
       <div className="motor-list" role="list">{motors.map((motor, index) => {
-        const min = parseTravelBound(motor.min, "min").value ?? -0.35, max = parseTravelBound(motor.max, "max").value ?? 0.35;
         const feedback = jointState?.position?.[index], name = jointState?.name?.[index] ?? jointLabel(index);
+        const range = motorRangeFor(modelRanges, name, index);
+        const hasRange = range.min !== null && range.max !== null;
+        const sliderMin = range.min ?? 0, sliderMax = range.max ?? 1;
+        const sliderValue = hasRange ? Math.max(sliderMin, Math.min(sliderMax, Number(motor.position) || 0)) : 0.5;
         return <div className={`motor-row${motor.enabled ? " enabled" : ""}`} role="listitem" key={name}>
           <label className="motor-enable"><input type="checkbox" checked={motor.enabled} disabled={busy} aria-label={`${name} 选择控制`} onChange={event => updateMotor(index, { enabled: event.target.checked })} /><span>{name}</span></label>
-          <label className="motor-position"><span className="motor-position-label">Position · rad</span><input type="range" min={Math.min(min, max)} max={Math.max(min, max)} step={0.001} disabled={busy || !motor.enabled || mode === 0} value={Number(motor.position) || 0} aria-label={`${name} Position 滑块`} onChange={event => updateMotor(index, { position: event.target.value })} /><input type="text" inputMode="decimal" disabled={busy || !motor.enabled || mode === 0} value={motor.position} placeholder={drive === "POS_VEL" ? "请填写" : undefined} aria-label={`${name} Position · rad`} onChange={event => decimal(event.target.value, value => updateMotor(index, { position: value }))} /></label>
+          <label className="motor-position"><span className="motor-position-label">Position · rad</span><input type="range" min={sliderMin} max={sliderMax} step="any" disabled={busy || !motor.enabled || mode === 0 || !hasRange} value={sliderValue} aria-label={`${name} Position 滑块`} aria-describedby={`motor-range-${index}`} onChange={event => updateMotor(index, { position: event.target.value })} /><input type="text" inputMode="decimal" disabled={busy || !motor.enabled || mode === 0} value={motor.position} placeholder={drive === "POS_VEL" ? "请填写" : undefined} aria-label={`${name} Position · rad`} onChange={event => decimal(event.target.value, value => updateMotor(index, { position: value }))} /></label>
           {drive === "POS_VEL" && <label className="motor-velocity-limit">速度上限 · rad/s<input type="text" inputMode="decimal" disabled={busy || !motor.enabled} value={velocityLimits[index] ?? ""} placeholder="正数；按逐轴验证范围" aria-label={`${name} 速度上限 · rad/s`} onChange={event => decimal(event.target.value, value => setVelocityLimits(values => values.map((old, i) => i === index ? value : old)))} /></label>}
-          <div className="motor-travel">{(["min", "max"] as const).map(bound => <label key={bound}>{bound}<input type="text" inputMode="decimal" disabled={busy} value={motor[bound]} aria-label={`${name} 行程 ${bound}`} onChange={event => decimal(event.target.value, value => updateMotor(index, { [bound]: value }))} /></label>)}<span className="motor-feedback" title="当前反馈">实测 {Number.isFinite(feedback) ? Number(feedback).toFixed(4) : "-"}</span></div>
+          <div className="motor-travel">{(["min", "max"] as const).map(bound => <label key={bound}>{bound}<input type="text" readOnly value={range[bound] === null ? "" : String(Number(range[bound]!.toPrecision(8)))} placeholder="—" title={range[bound] === null ? range.reason : String(range[bound])} aria-label={`${name} 行程 ${bound}`} /></label>)}<span className="motor-feedback" title="当前反馈">实测 {Number.isFinite(feedback) ? Number(feedback).toFixed(4) : "-"}</span></div>
+          <small className="motor-range-source" id={`motor-range-${index}`}>{range.source}{range.reason ? ` · ${range.reason}` : " · rad"}</small>
         </div>;
       })}</div>
     </section>
@@ -290,7 +296,7 @@ export function MotorControl({ bridge, jointState, status, statusTopic = "/stm32
       {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {selectedCount} 轴</div>}
       {result && <div className="command-result" aria-live="polite">{result}</div>}
       <details className="motor-control-details"><summary>控制详情</summary><dl><dt>指令流</dt><dd>20 Hz · 固定参数快照</dd><dt>sequence</dt><dd>{sequence ?? "—"}</dd><dt>lease</dt><dd>{drive === "POS_VEL" ? capabilities?.lease_id ?? "—" : "V1 原生准入"}</dd><dt>反馈龄上界</dt><dd>{capabilities ? `${capabilities.age_ms} ms${capabilities.fresh ? "" : "（过期）"}` : "旧协议"}</dd><dt>Topic</dt><dd>{drive === "POS_VEL" ? `${commandTopic}_v2` : commandTopic}</dd></dl></details>
-      <small className="safety-note">停止或离开页面会请求关闭输出，结果以新鲜固件反馈为准。滑块 min/max 仅设置编辑范围；未选择的轴不发送运动目标。断流可能触发故障锁存，不会自动恢复控制。</small>
+      <small className="safety-note">停止或离开页面会请求关闭输出，结果以新鲜固件反馈为准。滑块范围来自当前 URDF；POS_VEL 下发还须满足固件已验证范围。未选择的轴不发送运动目标。断流可能触发故障锁存，不会自动恢复控制。</small>
     </aside>
   </div>;
 }
