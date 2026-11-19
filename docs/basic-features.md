@@ -411,7 +411,7 @@ RGBD 图像使用独立 ROS Context / DDS participant 接收，避免大图像�
 
 ## 拖动示教（六轴柔顺 + 手动夹爪）
 
-- Status → 控制模式选择「拖动示教」。启动需确认现场已支撑机械臂与物体、运动区域安全；先安全停止旧模式，再调用 `--mode=teaching --clean=false`。启动前检查配套控制栈支持 `teaching_gripper.py check-manual`，旧版本明确拒绝；不启动 MoveIt 或主臂 relay。
+- Status → 控制模式选择「拖动示教」。启动需确认现场已支撑机械臂与物体、运动区域安全；先安全停止旧模式，再调用 `--mode=teaching --clean=false`。提交控制操作前只读检查配套控制栈支持 `teaching_gripper.py check-manual`；旧版本、检查失败或超时会显示具体原因并释放尚未提交的任务占用，可在修复环境后重试。实际执行仍再次检查能力；控制操作一旦提交，异常或超时继续保留未确认占用。不启动 MoveIt 或主臂 relay。
 - 六轴 Kp=0、Kd=1，保留重力补偿和每轴 ±10 N·m 前馈限幅。夹爪 Kp、Kd、effort 全部为零，不主动保持开度，可用手拨动；机械摩擦仍然存在。示教不启动夹爪轨迹控制器，底层拒绝七轴 position/velocity 及夹爪 effort 接管。
 - Status 删除张开、闭合目标、夹取和停止夹爪控件，仅保留「保存当前姿态」。保存同一帧六轴与夹爪实测开度；需要电动抓放时先安全退出示教，再启动 Trajectory。
 - 就绪核验包括只读 `drag_teaching` / `manual_teaching_gripper` 标记、重力控制器 active、运动控制器及夹爪命令接口未占用、新鲜标定反馈、七轴无故障 TRACK。旧客户端电动夹爪请求明确拒绝。
