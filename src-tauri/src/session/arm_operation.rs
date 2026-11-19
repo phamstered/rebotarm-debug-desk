@@ -16,6 +16,62 @@ use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
 
+async fn read_only_preflight(profile: &ConnectionProfile, mode: &str) -> Result<(), String> {
+    let Some(remote) = crate::arm_mode_preflight_remote_command(profile, mode)? else {
+        return Ok(());
+    };
+    let mut command = crate::ssh_base(profile);
+    command
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg(crate::ssh_target(profile))
+        .arg(remote);
+    preflight_output(command, Duration::from_secs(15)).await
+}
+
+async fn preflight_output(
+    mut command: tokio::process::Command,
+    timeout: Duration,
+) -> Result<(), String> {
+    // This command is deliberately read-only. A lost reply or timeout cannot
+    // leave a mode transition running, and never authorizes the mutation below.
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| "只读预检超时".to_string())?
+        .map_err(|error| format!("无法执行只读预检：{error}"))?;
+    if !output.status.success() {
+        return Err(crate::stderr_tail(
+            &String::from_utf8_lossy(&output.stderr),
+            &String::from_utf8_lossy(&output.stdout),
+        ));
+    }
+    Ok(())
+}
+
+async fn prepare_after_preflight<F, P>(
+    tasks: &Tasks,
+    id: u64,
+    preflight: F,
+    prepare: P,
+) -> Result<(), String>
+where
+    F: std::future::Future<Output = Result<(), String>>,
+    P: FnOnce() -> Result<(), String>,
+{
+    let result = match preflight.await {
+        Ok(()) => prepare(),
+        Err(error) => Err(format!("控制环境预检失败，未提交控制变更：{error}")),
+    };
+    if let Err(error) = &result {
+        // controller_sent has not succeeded on these paths. Retain the task
+        // until the existing durable cleanup releases it; never rewrite a
+        // submitted/uncertain task or a previous recovery record as rejected.
+        tasks.controller_finish(id, false, error);
+    }
+    result
+}
+
 pub fn authorize(label: &str) -> Result<(), String> {
     if matches!(label, "page-status" | "page-motion") {
         Ok(())
@@ -180,18 +236,39 @@ pub async fn start(
     owned(async move {
         let hub = guard.app.state::<Runtime>();
         // Reserve the original owner/epoch before this first await. A reconnect
-        // during log preparation must not admit an old invocation to a new session.
+        // during preflight/log preparation must not admit an old invocation to a new session.
         // Never delay a stop request for diagnostic preparation.
-        if !matches!(mode.as_str(), "stop" | "disable-stop") {
-            let _ = crate::control_logs::prepare(
-                &profile,
-                &guard.app.state::<crate::control_logs::LogSessions>(),
-            )
-            .await;
+        let preparation = prepare_after_preflight(
+            &hub.tasks,
+            id,
+            async {
+                read_only_preflight(&profile, &mode).await?;
+                if !matches!(mode.as_str(), "stop" | "disable-stop") {
+                    let _ = crate::control_logs::prepare(
+                        &profile,
+                        &guard.app.state::<crate::control_logs::LogSessions>(),
+                    )
+                    .await;
+                }
+                Ok(())
+            },
+            || {
+                hub.finite_recovery
+                    .prepare(&hub.tasks, id, &profile, job.ticket())?;
+                hub.send_controller(&label, task.epoch, id, &profile)
+            },
+        )
+        .await;
+        if let Err(message) = preparation {
+            let _ = progress.send(Progress {
+                stage: "prepare".into(),
+                message: message.clone(),
+                failed: true,
+            });
+            let _ = guard.app.emit("native-tasks-changed", ());
+            super::finite_recovery::wait_released(&guard.app, id).await;
+            return Err(message);
         }
-        hub.finite_recovery
-            .prepare(&hub.tasks, id, &profile, job.ticket())?;
-        hub.send_controller(&label, task.epoch, id, &profile)?;
         let _ = progress.send(Progress {
             stage: "prepare".into(),
             message: "等待远端控制环境步骤".into(),
@@ -307,9 +384,218 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::observations::Observation;
+    use super::super::{
+        finite_recovery::Recovery, observations::Observation, tasks::Owner, windows::WindowToken,
+    };
     use super::*;
     use serde_json::json;
+    use std::{cell::Cell, path::PathBuf};
+
+    struct PreflightFixture {
+        tasks: Arc<Tasks>,
+        recovery: Recovery,
+        profile: ConnectionProfile,
+        path: PathBuf,
+        id: u64,
+        job: Job,
+    }
+    impl PreflightFixture {
+        fn new() -> Self {
+            let tasks = Arc::new(Tasks::default());
+            let recovery = Recovery::default();
+            let path = std::env::temp_dir()
+                .join(super::super::controller_journal::new_arm_id().unwrap())
+                .join("finite.json");
+            assert!(recovery.restore(&tasks, Ok(path.clone())).is_none());
+            let profile: ConnectionProfile = serde_json::from_value(json!({
+                "host":"fixture.invalid", "sshPort":22, "username":"", "identityFile":"",
+                "localPort":18765, "remotePort":8765, "rosDomainId":197,
+                "rosSetupScript":"fixture/install/setup.bash", "commandTopic":"/cmd",
+                "statusTopic":"/status", "jointStateTopic":"/joints"
+            }))
+            .unwrap();
+            tasks.configure_motor(1, &serde_json::to_value(&profile).unwrap());
+            let id = tasks.begin_arm_mode(Self::owner()).unwrap();
+            let job = Job::new(
+                tasks.snapshot().unwrap().command_id,
+                "fixture mutation".into(),
+            )
+            .unwrap();
+            Self {
+                tasks,
+                recovery,
+                profile,
+                path,
+                id,
+                job,
+            }
+        }
+        fn owner() -> Owner {
+            Owner {
+                epoch: 1,
+                window: WindowToken {
+                    label: "page-status".into(),
+                    incarnation: 1,
+                },
+            }
+        }
+        fn prepare_and_admit(&self) -> Result<(), String> {
+            self.recovery
+                .prepare(&self.tasks, self.id, &self.profile, self.job.ticket())?;
+            self.tasks.controller_sent(self.id)
+        }
+        fn assert_released_after_cleanup(&self) {
+            assert!(self.tasks.finite_terminal().is_some());
+            assert!(
+                self.tasks.begin_arm_mode(Self::owner()).is_err(),
+                "cleanup still owns the slot"
+            );
+            assert!(self.recovery.cleanup(&self.tasks).unwrap());
+            assert!(self.tasks.snapshot().is_none());
+            assert!(
+                self.tasks.begin_arm_mode(Self::owner()).is_ok(),
+                "next operation is admitted"
+            );
+        }
+    }
+    impl Drop for PreflightFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
+        }
+    }
+    fn local_preflight(script: &str) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[tokio::test]
+    async fn missing_teaching_capability_releases_unsent_task_without_a_journal_submission() {
+        let fixture = PreflightFixture::new();
+        let mutation_count = Cell::new(0);
+        let error = prepare_after_preflight(
+            &fixture.tasks,
+            fixture.id,
+            preflight_output(
+                local_preflight("printf '缺少手动夹爪示教支持\\n' >&2; exit 1"),
+                Duration::from_secs(2),
+            ),
+            || {
+                fixture.prepare_and_admit()?;
+                mutation_count.set(mutation_count.get() + 1);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("未提交控制变更"));
+        assert!(error.contains("缺少手动夹爪示教支持"));
+        assert_eq!(mutation_count.get(), 0);
+        assert!(
+            !fixture.path.exists(),
+            "read-only failure never prepares a remote mutation ticket"
+        );
+        fixture.assert_released_after_cleanup();
+    }
+
+    #[tokio::test]
+    async fn timed_out_or_unavailable_preflight_never_submits_and_releases_the_reservation() {
+        for command in [
+            local_preflight("exec sleep 5"),
+            tokio::process::Command::new("/nonexistent/rebotarm-preflight-fixture"),
+        ] {
+            let fixture = PreflightFixture::new();
+            let mutation_count = Cell::new(0);
+            let result = prepare_after_preflight(
+                &fixture.tasks,
+                fixture.id,
+                preflight_output(command, Duration::from_millis(30)),
+                || {
+                    fixture.prepare_and_admit()?;
+                    mutation_count.set(mutation_count.get() + 1);
+                    Ok(())
+                },
+            )
+            .await;
+            assert!(result.unwrap_err().contains("未提交控制变更"));
+            assert_eq!(mutation_count.get(), 0);
+            assert!(!fixture.path.exists());
+            fixture.assert_released_after_cleanup();
+        }
+    }
+
+    #[tokio::test]
+    async fn late_preflight_success_cannot_submit_after_cancel_or_connection_loss() {
+        for disconnect in [false, true] {
+            let fixture = PreflightFixture::new();
+            let mutation_count = Cell::new(0);
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+            let pending = prepare_after_preflight(
+                &fixture.tasks,
+                fixture.id,
+                async {
+                    entered_tx.send(()).unwrap();
+                    finish_rx.await.unwrap();
+                    Ok(())
+                },
+                || {
+                    fixture.prepare_and_admit()?;
+                    mutation_count.set(mutation_count.get() + 1);
+                    Ok(())
+                },
+            );
+            let invalidate = async {
+                entered_rx.await.unwrap();
+                assert!(!fixture.path.exists());
+                if disconnect {
+                    // Runtime::close and transport errors use this same unsent-task path.
+                    fixture
+                        .tasks
+                        .lost(None, "fixture disconnected during preflight");
+                } else {
+                    assert!(fixture.tasks.request_controller_disable(
+                        &serde_json::to_value(&fixture.profile).unwrap()
+                    ));
+                }
+                finish_tx.send(()).unwrap();
+            };
+            let (result, ()) = tokio::join!(pending, invalidate);
+            assert!(result.is_err());
+            assert_eq!(mutation_count.get(), 0);
+            fixture.assert_released_after_cleanup();
+        }
+    }
+
+    #[tokio::test]
+    async fn passing_preflight_still_keeps_post_submission_failure_uncertain() {
+        let fixture = PreflightFixture::new();
+        let mutation_count = Cell::new(0);
+        prepare_after_preflight(
+            &fixture.tasks,
+            fixture.id,
+            preflight_output(local_preflight("exit 0"), Duration::from_secs(2)),
+            || {
+                fixture.prepare_and_admit()?;
+                mutation_count.set(mutation_count.get() + 1);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(mutation_count.get(), 1);
+        assert!(fixture.path.exists());
+        assert!(!fixture
+            .tasks
+            .controller_finish(fixture.id, false, "remote mutation failed"));
+        assert!(fixture.tasks.finite_terminal().is_none());
+        assert!(!fixture.recovery.cleanup(&fixture.tasks).unwrap());
+        assert!(fixture
+            .tasks
+            .begin_arm_mode(PreflightFixture::owner())
+            .is_err());
+    }
+
     fn snapshot() -> Snapshot {
         let mut result = Snapshot {
             epoch: 1,

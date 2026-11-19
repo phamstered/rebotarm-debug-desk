@@ -542,7 +542,7 @@ fn parse_usb_probe(output: &str) -> UsbProbeStatus {
     }
 }
 
-fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<String, String> {
+fn arm_mode_setup(profile: &ConnectionProfile) -> Result<String, String> {
     let transport = ros_transport_setup();
     if !is_safe_setup_script(&profile.ros_setup_script) {
         return Err("ROS 环境脚本路径包含不允许的字符".into());
@@ -565,6 +565,24 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
         setup_script = profile.ros_setup_script,
         domain = profile.ros_domain_id,
     );
+    Ok(setup)
+}
+
+fn arm_mode_preflight_remote_command(
+    profile: &ConnectionProfile,
+    mode: &str,
+) -> Result<Option<String>, String> {
+    if mode != "teaching" {
+        return Ok(None);
+    }
+    let setup = arm_mode_setup(profile)?;
+    let body = format!("{setup}{}", include_str!("teaching_preflight.sh"));
+    Ok(Some(format!("bash -lc '{}'", body.replace('\'', "'\\''"))))
+}
+
+fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<String, String> {
+    let setup = arm_mode_setup(profile)?;
+    let teaching_preflight = include_str!("teaching_preflight.sh");
     let paths = "mkdir -p \"$HOME/.cache/robot-console\"; \
                  teleop_pid_file=\"$HOME/.cache/robot-console/arm-teleop.pid\"; \
                  traj_pid_file=\"$HOME/.cache/robot-console/arm-trajectory.pid\"; \
@@ -661,9 +679,7 @@ fn arm_mode_remote_command(profile: &ConnectionProfile, mode: &str) -> Result<St
         ),
         "teaching" => format!(
             "{setup}{paths}{alive_fn}{stop_fn}\
-             [ -f \"$ws/scripts/start_arm_teleop.sh\" ] || exit 1; \
-             grep -q -- '--mode=.*teaching' \"$ws/scripts/start_arm_teleop.sh\" || {{ echo \"请升级 ROS 控制栈：缺少拖动示教支持\" >&2; exit 1; }}; \
-             ros2 run microros_stm32h723_bridge teaching_gripper.py --help | grep -q check-manual || {{ echo \"请升级 ROS 控制栈：缺少手动夹爪示教支持\" >&2; exit 1; }}; \
+             {teaching_preflight}\
              arm_refuse_teaching_transition || exit 1; \
              arm_clean_environment || exit 1; \
              moveit_manage stop || exit 1; \
@@ -1663,6 +1679,51 @@ mod tests {
         assert!(!status.teleop_running && !status.trajectory_running);
         let old = parse_arm_mode_status("ARM|idle|0|0|0|0|0|0").unwrap();
         assert!(!old.teaching_running);
+    }
+
+    #[test]
+    fn teaching_preflight_checks_capability_without_control_side_effects() {
+        use std::fs;
+        let root = std::env::temp_dir().join(session::controller_journal::new_id().unwrap());
+        let workspace = root.join("Project/custom_stack");
+        fs::create_dir_all(workspace.join("scripts")).unwrap();
+        fs::create_dir_all(workspace.join("install")).unwrap();
+        let launcher = workspace.join("scripts/start_arm_teleop.sh");
+        fs::write(&launcher, "# --mode=teaching\ntouch \"$HOME/control-started\"\n").unwrap();
+        let selected = ConnectionProfile {
+            ros_setup_script: "Project/custom_stack/install/setup.bash".into(),
+            ..profile("")
+        };
+        let command = arm_mode_preflight_remote_command(&selected, "teaching")
+            .unwrap().unwrap();
+        for (help, code, expected) in [
+            ("usage: teaching_gripper.py {check-manual}", 0, ""),
+            ("usage: teaching_gripper.py {move,cancel,check}", 0, "缺少手动夹爪示教支持"),
+            ("ImportError: fixture dependency missing", 1, "ImportError: fixture dependency missing"),
+        ] {
+            fs::write(workspace.join("install/setup.bash"), format!(
+                "timeout() {{ shift; \"$@\"; }}\nros2() {{ [ \"$*\" = 'run microros_stm32h723_bridge teaching_gripper.py --help' ] || {{ touch \"$HOME/control-started\"; return 99; }}; printf '%s\\n' '{help}'; return {code}; }}\n"
+            )).unwrap();
+            let output = std::process::Command::new("bash")
+                .args(["-c", &command]).env("HOME", &root)
+                .env_remove("LEADER_FOLLOWER_WS").output().unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.success(), expected.is_empty(), "{error}");
+            assert!(error.contains(expected), "{error}");
+            assert!(!root.join("control-started").exists());
+            assert!(!root.join(".cache").exists(), "preflight must not create a control lock or journal");
+        }
+        fs::write(&launcher, "#!/bin/bash\n").unwrap();
+        let output = std::process::Command::new("bash")
+            .args(["-c", &command]).env("HOME", &root)
+            .env_remove("LEADER_FOLLOWER_WS").output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("缺少拖动示教支持"));
+        assert!(!root.join("control-started").exists());
+        for mode in ["teleop", "trajectory", "vla", "stop", "disable-stop"] {
+            assert!(arm_mode_preflight_remote_command(&selected, mode).unwrap().is_none());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
