@@ -1747,3 +1747,7 @@ body.native-page-body { min-width: 0; min-height: 0; }
 .motor-mode-log-entries { max-height: 200px; overflow: auto; padding: 8px; margin-top: 7px; background: #07151d; border: 1px solid #29414e; border-radius: 6px; user-select: text; }
 .motor-mode-log-entries p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .motor-mode-log-entries time { color: #91b8c9; font-variant-numeric: tabular-nums; }
+
+.native-task-details { min-width: 0; max-width: 100%; }
+.native-task-details summary { cursor: pointer; }
+.native-task-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; margin: 8px 0 0; }
