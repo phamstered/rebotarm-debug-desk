@@ -110,6 +110,69 @@ def query(root, job, digest):
     return value
 
 
+def arm_processes_quiescent(domain, proc=Path("/proc"), home=None):
+    """Read-only, conservative absence proof for the fixed arm launcher family.
+
+    Unknown/unreadable process state is not absence. Include delayed launchers,
+    spawners and service clients, not only the currently visible Manager node.
+    This does NOT prove output off and never releases a native task by itself.
+    """
+    if type(domain) is not int or not 0 <= domain <= 232:
+        return False
+    home = Path.home() if home is None else home
+    try:
+        for name in ("teleop", "trajectory", "teaching"):
+            path = home / ".cache/robot-console" / ("arm-" + name + ".pid")
+            if path.is_symlink():
+                return False
+            if path.exists():
+                pid = path.read_text().strip()
+                if not pid.isdigit() or (proc / pid).exists():
+                    return False
+        ancestors = set()
+        pid = os.getpid()
+        while pid > 1 and pid not in ancestors:
+            ancestors.add(pid)
+            fields = (proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+            pid = int(fields[1])
+        markers = (b"ros2_control_node", b"controller_manager", b"start_arm_teleop",
+                   b"stm32h723_arm.launch", b"teaching_gripper", b"ros2 control",
+                   b"SwitchController", b"manager_remote.py", b"rebotarm_vla", b"move_group")
+        for entry in proc.iterdir():
+            if not entry.name.isdigit() or int(entry.name) in ancestors:
+                continue
+            try:
+                command = (entry / "cmdline").read_bytes().replace(b"\0", b" ")
+                if not any(marker in command for marker in markers):
+                    continue
+                state = (entry / "stat").read_text().rsplit(")", 1)[1].split()[0]
+                if state == "Z":
+                    continue
+                environment = (entry / "environ").read_bytes().split(b"\0")
+                values = [v.split(b"=", 1)[1] for v in environment if v.startswith(b"ROS_DOMAIN_ID=")]
+                if len(values) > 1 or (values and not values[0].isdigit()):
+                    return False
+                if (int(values[0]) if values else 0) == domain:
+                    return False
+            except FileNotFoundError:
+                if entry.exists():
+                    return False
+                continue  # process exited while being read
+        return True
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def audited_query(root, job, digest, domain):
+    value = dict(query(root, job, digest))
+    value.pop("arm_quiescent", None)  # only fresh observations, never cached proof
+    if (job.startswith("arm-mode-") and value.get("phase") == "uncertain"
+            and value.get("started") is True and value.get("timed_out") is False
+            and type(value.get("exit_code")) is int and 1 <= value["exit_code"] <= 255):
+        value["arm_quiescent"] = arm_processes_quiescent(domain)
+    return value
+
+
 def reserve(root, job, digest):
     root_dir(root, True)
     # Serialize reservation and bounded retention; never evict unresolved jobs.
@@ -247,7 +310,7 @@ def main():
     job, digest = request(value)
     root = Path.home() / ".cache/rebotarm-debug-desk/controller-operations-v1"
     result = (submit(root, job, digest, value["command"]) if value["op"] == "submit"
-              else query(root, job, digest))
+              else audited_query(root, job, digest, value.get("audit_domain")))
     print(json.dumps(result, ensure_ascii=True), flush=True)
 
 

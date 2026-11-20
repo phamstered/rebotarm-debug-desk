@@ -268,7 +268,7 @@ pub fn initialize(app: &AppHandle) {
         });
     }
 }
-async fn recover(app: AppHandle, id: u64, record: Record) {
+pub(super) async fn recover(app: AppHandle, id: u64, record: Record) {
     let hub = app.state::<Runtime>();
     // Already validated at load; errors keep the reservation and cannot execute.
     let (Ok(job), Ok(profile)) = (
@@ -295,6 +295,11 @@ async fn recover(app: AppHandle, id: u64, record: Record) {
                     completed = true;
                     hub.tasks.controller_remote_completed(id);
                     "远端控制操作已结束；桌面重启不恢复授权。请现场确认支撑后显式 DISABLE，等待新的硬件关闭反馈".into()
+                }
+                Ok(Proof::ArmFailedQuiescent(_)) => {
+                    completed = true;
+                    hub.tasks.controller_remote_completed(id);
+                    "原启动已失败退出，未发现仍运行的控制进程；请在模式预设中确认现场支撑并直接关闭输出，新的 DISABLE 反馈核验后才释放占用".into()
                 }
                 Ok(Proof::Uncertain(detail)) => {
                     format!("远端控制执行结果不确定，保留占用，不重发：{detail}")

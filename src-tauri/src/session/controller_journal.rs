@@ -37,6 +37,7 @@ pub enum Proof {
     BagSucceeded(Value),
     Rejected(String),
     Uncertain(String),
+    ArmFailedQuiescent(String),
 }
 pub struct Job {
     id: String,
@@ -100,7 +101,9 @@ impl Job {
         self.exchange(profile, request).await
     }
     pub async fn query(&self, profile: &ConnectionProfile) -> Result<Proof, String> {
-        self.exchange(profile, self.query_request()).await
+        let mut request = self.query_request();
+        if self.id.starts_with("arm-mode-") { request["audit_domain"] = json!(profile.ros_domain_id); }
+        self.exchange(profile, request).await
     }
     fn proof(&self, value: &Value) -> Result<Proof, String> {
         if value["version"] != 1 || value["id"] != self.id || value["command_hash"] != self.hash {
@@ -132,7 +135,13 @@ impl Job {
                 } else { Ok(Proof::Succeeded) }
             }
             Some("rejected") if value["started"] == false => Ok(Proof::Rejected(detail)),
-            Some("uncertain") if value["started"] == true => Ok(Proof::Uncertain(detail)),
+            Some("uncertain") if value["started"] == true => {
+                if self.id.starts_with("arm-mode-") && value["arm_quiescent"] == true
+                    && value["timed_out"] == false
+                    && value["exit_code"].as_u64().is_some_and(|code| (1..=255).contains(&code)) {
+                    Ok(Proof::ArmFailedQuiescent(detail))
+                } else { Ok(Proof::Uncertain(detail)) }
+            },
             _ => Err("Controller 远端完成记录无效".into()),
         }
     }
@@ -182,6 +191,20 @@ fn remote_command() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_known_failed_quiescent_arm_jobs_allow_post_failure_disable_recovery() {
+        for arm in [true, false] {
+            let job = Job::new(if arm { new_arm_id().unwrap() } else { new_id().unwrap() }, "exit 1".into()).unwrap();
+            let value = json!({"version":1,"id":job.id,"command_hash":job.hash,"phase":"uncertain",
+                "started":true,"exit_code":1,"timed_out":false,"arm_quiescent":true,"message":"failed"});
+            assert_eq!(matches!(job.proof(&value).unwrap(), Proof::ArmFailedQuiescent(_)), arm);
+            for (key, invalid) in [("timed_out",json!(true)),("exit_code",json!(null)),("exit_code",json!(-9)),("arm_quiescent",json!(false))] {
+                let mut changed = value.clone(); changed[key] = invalid;
+                assert!(matches!(job.proof(&changed).unwrap(), Proof::Uncertain(_)));
+            }
+        }
+    }
+
     #[test]
     fn persisted_ticket_is_query_only_and_rejects_executable_or_malformed_fields() {
         let job = Job::new(new_bag_id().unwrap(), "echo never replay".into()).unwrap();

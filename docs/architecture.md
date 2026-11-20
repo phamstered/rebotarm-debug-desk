@@ -322,3 +322,7 @@ Motor 页的驱动候选和执行状态分离；V1 MIT 保持原消息布局，V
 运行中 Manager 的配置目录由其参数声明决定；新进程使用 overlay 中的 arm_controllers.yaml，硬件初态为 inactive，不使用会自动激活 Controller 的普通 launch。显式启用前分别核验硬件状态、接口冲突和 V2 MIT 资格。Manager 停止只触及本应用保存的 PID/启动身份，使用 pidfd 防止 PID 复用；外部启动的 Manager 只可管理 Controller，不能由此按钮杀进程。
 
 管理快照每 5 秒按需查询，10 秒后只读；切换提交仍需远端即时比较确认快照，操作后再次查询验证。常规 Topics/运动控制继续用 Bridge 常驻 Controller 缓存，管理快照不替代运动安全所用的新鲜状态。
+
+### Failed arm startup recovery
+
+The fixed SSH journal's read-only query may attach fresh `arm_quiescent` evidence to an arm-mode record with a known nonzero normal exit. It never rewrites the original record. The probe checks the fixed launch PID receipts and live same-domain control processes, including delayed launchers/spawners; unreadable evidence fails closed. Generic Controller service failures, worker timeouts and unknown records remain uncertain. Native recovery treats this evidence only as a completion barrier for a subsequent user-confirmed DISABLE: it does not restore authorization, replay startup, claim success, or release ownership without fresh output-off proof. The same query-only recovery runs after a failed live operation and after desktop restart.

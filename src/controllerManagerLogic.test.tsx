@@ -1,7 +1,7 @@
-import {act, render, screen, waitFor} from '@testing-library/react';
+import {act, render, renderHook, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {beforeEach, describe, expect, it, vi} from 'vitest';
-import {activationPlan,type ManagedController,type ManagerSnapshot} from './controllerManagerLogic';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {activationPlan,useControllerManager,type ManagedController,type ManagerSnapshot} from './controllerManagerLogic';
 import {ControllerManagerPanel} from './ControllerManagerPanel';
 import {defaultProfile} from './types';
 const ipc=vi.hoisted(()=>({invoke:vi.fn(),native:false,listeners:new Set<()=>void>()}));
@@ -75,4 +75,37 @@ it('fails closed when the shared task query fails while Manager refresh still wo
  await screen.findByText('new');await screen.findByText(/原生任务状态查询失败/);
  expect(screen.getByRole('button',{name:'补加载 / 重试未配置项'})).toBeDisabled();
  expect(screen.getByRole('button',{name:'刷新'})).toBeEnabled();
+});
+
+afterEach(()=>vi.useRealTimers());
+it('spaces background polls after completion and never changes manual refresh into a spinner',async()=>{
+ vi.useFakeTimers();vi.setSystemTime(100000);
+ let resolve!:(value:ManagerSnapshot)=>void;
+ ipc.invoke.mockImplementation(()=>new Promise(done=>resolve=done));
+ const view=renderHook(()=>useControllerManager(defaultProfile,true,true));
+ expect(ipc.invoke).toHaveBeenCalledTimes(1);expect(view.result.current.refreshing).toBe(false);
+ await act(async()=>vi.advanceTimersByTimeAsync(8000));
+ expect(ipc.invoke).toHaveBeenCalledTimes(1);
+ await act(async()=>resolve(snapshot()));
+ expect(view.result.current.fresh).toBe(true);
+ await act(async()=>vi.advanceTimersByTimeAsync(4999));expect(ipc.invoke).toHaveBeenCalledTimes(1);
+ await act(async()=>vi.advanceTimersByTimeAsync(1));expect(ipc.invoke).toHaveBeenCalledTimes(2);
+ expect(view.result.current.refreshing).toBe(false);expect(view.result.current.fresh).toBe(true);
+ let manual!:Promise<unknown>;act(()=>{manual=view.result.current.refresh();});
+ expect(view.result.current.refreshing).toBe(true);expect(ipc.invoke).toHaveBeenCalledTimes(2);
+ await act(async()=>{resolve(snapshot());await manual;});
+ expect(view.result.current.refreshing).toBe(false);view.unmount();
+ await act(async()=>vi.advanceTimersByTimeAsync(10000));expect(ipc.invoke).toHaveBeenCalledTimes(2);
+});
+it('keeps start enabled during background reads with a fresh snapshot and explains an absent Manager',async()=>{
+ const user=userEvent.setup();
+ ipc.invoke.mockResolvedValue({...snapshot([]),available:false});
+ render(<ControllerManagerPanel profile={defaultProfile} connected active disabledReason="" presets={null}/>);
+ await screen.findByText('Manager 未启动');
+ expect(screen.getByRole('button',{name:'启动并加载全部'})).toBeEnabled();
+ expect(screen.getByRole('button',{name:'停止 Manager'})).toHaveAttribute('title','Manager 未启动，无需停止');
+ expect(screen.getByRole('button',{name:'刷新'})).toBeEnabled();
+ await user.click(screen.getByRole('button',{name:'启动并加载全部'}));
+ expect(screen.getByRole('dialog')).toBeVisible();
+ expect(ipc.invoke.mock.calls.some(([command])=>command==='controller_manager_manage')).toBe(false);
 });

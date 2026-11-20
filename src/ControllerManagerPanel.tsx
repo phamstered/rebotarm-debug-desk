@@ -11,13 +11,15 @@ export function ControllerManagerPanel({profile,connected,active,disabledReason,
  const nativeBlock=nativeTask.error || (!nativeTask.loaded ? "正在核验共享任务状态" : nativeTask.task ? "已有共享控制任务尚未结束，请先核验原任务；管理状态仍可刷新" : "");
  const blockReason=disabledReason || nativeBlock;
  const manager=useControllerManager(profile,connected,active);
- const {snapshot,fresh,busy,refreshing,error,logs}=manager;
+ const {snapshot,fresh,busy,refreshing,syncing,error,logs}=manager;
  const [tab,setTab]=useState<"presets"|"controllers">("controllers");
  const [search,setSearch]=useState(""),[selected,setSelected]=useState<string[]>([]);
  const [confirmation,setConfirmation]=useState<ManagerRequest|null>(null),[supported,setSupported]=useState(false),[planError,setPlanError]=useState("");
  const key=JSON.stringify([profile,connected]);
  useEffect(()=>{setConfirmation(null);setSupported(false);setSelected([]);setPlanError("");},[key]);
  const rows=snapshot?.controllers??[], blocked=busy||Boolean(blockReason)||!connected;
+ const startReason=blockReason || (!connected?"未连接机器人":!fresh?"等待新鲜 Manager 状态":"");
+ const stopReason=!snapshot?.available?"Manager 未启动，无需停止":startReason || (!snapshot.owned?"只可停止本应用创建的 Manager":rows.some(r=>r.state==="active")?"请先停用全部 Controller":"");
  const stateLabel:Record<string,string>={unloaded:"未加载",unconfigured:"未配置",inactive:"已加载 · 未激活",active:"运行中",finalized:"已结束",error:"异常",unknown:"未知"};
  function ask(request:ManagerRequest){setPlanError("");setSupported(false);setConfirmation({...request,expected:snapshot?.fingerprint});}
  function activate(names:string[]){if(!snapshot)return;const plan=activationPlan(snapshot,names);if(plan.error){setPlanError(plan.error);return;}if(!plan.activate.length&&!plan.deactivate.length){setPlanError("所选 Controller 已激活");return;}ask({action:"switch",activate:plan.activate,deactivate:plan.deactivate});}
@@ -26,10 +28,11 @@ export function ControllerManagerPanel({profile,connected,active,disabledReason,
   <section className="manager-summary" aria-label="Controller Manager">
    <div><span className="manager-eyebrow">CONTROLLER MANAGER</span><h2>{fresh?(snapshot?.available?"Manager 在线":"Manager 未启动"):"Manager 状态待确认"}</h2><p>{snapshot?.manager??"/controller_manager"} · {snapshot?.updateRate??"—"} Hz · {snapshot?.owned?"应用管理的进程":"外部或尚未启动"}</p></div>
    <div className="manager-counts"><strong>{rows.filter(r=>r.state!=="unloaded").length}<small>已加载 / {rows.length}</small></strong><strong>{rows.filter(r=>r.state==="active").length}<small>已激活</small></strong></div>
-   <div className="manager-actions"><ActionButton disabled={blocked||!fresh} onClick={()=>ask({action:snapshot?.available?"load":"start"})}>{snapshot?.available?"补加载 / 重试未配置项":"启动并加载全部"}</ActionButton><ActionButton disabled={refreshing||busy||!connected} onClick={()=>void manager.refresh()}>{refreshing?"刷新中…":"刷新"}</ActionButton><ActionButton disabled={blocked||!fresh||!snapshot?.available||!snapshot.owned||rows.some(r=>r.state==="active")} onClick={()=>ask({action:"stop"})}>停止 Manager</ActionButton></div>
+   <div className="manager-actions"><ActionButton title={startReason||undefined} disabled={blocked||!fresh} onClick={()=>ask({action:snapshot?.available?"load":"start"})}>{snapshot?.available?"补加载 / 重试未配置项":"启动并加载全部"}</ActionButton><ActionButton disabled={refreshing||busy||!connected} onClick={()=>void manager.refresh()}>{refreshing?"刷新中…":"刷新"}</ActionButton><ActionButton title={stopReason||undefined} disabled={Boolean(stopReason)||busy} onClick={()=>ask({action:"stop"})}>停止 Manager</ActionButton></div>
   </section>
+  <p className="manager-note" aria-live="polite">{busy?"正在执行管理操作":syncing?"后台同步状态；操作可用性以状态新鲜度和任务占用为准":fresh?"状态已同步":"等待状态核验"}{!snapshot?.available&&fresh?" · Manager 未启动，无需停止":""}</p>
   <p className="manager-note">默认全部加载并配置为 inactive，按需启用。停用 Controller 会保留加载状态；它不等同于关闭电机输出。</p>
-  {blockReason&&<p role="status" className="manager-warning">{blockReason}</p>}
+  {blockReason&&<div role="status" className="manager-warning"><p>{blockReason}</p>{nativeTask.task&&["arm_mode","controller"].includes(nativeTask.task.kind)&&<><p>这与后台刷新无关。原任务需先核验结束，再通过现场支撑确认后的“直接关闭输出”完成恢复。</p><ActionButton onClick={()=>setTab("presets")}>前往原任务恢复</ActionButton></>}</div>}
   {(error||planError)&&<p role="alert" className="manager-error">{planError||error}</p>}
   <div className="manager-tabs" role="tablist" aria-label="控制管理"><button role="tab" aria-selected={tab==="presets"} onClick={()=>setTab("presets")}>模式预设</button><button role="tab" aria-selected={tab==="controllers"} onClick={()=>setTab("controllers")}>Controller 管理</button></div>
   <section hidden={tab!=="presets"} role="tabpanel" aria-label="模式预设">{presets}</section>

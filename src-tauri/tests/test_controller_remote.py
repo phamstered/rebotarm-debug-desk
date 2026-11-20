@@ -24,6 +24,59 @@ def job(command="true"):
 
 
 class JournalTests(unittest.TestCase):
+    def test_failed_arm_audit_requires_a_known_exit_and_never_writes_the_journal(self):
+        request = job("exit 1")
+        request["id"] = request["id"].replace("controller-", "arm-mode-")
+        record = self.reserve(request)
+        record.update(phase="uncertain", started=True, exit_code=1, timed_out=False)
+        remote.write_record(self.root, record)
+        path = self.root / (request["id"] + ".json")
+        before = path.read_bytes()
+        with patch.object(remote, "arm_processes_quiescent", return_value=True) as probe:
+            value = remote.audited_query(self.root, request["id"], request["command_hash"], 198)
+            self.assertTrue(value["arm_quiescent"])
+            probe.assert_called_once_with(198)
+        self.assertEqual(path.read_bytes(), before)
+        for changes in [dict(timed_out=True), dict(exit_code=None), dict(exit_code=-9),
+                        dict(exit_code=True), dict(phase="running"), dict(started=False)]:
+            remote.write_record(self.root, dict(record, **changes))
+            with patch.object(remote, "arm_processes_quiescent") as probe:
+                result = remote.audited_query(self.root, request["id"], request["command_hash"], 198)
+                self.assertNotIn("arm_quiescent", result)
+                probe.assert_not_called()
+        remote.write_record(self.root, record)
+        with patch.object(remote, "arm_processes_quiescent", return_value=False):
+            self.assertFalse(remote.audited_query(self.root, request["id"], request["command_hash"], 198)["arm_quiescent"])
+
+    def test_arm_absence_probe_includes_late_launchers_and_fails_closed(self):
+        proc = self.home / "proc"
+        proc.mkdir()
+        def process(pid, command, domain=198):
+            folder = proc / str(pid); folder.mkdir(exist_ok=True)
+            (folder / "cmdline").write_bytes(command)
+            (folder / "stat").write_text(f"{pid} (fixture) S 1 0 0")
+            (folder / "environ").write_bytes(f"ROS_DOMAIN_ID={domain}".encode())
+            return folder
+        process(42, b"query")
+        with patch.object(remote.os, "getpid", return_value=42):
+            self.assertTrue(remote.arm_processes_quiescent(198, proc, self.home))
+            for marker in [b"ros2_control_node", b"controller_manager/spawner", b"start_arm_teleop.sh", b"stm32h723_arm.launch.py", b"ros2 control switch_controllers", b"python3 -c controller_manager client"]:
+                folder = process(43, marker)
+                self.assertFalse(remote.arm_processes_quiescent(198, proc, self.home))
+                (folder / "environ").write_bytes(b"ROS_DOMAIN_ID=197")
+                self.assertTrue(remote.arm_processes_quiescent(198, proc, self.home))
+                (folder / "environ").unlink()
+                self.assertFalse(remote.arm_processes_quiescent(198, proc, self.home))
+            (folder / "cmdline").write_bytes(b"unrelated")
+            receipt = self.home / ".cache/robot-console/arm-teaching.pid"
+            receipt.parent.mkdir(parents=True, exist_ok=True); receipt.write_text("43")
+            self.assertFalse(remote.arm_processes_quiescent(198, proc, self.home))
+            receipt.write_text("999")
+            self.assertTrue(remote.arm_processes_quiescent(198, proc, self.home))
+            receipt.write_text("unknown")
+            self.assertFalse(remote.arm_processes_quiescent(198, proc, self.home))
+            self.assertFalse(remote.arm_processes_quiescent(None, proc, self.home))
+
     def test_manager_receipt_is_bound_to_one_submission_and_survives_lost_reply(self):
         marker = self.home / "manager-once"
         receipt = {"action":"load", "ok":False, "fingerprint":"a"*64, "message":"one: configure failed"}
