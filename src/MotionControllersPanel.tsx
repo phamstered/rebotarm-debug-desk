@@ -21,6 +21,7 @@ export type MotionControllersPanelProps = {
   focusController?: string;
   onInspect?(name: string): void;
   active?: boolean;
+  onManage?(): void;
 };
 export function MotionControllersPanel({
   status,
@@ -34,6 +35,7 @@ export function MotionControllersPanel({
   focusController,
   onInspect,
   active = true,
+  onManage,
 }: MotionControllersPanelProps) {
   const [pending, setPending] = useState<{
     controller: ControllerInfo;
@@ -89,7 +91,7 @@ export function MotionControllersPanel({
         status={status}
         focusController={focusController}
         onInspect={(name) => onInspect?.(name)}
-        renderActions={(controller) => {
+        renderActions={onManage ? undefined : (controller) => {
           const allowed =
             controller.state === "active" || controller.state === "inactive";
           const kind =
@@ -120,7 +122,8 @@ export function MotionControllersPanel({
           );
         }}
      />
-      {pending && active && (
+      {onManage && <ActionButton onClick={onManage}>管理 Controller</ActionButton>}
+      {pending && active && !onManage && (
         <ModalShell
           title={`${pending.action === "activate" ? "激活" : "停用"} Controller`}
           onClose={() => setPending(null)}

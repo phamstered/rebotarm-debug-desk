@@ -72,7 +72,7 @@ describe("main document session recovery", () => {
 });
 describe("native page routing", () => {
   it("only accepts the nine known feature identifiers", () => {
-    for (const page of ["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "gravity"]) expect(hostedPageFromSearch(`?page=${page}`)).toBe(page);
+    for (const page of ["status", "control", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "gravity"]) expect(hostedPageFromSearch(`?page=${page}`)).toBe(page);
     expect(hostedPageFromSearch("?page=calibration")).toBeUndefined();
     for (const search of ["", "?page=main", "?page=../../motor", "?page=Motion", "?page=connect"]) expect(hostedPageFromSearch(search)).toBeUndefined();
   });

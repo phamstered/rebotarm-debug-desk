@@ -380,7 +380,7 @@ impl Tasks {
         self.inner.lock().unwrap().finite_recovery_enabled = true;
     }
     pub fn restore_finite(&self, kind: Kind, window: String, command_id: String, profile: &Value) -> Result<u64, String> {
-        if !matches!(kind, Kind::Controller | Kind::ArmMode) || !matches!(window.as_str(), "page-motion" | "page-status") {
+        if !matches!(kind, Kind::Controller | Kind::ArmMode) || !matches!(window.as_str(), "page-motion" | "page-control" | "page-status") {
             return Err("控制恢复任务种类或页面无效".into());
         }
         let mut inner = self.inner.lock().unwrap();
@@ -423,6 +423,20 @@ impl Tasks {
         }
     }
 
+    pub fn manager_v2_seen(&self) -> bool {
+        self.inner.lock().unwrap().motor_context.as_ref().is_some_and(|c| c.control_seen)
+    }
+
+    pub fn manager_activation_ready(&self) -> Result<(), String> {
+        let inner = self.inner.lock().unwrap();
+        let context = inner.motor_context.as_ref().ok_or("缺少当前硬件上下文")?;
+        super::motor_task::Motor::start(Some(context), context.epoch, Instant::now())?;
+        if context.control_seen && !super::motor_task::Motor::mit_evidence(Some(context), Instant::now()) {
+            return Err("请先恢复整组 7 轴 MIT、释放 V2 租约并等待新鲜读回".into());
+        }
+        Ok(())
+    }
+
     pub fn begin_controller(&self, owner: Owner) -> Result<u64, String> {
         self.begin_finite_control(owner, Kind::Controller)
     }
@@ -432,8 +446,8 @@ impl Tasks {
     }
 
     fn begin_finite_control(&self, owner: Owner, kind: Kind) -> Result<u64, String> {
-        if !matches!(owner.window.label.as_str(), "page-motion" | "page-status") {
-            return Err("只有 Motion 或 Status 页面可以切换 Controller".into());
+        if !matches!(owner.window.label.as_str(), "page-motion" | "page-control" | "page-status") {
+            return Err("只有控制模式、Motion 或 Status 页面可以切换 Controller".into());
         }
         let mut inner = self.inner.lock().unwrap();
         self.check_activity(super::activity::Check::Motion)?;

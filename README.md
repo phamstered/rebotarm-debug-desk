@@ -190,3 +190,5 @@ Navigation → **手眼标定**：Target / Context / Calibrate 对应 RViz 操�
 ## Jetson Docker runtime
 
 ROS 2 Humble 的独立容器构建、启动与 host/Docker 双路径验证入口见 [Docker 运行说明](docs/docker.md)。
+
+Controller Manager 的启动、默认全部加载为 inactive 与按需启停位于左侧「控制模式」。详细行为见 [基本功能](docs/basic-features.md#控制模式与-controller-manager)。

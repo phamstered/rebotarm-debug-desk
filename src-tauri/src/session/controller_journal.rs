@@ -32,6 +32,7 @@ pub enum Proof {
     Progress(String),
     Unknown,
     Succeeded,
+    ManagerSucceeded(Value),
     CollectionSucceeded(Value),
     BagSucceeded(Value),
     Rejected(String),
@@ -124,6 +125,10 @@ impl Job {
                     let receipt = value.get("receipt").filter(|v| v.is_object() && v.to_string().len() <= 1024)
                         .ok_or("采集完成记录缺少有效回执")?;
                     Ok(if self.id.starts_with("bag-") { Proof::BagSucceeded(receipt.clone()) } else { Proof::CollectionSucceeded(receipt.clone()) })
+                } else if self.id.starts_with("arm-mode-") && value["receipt"].is_object() {
+                    let receipt = &value["receipt"];
+                    if receipt.to_string().len() > 1024 { return Err("Manager 回执过大".into()); }
+                    Ok(Proof::ManagerSucceeded(receipt.clone()))
                 } else { Ok(Proof::Succeeded) }
             }
             Some("rejected") if value["started"] == false => Ok(Proof::Rejected(detail)),

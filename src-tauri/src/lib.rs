@@ -14,6 +14,7 @@ mod control_logs;
 mod positions;
 mod motion_groups;
 mod arm_workflow;
+mod controller_manager;
 mod node_runtime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1548,6 +1549,8 @@ pub fn run() {
             restart_micro_ros_agent,
             probe_arm_mode,
             start_arm_mode,
+            controller_manager::controller_manager_snapshot,
+            controller_manager::controller_manager_manage,
             check_ros_controllers,
             switch_ros_controller,
             switch_ros_controllers,

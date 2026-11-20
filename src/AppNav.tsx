@@ -40,6 +40,7 @@ function CollectionIcon() {
 
 const NAV_ITEMS: Array<{ page: AppPage; label: string; title: string; icon: () => ReactElement }> = [
   { page: "status", label: "Status", title: "Status", icon: StatusIcon },
+  { page: "control", label: "控制模式", title: "控制模式 / Controller Manager", icon: MotorIcon },
   { page: "dashboard", label: "Topics", title: "Topics", icon: DashboardIcon },
   { page: "motion", label: "Motion", title: "Motion", icon: MotionIcon },
   { page: "monitor", label: "Monitor", title: "Monitor", icon: MonitorIcon },

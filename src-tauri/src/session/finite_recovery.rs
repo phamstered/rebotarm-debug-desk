@@ -34,7 +34,7 @@ impl Record {
     }
     fn validate(&self) -> Result<(), String> {
         self.kind()?;
-        if !matches!(self.window.as_str(), "page-status" | "page-motion")
+        if !matches!(self.window.as_str(), "page-status" | "page-control" | "page-motion")
             || serde_json::to_vec(&self.profile)
                 .map_err(|e| e.to_string())?
                 .len()
@@ -291,7 +291,7 @@ async fn recover(app: AppHandle, id: u64, record: Record) {
             && same_profile(&record.profile, &context["profile"])
         {
             let message = match job.query(&profile).await {
-                Ok(Proof::Succeeded | Proof::Rejected(_)) => {
+                Ok(Proof::Succeeded | Proof::ManagerSucceeded(_) | Proof::Rejected(_)) => {
                     completed = true;
                     hub.tasks.controller_remote_completed(id);
                     "远端控制操作已结束；桌面重启不恢复授权。请现场确认支撑后显式 DISABLE，等待新的硬件关闭反馈".into()

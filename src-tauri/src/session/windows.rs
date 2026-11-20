@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "lowercase")]
 pub enum Page {
     Status,
+    Control,
     Dashboard,
     Motion,
     Monitor,
@@ -27,6 +28,7 @@ impl Page {
     pub fn title(self) -> &'static str {
         match self {
             Self::Status => "Status",
+            Self::Control => "控制模式",
             Self::Dashboard => "Topics",
             Self::Motion => "Motion",
             Self::Monitor => "Monitor",
@@ -40,6 +42,7 @@ impl Page {
     pub fn label(self) -> &'static str {
         match self {
             Self::Status => "page-status",
+            Self::Control => "page-control",
             Self::Dashboard => "page-dashboard",
             Self::Motion => "page-motion",
             Self::Monitor => "page-monitor",
@@ -53,6 +56,7 @@ impl Page {
     pub fn from_label(label: &str) -> Option<Self> {
         [
             Self::Status,
+            Self::Control,
             Self::Dashboard,
             Self::Motion,
             Self::Monitor,

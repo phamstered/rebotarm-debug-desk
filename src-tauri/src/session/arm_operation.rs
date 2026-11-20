@@ -73,10 +73,10 @@ where
 }
 
 pub fn authorize(label: &str) -> Result<(), String> {
-    if matches!(label, "page-status" | "page-motion") {
+    if matches!(label, "page-status" | "page-control" | "page-motion") {
         Ok(())
     } else {
-        Err("只有 Status 或 Motion 页面可以切换控制环境".into())
+        Err("只有控制模式、Status 或 Motion 页面可以切换控制环境".into())
     }
 }
 fn execution_progress(line: &str) -> Option<Progress> {
@@ -243,6 +243,7 @@ pub async fn start(
             id,
             async {
                 read_only_preflight(&profile, &mode).await?;
+                if mode == "manager-activate" { hub.tasks.manager_activation_ready()?; }
                 if !matches!(mode.as_str(), "stop" | "disable-stop") {
                     let _ = crate::control_logs::prepare(
                         &profile,
@@ -253,6 +254,7 @@ pub async fn start(
                 Ok(())
             },
             || {
+                if mode == "manager-activate" { hub.tasks.manager_activation_ready()?; }
                 hub.finite_recovery
                     .prepare(&hub.tasks, id, &profile, job.ticket())?;
                 hub.send_controller(&label, task.epoch, id, &profile)
@@ -276,6 +278,7 @@ pub async fn start(
         });
         let mut proof = job.submit(&profile).await.ok();
         let mut completed = false;
+        let mut manager_receipt: Option<Value> = None;
         loop {
             if *outcome.borrow() == Outcome::Disabled {
                 super::finite_recovery::wait_released(&guard.app, id).await;
@@ -285,6 +288,11 @@ pub async fn start(
                 return Err("控制环境任务已结束或失效".into());
             }
             match proof.take() {
+                Some(Proof::ManagerSucceeded(receipt)) if mode.starts_with("manager") => {
+                    manager_receipt = Some(receipt);
+                    completed = true;
+                    hub.tasks.controller_remote_completed(id);
+                }
                 Some(Proof::Succeeded) => {
                     completed = true;
                     hub.tasks.controller_remote_completed(id);
@@ -316,6 +324,23 @@ pub async fn start(
             let context = hub.context();
             if context["connected"] == true && same_profile(&original, &context["profile"]) {
                 if completed {
+                    if mode.starts_with("manager") {
+                        if let Some(receipt) = &manager_receipt {
+                            match crate::controller_manager::snapshot(&profile).await {
+                                Ok(actual) if crate::controller_manager::verified(&context, &hub.context(), &original, receipt, &actual) => {
+                                    if guard.finish(true, "Manager 已核验") {
+                                        super::finite_recovery::wait_released(&guard.app, id).await;
+                                        return Ok(RemoteActionResult { ok: receipt["ok"] == true, exit_code: 0,
+                                            message: if receipt["ok"] == true { "Manager 操作完成，已核验实际状态".into() } else { "Manager 操作未全部完成，已保留实际状态与成功项".into() },
+                                            detail: receipt["message"].as_str().unwrap_or("").into() });
+                                    }
+                                }
+                                _ => { guard.progress("Manager 操作已结束，等待实际状态核验；不重发"); }
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
                     let epoch = context["epoch"].as_u64().ok_or("连接代次无效")?;
                     let _ = hub.observations.refresh(epoch, Source::Arm, true).await;
                     if !matches!(mode.as_str(), "stop" | "disable-stop" | "realsense") {
@@ -615,6 +640,7 @@ mod tests {
     #[test]
     fn arm_success_requires_current_fresh_mode_and_controller_state() {
         assert!(authorize("page-status").is_ok());
+        assert!(authorize("page-control").is_ok());
         assert!(authorize("page-motion").is_ok());
         for caller in ["main", "page-handeye", "page-motor", "page-status-copy"] {
             assert!(authorize(caller).is_err());

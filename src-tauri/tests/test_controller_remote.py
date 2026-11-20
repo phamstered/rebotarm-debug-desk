@@ -24,6 +24,19 @@ def job(command="true"):
 
 
 class JournalTests(unittest.TestCase):
+    def test_manager_receipt_is_bound_to_one_submission_and_survives_lost_reply(self):
+        marker = self.home / "manager-once"
+        receipt = {"action":"load", "ok":False, "fingerprint":"a"*64, "message":"one: configure failed"}
+        line = "ROBOT_CONSOLE_MANAGER_RECEIPT=" + json.dumps(receipt)
+        command = "printf x >> " + shlex.quote(str(marker)) + "; printf '%s\\n' " + shlex.quote(line)
+        request = job(command); request["id"] = request["id"].replace("controller-", "arm-mode-")
+        self.cli(request, discard_reply=True)
+        proof = self.wait(request)
+        self.assertEqual(proof["phase"], "succeeded")
+        self.assertEqual(proof["receipt"], receipt)
+        self.cli(request)
+        self.assertEqual(marker.read_text(), "x")
+
     def test_bag_receipt_bound_to_single_execution_and_missing_receipt_is_uncertain(self):
         marker = self.home / "bag-once"
         receipt = {"kind": "play", "active": True, "pid": 42, "domain": 197,

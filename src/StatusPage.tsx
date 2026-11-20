@@ -118,6 +118,7 @@ function StatusCard({
 }
 
 export function StatusPage({
+  controlView = false, renderControl, onManageControllers,
   clockSync,
   stage,
   sshOk,
@@ -147,6 +148,9 @@ export function StatusPage({
   onSaveTeachingPose,
   onClearHighlight,
 }: {
+  controlView?: boolean;
+  renderControl?: (presets: import("react").ReactNode) => import("react").ReactNode;
+  onManageControllers?: () => void;
   clockSync?: ClockStatus;
   stage: string;
   sshOk: boolean;
@@ -176,7 +180,7 @@ export function StatusPage({
   onSaveTeachingPose?: () => void;
   onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "teaching" | "stop" | "disable-stop") => void;
 }) {
-  const [selectedTab, setSelectedTab] = useState<StatusZoneId>(() => statusZoneForCard(highlightCardId) ?? "connection");
+  const [selectedTab, setSelectedTab] = useState<StatusZoneId>(() => controlView ? "control" : statusZoneForCard(highlightCardId) ?? "connection");
   useEffect(() => {
     const zone = statusZoneForCard(highlightCardId);
     if (zone) setSelectedTab(zone);
@@ -213,13 +217,18 @@ export function StatusPage({
     vlaChunkSample,
     actionBusy,
   });
-  const zones = useMemo(() => groupStatusZones(cards), [cards]);
+  const zones = useMemo(() => groupStatusZones(cards).filter(zone => !controlView || zone.id === "control"), [cards, controlView]);
   const stickyAlert = useMemo(() => buildHardwareStickyAlert(hardwareStatus), [hardwareStatus]);
   const observedMode = useMemo(
     () => resolveActiveControlMode({ armMode, rosControl }),
     [armMode, rosControl],
   );
   const activeMode = controlStopped ? null : observedMode;
+  const presetEnvironment = activeMode === "teaching" ? Boolean(armMode?.teachingRunning) :
+    activeMode === "teleop" ? Boolean(armMode?.teleopRunning && armMode.teleopOwnsRos2Control) :
+    activeMode === "trajectory" || activeMode === "vla" ? Boolean(armMode?.trajectoryRunning && armMode.trajectoryOwnsRos2Control) : false;
+  const presetConfirmed = presetEnvironment && Boolean(rosControl?.controllers.some(c=>c.name === "gravity_compensation_controller" && c.state === "active"));
+  const customCombination = controllerStatusFresh(rosControl) && !presetConfirmed && rosControl!.controllers.some(c=>c.state === "active") && !controlStopped;
   useEffect(() => { }, [activeMode, hardwareStatus?.mode, hardwareStatus?.fault_code]);
   const modeConfirmed = controllerStatusFresh(rosControl) || controlStopped;
   const [targetMode, setTargetMode] = useState<"teleop" | "trajectory" | "vla" | "teaching">("teleop");
@@ -239,22 +248,23 @@ export function StatusPage({
   const targetAction = quickActions.find((action) => action.id === targetMode)!;
   const logMode = workflow && (workflow.running || workflow.failed || actionBusy) && ["teleop", "trajectory", "vla", "teaching"].includes(workflow.mode) ? workflow.mode : (modeConfirmed ? activeMode : null) ?? targetMode;
   const logSource = workflow?.mode === "moveit" || (workflow?.mode === "trajectory" && workflow.stage === "planner") ? "moveit" : logMode === "teaching" ? "teaching" : logMode === "vla" ? "vla" : logMode === "trajectory" ? "trajectory" : "teleop";
-  return (
+  const content = (
     <main className="status-page">
-      <header className="status-page-header native-window-header">
+      {!controlView && <header className="status-page-header native-window-header">
         <div>
           <h1>Status</h1>
-          <span>分区状态总览 · 控制模式与实时日志</span>
+          <span>连接、硬件与控制环境总览</span>
         </div>
         <div className="status-page-meta" title="不刷写固件；Bridge 升级仍走既有 mismatch 提示">
           <span>NO FLASH</span>
           <strong>{profile.name || profile.host}</strong>
         </div>
         <NativePageActions />
-      </header>
-      <p className="status-page-banner" role="note">
-        选择控制模式后确认启动或切换。切换前会安全停止、关闭输出并清理旧控制进程；拖动示教退出需先支撑，不主动回零；失败时停止切换，详情见下方日志。
-      </p>
+      </header>}
+      {!controlView && <p className="status-page-banner" role="note">
+        控制环境启停、Controller 管理与操作日志已集中到「控制模式」。
+        <ActionButton onClick={onManageControllers}>打开控制模式</ActionButton>
+      </p>}
       {stickyAlert && (
         <div
           className={`status-sticky-alert tone-${stickyAlert.tone}`}
@@ -266,7 +276,7 @@ export function StatusPage({
           <span>{stickyAlert.message}</span>
         </div>
       )}
-      <div className="status-tabs" role="tablist" aria-label="状态分区">
+      {!controlView && <div className="status-tabs" role="tablist" aria-label="状态分区">
         {zones.map((zone, index) => {
           const summary = summarizeStatusZone(zone.cards);
           return <button key={zone.id} type="button" role="tab" id={`status-tab-${zone.id}`}
@@ -284,7 +294,7 @@ export function StatusPage({
             <span className="status-tab-summary">{summary.detail}</span>
           </button>;
         })}
-      </div>
+      </div>}
       <div className="status-zones">
         {zones.map((zone) => {
           const isControl = zone.id === "control";
@@ -293,11 +303,11 @@ export function StatusPage({
             : zone.cards;
           const body = (
             <>
-              {isControl && (
+              {isControl && controlView && (
                 <section className="status-mode-strip" aria-label="控制模式启停">
                   <header className="status-mode-current" aria-live="polite">
                     <span>当前模式</span>
-                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
+                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : customCombination ? `自定义组合${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
                     <span>{actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认，尚不能启用目标模式" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
                   </header>
                   <div className="status-mode-selection">
@@ -307,11 +317,11 @@ export function StatusPage({
                         <button key={action.id} type="button" className={`status-quick-action${targetMode === action.id ? " active" : ""}`}
                           disabled={action.disabled} aria-pressed={targetMode === action.id}
                           title={action.disabledReason || action.label}
-                          onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}</button>
+                          onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}{controlView && <small aria-hidden="true">{{teleop:"主臂跟随与重力补偿",trajectory:"轨迹执行与 MoveIt 规划",teaching:"手动拖动、阻尼与重力补偿",vla:"策略推理驱动的关节目标"}[action.id as "teleop"|"trajectory"|"teaching"|"vla"]}</small>}</button>
                       ))}
                     </div>
-                    <ActionButton type="button" className="status-quick-action primary" disabled={targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && activeMode === targetMode)}
-                      onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
+                    <ActionButton type="button" className="status-quick-action primary" disabled={targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && presetConfirmed && activeMode === targetMode)}
+                      onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : presetConfirmed && activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
                   <p className="status-mode-explanation">目标：{modeNames[targetMode]} · {activeMode === "teaching" ? "退出示教前先支撑机械臂与物体，解除输出后再切换。" : "切换流程：安全停止旧模式 → 清理旧进程 → 启动并核验。"}</p>
@@ -337,7 +347,7 @@ export function StatusPage({
                   <ArmModeWorkflow workflow={workflow} />
                 </section>
               )}
-              {isControl && !activeMode && (
+              {isControl && controlView && !activeMode && (
                 <p className="status-mode-idle" data-testid="status-mode-idle">{modeConfirmed ? "当前无运行中模式 · 选择目标模式后点击启动" : "当前模式待确认 · 可刷新状态或尝试恢复启动"}</p>
               )}
               <div
@@ -349,7 +359,7 @@ export function StatusPage({
                     key={card.id}
                     card={card}
                     highlighted={highlightCardId === card.id && selectedTab === zone.id}
-                    onAction={onCardAction}
+                    onAction={isControl && !controlView ? () => onManageControllers?.() : onCardAction}
                     compact={zone.id === "connection"}
                  />
                 ))}
@@ -361,8 +371,8 @@ export function StatusPage({
             <section
               key={zone.id}
               className={`status-zone zone-${zone.id}${zone.primary ? " primary" : ""}`}
-              role="tabpanel" id={`status-panel-${zone.id}`} aria-labelledby={`status-tab-${zone.id}`}
-              hidden={selectedTab !== zone.id}
+              role="tabpanel" id={`status-panel-${zone.id}`} aria-label={controlView ? "模式预设" : undefined} aria-labelledby={controlView ? undefined : `status-tab-${zone.id}`}
+              hidden={!controlView && selectedTab !== zone.id}
               data-primary={zone.primary ? "true" : undefined}
             >
               <header className="status-zone-title">
@@ -370,7 +380,7 @@ export function StatusPage({
                 {zone.primary && <span className="status-zone-badge">主区</span>}
               </header>
               {body}
-              {isControl && <ControlLogViewer key={logSource} profile={profile} connected={sshOk} active={selectedTab === "control"}
+              {isControl && controlView && <ControlLogViewer key={logSource} profile={profile} connected={sshOk} active={selectedTab === "control"}
                 preferredSource={logSource} />}
             </section>
           );
@@ -397,4 +407,5 @@ export function StatusPage({
       </div>}
     </main>
   );
+  return controlView && renderControl ? renderControl(content) : content;
 }

@@ -67,10 +67,10 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 显示累计消息数和平均接收频率。
 - Topics 列表头部提供即时搜索框，可按 Topic 名称或消息类型进行大小写不敏感过滤，并显示匹配数/总数；过滤仅影响本地显示，不改变订阅状态。
 - Topics 列表默认每 30 秒重新请求 ROS graph，也可通过标题栏刷新按钮立即刷新；自动刷新周期可在应用设置中配置为 5–300 秒。刷新失败时保留现有列表并显示原因。
-- 页面导航只保留在左侧 Navigation，**Status** 为第一项，其后为 Topics、Motion、Monitor、数据采集、Motor、Calibration 和重力辨识。Topics 集中 Graph / Inspector、Topic 列表与 Controller 只读浏览；Motion 提供 Robot View / 姿态库 / 动作组 三个局部 Tab、可折叠 Controllers 管理侧栏和共享运动日志。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
-- **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；Teleop / Trajectory / RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；启动前读取新鲜 HardwareStatus，拒绝未恢复的锁存故障；停止旧 Teleop / Trajectory 前调用现有硬件 safe_stop（按当前增益执行 RETURN → DISABLE），等待 STM32 DISABLE 确认后仅通知启动脚本清理，不发送孤立 HOLD；安全停止被拒绝或确认超时时保留命令进程并报错；SSH 侧互斥保护并等待脚本完整自检与非零命令确认后才报告启动成功，超时保留 PID 供「停止」处理）。回零停不下来时可选择「解除输出并停止」，确认现场支撑后由控制器 `~/disable` 服务持续发送零输出 DISABLE，收到 STM32 回执后才停进程（需要支持该服务的 ROS 控制插件）；服务缺失或回执失败时不会改用外部发布者或强杀。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。一键 Trajectory 执行 `scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true --clean=false`，并按新鲜硬件使能掩码的 bit0x40 选择 `--gripper=true/false`，默认同时启用独立的 `gravity_compensation_controller`；仍等待启动脚本完成控制器状态自检后才报告成功。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；启动时与 Teleop/Trajectory 一样，先安全回零、确认 DISABLE、清理并核验旧模式，再以 Trajectory+gravity 初始化新控制环境，在同一原生互斥锁内切到 VLA；不复用旧命令状态，初始化/清理失败则中止；成功后校验 controller active（及可用时的 TRACK）；`fault_code=11` 禁用启动类按钮。可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。完整用法见 [VLA 使用指南](./vla)。无一键升级全部或自动刷写 STM32。
+- 页面导航只保留在左侧 Navigation，**Status** 为第一项，其后为控制模式、Topics、Motion、Monitor、数据采集、手眼标定、Motor 和重力辨识。Topics 集中 Graph / Inspector、Topic 列表与 Controller 只读浏览；Motion 提供 Robot View / 姿态库 / 动作组 三个局部 Tab、可折叠 Controllers 状态侧栏和共享运动日志。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
+- **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；控制模式页的 Teleop / Trajectory 与硬件区的 RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；启动前读取新鲜 HardwareStatus，拒绝未恢复的锁存故障；停止旧 Teleop / Trajectory 前调用现有硬件 safe_stop（按当前增益执行 RETURN → DISABLE），等待 STM32 DISABLE 确认后仅通知启动脚本清理，不发送孤立 HOLD；安全停止被拒绝或确认超时时保留命令进程并报错；SSH 侧互斥保护并等待脚本完整自检与非零命令确认后才报告启动成功，超时保留 PID 供「停止」处理）。回零停不下来时可选择「解除输出并停止」，确认现场支撑后由控制器 `~/disable` 服务持续发送零输出 DISABLE，收到 STM32 回执后才停进程（需要支持该服务的 ROS 控制插件）；服务缺失或回执失败时不会改用外部发布者或强杀。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。一键 Trajectory 执行 `scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true --clean=false`，并按新鲜硬件使能掩码的 bit0x40 选择 `--gripper=true/false`，默认同时启用独立的 `gravity_compensation_controller`；仍等待启动脚本完成控制器状态自检后才报告成功。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；启动时与 Teleop/Trajectory 一样，先安全回零、确认 DISABLE、清理并核验旧模式，再以 Trajectory+gravity 初始化新控制环境，在同一原生互斥锁内切到 VLA；不复用旧命令状态，初始化/清理失败则中止；成功后校验 controller active（及可用时的 TRACK）；`fault_code=11` 禁用启动类按钮。可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。完整用法见 [VLA 使用指南](./vla)。无一键升级全部或自动刷写 STM32。
 - Status 分为「连接 / 硬件健康 / 控制模式」三个 Tab；硬件健康包含 USB、Hardware、时钟同步和 RealSense，控制模式包含 ros2_control、ROS 就绪及当前运行模式卡片（未启用模式时仍显示前两张）；默认打开连接。Tab 按卡片状态聚合，异常优先于注意、未知、正常、空闲，隐藏分区仍持续更新汇总；支持左右方向键、Home/End。Fault 芯片会自动打开硬件 Tab 并高亮 Hardware，HOLD / 故障提示在所有 Tab 保留。
-- 控制模式 Tab 保留互斥模式条与停止/解除输出确认，并提供实时日志：默认按当前模式选 Teleop、Trajectory 或 ROS 控制器/VLA，也可选择 RealSense。通过 Tauri `read_control_log` 走只读 SSH，每轮完成后间隔 1 秒刷新，仅在控制 Tab 和窗口可见、SSH 可用时工作；搜索不区分大小写并移除终端控制字符。关闭「跟随最新」或向上滚动后保留阅读位置，刷新不覆盖搜索内容。
+- 独立控制模式页的「模式预设」保留互斥模式条与停止/解除输出确认，并提供实时日志：默认按当前模式选 Teleop、Trajectory 或 ROS 控制器/VLA，也可选择 RealSense。通过 Tauri `read_control_log` 走只读 SSH，每轮完成后间隔 1 秒刷新，仅在模式预设和窗口可见、SSH 可用时工作；搜索不区分大小写并移除终端控制字符。关闭「跟随最新」或向上滚动后保留阅读位置，刷新不覆盖搜索内容。
 
 Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩色图像、对齐深度和 CameraInfo；一键 RealSense 启动 ROS 栈的 `left_wrist_camera.launch.py`，启用深度对齐和时间同步，并把 `camera_link` 接到相机的 `left_arm/wrist_link`。Bridge 对三个流分别选择兼容的可靠性，均以 `VOLATILE` 订阅，兼容 RealSense 图像与 CameraInfo 不同的 durability；点云帧最多等待 150 毫秒获取采集时刻 TF。若 500 毫秒内有成功帧，短暂 TF 失败不会中断上一帧；持续失败会隐藏过期点云并显示错误，避免与实时 URDF 姿态错位。点云开关、着色、点大小和近远距离控件可交互；尚未收到完整 RGBD 帧时显示等待提示。修改过的自定义 Topic 配置不会被默认迁移覆盖。启动文件需先安装到 Jetson 的 `rebotarm_gazebo` 包。
 - 日志窗口展示末尾 128 KiB / 2000 行；「下载完整日志」通过保存对话框保存未经过搜索过滤的 `.log` 文件（最大 32 MiB，超过时明确拒绝）。来源仅限 `$HOME/.cache/robot-console/arm-{teleop,trajectory,realsense}.log` 和 `$HOME/.ros/log/ros2_control_node_*.log` 中最新文件；VLA 日志随宿主控制器进程记录。缺失日志显示等待，读取/下载失败显示原因；SSH 操作有 10 秒远端 / 15 秒本机超时，切换来源、隐藏或断开后忽略旧响应。此功能不启停 ROS 或机械臂。
@@ -80,7 +80,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Topics/ROS Control 之间可上下拖动调整高度；左右侧栏边界可横向拖动调整宽度，面板尺寸会持久化到本机。分隔条支持键盘方向键微调。Topic 名称与类型悬停显示全称。
 - Topics 下方显示 `/controller_manager` 当前加载的 ROS Control Controller、类型及 active/inactive 等状态。桌面每秒经现有 WebSocket 读取 Bridge 共享缓存，不再为列表刷新启动 SSH/ROS CLI；Topics 自动刷新间隔单独设置。
 - ROS Control 标题栏提供手动刷新按钮，与展开/收起按钮并列；手动与自动刷新具有并发保护。自动轮询静默更新，不触发“全部刷新”或“刷新 Controllers”的忙碌显示；手动刷新和操作核验仍显示进行中状态。健康结果默认仅显示稳定的“最新”摘要，快照年龄与后台查询进度可展开“查询详情”查看，故障、过期及真实 Controller 状态变化立即展示。手动刷新及控制器操作前后等待请求进入后新发起的 ROS 查询，切换期间发起的查询不能充当切换后核验。
-- Topics 的 Controller 卡片提供「查看 Graph」聚焦关联节点、Topic 和连线，以及「管理」跳转 Motion；本页只读。Motion 中确认 Activate / Deactivate 后，通过 SSH 调用 Humble `ros2 control switch_controllers --strict`，完成后共享刷新列表并展示成功或错误信息。
+- Topics 的 Controller 卡片提供「查看 Graph」聚焦关联节点、Topic 和连线，以及「管理」跳转控制模式；本页只读。Controller 管理在独立控制模式页完成，见下方说明。
 - Controller 名称和操作类型在 Tauri/Rust 后端校验，拒绝包含 shell 特殊字符的输入。列表与运动健康检查共用单个常驻 ROS 客户端，沿用 2 秒请求上限、3.1 秒状态有效期和失败退避，保留既有 active、接口认领和故障门禁。新鲜成功结果不显示“重试等待”，仅失效状态显示退避等待时间。缺少 MoveIt 支持时仍可查询列表；缺少 Controller Manager 消息支持或旧 Bridge 时明确提示升级，不回退到冷启动 CLI 查询。
 - 兼容 Jetson 当前 Humble `ros2controlcli` 的超时参数类型缺陷：不显式传入 `--switch-timeout`，使用其内部浮点默认值，并由外层进程提供 10 秒超时保护。
 - Controller 列表区分首次等待、查询中、服务不可用、查询超时、数据过期及 Bridge 不支持。失败后保留同会话最后成功列表并标明年龄/错误，只供查看；不再把一次查询失败直接显示成控制器离线。成功空列表明确显示暂无 Controller。连接代变化清除旧列表，过期数据禁止 Controller 切换及当前模式确认。
@@ -89,7 +89,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 ### Motion 工作区
 
 - Motion 可在 ROS 未就绪时进入，查看已保存位置及就绪原因；执行继续要求连接、MoveIt、active 控制器、新鲜反馈、时钟和既有安全确认。
-- Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际 Activate / Deactivate 只在 Motion 侧栏，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。Status 保留整栈启动、模式切换、安全退出与解除输出。
+- Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际启停在控制模式页，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。控制模式页同时保留整栈启动、安全退出与解除输出。
 - Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、姿态库与动作组共用底部规划执行日志。左侧 Controllers 默认收起，可通过工作栏“面板”展开；已有展开偏好继续恢复。
 - Controllers 宽度、日志高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄姿态库页改为列表/编辑上下分区。
 - Robot View 画布铺满内容区；「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」支持画布内浮窗。紧凑工作台的 TCP / 关节操作默认停靠右侧，可切换浮窗，也可直接拖动标题脱离停靠（单击标题不会切换）；未保存偏好时运动状态和 RGBD 默认折叠，异常仍在状态摘要或面板标题提示。拖动标题移动，右下角手柄调整大小；标题和缩放手柄也支持方向键每次 10px、Shift 每次 40px。每个浮窗可折叠，画布顶部按钮可重新展开并置于最前；「重置浮窗」恢复默认位置、大小和展开状态。折叠保留当前编辑内容，不改变点云订阅或执行状态。面板内滚动/点击不操作相机，拖动浮窗不下发运动。
@@ -335,10 +335,10 @@ macOS 已安装应用在升级 Bridge 前按 `NODE_BINARY` → 应用 PATH → H
 ## MoveIt 一键启动
 
 - Trajectory 自检通过后启动真实 MoveIt，流程图增加“启动 MoveIt”阶段；Teleop/VLA 不启动规划器。仅启动规划器不会执行点位，不会自动勾选安全解锁，也不会创建或切换硬件控制器。
-- MoveIt 启动统一由 Status 的 Trajectory 模式流程完成；姿态库不提供重复启动入口。未就绪时继续显示原因，保存姿态不要求启动规划器或解锁运动。
+- MoveIt 启动统一由 控制模式页的 Trajectory 模式流程完成；姿态库不提供重复启动入口。未就绪时继续显示原因，保存姿态不要求启动规划器或解锁运动。
 - 在配置的 ROS 域内等待 `/move_action`、`/move_group/get_parameters`、`/get_planning_scene` 就绪。已有就绪规划器直接复用；已有但未就绪的节点只等待，不重复启动。重复的 Action 服务端、启动器提前退出或超时均报错；MoveIt 自身的同名内部节点不会被误判为多套规划器。点位是否可执行继续由 Bridge 的模型、碰撞、起点和硬件安全门判断。
 - 本应用启动的规划器保存 Linux PID、启动标识、用户与 ROS 域；切换或退出在 DISABLE 和旧 arm 清理通过后向已核验的启动器发送一次退出信号并等待其进程组退出，避免向启动器与子节点重复广播信号。归属不可读、PID 复用、未知残留或退出超时会阻止后续步骤，不强杀、不接管外部启动的规划器。失败时保留必要进程与日志；重试不会中断机械臂命令流。
-- MoveIt 输出记录在 Jetson `~/.cache/robot-console/arm-moveit.log`，Status 日志来源可选“MoveIt 规划器”，支持既有搜索、下载与跟随。旧日志保留在 `history/`。手动兼容启动仍可执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`。
+- MoveIt 输出记录在 Jetson `~/.cache/robot-console/arm-moveit.log`，控制模式页日志来源可选“MoveIt 规划器”，支持既有搜索、下载与跟随。旧日志保留在 `history/`。手动兼容启动仍可执行 `ros2 launch rebotarm_moveit_config real_move_group.launch.py`。
 
 ## Motion 规划执行终端
 
@@ -412,12 +412,12 @@ RGBD 图像使用独立 ROS Context / DDS participant 接收，避免大图像�
 
 ## 拖动示教（六轴柔顺 + 手动夹爪）
 
-- Status → 控制模式选择「拖动示教」。启动需确认现场已支撑机械臂与物体、运动区域安全；先安全停止旧模式，再调用 `--mode=teaching --clean=false`。提交控制操作前只读检查配套控制栈支持 `teaching_gripper.py check-manual`；旧版本、检查失败或超时会显示具体原因并释放尚未提交的任务占用，可在修复环境后重试。实际执行仍再次检查能力；控制操作一旦提交，异常或超时继续保留未确认占用。不启动 MoveIt 或主臂 relay。
+- 控制模式 → 模式预设选择「拖动示教」。启动需确认现场已支撑机械臂与物体、运动区域安全；先安全停止旧模式，再调用 `--mode=teaching --clean=false`。提交控制操作前只读检查配套控制栈支持 `teaching_gripper.py check-manual`；旧版本、检查失败或超时会显示具体原因并释放尚未提交的任务占用，可在修复环境后重试。实际执行仍再次检查能力；控制操作一旦提交，异常或超时继续保留未确认占用。不启动 MoveIt 或主臂 relay。
 - 六轴 Kp=0、Kd=1，保留重力补偿和每轴 ±10 N·m 前馈限幅。夹爪 Kp、Kd、effort 全部为零，不主动保持开度，可用手拨动；机械摩擦仍然存在。示教不启动夹爪轨迹控制器，底层拒绝七轴 position/velocity 及夹爪 effort 接管。
-- Status 删除张开、闭合目标、夹取和停止夹爪控件，仅保留「保存当前姿态」。保存同一帧六轴与夹爪实测开度；需要电动抓放时先安全退出示教，再启动 Trajectory。
+- 控制模式页删除张开、闭合目标、夹取和停止夹爪控件，仅保留「保存当前姿态」。保存同一帧六轴与夹爪实测开度；需要电动抓放时先安全退出示教，再启动 Trajectory。
 - 就绪核验包括只读 `drag_teaching` / `manual_teaching_gripper` 标记、重力控制器 active、运动控制器及夹爪命令接口未占用、新鲜标定反馈、七轴无故障 TRACK。旧客户端电动夹爪请求明确拒绝。
 - 退出示教不会主动回零。退出前必须托住机械臂与物体，经支撑确认后 DISABLE，并确认反馈才清理控制进程。不能直接从示教切到其他模式；手动拖动没有规划避碰，松手不保证机械臂或物体保持原位。
-- Motor 页禁止本会话示教运行期间直接下发电机命令。Status 与 Motion 保存姿态都从 `/robot_feedback/joint_states` 同帧捕获六轴与米制夹爪，反馈超过 500 ms 或不完整时拒绝，不依赖 MoveIt。之后可在 Trajectory 模式使用姿态库/动作组回放；本模式不自动录制连续轨迹。
+- Motor 页禁止本会话示教运行期间直接下发电机命令。控制模式页与 Motion 保存姿态都从 `/robot_feedback/joint_states` 同帧捕获六轴与米制夹爪，反馈超过 500 ms 或不完整时拒绝，不依赖 MoveIt。之后可在 Trajectory 模式使用姿态库/动作组回放；本模式不自动录制连续轨迹。
 - 实时日志使用独立 `arm-teaching.log`。验证覆盖手动模式就绪、无电动夹爪控件、七轴姿态保存、旧版本拒绝与支撑退出；控制栈另有硬件写帧回归及隔离模拟 MCU 测试，不代表真机拖动手感或负载验证。
 
 ### 桌面物体三维框（几何检测）
@@ -562,7 +562,7 @@ Position、动作组、视觉抓取和重力辨识与直接轨迹、Joint4 一�
 重力辨识期间点击 DISABLE 后，停止确认会要求固件实际进入 DISABLE；取消后编排器短暂发送的 HOLD 不能解除占用。Bridge 在 Action 返回后再次发送清零 DISABLE 并核对新序列反馈，普通 Abort 仍保持原有 HOLD 语义。
 
 
-多窗口功能的单个及批量 Controller 切换已接入共享任务锁：仅 Motion / Status 当前连接页面可以提交，预检前即阻止冲突运动及本页迁移。原生工作独立于页面存活，成功需要远端记录确认命令执行成功以及后续新鲜列表中所有目标 Controller 的名称、类型、目标状态一致。已成功命令遇到断线会等待原机器人同配置重连核验；SSH 错误或超时后按任务编号查询远端记录，恢复成功结果后再核验列表，不会自动重发切换。远端命令自身异常/超时、记录缺失或摘要不匹配继续保留“结果未确认”；明确在命令启动前拒绝才可报告失败并释放任务。整栈模式切换的原生生命周期与桌面重启恢复见下文；完整多窗口实机验收仍在进行。
+多窗口功能的单个及批量 Controller 切换已接入共享任务锁：仅控制模式 / Motion / Status 当前连接页面可以提交，预检前即阻止冲突运动及本页迁移。原生工作独立于页面存活，成功需要远端记录确认命令执行成功以及后续新鲜列表中所有目标 Controller 的名称、类型、目标状态一致。已成功命令遇到断线会等待原机器人同配置重连核验；SSH 错误或超时后按任务编号查询远端记录，恢复成功结果后再核验列表，不会自动重发切换。远端命令自身异常/超时、记录缺失或摘要不匹配继续保留“结果未确认”；明确在命令启动前拒绝才可报告失败并释放任务。整栈模式切换的原生生命周期与桌面重启恢复见下文；完整多窗口实机验收仍在进行。
 
 
 Controller 切换期间发送 DISABLE，或确认支撑后选择“支撑并退出”的 disable-stop，会保留停止意图。先立即请求关闭输出，远端切换确认结束后再发送新的 DISABLE；只有对应新序列的新鲜 HardwareStatus 确认关闭输出才释放占用。之前的 DISABLE ACK、旧反馈和 Controller 目标状态成功不能代替这次确认。页面全部关闭后原生工作仍继续；未知远端结果继续持锁。普通停止中的 RETURN 回零流程没有改为立即 DISABLE，其他模式启停沿用下文的应用级工作与持久化恢复流程。
@@ -623,3 +623,13 @@ Status / Motion 的整栈启动、模式切换、相机重启、MoveIt 启动及
 主窗口页面重载后先读取原生共享会话。如果原生连接仍在，只恢复当前页面的消费者、连接状态和公共订阅，不重复建立 SSH 隧道，不重放运动指令或恢复运动授权。恢复期间禁用新连接；查询失败或恢复期间连接代次/配置发生变化时显示“重试恢复共享会话”，不自动断开其他窗口。若整个桌面应用已退出，新进程仍保持未连接，需手动连接。
 
 正常退出应用时会显式关闭本应用持有的共享连接及 SSH 隧道，防止残留转发占用端口；不会按进程名清理其他 SSH 或 ROS 进程。退出不构成运动已停止的证明，未确认任务的恢复记录继续保留。
+
+### 控制模式与 Controller Manager
+
+- 左侧 **控制模式** 页面集中 Manager 生命周期、模式预设、Controller 管理和操作历史。Status 保留状态总览及跳转；Motion / Topics 只读查看 Controller，管理按钮跳到此页。
+- 「启动并加载全部」使用当前 ROS overlay 的 `microros_stm32h723_bridge/config/arm_controllers.yaml` 和机器人 xacro。新 Manager 的硬件组件保持 inactive；从 Manager 实际声明的 `*.type` 参数枚举全部 Controller，依次 load、configure 到 inactive，包括 broadcaster，不自动 activate。连接已有 Manager 不重放启动或激活操作；「补加载 / 重试未配置项」保留已有 active / inactive，只处理 unloaded / unconfigured。
+- 列表区分未加载、未配置、已加载未激活、运行中和未知，展示类型及实际所需命令接口。加载失败保留成功项、上次失败原因和操作历史，可补加载重试。管理元数据通过固定的原生 SSH 只读程序查询；连接代变化后丢弃旧响应，过期快照禁止操作。Bridge 的运动健康查询链路不变。
+- 支持逐个或批量启用、停用。批量目标之间争用同一命令接口时拒绝；与运行中 Controller 冲突时，在确认框明确列出需要停用的对象。确认后远端重新比对实际快照，严格切换，并再次读回目标状态。手动组合不凭 active 集合声明完整模式就绪。
+- 启用命令 Controller 可能激活硬件并产生保持力矩。保留现场确认、共享任务互斥、拖动示教退出要求及整组 MIT / V2 租约释放校验。停用 Controller 后仍已加载，**不等同电机 DISABLE**。模式预设沿用原有整栈启动、安全退出与核验流程。
+- 仅能停止本应用创建并有精确 PID/启动身份记录的 Manager。要求所有 Controller 非 active、无冲突任务、三帧推进的无故障 DISABLE；V2 环境还要求实际关闭输出的读回。使用 Linux pidfd 对精确进程发信号；停止进程不替代电机停止。
+- 管理操作由原生会话托管，先持久化任务票据，再单次提交。断线或 UI 消失不会重发；结果未知保留任务占用，重启沿用控制恢复流程。确认框、进度及失败原因保留在本次连接最近 200 条管理历史中，页签切换不清除；实际服务结果和新查询一致才显示完成。
