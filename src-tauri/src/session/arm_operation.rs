@@ -307,7 +307,14 @@ pub async fn start(
                         return Err(format!("远端确认未启动控制环境操作：{detail}"));
                     }
                 }
-                Some(Proof::Uncertain(detail)) => {
+                Some(Proof::Uncertain(detail) | Proof::ArmFailedQuiescent(detail)) => {
+                    let handle = guard.app.clone();
+                    let record = super::finite_recovery::Record {
+                        window: label.clone(), profile: original.clone(), ticket: job.ticket(),
+                    };
+                    tauri::async_runtime::spawn(async move {
+                        super::finite_recovery::recover(handle, id, record).await;
+                    });
                     guard.finish(false, &format!("远端步骤异常，控制状态未确认：{detail}"));
                     return Err(format!("控制环境结果未确认：{detail}"));
                 }

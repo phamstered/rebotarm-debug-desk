@@ -23,34 +23,59 @@ export function activationPlan(snapshot:ManagerSnapshot, names:string[]): {activ
 export function useControllerManager(profile:ConnectionProfile, connected:boolean, active:boolean) {
   const context=JSON.stringify([profile,connected]);
   const latest=useRef(context);latest.current=context;
-  const generation=useRef(0), pending=useRef<symbol|null>(null);
+  const generation=useRef(0), pending=useRef<Promise<ManagerSnapshot|undefined>|null>(null);
+  const busyRef=useRef(false), lastRead=useRef(0);
   const [snapshot,setSnapshot]=useState<ManagerSnapshot|null>(null);
   const [at,setAt]=useState(0),[now,setNow]=useState(Date.now());
-  const [refreshing,setRefreshing]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [syncing,setSyncing]=useState(false),[refreshing,setRefreshing]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [logs,setLogs]=useState<{at:number;message:string}[]>([]);
   const append=(message:string)=>setLogs(old=>[...old,{at:Date.now(),message:message.slice(0,4000)}].slice(-200));
-  async function refresh() {
-    if(!connected || pending.current) return;
-    const query=Symbol();pending.current=query;setRefreshing(true);const ticket=generation.current, key=context;
-    try {const value=await invoke<ManagerSnapshot>("controller_manager_snapshot",{profile});
-      if(ticket!==generation.current||key!==latest.current) return;
-      setSnapshot(value);setAt(Date.now());setError("");return value;
-    } catch(reason) {if(ticket===generation.current&&key===latest.current){setError(String(reason));setAt(0);}}
-    finally {if(pending.current===query)pending.current=null;if(ticket===generation.current&&key===latest.current)setRefreshing(false);}
+  async function refresh(source: "manual"|"background" = "manual") {
+    if(!connected || busyRef.current) return;
+    const ticket=generation.current,key=context;
+    const current=()=>ticket===generation.current&&key===latest.current;
+    if(source==="manual") setRefreshing(true);
+    if(!pending.current) {
+      setSyncing(true);
+      const query=(async()=>{
+        try {
+          const value=await invoke<ManagerSnapshot>("controller_manager_snapshot",{profile});
+          if(!current()) return;
+          setSnapshot(value);setAt(Date.now());setNow(Date.now());setError("");return value;
+        } catch(reason) {if(current()){setError(String(reason));setAt(0);}}
+        finally {if(current()){lastRead.current=Date.now();setSyncing(false);}}
+      })();
+      pending.current=query;
+      void query.finally(()=>{if(pending.current===query)pending.current=null;});
+    }
+    try {return await pending.current;} finally {if(current()&&source==="manual")setRefreshing(false);}
   }
-  useEffect(()=>{generation.current++;setSnapshot(null);setAt(0);setBusy(false);setError("");setLogs([]);pending.current=null;},[context]);
-  useEffect(()=>{if(!active||!connected)return;void refresh();const timer=window.setInterval(()=>void refresh(),5000);return()=>window.clearInterval(timer);},[context,active]);
+  useEffect(()=>{
+    generation.current++;setSnapshot(null);setAt(0);setBusy(false);busyRef.current=false;
+    setRefreshing(false);setSyncing(false);setError("");setLogs([]);pending.current=null;lastRead.current=0;
+    return()=>{generation.current++;};
+  },[context]);
+  useEffect(()=>{
+    if(!active||!connected)return;
+    let stopped=false;let timer:number|undefined;
+    const tick=async()=>{
+      const remaining=lastRead.current?5000-(Date.now()-lastRead.current):0;
+      if(remaining<=0) await refresh("background");
+      if(!stopped)timer=window.setTimeout(()=>void tick(),Math.max(5000-(Date.now()-lastRead.current),1000));
+    };
+    void tick();return()=>{stopped=true;window.clearTimeout(timer);};
+  },[context,active]);
   useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),1000);return()=>window.clearInterval(timer);},[]);
   async function execute(request:ManagerRequest) {
-    if(busy || !connected)return;
+    if(busyRef.current || !connected)return;
     const key=context,ticket=generation.current;
     const current=()=>latest.current===key&&generation.current===ticket;
-    setBusy(true);append(`提交 ${request.action}${request.activate?.length?` · 启用 ${request.activate.join(", ")}`:""}${request.deactivate?.length?` · 停用 ${request.deactivate.join(", ")}`:""}`);
+    busyRef.current=true;setBusy(true);append(`提交 ${request.action}${request.activate?.length?` · 启用 ${request.activate.join(", ")}`:""}${request.deactivate?.length?` · 停用 ${request.deactivate.join(", ")}`:""}`);
     const onProgress=new Channel<ArmProgress>();onProgress.onmessage=event=>{if(current())append(event.message);};
     try {const result=await invoke<RemoteActionResult>("controller_manager_manage",{profile,request,confirmed:true,onProgress});
       if(current()){append([result.message,result.detail].filter(Boolean).join("："));if(!result.ok)setError(result.detail||result.message);}
     }catch(reason){if(current()){setError(String(reason));append(String(reason));}}
-    finally{if(current()){setBusy(false);await refresh();}}
+    finally{if(current()){await pending.current;if(current()){busyRef.current=false;setBusy(false);await refresh("background");}}}
   }
-  return {snapshot,fresh:connected&&at>0&&now-at<10000,refreshing,busy,error,logs,refresh,execute};
+  return {snapshot,fresh:connected&&at>0&&now-at<10000,refreshing,syncing,busy,error,logs,refresh,execute};
 }
