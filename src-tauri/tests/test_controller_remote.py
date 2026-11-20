@@ -233,6 +233,17 @@ class JournalTests(unittest.TestCase):
             self.assertEqual(remote.query(self.root, pending[0]["id"], pending[0]["command_hash"])["phase"], "unknown")
             self.assertEqual(remote.query(self.root, pending[1]["id"], pending[1]["command_hash"])["phase"], "reserved")
 
+    def test_arm_failure_keeps_first_error_before_cleanup_noise(self):
+        command = "printf '[ros2_control_node] [ERROR] confirmed MIT without V2 ownership\\n'; " +             "printf '%s\\n' " + shlex.quote("cleanup shutdown noise " * 300) + "; exit 1"
+        request = job(command)
+        request["id"] = request["id"].replace("controller-", "arm-mode-")
+        remote.worker(self.root, self.reserve(request), command)
+        record = self.read(request)
+        self.assertEqual(record["phase"], "uncertain")
+        self.assertIn("confirmed MIT without V2 ownership", record["message"])
+        self.assertIn("cleanup shutdown noise", record["message"])
+        self.assertLessEqual(len(record["message"]), 2048)
+
     def test_output_is_bounded_and_invalid_record_or_symlink_fails_closed(self):
         request = job(f"{shlex.quote(sys.executable)} -c 'print(\"x\" * 1000000)'")
         remote.worker(self.root, self.reserve(request), request["command"])

@@ -150,6 +150,7 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
         return
     tail = bytearray()
     progress_buffer = bytearray()
+    first_error = None
     expired = False
     deadline = time.monotonic() + timeout
     with selectors.DefaultSelector() as selector:
@@ -171,6 +172,9 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
                         while b"\n" in progress_buffer:
                             line, _, rest = progress_buffer.partition(b"\n")
                             progress_buffer = bytearray(rest)
+                            if (record["id"].startswith("arm-mode-") and first_error is None
+                                    and (b"[ERROR]" in line or line.startswith(b"ERROR:"))):
+                                first_error = line.decode("utf-8", errors="replace")[:768]
                             if record["id"].startswith("arm-mode-") and line.startswith(b"ARM_STAGE|") and len(line) <= 2048:
                                 # ensure_ascii expands malformed/unicode input;
                                 # leave room for the separately bounded log tail.
@@ -199,9 +203,12 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
                 pass
             child.wait()
     child.stdout.close()
+    message = tail.decode("utf-8", errors="replace")
+    if first_error and (child.returncode != 0 or expired):
+        message = ("首次错误：" + first_error + "\n末尾日志：\n" + message[-1024:])[:2048]
     record.update(phase="succeeded" if child.returncode == 0 and not expired else "uncertain",
                   exit_code=child.returncode, timed_out=expired,
-                  message=tail.decode("utf-8", errors="replace"))
+                  message=message)
     if record["id"].startswith(("collection-", "bag-")) and "receipt" not in record:
         record["phase"] = "uncertain"
     write_record(root, record)

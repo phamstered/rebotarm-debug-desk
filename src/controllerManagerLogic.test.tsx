@@ -4,11 +4,13 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {activationPlan,type ManagedController,type ManagerSnapshot} from './controllerManagerLogic';
 import {ControllerManagerPanel} from './ControllerManagerPanel';
 import {defaultProfile} from './types';
-const ipc=vi.hoisted(()=>({invoke:vi.fn()}));
+const ipc=vi.hoisted(()=>({invoke:vi.fn(),native:false,listeners:new Set<()=>void>()}));
+vi.mock('./nativeWorkspaceLogic',()=>({nativeDesktop:()=>ipc.native}));
+vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async(_:string,listener:()=>void)=>{ipc.listeners.add(listener);return()=>ipc.listeners.delete(listener);})}));
 vi.mock('@tauri-apps/api/core',()=>({invoke:ipc.invoke,Channel:class{onmessage=()=>{};}}));
 const row=(name:string,state='inactive',interfaces=['joint1/position']):ManagedController=>({name,state,typeName:'test/Controller',requiredInterfaces:interfaces,claimedInterfaces:state==='active'?interfaces:[],interfacesKnown:true});
 const snapshot=(controllers=[row('new'),row('old','active')]):ManagerSnapshot=>({available:true,owned:true,manager:'/controller_manager',updateRate:100,controllers,hardware:[],fingerprint:'a'.repeat(64)});
-beforeEach(()=>{ipc.invoke.mockReset();ipc.invoke.mockResolvedValue(snapshot());});
+beforeEach(()=>{ipc.native=false;ipc.listeners.clear();ipc.invoke.mockReset();ipc.invoke.mockResolvedValue(snapshot());});
 describe('Controller management',()=>{
  it('uses actual interfaces to expose preemption and rejects conflicts within target',()=>{
   expect(activationPlan(snapshot(),['new'])).toEqual({activate:['new'],deactivate:['old'],error:''});
@@ -49,4 +51,28 @@ describe('Controller management',()=>{
   render(<ControllerManagerPanel profile={defaultProfile} connected active disabledReason="" presets={null}/>);
   await waitFor(()=>expect(screen.getByText('idle')).toBeVisible());expect(screen.getByRole('button',{name:'停止 Manager'})).toBeDisabled();
  });
+});
+
+it('blocks Manager mutations on native task ownership but keeps refresh available',async()=>{
+ ipc.native=true;
+ let task:unknown={id:1,command_id:'old',kind:'arm_mode',phase:'uncertain',window:'page-control',message:'unconfirmed'};
+ ipc.invoke.mockImplementation(async(command)=>command==='native_task_snapshot'?task:snapshot());
+ render(<ControllerManagerPanel profile={defaultProfile} connected active disabledReason="" presets={null}/>);
+ await screen.findByText('new');
+ expect(await screen.findByText(/已有共享控制任务尚未结束/)).toBeVisible();
+ expect(screen.getByRole('button',{name:'补加载 / 重试未配置项'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'启用'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'刷新'})).toBeEnabled();
+ task=null;await act(async()=>ipc.listeners.forEach(listener=>listener()));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'补加载 / 重试未配置项'})).toBeEnabled());
+ expect(ipc.invoke.mock.calls.some(([command])=>command==='controller_manager_manage')).toBe(false);
+});
+
+it('fails closed when the shared task query fails while Manager refresh still works',async()=>{
+ ipc.native=true;
+ ipc.invoke.mockImplementation(async(command)=>{if(command==='native_task_snapshot')throw new Error('unavailable');return snapshot();});
+ render(<ControllerManagerPanel profile={defaultProfile} connected active disabledReason="" presets={null}/>);
+ await screen.findByText('new');await screen.findByText(/原生任务状态查询失败/);
+ expect(screen.getByRole('button',{name:'补加载 / 重试未配置项'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'刷新'})).toBeEnabled();
 });

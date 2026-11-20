@@ -16,6 +16,10 @@ use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
 
+fn requires_mit(mode: &str) -> bool {
+    matches!(mode, "manager-activate" | "teleop" | "trajectory" | "vla" | "teaching")
+}
+
 async fn read_only_preflight(profile: &ConnectionProfile, mode: &str) -> Result<(), String> {
     let Some(remote) = crate::arm_mode_preflight_remote_command(profile, mode)? else {
         return Ok(());
@@ -243,7 +247,7 @@ pub async fn start(
             id,
             async {
                 read_only_preflight(&profile, &mode).await?;
-                if mode == "manager-activate" { hub.tasks.manager_activation_ready()?; }
+                if requires_mit(&mode) { hub.tasks.manager_activation_ready()?; }
                 if !matches!(mode.as_str(), "stop" | "disable-stop") {
                     let _ = crate::control_logs::prepare(
                         &profile,
@@ -254,7 +258,7 @@ pub async fn start(
                 Ok(())
             },
             || {
-                if mode == "manager-activate" { hub.tasks.manager_activation_ready()?; }
+                if requires_mit(&mode) { hub.tasks.manager_activation_ready()?; }
                 hub.finite_recovery
                     .prepare(&hub.tasks, id, &profile, job.ticket())?;
                 hub.send_controller(&label, task.epoch, id, &profile)
@@ -488,6 +492,16 @@ mod tests {
             let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
         }
     }
+    #[test]
+    fn preset_start_requires_mit_but_stops_and_inactive_loading_do_not() {
+        for mode in ["manager-activate", "teleop", "trajectory", "vla", "teaching"] {
+            assert!(requires_mit(mode));
+        }
+        for mode in ["stop", "disable-stop", "manager", "realsense", "moveit"] {
+            assert!(!requires_mit(mode));
+        }
+    }
+
     fn local_preflight(script: &str) -> tokio::process::Command {
         let mut command = tokio::process::Command::new("sh");
         command.args(["-c", script]);

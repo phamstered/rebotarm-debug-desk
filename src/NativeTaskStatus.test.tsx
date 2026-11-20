@@ -135,3 +135,14 @@ it("shows corrupt control recovery as a journal error without suggesting a runni
   expect(screen.getByRole("status")).not.toHaveTextContent("Controller 切换");
   expect(screen.queryByRole("button")).toBeNull();
 });
+
+it("keeps long recovery logs in collapsed details instead of filling the toolbar", async () => {
+  const message = "原始失败日志 " + "traceback ".repeat(40);
+  mocks.invoke.mockResolvedValue({ ...task, kind: "arm_mode", phase: "uncertain", message });
+  render(<NativeTaskStatus />);
+  const detail = (await screen.findByText("查看任务详情")).closest("details")!;
+  expect(detail).not.toHaveAttribute("open");
+  expect(detail.querySelector("pre")?.textContent).toBe(message);
+  act(() => { screen.getByText("查看任务详情").click(); });
+  expect(detail).toHaveAttribute("open");
+});
