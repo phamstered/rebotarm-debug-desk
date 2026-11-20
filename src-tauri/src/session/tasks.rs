@@ -432,7 +432,7 @@ impl Tasks {
         let context = inner.motor_context.as_ref().ok_or("缺少当前硬件上下文")?;
         super::motor_task::Motor::start(Some(context), context.epoch, Instant::now())?;
         if context.control_seen && !super::motor_task::Motor::mit_evidence(Some(context), Instant::now()) {
-            return Err("请先恢复整组 7 轴 MIT、释放 V2 租约并等待新鲜读回".into());
+            return Err("请在 Motor 页面恢复整组 7 轴 MIT 并释放 V2 控制权，等待新鲜读回；lease=0 不代表 owner 已释放".into());
         }
         Ok(())
     }
@@ -1975,6 +1975,25 @@ mod motor_tests {
         let mut proof=caps();proof["stamp_ns"]=json!("101");proof["last_command_sequence"]=json!(5);
         tasks.observe(1,&json!({"op":"motor_control_status","motor_control":proof}));assert!(tasks.snapshot().is_none());
     }
+    #[test]
+    fn controller_activation_rejects_retained_owner_even_with_zero_lease() {
+        use super::super::motor_v2_task::tests::caps;
+        let tasks = Arc::new(Tasks::default());
+        tasks.configure_motor(1, &profile("first"));
+        tasks.observe(1, &feedback(1, 3, 1));
+        let mut status = caps();
+        status["control_modes"] = json!(["MIT", "MIT", "MIT", "MIT", "MIT", "MIT", "MIT"]);
+        status["verified_joint_mask"] = json!(127);
+        status["lease_id"] = json!(0);
+        status["owner_source_id"] = json!("123");
+        tasks.observe(1, &json!({"op":"motor_control_status", "motor_control":status}));
+        assert!(tasks.manager_activation_ready().unwrap_err().contains("V2 控制权"));
+        status["owner_source_id"] = json!("0");
+        status["stamp_ns"] = json!("101");
+        tasks.observe(1, &json!({"op":"motor_control_status", "motor_control":status}));
+        assert!(tasks.manager_activation_ready().is_ok());
+    }
+
     fn v2_started() -> (Arc<Tasks>, Value, Value, u64) {
         use super::super::motor_v2_task::tests::{caps,acquire};
         let tasks = Arc::new(Tasks::default()); tasks.configure_motor(1, &profile("first"));

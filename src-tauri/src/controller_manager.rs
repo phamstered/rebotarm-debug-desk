@@ -3,7 +3,7 @@
 use crate::{ConnectionProfile, RemoteActionResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{ipc::Channel, AppHandle, State, WebviewWindow};
+use tauri::{ipc::Channel, AppHandle, State, Webview};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -97,8 +97,8 @@ pub fn verified(
 }
 
 #[tauri::command]
-pub async fn controller_manager_snapshot(
-    window: WebviewWindow,
+pub async fn controller_manager_snapshot<R: tauri::Runtime>(
+    window: Webview<R>,
     profile: ConnectionProfile,
 ) -> Result<Value, String> {
     crate::session::arm_operation::authorize(window.label())?;
@@ -107,7 +107,7 @@ pub async fn controller_manager_snapshot(
 #[tauri::command]
 pub async fn controller_manager_manage(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     hub: State<'_, crate::session::runtime::Runtime>,
     profile: ConnectionProfile,
     request: Request,
@@ -144,6 +144,37 @@ pub async fn controller_manager_manage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snapshot_extracts_child_webview_before_authorizing_caller() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![controller_manager_snapshot])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let window = tauri::WindowBuilder::new(&app, "main").build().unwrap();
+        // Deliberately unauthorized: reaching this error proves real IPC extracted
+        // the embedded child view, without running SSH or any robot operation.
+        let view = window.add_child(
+            tauri::WebviewBuilder::new("page-dashboard", Default::default()),
+            tauri::LogicalPosition::new(0, 0), tauri::LogicalSize::new(800, 600),
+        ).unwrap();
+        struct Child(tauri::Webview<tauri::test::MockRuntime>);
+        impl AsRef<tauri::Webview<tauri::test::MockRuntime>> for Child {
+            fn as_ref(&self) -> &tauri::Webview<tauri::test::MockRuntime> { &self.0 }
+        }
+        let response = tauri::test::get_ipc_response(&Child(view), tauri::webview::InvokeRequest {
+            cmd: "controller_manager_snapshot".into(),
+            callback: tauri::ipc::CallbackFn(0), error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: tauri::ipc::InvokeBody::Json(json!({"profile": {
+                "host":"robot", "sshPort":22, "username":"user", "identityFile":"",
+                "remotePort":8765, "localPort":18765, "rosDomainId":0,
+                "rosSetupScript":"stack/install/setup.bash", "jointStateTopic":"/joint_states",
+                "commandTopic":"/command", "statusTopic":"/status"
+            }})),
+            headers: Default::default(), invoke_key: tauri::test::INVOKE_KEY.into(),
+        });
+        assert_eq!(response.unwrap_err(), json!(crate::session::arm_operation::authorize("page-dashboard").unwrap_err()));
+    }
+
     #[test]
     fn completion_cannot_cross_a_disconnect_or_connection_epoch() {
         let profile = json!({"host":"robot","sshPort":22,"username":"user","identityFile":"","remotePort":8765,"rosDomainId":0,"rosSetupScript":"stack/install/setup.bash","commandTopic":"/command","statusTopic":"/status","jointStateTopic":"/joint_states"});
