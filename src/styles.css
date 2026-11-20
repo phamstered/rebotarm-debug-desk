@@ -512,7 +512,7 @@ header button.ghost { margin-left: 10px; color: #adc1ce; background: transparent
 .motor-drive-selector button[aria-pressed="true"] { border-color: #43b5a9; color: #c4fff3; background: #123b37; }
 .motor-drive-selector button:disabled { opacity: .45; }
 .motor-mode-application { display: grid; gap: 7px; margin: 8px 0 13px; font-size: 11px; overflow-wrap: anywhere; }
-.motor-mode-application button, .motor-mode-confirmation button, .motor-batch-velocity button { padding: 7px 10px; border: 1px solid #355566; border-radius: 6px; color: #c8e0e7; background: #102630; }
+.motor-mode-application button, .motor-mode-confirmation button, .motor-batch-velocity button, .motor-mode-log button { padding: 7px 10px; border: 1px solid #355566; border-radius: 6px; color: #c8e0e7; background: #102630; }
 .motor-mode-confirmation { padding: 10px; margin: 10px 0; border: 1px solid #806333; border-radius: 7px; color: #dec69b; background: #242015; font-size: 11px; overflow-wrap: anywhere; }
 .motor-mode-confirmation p { line-height: 1.5; }
 .motor-mode-confirmation button + button { margin-left: 7px; }
@@ -1738,3 +1738,12 @@ body.native-page-body { min-width: 0; min-height: 0; }
 
 .native-hosted-page .app-toolbar.native-window-header { overflow: visible; }
 .native-hosted-page .app-toolbar.native-window-header .toolbar-actions { flex-wrap: wrap; }
+
+.motor-mode-failure { font-size: 11px; line-height: 1.6; margin: 10px 0; padding: 10px; color: #f4b1a9; border: 1px solid #87504a; border-radius: 7px; background: #2c1919; overflow-wrap: anywhere; }
+.motor-firmware-ranges, .motor-mode-log { margin: 12px 0; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
+.motor-firmware-ranges p { margin: 4px 0; }
+.motor-mode-log summary { cursor: pointer; font-weight: 700; }
+.motor-mode-log small { display: block; margin: 6px 0; color: var(--muted); }
+.motor-mode-log-entries { max-height: 200px; overflow: auto; padding: 8px; margin-top: 7px; background: #07151d; border: 1px solid #29414e; border-radius: 6px; user-select: text; }
+.motor-mode-log-entries p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.motor-mode-log-entries time { color: #91b8c9; font-variant-numeric: tabular-nums; }

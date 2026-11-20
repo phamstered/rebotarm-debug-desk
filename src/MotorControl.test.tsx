@@ -285,6 +285,7 @@ describe("MotorControl V2", () => {
     expect(screen.getByText("模式申请中")).toBeVisible();
     const next = capabilities({ control_modes: ["POS_VEL", ...Array(6).fill("MIT")], operation_state: 2, operation_id: 8, control_epoch: 3, stamp_ns: "1100000000" });
     await act(async () => finish({ op: "motor_set_control_mode_result", terminal: true, motor_control: next }));
+    expect(screen.getByRole("log")).toHaveTextContent("应用成功：POS_VEL 已读回");
     expect(screen.getByText("实际驱动：POS_VEL（已读回）")).toBeVisible(); expect(screen.getByLabelText("安全确认")).not.toBeChecked(); expect(bridge.send).not.toHaveBeenCalled();
   });
   it("rejects an ACK without terminal readback and never auto-starts after partial configuration", async () => {
@@ -345,5 +346,64 @@ describe("MotorControl V2", () => {
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: capabilities() }));
     expect(screen.getByLabelText("安全确认")).toBeDisabled(); // Same source stamp cannot revive invalidated data.
     expect(bridge.command).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush(); expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ op: "joint_command", mode: 3 }));
+  });
+});
+
+
+describe("Motor mode history", () => {
+  it("retains joint7 failure across stop proof, polling and reopening confirmation", async () => {
+    const initial = capabilities({ pos_vel_supported_mask: 64 });
+    const bridge = bridgeDouble(initial);
+    mount(bridge, { jointState: { name: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper_finger_left_joint"], position: [0, 0, 0, 0, 0, 0, 0.511749] } }); await flush();
+    fireEvent.click(screen.getByLabelText("gripper_finger_left_joint 选择控制"));
+    fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
+    fireEvent.click(screen.getByRole("button", { name: "应用驱动模式…" }));
+    let reject!: (reason: Error) => void;
+    bridge.command.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    fireEvent.click(screen.getByLabelText("现场支撑确认"));
+    fireEvent.click(screen.getByRole("button", { name: "确认应用驱动模式" }));
+    expect(bridge.command).toHaveBeenCalledWith(expect.objectContaining({ active_joint_mask: 64, control_mode: "POS_VEL" }));
+    const failed = capabilities({ pos_vel_supported_mask: 64, operation_id: 4, selected_joint_mask: 64, operation_state: 3, error_code: 10, stamp_ns: "2000000000", position_max: [0, 0, 0, 0, 0, 0, 0.508316] });
+    await act(async () => {
+      bridge.emit({ op: "motor_control_status", motor_control: failed });
+      reject(new Error("固件模式操作失败或已取消"));
+    });
+    const stopped = { ...failed, stamp_ns: "3000000000", last_command_sequence: 42 };
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: stopped }));
+    const log = screen.getByRole("log", { name: "模式切换日志" });
+    expect(log).toHaveTextContent("joint7（gripper_finger_left_joint）");
+    expect(log).toHaveTextContent("mask=64");
+    expect(log).toHaveTextContent("error=10（超出固件已验证范围）");
+    expect(log).toHaveTextContent("应用失败 / 结果未确认");
+    expect(log).toHaveTextContent("停止反馈：已核验输出关闭");
+    expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
+    expect(screen.getByText(/当前反馈：joint7 0.511749 rad/)).toBeVisible();
+    const lines = log.querySelectorAll("p").length;
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...stopped, stamp_ns: "4000000000" } }));
+    expect(log.querySelectorAll("p")).toHaveLength(lines);
+    // Stale success must not replace the accepted failure or pollute history.
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...failed, operation_state: 2, error_code: 0 } }));
+    expect(log.querySelectorAll("p")).toHaveLength(lines);
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...stopped, stamp_ns: "5000000000" } }));
+    fireEvent.click(screen.getByRole("button", { name: "应用驱动模式…" }));
+    expect(log).toHaveTextContent("应用失败 / 结果未确认");
+    expect(bridge.command).toHaveBeenCalledTimes(2); // configure, then DISABLE only
+    expect(bridge.send).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "清空切换日志" }));
+    expect(log).toHaveTextContent("暂无切换记录");
+    expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
+  });
+  it("retains rapid observed pending/failure transitions, but clears history on disconnect", async () => {
+    const bridge = bridgeDouble(capabilities()); mount(bridge); await flush();
+    await act(async () => {
+      bridge.emit({ op: "motor_control_status", motor_control: capabilities({ operation_id: 1, operation_state: 1, stamp_ns: "2000000000" }) });
+      bridge.emit({ op: "motor_control_status", motor_control: capabilities({ operation_id: 1, operation_state: 3, error_code: 13, stamp_ns: "3000000000" }) });
+    });
+    const log = screen.getByRole("log");
+    expect(log).toHaveTextContent("进行中"); expect(log).toHaveTextContent("寄存器操作超时");
+    expect(log.querySelectorAll("time")).toHaveLength(2);
+    await act(async () => bridge.emit({ op: "disconnected" }));
+    expect(log).toHaveTextContent("暂无切换记录");
+    expect(bridge.command).not.toHaveBeenCalled();
   });
 });
