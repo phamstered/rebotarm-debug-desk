@@ -314,3 +314,11 @@ Motor 页的驱动候选和执行状态分离；V1 MIT 保持原消息布局，V
 模式申请先停机，再等待真实反馈，写入/读回配置后才发出终态结果；恢复 MIT 还需全组验证和 RELEASE。`disabled_verified` 由固件依据本次 CAN stop 之后的七轴反馈生成，而不是依据曾经缓存的零使能掩码。显式 DISABLE 撤销在途配置与流权限；晚到服务回调、旧 epoch 或 lease 不能重新使能。Bridge 在 V2 流中断时请求停止，Rust 也监视真正发出的指令并保留未知任务，均不补发旧目标。
 
 原生 Motor 恢复记录扩展为可选 operation 类别（configuration/release/stream），兼容已有 V1 记录。恢复只建立关闭输出的占用，V2 记录不能仅凭旧 HardwareStatus 解锁。Bridge 无页面订阅也推送 MotorControlStatus，因此所有 WebView 关闭后仍由原生会话接收停止证据。硬件资格验证由 executor 单独控制，默认 POS_VEL supported mask 为零；隔离模拟验收不改变真实电机资格。
+
+## Controller Manager 管理
+
+`page-control` 是独立、持久的原生 WebView。模式预设沿用 `arm_operation`；Manager 管理通过 `controller_manager_manage` 使用同一任务锁、应用托管执行、远端单次提交 journal 和崩溃恢复票据。固定 `manager_remote.py` 只接受 load/start/switch/stop 的结构化参数；读取当前 ROS overlay 配置及 Manager 服务，不允许 WebView 传入命令文本。Mac 不加入 DDS。
+
+运行中 Manager 的配置目录由其参数声明决定；新进程使用 overlay 中的 arm_controllers.yaml，硬件初态为 inactive，不使用会自动激活 Controller 的普通 launch。显式启用前分别核验硬件状态、接口冲突和 V2 MIT 资格。Manager 停止只触及本应用保存的 PID/启动身份，使用 pidfd 防止 PID 复用；外部启动的 Manager 只可管理 Controller，不能由此按钮杀进程。
+
+管理快照每 5 秒按需查询，10 秒后只读；切换提交仍需远端即时比较确认快照，操作后再次查询验证。常规 Topics/运动控制继续用 Bridge 常驻 Controller 缓存，管理快照不替代运动安全所用的新鲜状态。

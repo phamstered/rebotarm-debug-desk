@@ -176,7 +176,7 @@ def worker(root, record, command, timeout=COMMAND_TIMEOUT):
                                 # leave room for the separately bounded log tail.
                                 record["progress"] = line.decode("utf-8", errors="replace")[:512]
                                 write_record(root, record)
-                            if ((record["id"].startswith("collection-") and line.startswith(b"ROBOT_CONSOLE_COLLECTION_RECEIPT=")) or (record["id"].startswith("bag-") and line.startswith(b"ROBOT_CONSOLE_BAG_RECEIPT="))) and len(line) <= 1024:
+                            if ((record["id"].startswith("collection-") and line.startswith(b"ROBOT_CONSOLE_COLLECTION_RECEIPT=")) or (record["id"].startswith("bag-") and line.startswith(b"ROBOT_CONSOLE_BAG_RECEIPT=")) or (record["id"].startswith("arm-mode-") and line.startswith(b"ROBOT_CONSOLE_MANAGER_RECEIPT="))) and len(line) <= 1024:
                                 try:
                                     receipt = json.loads(line.split(b"=", 1)[1])
                                     if isinstance(receipt, dict) and len(json.dumps(receipt, ensure_ascii=True)) <= 1024:

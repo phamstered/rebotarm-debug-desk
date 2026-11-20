@@ -377,7 +377,7 @@ impl Runtime {
         let attachment = {
             let core = self.core.lock().unwrap();
             if self.tasks.finite_terminal().is_none() { return Ok(false); }
-            if !matches!(label, "page-status" | "page-motion") || core.error.is_some() || core.transport.is_none()
+            if !matches!(label, "page-status" | "page-control" | "page-motion") || core.error.is_some() || core.transport.is_none()
                 || !super::controller_task::same_profile(&core.profile, &serde_json::to_value(profile).map_err(|e|e.to_string())?) {
                 return Err("DISABLE 请求与当前共享连接不一致".into());
             }

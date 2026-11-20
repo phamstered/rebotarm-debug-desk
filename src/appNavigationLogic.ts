@@ -1,4 +1,4 @@
-export const APP_PAGES = ["status", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "gravity"] as const;
+export const APP_PAGES = ["status", "control", "dashboard", "motion", "monitor", "collection", "handeye", "motor", "gravity"] as const;
 export type AppPage = typeof APP_PAGES[number];
 export type MotionTab = "robot" | "urdf" | "positions" | "groups";
 type NavigationStorage = Pick<Storage, "getItem">;

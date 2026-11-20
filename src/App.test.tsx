@@ -837,39 +837,27 @@ describe("App workflow", () => {
     expect(await screen.findByLabelText("ROS Topic Graph")).toBeVisible();
   });
 
-  it("keeps Topics read-only and confirms verified Controller switches only in Motion", async () => {
-    const baseInvoke = doubles.invoke.getMockImplementation()!;
-    const states = { joint_state_broadcaster: "active", arm_controller: "inactive" };
-    doubles.controllers.mockImplementation(() => {return { manager: "/controller_manager", fresh: true, available: true,
-        controllers: Object.entries(states).map(([name,state]) => ({name,state,typeName: name === "arm_controller" ? "joint_trajectory_controller/JointTrajectoryController" : "joint_state_broadcaster/JointStateBroadcaster"})), message: "" };});
-    doubles.invoke.mockImplementation(async (command, args) => {
-
-      if (command === "switch_ros_controller") {
-        states[args.controllerName as keyof typeof states] = args.action === "activate" ? "active" : "inactive";
-        return `${args.controllerName} ${args.action} complete`;
-      }
+  it("routes read-only Motion to the dedicated Manager and confirms verified switches", async () => {
+    const baseInvoke=doubles.invoke.getMockImplementation()!;
+    const states:Record<string,string>={joint_state_broadcaster:"active",arm_controller:"inactive"};
+    doubles.invoke.mockImplementation(async(command,args)=>{
+      if(command==="controller_manager_snapshot") return {manager:"/controller_manager",available:true,owned:false,updateRate:100,hardware:[],fingerprint:"a".repeat(64),controllers:Object.entries(states).map(([name,state])=>({name,state,typeName:"test/Controller",interfacesKnown:true,requiredInterfaces:[],claimedInterfaces:[]}))};
+      if(command==="controller_manager_manage") {for(const name of args.request.activate??[])states[name]="active";for(const name of args.request.deactivate??[])states[name]="inactive";return {ok:true,message:"切换已核验",detail:""};}
       return baseInvoke(command,args);
     });
-    const user = userEvent.setup(); render(<App />);
-    await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
-    await screen.findByText("joint_state_broadcaster");
-    expect(screen.queryByRole("button", {name:"停用 joint_state_broadcaster"})).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", {name:"激活 arm_controller"})).not.toBeInTheDocument();
-    expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
-    await user.click(screen.getByRole("button", {name:"Motion"}));
-    await user.click(screen.getByRole("button", {name:"面板"}));
-    await user.click(screen.getByRole("button", {name:"展开 Controllers"}));
-    const before = doubles.controllers.mock.calls.length;
-    await user.click(screen.getByRole("button",{name:"停用 joint_state_broadcaster"}));
-    expect(doubles.invoke.mock.calls.some(([c]) => c === "switch_ros_controller")).toBe(false);
-    await user.click(screen.getByRole("button",{name:"确认停用"}));
-    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", { profile:expect.any(Object), controllerName:"joint_state_broadcaster", action:"deactivate" }));
-    await waitFor(() => expect(doubles.controllers.mock.calls.length).toBeGreaterThanOrEqual(before+2));
-    expect(await screen.findByText("joint_state_broadcaster deactivate complete")).toBeVisible();
-    await user.click(screen.getByRole("button",{name:"激活 arm_controller"}));
-    await user.click(screen.getByRole("button",{name:"确认激活"}));
-    await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("switch_ros_controller", {profile:expect.any(Object),controllerName:"arm_controller",action:"activate"}));
-    expect(await screen.findByText("arm_controller activate complete")).toBeVisible();
+    const user=userEvent.setup();render(<App/>);
+    await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
+    await user.click(await screen.findByRole("button",{name:"Motion"}));
+    await user.click(screen.getByRole("button",{name:"面板"}));await user.click(screen.getByRole("button",{name:"展开 Controllers"}));
+    expect(screen.queryByRole("button",{name:"停用 joint_state_broadcaster"})).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button",{name:"管理 Controller"}));
+    expect(await screen.findByRole("heading",{name:"控制模式"})).toBeVisible();
+    await user.click(await screen.findByRole("button",{name:"停用"}));
+    expect(doubles.invoke.mock.calls.some(([c])=>c==="controller_manager_manage")).toBe(false);
+    await user.click(screen.getByRole("checkbox",{name:"已核对操作对象、现场支撑及运动区域"}));
+    await user.click(screen.getByRole("button",{name:"确认执行"}));
+    await screen.findByText("切换已核验");
+    expect(doubles.invoke).toHaveBeenCalledWith("controller_manager_manage",expect.objectContaining({request:{action:"switch",activate:[],deactivate:["joint_state_broadcaster"],expected:"a".repeat(64)}}));
   });
 
   it("refreshes Controllers from the Bridge every second independently of the Topics interval", async () => {
@@ -1600,7 +1588,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
-    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
+    await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" }));
     emitRosReady();
     for (let cycle = 0; cycle < 5; cycle += 1) {
       await user.click(screen.getByRole("button", { name: "Teleop" }));
@@ -1625,7 +1613,7 @@ describe("App workflow", () => {
     const user = userEvent.setup(); render(<App />);
     await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
     await screen.findByRole("heading", {name: "Status"});
-    await user.click(screen.getByRole("tab", {name: /控制模式/})); emitRosReady();
+    await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" })); emitRosReady();
     await user.click(screen.getByRole("button", {name: "VLA"}));
     await user.click(screen.getByRole("button", {name: /启动所选模式|切换模式（先回零）/}));
     await waitFor(() => expect(screen.getByText(/旧进程未退出：cleanup refused/)).toBeVisible());
@@ -1644,7 +1632,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
-    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
+    await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" }));
     emitRosReady();
     await user.click(screen.getByRole("button", { name: "Teleop" }));
       await user.click(screen.getByRole("button", { name: /启动所选模式|切换模式（先回零）/ }));
@@ -1660,7 +1648,7 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("heading", { name: "Status" });
-    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
+    await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" }));
     await user.click(screen.getByText("直接关闭输出…"));
     await user.click(screen.getByRole("button", { name: "直接解除电机输出" }));
     await user.click(screen.getByRole("button", { name: "取消" }));
@@ -1682,7 +1670,7 @@ describe("App workflow", () => {
     const user = userEvent.setup(); render(<App />);
     await user.click(screen.getByRole("button", {name: "连接 Jetson"}));
     await screen.findByRole("heading", {name: "Status"});
-    await user.click(screen.getByRole("tab", {name: /控制模式/})); emitRosReady();
+    await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" })); emitRosReady();
     await user.click(screen.getByRole("button", {name: /启动所选模式|切换模式（先回零）/}));
     await user.click(screen.getByRole("button", {name: /断开并重连…/}));
     await screen.findByRole("button", {name: "连接 Jetson"});
@@ -1692,7 +1680,7 @@ describe("App workflow", () => {
       channel.onmessage({stage: "cleanup", message: "old progress", failed: true});
       finish({ok: false, message: "old session failure", detail: "old failure"});
     });
-    await user.click(screen.getByRole("tab", {name: /控制模式/}));
+    await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" }));
     expect(screen.queryByText(/old session failure|old progress/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("控制器启动流程")).not.toBeInTheDocument();
   });
@@ -1929,7 +1917,7 @@ describe("App workflow", () => {
     const list=await screen.findByRole("region",{name:"ROS Control Controllers"});expect(list).toHaveTextContent("查询超时");expect(list).not.toHaveTextContent("离线");expect(list).toHaveTextContent("active（上次）");
     await user.click(screen.getByRole("button",{name:"Motion"}));expect(screen.getByTestId("trajectory-controller")).toHaveTextContent("none");
     await user.click(screen.getByRole("button",{name:"面板"}));await user.click(screen.getByRole("button",{name:"展开 Controllers"}));
-    expect(screen.getByRole("button",{name:"停用 arm_trajectory_controller"})).toBeDisabled();
+    expect(screen.queryByRole("button",{name:"停用 arm_trajectory_controller"})).not.toBeInTheDocument();
     expect(doubles.invoke.mock.calls.some(([command])=>command==="check_ros_controllers")).toBe(false);
   });
   it("requires a supported Bridge before native mode startup while preserving safe stop",async()=>{
@@ -1938,7 +1926,7 @@ describe("App workflow", () => {
     try{
       const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
       expect(await screen.findByText(/当前 Bridge 不支持常驻 Controller 查询/)).toBeVisible();
-      await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("tab",{name:/控制模式/}));emitRosReady();
+      await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
       await user.click(screen.getByRole("button",{name:"启动所选模式"}));
       await waitFor(()=>expect(screen.getByRole("button",{name:"Teleop"})).toBeEnabled());
       expect(doubles.invoke.mock.calls.some(([command,args])=>command==="start_arm_mode"&&args.mode==="teleop")).toBe(false);
@@ -1949,9 +1937,9 @@ describe("App workflow", () => {
   });
   it("permits controlled cold-stack recovery and confirms fresh controllers after native startup",async()=>{
     let started=false;const base=doubles.invoke.getMockImplementation()!;
-    doubles.controllers.mockImplementation(()=>({manager:"/controller_manager",available:started,controllers:started?[{name:"arm_teleop_controller",typeName:"test/Controller",state:"active"}]:[],message:started?"":"等待 Controller Manager 启动"}));
-    doubles.invoke.mockImplementation((command,args)=>{if(command==="start_arm_mode"&&args.mode==="teleop")started=true;return base(command,args);});
-    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("tab",{name:/控制模式/}));emitRosReady();
+    doubles.controllers.mockImplementation(()=>({manager:"/controller_manager",available:started,controllers:started?[{name:"arm_teleop_controller",typeName:"test/Controller",state:"active"},{name:"gravity_compensation_controller",typeName:"test/Controller",state:"active"}]:[],message:started?"":"等待 Controller Manager 启动"}));
+    doubles.invoke.mockImplementation((command,args)=>{if(command==="start_arm_mode"&&args.mode==="teleop")started=true;if(command==="probe_arm_mode"&&started)return Promise.resolve({mode:"teleop",teleopRunning:true,teleopOwnsRos2Control:true,trajectoryRunning:false,trajectoryOwnsRos2Control:false,realsenseRunning:false,teleopPid:42,trajectoryPid:0,realsensePid:0,message:""});return base(command,args);});
+    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
     expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");
     await user.click(screen.getByRole("button",{name:"启动所选模式"}));
     await waitFor(()=>expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Teleop"));
@@ -1961,7 +1949,7 @@ describe("App workflow", () => {
   });
   it("does not claim native mode startup is confirmed when the post-query is unavailable",async()=>{
     doubles.controllers.mockResolvedValue({manager:"/controller_manager",available:false,controllers:[],message:"Manager 暂不可用"});
-    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("tab",{name:/控制模式/}));emitRosReady();
+    const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
     await user.click(screen.getByRole("button",{name:"启动所选模式"}));
     expect(await screen.findByText(/模式启动后 Controller 状态未确认/)).toBeVisible();
     expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");

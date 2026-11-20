@@ -14,7 +14,7 @@ describe("AppNav", () => {
     expect(screen.getByRole("navigation", { name: "主工具栏" })).toBeVisible();
     const nav = screen.getByRole("navigation", { name: "主工具栏" });
     const navButtons = Array.from(nav.querySelectorAll(".app-nav-items .app-nav-item > button"));
-    expect(navButtons.slice(0, 4).map((button) => button.textContent)).toEqual(["Status", "Topics", "Motion", "Monitor"]);
+    expect(navButtons.slice(0, 5).map((button) => button.textContent)).toEqual(["Status", "控制模式", "Topics", "Motion", "Monitor"]);
     expect(screen.getByRole("button", { name: "Topics" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Status" })).not.toHaveAttribute("aria-current");
 

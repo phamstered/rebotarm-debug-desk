@@ -796,3 +796,9 @@ Startup restores occupancy before workspace initialization and does not connect.
 ### Joint4 桌面入口退役
 
 `call_joint4_calibration_service` 与 `save_joint4_calibration_report` 已从 Tauri invoke 注册表移除。功能页白名单不再包含 Calibration，旧窗口布局仅作迁移读取，不能打开或拆出。通用 Bridge IPC 继续拒绝 `joint4_start` / `joint4_capture` / `joint4_cancel` 绕行；旧任务由原生恢复及停止核验路径处理，不自动重发采样或重建页面。Bridge 协议本身保留兼容。
+
+## 原生 Controller Manager IPC（非 WebSocket）
+
+- `controller_manager_snapshot(profile)`：固定 SSH 程序读取 `/controller_manager` 的 ListControllers、ListHardwareComponents、ListParameters/GetParameters。返回 available、owned、updateRate、controllers（name/typeName/state/claimedInterfaces/requiredInterfaces/interfacesKnown/loadError）、hardware 和 fingerprint。离线时列出当前 overlay 默认机器人配置。它不 load 或 activate。
+- `controller_manager_manage(profile, request, confirmed, onProgress)`：request.action 为 start/load/switch/stop；switch 提供 activate/deactivate 数组；switch/stop 必须提供确认时的 expected fingerprint。名称限定字母、数字、下划线及命名空间斜杠，最多 256 个；未知操作拒绝。原生校验实际 WebView 身份与当前连接，使用共享有限任务锁及 durable journal。
+- `ROBOT_CONSOLE_MANAGER_RECEIPT=` 是固定远端程序的有界完成回执，包含 action、ok、fingerprint 和 message。部分 load/configure 失败可产生已核验的失败回执；超时和无法确认执行结束不产生成功证明。原生只在同一机器人重新读取 fingerprint 一致后释放操作，不能把一次请求受理视为成功。崩溃恢复只查票据，不重放写操作。

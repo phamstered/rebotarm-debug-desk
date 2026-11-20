@@ -48,7 +48,7 @@ impl Key {
         }
         match self {
             Self::Monitor => matches!(label, "page-monitor" | "page-dashboard"),
-            Self::Positions => matches!(label, "main" | "page-motion" | "page-status"),
+            Self::Positions => matches!(label, "main" | "page-motion" | "page-control" | "page-status"),
             Self::MotionGroups => matches!(label, "main" | "page-motion"),
         }
     }

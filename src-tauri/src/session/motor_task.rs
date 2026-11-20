@@ -161,7 +161,7 @@ impl Motor {
         }
         Ok(motor)
     }
-    fn mit_evidence(context: Option<&Context>, now: Instant) -> bool {
+    pub(super) fn mit_evidence(context: Option<&Context>, now: Instant) -> bool {
         context.and_then(|c| c.control.as_ref()).is_some_and(|e| e.fresh(now)
             && e.matches_mode(0x7f, "MIT") && e.value["lease_id"] == 0
             && e.value["owner_source_id"] == "0" && e.value["switching"] == false && e.value["fault_code"] == 0)

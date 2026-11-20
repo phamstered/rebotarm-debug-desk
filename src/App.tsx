@@ -16,6 +16,7 @@ import { MotionPage } from "./MotionPage";
 import { TopicsPage } from "./TopicsPage";
 import { ControllerList } from "./ControllerList";
 import { MotionControllersPanel } from "./MotionControllersPanel";
+import { ControllerManagerPanel } from "./ControllerManagerPanel";
 import { useRosControllers } from "./useRosControllers";
 import { controllerStatusFresh, controllerStatusLabel } from "./controllersInfoLogic";
 import { MotionTerminal } from "./MotionTerminal";
@@ -450,8 +451,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     connectionKey: JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]),
     getBlockReason: getControllerBlockReason, shared: nativeDesktop() ? sharedObservations : undefined });
   const { status: rosControl, refreshing: rosControlRefreshing, action: controllerAction,
-    message: controllerActionMessage, error: controllerActionError,
-    refresh: refreshRosControllers, fetchStatus: fetchRosControllers, switchController } = controllers;
+
+    refresh: refreshRosControllers, fetchStatus: fetchRosControllers } = controllers;
   const [trajectoryStateError, setTrajectoryStateError] = useState("");
   const [topicRefreshing, setTopicRefreshing] = useState(false);
   const [topicRefreshError, setTopicRefreshError] = useState("");
@@ -660,7 +661,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   usePagePreference("robot-console-nav-expanded", String(navExpanded), hostedPage);
 
   const positionProfileKey = profileKeyFor(profile);
-  const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status");
+  const positionsEditor = usePositions(positionProfileKey, !nativeDesktop() || nativeMain || hostedPage === "motion" || hostedPage === "status" || hostedPage === "control");
   useMotionNavigation(hostedPage, workspace.snapshot.motion_navigation, positionProfileKey, setMotionTab);
   const positionStore = positionsEditor.store;
   const createPosition = positionsEditor.create, editPosition = positionsEditor.update, removePosition = positionsEditor.remove;
@@ -1687,8 +1688,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   }
   function manageController(name: string) {
     setFocusController(name);
-    setMotionControllersOpen(true);
-    setAppPage("motion");
+    setAppPage("control");
   }
 
   async function selectTopic(topic: TopicInfo) {
@@ -2005,8 +2005,11 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {nativeMain ? <NativeWorkspaceHost page={appPage} snapshot={workspace.snapshot}
         covered={connectionDialogOpen || settingsDialogOpen || versionDialogOpen || Boolean(poseToSave)} onError={setError} /> : <>
       {(!hostedPage || hostedPage === "handeye") && <div className="handeye-viewport" role="region" aria-label="手眼标定内容" tabIndex={0} hidden={appPage !== "handeye"}><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={stage === "connected"} active={appPage === "handeye" && windowVisible} onBusyChange={setHandeyeBusy} onMotion={() => void openRobotMotion()} /></div>}
-      {appPage === "handeye" ? null : appPage === "status" ? (
+      {appPage === "handeye" ? null : (appPage === "status" || appPage === "control") ? (
         <StatusPage
+          controlView={appPage === "control"}
+          onManageControllers={() => setAppPage("control")}
+          renderControl={(presets) => <main className="status-page"><header className="status-page-header native-window-header"><div><h1>控制模式</h1><span>Controller Manager · 模式预设与按需启停</span></div><NativePageActions /></header><ControllerManagerPanel profile={profile} connected={stage === "connected"} active={appPage === "control" && windowVisible} disabledReason={controllerDisabledReason || (armMode?.teachingRunning ? "拖动示教运行中，请在模式预设中支撑并退出示教后再管理 Controller" : "")} presets={presets}/></main>}
           clockSync={clockSync}
           workflow={armWorkflow.workflow}
           stage={stage}
@@ -2214,9 +2217,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         resetVersion={motionLayoutReset} visible={appPage === "motion"} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
-          onSwitch={(controller, action) => void switchController(controller, action)} action={controllerAction}
-          message={controllerActionMessage} error={controllerActionError} disabledReason={controllerDisabledReason}
-          focusController={focusController} onInspect={inspectController} />}
+          onSwitch={() => {}} action={controllerAction} message="" error="" disabledReason={controllerDisabledReason}
+          focusController={focusController} onInspect={inspectController} onManage={()=>setAppPage("control")} />}
         readiness={<>
           <span>机械臂：{(controllerStatusFresh(rosControl) ? rosControl!.controllers.find((controller) => controller.name === "arm_trajectory_controller")?.state : undefined) ?? "未知"}</span>
           <span>夹爪：{(controllerStatusFresh(rosControl) ? rosControl!.controllers.find((controller) => controller.name === "gripper_trajectory_controller")?.state : undefined) ?? "未知"}</span>

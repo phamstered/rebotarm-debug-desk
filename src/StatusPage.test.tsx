@@ -56,47 +56,23 @@ const baseProps = {
 };
 
 describe("StatusPage", () => {
-  it("renders three status tabs with sticky HOLD alert and exclusive mode strip", async () => {
-    const user = userEvent.setup();
-    const onCardAction = vi.fn();
-    const onQuickAction = vi.fn();
-    render(
-      <StatusPage
-        {...baseProps}
-        onCardAction={onCardAction}
-        onQuickAction={onQuickAction}
-      />,
-    );
-
-    expect(screen.getByRole("heading", { name: "Status" })).toBeVisible();
-    expect(screen.getByRole("tablist", { name: "状态分区" })).toBeVisible();
+  it("keeps Status as an overview and routes management to the dedicated page", async () => {
+    const user=userEvent.setup(), manage=vi.fn(),cardAction=vi.fn();
+    render(<StatusPage {...baseProps} onManageControllers={manage} onCardAction={cardAction}/>);
+    expect(screen.getByRole("heading",{name:"Status"})).toBeVisible();
     expect(screen.getAllByRole("tab")).toHaveLength(3);
-    expect(screen.getByRole("tab", { name: /连接/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("tab", { name: /传感器/ })).not.toBeInTheDocument();
-
-    expect(screen.getByLabelText("SSH / 隧道")).toBeVisible();
-    expect(screen.getByLabelText("Bridge")).toBeVisible();
-    expect(screen.getByLabelText("micro-ROS Agent")).toBeVisible();
-    expect(screen.getByLabelText("Hardware")).not.toBeVisible();
-    await user.click(screen.getByRole("tab", { name: /硬件健康/ }));
+    await user.click(screen.getByRole("tab",{name:/硬件健康/}));
     expect(screen.getByLabelText("Hardware")).toBeVisible();
-    expect(screen.getByLabelText("ROS 就绪")).not.toBeVisible();
-    expect(screen.getByLabelText("ros2_control")).not.toBeVisible();
-    expect(screen.getByLabelText("USB CDC / ACM")).toBeVisible();
-    expect(screen.queryByLabelText("DDS Domain")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("systemd")).not.toBeInTheDocument();
-
-    expect(screen.getByTestId("status-sticky-alert")).toHaveTextContent(/无重力补偿/);
-    expect(screen.getByTestId("status-sticky-alert")).toHaveAttribute("data-kind", "hold");
-    expect(screen.getByText("42")).toBeVisible();
-    expect(screen.getByText("localhost:18765")).not.toBeVisible();
-    expect(screen.getByTestId("status-detail-hardware")).toHaveTextContent(/无重力补偿/);
-    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
-    expect(screen.getByTestId("status-mode-idle")).toBeVisible();
-    expect(screen.getByLabelText("ROS 就绪")).toBeVisible();
+    await user.click(screen.getByRole("button",{name:"刷新检测"}));expect(cardAction.mock.calls[0][0].id).toBe("usb-refresh");
+    await user.click(screen.getByRole("tab",{name:/控制模式/}));
     expect(screen.getByLabelText("ros2_control")).toBeVisible();
-    expect(screen.queryByLabelText("Teleop")).not.toBeInTheDocument();
-
+    expect(screen.queryByRole("button",{name:"启动所选模式"})).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button",{name:"打开控制模式"}));
+    expect(manage).toHaveBeenCalledOnce();
+  });
+  it("keeps preset selection explicit and output release support-confirmed", async () => {
+    const user=userEvent.setup(),onQuickAction=vi.fn();
+    render(<StatusPage {...baseProps} controlView onQuickAction={onQuickAction}/>);
     expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Trajectory" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "VLA" })).toBeEnabled();
@@ -120,15 +96,11 @@ describe("StatusPage", () => {
     await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
     expect(onQuickAction).toHaveBeenCalledWith("disable-stop");
     expect(screen.queryByRole("dialog", { name: "解除电机输出确认" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: /硬件健康/ }));
-    await user.click(screen.getByRole("button", { name: "刷新检测" }));
-    expect(onCardAction).toHaveBeenCalled();
-    expect(onCardAction.mock.calls[0][0].id).toBe("usb-refresh");
   });
 
   it("shows only the active mode detail and marks the strip segment pressed", async () => {
     render(
-      <StatusPage
+      <StatusPage controlView
         {...baseProps}
         hardwareStatus={{ mode: 1, mode_name: "TRACK", fault_code: 0, last_command_sequence: 9 }}
         armMode={{
@@ -148,7 +120,6 @@ describe("StatusPage", () => {
         }}
       />,
     );
-    await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.queryByTestId("status-sticky-alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Teleop")).toBeVisible();
     expect(screen.queryByLabelText("Trajectory / MoveIt")).not.toBeInTheDocument();
@@ -160,9 +131,10 @@ describe("StatusPage", () => {
     expect(screen.queryByLabelText("Teleop 操作")).not.toBeInTheDocument();
   });
 
-  it("prefers list_controllers over teleopRunning for strip selection after switch_controllers", async () => {
+
+it("prefers list_controllers over teleopRunning for strip selection after switch_controllers", async () => {
     render(
-      <StatusPage
+      <StatusPage controlView
         {...baseProps}
         armMode={{
           ...baseProps.armMode,
@@ -182,16 +154,16 @@ describe("StatusPage", () => {
         }}
       />,
     );
-    await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByRole("button", { name: "Trajectory" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Teleop" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByLabelText("Trajectory / MoveIt")).toBeVisible();
     expect(screen.getByText("arm_trajectory_controller")).toBeVisible();
   });
 
-  it("surfaces disabledReasons as on-page hints for gated quick actions", async () => {
+
+it("surfaces disabledReasons as on-page hints for gated quick actions", async () => {
     render(
-      <StatusPage
+      <StatusPage controlView
         stage="connected"
         sshOk={false}
         bridgeUp={false}
@@ -208,17 +180,15 @@ describe("StatusPage", () => {
         lastKnownDomainId={null}
       />,
     );
-    await userEvent.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByRole("button", { name: "Teleop" })).toBeDisabled();
     expect(screen.getByTestId("status-mode-disabled")).toHaveTextContent("SSH 未就绪");
-    await userEvent.click(screen.getByRole("tab", { name: /硬件健康/ }));
-    expect(screen.getByTestId("status-disabled-usb-usb-refresh")).toHaveTextContent("SSH 未就绪");
   });
 });
 
 
 describe("Status tab navigation", () => {
-  it("updates an unselected hardware tab to red and follows a fault highlight request", async () => {
+
+it("updates an unselected hardware tab to red and follows a fault highlight request", async () => {
     const { rerender } = render(<StatusPage {...baseProps} />);
     expect(screen.getByRole("tab", { name: /连接/ })).toHaveAttribute("aria-selected", "true");
     rerender(<StatusPage {...baseProps} hardwareStatus={{ fault_code: 11, mode: 0 }} />);
@@ -245,9 +215,8 @@ describe("Status tab navigation", () => {
 
 it("separates current mode from target selection and waits for explicit switch", async () => {
   const user = userEvent.setup(); const action = vi.fn();
-  render(<StatusPage {...baseProps} onQuickAction={action} rosControl={{ ...baseProps.rosControl,
-    controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}] }} />);
-  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  render(<StatusPage controlView {...baseProps} armMode={{...baseProps.armMode,trajectoryRunning:true,trajectoryOwnsRos2Control:true}} onQuickAction={action} rosControl={{ ...baseProps.rosControl,
+    controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}, {name:"gravity_compensation_controller",typeName:"t",state:"active"}] }} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory");
   expect(screen.getByRole("button", {name: "当前模式已启用"})).toBeDisabled();
   await user.click(screen.getByRole("button", {name: "Teleop"}));
@@ -260,8 +229,7 @@ it("separates current mode from target selection and waits for explicit switch",
 
 it("shows one busy notice and disables conflicting mode and stop operations", async () => {
   const user = userEvent.setup();
-  render(<StatusPage {...baseProps} actionBusy="trajectory-restart" />);
-  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  render(<StatusPage controlView {...baseProps} actionBusy="trajectory-restart" />);
   expect(screen.getByRole("button", {name: "Trajectory"})).toHaveTextContent("Trajectory");
   expect(screen.getByRole("button", {name: "切换中…"})).toBeDisabled();
   expect(screen.getByRole("button", {name: "回零并退出控制"})).toBeDisabled();
@@ -271,28 +239,26 @@ it("shows one busy notice and disables conflicting mode and stop operations", as
 it("offers explicit same-mode session rebuild after firmware DISABLE without automatic restart", async () => {
   const user = userEvent.setup(); const action = vi.fn();
   const controllers = { ...baseProps.rosControl,
-    controllers: [{ name: "arm_trajectory_controller", typeName: "t", state: "active" }] };
-  const props = { ...baseProps, onQuickAction: action, rosControl: controllers };
-  const { rerender } = render(<StatusPage {...props} />);
-  await user.click(screen.getByRole("tab", { name: /控制模式/ }));
+    controllers: [{ name: "arm_trajectory_controller", typeName: "t", state: "active" }, {name:"gravity_compensation_controller",typeName:"t",state:"active"}] };
+  const props = { ...baseProps, armMode:{...baseProps.armMode,trajectoryRunning:true,trajectoryOwnsRos2Control:true}, onQuickAction: action, rosControl: controllers };
+  const { rerender } = render(<StatusPage controlView {...props} />);
   expect(screen.getByRole("button", { name: "当前模式已启用" })).toBeDisabled();
-  rerender(<StatusPage {...props} hardwareStatus={{ mode: 3, mode_name: "DISABLE", fault_code: 0, last_command_sequence: 0 }} />);
+  rerender(<StatusPage controlView {...props} hardwareStatus={{ mode: 3, mode_name: "DISABLE", fault_code: 0, last_command_sequence: 0 }} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory（输出已关闭）");
   expect(screen.getByText("下位机输出已关闭，旧控制会话需要重建")).toBeVisible();
   expect(action).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "重建控制会话" }));
   expect(action).toHaveBeenCalledExactlyOnceWith("trajectory");
-  rerender(<StatusPage {...props} actionBusy="trajectory-restart" hardwareStatus={{ mode: 3, fault_code: 0 }} />);
+  rerender(<StatusPage controlView {...props} actionBusy="trajectory-restart" hardwareStatus={{ mode: 3, fault_code: 0 }} />);
   expect(screen.getByRole("button", { name: "切换中…" })).toBeDisabled();
-  rerender(<StatusPage {...props} hardwareStatus={{ mode: 3, fault_code: 11 }} />);
+  rerender(<StatusPage controlView {...props} hardwareStatus={{ mode: 3, fault_code: 11 }} />);
   expect(screen.getByRole("button", { name: "重建控制会话" })).toBeDisabled();
 });
 
 it("shows RETURN as an unfinished stop and blocks starting either selected mode", async () => {
   const user = userEvent.setup(); const action = vi.fn();
-  render(<StatusPage {...baseProps} hardwareStatus={{mode: 2, fault_code: 0}} onQuickAction={action}
-    rosControl={{...baseProps.rosControl, controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}]}} />);
-  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  render(<StatusPage controlView {...baseProps} armMode={{...baseProps.armMode,trajectoryRunning:true,trajectoryOwnsRos2Control:true}} hardwareStatus={{mode: 2, fault_code: 0}} onQuickAction={action}
+    rosControl={{...baseProps.rosControl, controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}, {name:"gravity_compensation_controller",typeName:"t",state:"active"}]}} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory（回零中）");
   expect(screen.getByRole("button", {name: "等待回零完成"})).toBeDisabled();
   await user.click(screen.getByRole("button", {name: "Teleop"}));
@@ -302,10 +268,9 @@ it("shows RETURN as an unfinished stop and blocks starting either selected mode"
 
 it("follows the starting controller and resets manual log selection when the controller changes", async () => {
   const user = userEvent.setup();
-  const { rerender } = render(<StatusPage {...baseProps} />);
-  await user.click(screen.getByRole("tab", {name: /控制模式/}));
+  const { rerender } = render(<StatusPage controlView {...baseProps} />);
   await user.selectOptions(screen.getByRole("combobox", {name: "日志来源"}), "realsense");
-  rerender(<StatusPage {...baseProps} workflow={{mode: "trajectory", stage: "startup", message: "starting", failed: false, running: true}} />);
+  rerender(<StatusPage controlView {...baseProps} workflow={{mode: "trajectory", stage: "startup", message: "starting", failed: false, running: true}} />);
   expect(screen.getByRole("combobox", {name: "日志来源"})).toHaveValue("auto");
   expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
   expect(screen.getByRole("checkbox", {name: "跟随最新"})).toBeChecked();
@@ -313,16 +278,13 @@ it("follows the starting controller and resets manual log selection when the con
 
 it("keeps the last target/log after verified stop and treats manager shutdown as expected", async () => {
   const user = userEvent.setup();
-  const { rerender } = render(<StatusPage {...baseProps} rosControl={{...baseProps.rosControl,
+  const { rerender } = render(<StatusPage controlView {...baseProps} rosControl={{...baseProps.rosControl,
     controllers: [{name: "arm_trajectory_controller", typeName: "t", state: "active"}]}} />);
-  await user.click(screen.getByRole("tab", {name: /控制模式/}));
-  rerender(<StatusPage {...baseProps} hardwareStatus={{mode: 3, fault_code: 0}} rosControl={{...baseProps.rosControl, available: false, controllers: []}}
+  rerender(<StatusPage controlView {...baseProps} hardwareStatus={{mode: 3, fault_code: 0}} rosControl={{...baseProps.rosControl, available: false, controllers: []}}
     armMode={{...baseProps.armMode, teleopRunning: true}} workflow={{mode: "stop", stage: "ready", message: "stopped", failed: false, running: false}} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
   expect(screen.getByRole("button", {name: "Trajectory"})).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
-  expect(screen.getByRole("tab", {name: /控制模式/})).not.toHaveTextContent("异常");
-  await user.click(screen.getByRole("tab", {name: /控制模式/}));
   expect(screen.getByText("控制环境已退出（预期）")).toBeVisible();
 });
 
@@ -351,8 +313,7 @@ it.each(["ros-ready", "ros2-control"])("opens control health card %s on highligh
 describe("drag teaching UI", () => {
   it("requires support confirmation before enabling compliance", async () => {
     const user = userEvent.setup(); const action = vi.fn();
-    render(<StatusPage {...baseProps} onQuickAction={action} />);
-    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
+    render(<StatusPage controlView {...baseProps} onQuickAction={action} />);
     await user.click(screen.getByRole("button", { name: "拖动示教" }));
     await user.click(screen.getByRole("button", { name: "启动所选模式" }));
     expect(action).not.toHaveBeenCalled();
@@ -361,14 +322,14 @@ describe("drag teaching UI", () => {
     await user.click(screen.getByRole("button", { name: "确认进入拖动示教" }));
     expect(action).toHaveBeenCalledWith("teaching");
   });
-  it("provides manual pose capture without electric gripper controls and requires supported exit", async () => {
+
+it("provides manual pose capture without electric gripper controls and requires supported exit", async () => {
     const user = userEvent.setup(); const action = vi.fn();
     const savePose = vi.fn();
-    render(<StatusPage {...baseProps} hardwareStatus={{ mode: 1, fault_code: 0 }}
+    render(<StatusPage controlView {...baseProps} hardwareStatus={{ mode: 1, fault_code: 0 }}
       armMode={{ ...baseProps.armMode, mode: "teaching", teachingRunning: true }}
       rosControl={{ ...baseProps.rosControl, controllers: ["gravity_compensation_controller"].map(name => ({ name, state: "active", typeName: "t" })) }}
       onSaveTeachingPose={savePose} onQuickAction={action} />);
-    await user.click(screen.getByRole("tab", { name: /控制模式/ }));
     expect(screen.getByTestId("current-control-mode")).toHaveTextContent("拖动示教");
     for (const name of ["张开", "夹取到目标", "停止夹爪"]) {
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
@@ -383,4 +344,10 @@ describe("drag teaching UI", () => {
     await user.click(screen.getByRole("button", { name: "确认 DISABLE 并停止" }));
     expect(action).toHaveBeenCalledWith("disable-stop");
   });
+});
+
+it("does not infer a ready preset from a manually active Controller",()=>{
+ render(<StatusPage controlView {...baseProps} rosControl={{...baseProps.rosControl,controllers:[{name:"arm_trajectory_controller",typeName:"t",state:"active"}]}}/>);
+ expect(screen.getByTestId("current-control-mode")).toHaveTextContent("自定义组合");
+ expect(screen.queryByRole("button",{name:"当前模式已启用"})).not.toBeInTheDocument();
 });
