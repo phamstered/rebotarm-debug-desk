@@ -326,3 +326,8 @@ Motor 页的驱动候选和执行状态分离；V1 MIT 保持原消息布局，V
 ### Failed arm startup recovery
 
 The fixed SSH journal's read-only query may attach fresh `arm_quiescent` evidence to an arm-mode record with a known nonzero normal exit. It never rewrites the original record. The probe checks the fixed launch PID receipts and live same-domain control processes, including delayed launchers/spawners; unreadable evidence fails closed. Generic Controller service failures, worker timeouts and unknown records remain uncertain. Native recovery treats this evidence only as a completion barrier for a subsequent user-confirmed DISABLE: it does not restore authorization, replay startup, claim success, or release ownership without fresh output-off proof. The same query-only recovery runs after a failed live operation and after desktop restart.
+
+
+### Manager URDF 发布
+
+Manager startup/load ensures a companion robot_state_publisher before reporting success. The description matches the expanded Manager URDF (geometry canonicalization excludes ros2_control parameters). A reliable transient-local subscription validates the published model; existing publishers are reused, multiple/conflicting/unresponsive publishers are rejected, and same-domain local process checks cover delayed discovery/remapping. Starts share the arm-mode lock. A separate PID/start-time/executable/domain receipt identifies the owned companion; only that exact process is stopped after a verified Manager stop. No hardware activation or Bridge protocol change is involved.
