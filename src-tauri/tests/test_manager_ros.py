@@ -8,6 +8,7 @@ from pathlib import Path
 import signal
 import sys
 import tempfile
+import time
 from unittest.mock import patch
 import yaml
 
@@ -36,6 +37,36 @@ def main():
         with patch('ament_index_python.packages.get_package_share_directory', return_value=str(root)):
             try:
                 m.start_manager(ros)
+                rsp = m.owned_process('state-publisher-process.json'); assert rsp
+                assert ros.description_ready(urdf)
+                m.start_manager(ros)
+                assert m.owned_process('state-publisher-process.json') == rsp
+                assert len(ros.node.get_publishers_info_by_topic('/robot_description')) == 1
+                try:
+                    m.ensure_state_publisher(ros, urdf.replace('upper="1"', 'upper="2"'))
+                except ValueError as error:
+                    assert 'differs' in str(error), error
+                else:
+                    raise AssertionError('Conflicting model was reused')
+                from std_msgs.msg import String
+                from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+                extra = ros.node.create_publisher(String, '/robot_description', QoSProfile(
+                    depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+                extra.publish(String(data=urdf))
+                try:
+                    deadline = time.monotonic()+3
+                    while len(ros.node.get_publishers_info_by_topic('/robot_description')) < 2 and time.monotonic()<deadline:
+                        ros.rclpy.spin_once(ros.node,timeout_sec=.1)
+                    assert len(ros.node.get_publishers_info_by_topic('/robot_description')) == 2
+                    try:
+                        m.ensure_state_publisher(ros, urdf)
+                    except ValueError as error:
+                        assert 'Multiple' in str(error), error
+                    else:
+                        raise AssertionError('Duplicate publishers accepted')
+                finally:
+                    ros.node.destroy_publisher(extra)
+                assert m.owned_process('state-publisher-process.json') == rsp
                 owned = m.owned_process(); assert owned
                 pid = owned['pid']
                 before = ros.snapshot()
@@ -73,8 +104,10 @@ def main():
                 ros.switch(dict(request, activate=[], deactivate=['b'], expected=ros.snapshot()['fingerprint']))
                 m.stop_manager(ros, dict(request, expected=ros.snapshot()['fingerprint']))
                 assert not ros.snapshot()['available'] and not m.owned_process()
-                print(json.dumps(dict(result='passed', defaultStates=states, hardwareOnLoad='inactive', conflict='explicit', existingActive='preserved', ownedStop='verified')))
+                assert not m.owned_process('state-publisher-process.json')
+                print(json.dumps(dict(result='passed', defaultStates=states, hardwareOnLoad='inactive', urdf='published/reused; duplicate and mismatch rejected', conflict='explicit', existingActive='preserved', ownedStop='verified')))
             finally:
+                m.stop_state_publisher()
                 # Only this fixture's exact child; no domain-wide process killing.
                 if pid is None and m.owned_process():
                     pid = m.owned_process()['pid']

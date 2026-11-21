@@ -3,7 +3,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 from types import SimpleNamespace as Obj
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 spec = importlib.util.spec_from_file_location('manager_remote', Path(__file__).parents[1] / 'src/manager_remote.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -46,9 +46,45 @@ class ManagerTests(unittest.TestCase):
         s['hardware'][0]['state']='inactive';s['controllers'][0]['requiredInterfaces']=['joint2/position'];self.assertNotEqual(original,m.fingerprint(s))
 
     def test_start_preserves_existing_manager_without_spawning(self):
-        with patch.object(m.subprocess,'Popen') as spawn:
-            m.start_manager(Obj(snapshot=lambda:dict(available=True)))
+        ros=Obj(snapshot=lambda:dict(available=True), params=lambda *_:[Obj(string_value='<robot/>')])
+        with patch.object(m.subprocess,'Popen') as spawn, patch.object(m,'ensure_state_publisher') as ensure:
+            m.start_manager(ros)
             spawn.assert_not_called()
+            ensure.assert_called_once_with(ros, '<robot/>')
+
+    def test_geometry_comparison_ignores_control_parameters_but_not_limits(self):
+        a='<robot name="arm"><link name="base"/><joint name="j"><limit lower="-1" upper="1"/></joint></robot>'
+        b=a.replace('</robot>', '<ros2_control name="hw"><param name="drag">true</param></ros2_control></robot>')
+        self.assertEqual(m.model_geometry(a), m.model_geometry(b))
+        self.assertNotEqual(m.model_geometry(a),m.model_geometry(a.replace('upper="1"','upper="2"')))
+        with self.assertRaises(ValueError):m.model_geometry('<robot/>')
+
+    def test_existing_publisher_reused_without_spawn_or_process_mutation(self):
+        ros=Obj(description_ready=Mock(return_value=True))
+        with patch.object(m.subprocess,'Popen') as spawn, patch.object(m,'processes_for') as scan:
+            m.ensure_state_publisher(ros, '<robot><link name="base"/></robot>')
+            spawn.assert_not_called(); scan.assert_not_called()
+
+    def test_discovery_delay_and_remapped_live_process_never_spawn_duplicate(self):
+        for ready in (True,False):
+            ros=Obj(description_ready=Mock(side_effect=[False,ready]))
+            with patch.object(m,'processes_for',return_value=[{'pid':123}]), patch.object(m.subprocess,'Popen') as spawn:
+                if ready:m.ensure_state_publisher(ros,'<robot><link name="base"/></robot>')
+                else:
+                    with self.assertRaisesRegex(ValueError,'process exists'):
+                        m.ensure_state_publisher(ros,'<robot><link name="base"/></robot>')
+                spawn.assert_not_called()
+
+    def test_conflicting_publisher_never_spawns(self):
+        ros=Obj(description_ready=Mock(side_effect=ValueError('Multiple publishers')))
+        with patch.object(m.subprocess,'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError,'Multiple'):
+                m.ensure_state_publisher(ros,'<robot><link name="base"/></robot>')
+            spawn.assert_not_called()
+
+    def test_external_state_publisher_is_not_stopped(self):
+        with patch.object(m,'owned_process',return_value=None), patch.object(m.os,'pidfd_open',create=True) as opening:
+            m.stop_state_publisher(); opening.assert_not_called()
 
     def test_stop_requires_exact_owned_process_and_no_active_controllers(self):
         s=dict(available=True,controllers=[row('a','active')],hardware=[])

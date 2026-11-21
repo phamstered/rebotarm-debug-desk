@@ -74,6 +74,30 @@ class Ros:
         from rcl_interfaces.srv import GetParameters
         return self.call(node + '/get_parameters', GetParameters, GetParameters.Request(names=names)).values
 
+    def description_ready(self, expected, timeout=2):
+        from std_msgs.msg import String
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+        messages = []
+        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        sub = self.node.create_subscription(String, '/robot_description', lambda msg: messages.append(msg.data), qos)
+        try:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                self.rclpy.spin_once(self.node, timeout_sec=.1)
+                publishers = self.node.get_publishers_info_by_topic('/robot_description')
+                if len(publishers) > 1:
+                    raise ValueError('Multiple /robot_description publishers; resolve duplicates before starting Manager')
+                if len(publishers) == 1 and messages:
+                    if model_geometry(messages[-1]) != model_geometry(expected):
+                        raise ValueError('/robot_description model differs from Manager URDF; existing publisher preserved')
+                    return True
+            if self.node.get_publishers_info_by_topic('/robot_description'):
+                raise ValueError('/robot_description publisher exists but no compatible transient-local URDF was received')
+            return False
+        finally:
+            self.node.destroy_subscription(sub)
+
     def snapshot(self):
         from controller_manager_msgs.srv import ListControllers, ListHardwareComponents
         from rcl_interfaces.srv import ListParameters
@@ -232,13 +256,13 @@ def identity(pid):
                 exe=os.readlink(root / 'exe'), domain=os.environ.get('ROS_DOMAIN_ID', '0'))
 
 
-def manager_processes():
+def processes_for(suffix):
     result = []
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit():
             continue
         try:
-            if not os.readlink(entry / 'exe').endswith('/controller_manager/ros2_control_node'):
+            if not os.readlink(entry / 'exe').endswith(suffix):
                 continue
             env = dict(item.split(b'=', 1) for item in (entry / 'environ').read_bytes().split(b'\0') if b'=' in item)
             if env.get(b'ROS_DOMAIN_ID', b'0').decode() == os.environ.get('ROS_DOMAIN_ID', '0'):
@@ -248,9 +272,13 @@ def manager_processes():
     return sorted(result, key=lambda p:p['pid'])
 
 
-def owned_process():
+def manager_processes():
+    return processes_for('/controller_manager/ros2_control_node')
+
+
+def owned_process(filename='process.json'):
     try:
-        saved = json.loads((cache() / 'process.json').read_text())
+        saved = json.loads((cache() / filename).read_text())
         return saved if identity(saved['pid']) == saved else None
     except (OSError, ValueError, KeyError, IndexError):
         return None
@@ -260,9 +288,69 @@ def stage(phase, message):
     print('ARM_STAGE|' + phase + '|' + message, flush=True)
 
 
+def model_geometry(description):
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(description)
+    if root.tag != 'robot' or not root.findall('link'):
+        raise ValueError('Invalid robot_description model')
+    # Controller-specific parameters do not change the rendered robot geometry.
+    for child in root.findall('ros2_control'):
+        root.remove(child)
+    return ET.canonicalize(ET.tostring(root, encoding='unicode'), strip_text=True)
+
+
+def ensure_state_publisher(ros, description):
+    model_geometry(description)
+    if ros.description_ready(description):
+        stage('startup', '复用现有 /robot_description 发布者，URDF 已核验')
+        return
+    # The shared arm-mode lock serializes our starts. An existing but not yet
+    # discovered/remapped process must never trigger a second local publisher.
+    if processes_for('/robot_state_publisher/robot_state_publisher'):
+        if ros.description_ready(description, timeout=5):
+            return
+        raise ValueError('robot_state_publisher process exists but /robot_description is unavailable; inspect its remapping/log')
+    from ament_index_python.packages import get_package_prefix
+    import yaml
+    root = cache(); root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    params = root / 'state-publisher.yaml'
+    params.write_text(yaml.safe_dump({'robot_state_publisher': {'ros__parameters': {
+        'robot_description': description, 'use_sim_time': False}}}))
+    executable = Path(get_package_prefix('robot_state_publisher')) / 'lib/robot_state_publisher/robot_state_publisher'
+    stage('startup', '启动 robot_state_publisher，等待 /robot_description')
+    with (root / 'state-publisher.log').open('ab', buffering=0) as log:
+        child = subprocess.Popen([str(executable), '--ros-args', '--params-file', str(params)],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    (root / 'state-publisher-process.json').write_text(json.dumps(identity(child.pid)))
+    if not ros.description_ready(description, timeout=5):
+        raise RuntimeError('robot_state_publisher did not publish URDF; see ' + str(root / 'state-publisher.log'))
+    if child.poll() is not None:
+        raise RuntimeError('robot_state_publisher exited during startup; inspect its log')
+
+
+def stop_state_publisher():
+    filename = 'state-publisher-process.json'
+    saved = owned_process(filename)
+    if not saved:
+        return  # Reused external publishers are never stopped.
+    fd = os.pidfd_open(saved['pid'])
+    try:
+        if owned_process(filename) != saved:
+            raise ValueError('robot_state_publisher process identity changed')
+        signal.pidfd_send_signal(fd, signal.SIGINT)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and owned_process(filename):
+            time.sleep(.1)
+        if owned_process(filename):
+            raise RuntimeError('Owned robot_state_publisher stop unconfirmed')
+    finally:
+        os.close(fd)
+
+
 def start_manager(ros):
     if ros.snapshot()['available']:
-        return  # Preserve an already running manager, including active controllers.
+        ensure_state_publisher(ros, ros.params(MANAGER, ['robot_description'])[0].string_value)
+        return  # Preserve the Manager and all hardware/controller states.
     if manager_processes():
         raise ValueError('A Manager process exists in this domain but service is unavailable; inspect its log before starting another')
     from ament_index_python.packages import get_package_share_directory, get_package_prefix
@@ -274,6 +362,7 @@ def start_manager(ros):
     hardware = [c.attrib['name'] for c in ET.fromstring(description).findall('ros2_control')]
     if not hardware:
         raise ValueError('Robot description contains no ros2_control hardware')
+    ensure_state_publisher(ros, description)
     params = yaml.safe_load(config.read_text())
     manager = params['controller_manager']['ros__parameters']
     manager['robot_description'] = description
@@ -315,6 +404,7 @@ def stop_manager(ros, request):
             time.sleep(.1)
         if owned_process() or ros.snapshot()['available']:
             raise RuntimeError('Manager stop unconfirmed')
+        stop_state_publisher()
     finally:
         os.close(fd)
 
@@ -340,9 +430,8 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         errors = []
         try:
-            if action == 'start':
-                start_manager(ros)
             if action in ('start', 'load'):
+                start_manager(ros)
                 errors = ros.load()
             elif action == 'switch':
                 ros.switch(request)
