@@ -331,6 +331,25 @@ describe("MotorControl V2", () => {
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: capabilities({ boot_id: "9" }) })); expect(screen.getByLabelText("安全确认")).not.toBeChecked();
     arm(); await act(async () => bridge.emit({ op: "disconnected" })); expect(screen.getByLabelText("安全确认")).not.toBeChecked(); expect(screen.getByRole("button", { name: "开始控制" })).toBeDisabled(); expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
   });
+  it.each([false, true])("unlocks reconnect only with new verified output-off evidence (reboot=%s)", async reboot => {
+    const { bridge } = mount(bridgeDouble(capabilities())); await flush(); select(); arm();
+    await act(async () => bridge.emit({ op: "disconnected" }));
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: capabilities() }));
+    expect(screen.getByRole("button", { name: "POS_VEL" })).toBeDisabled(); // Replayed stamp cannot unlock.
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: capabilities({ boot_id: reboot ? "99" : "9007199254740993", stamp_ns: "2000000000" }) }));
+    expect(screen.getByRole("button", { name: "POS_VEL" })).not.toBeDisabled();
+    expect(screen.getByText(/已确认输出关闭/)).toBeVisible();
+    expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
+  });
+  it.each([{ disabled_verified: false }, { fresh: false }, { mode: 1 }, { enabled_joint_mask: 1 }, { lease_id: 2 }, { owner_source_id: "5" }, { switching: true }, { fault_code: 1 }])("keeps reconnect locked for incomplete output-off proof %j", async patch => {
+    const { bridge } = mount(bridgeDouble(capabilities())); await flush();
+    await act(async () => bridge.emit({ op: "disconnected" }));
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: capabilities({ stamp_ns: "2000000000", ...patch }) }));
+    expect(screen.getByRole("button", { name: "POS_VEL" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "停止并 DISABLE" })).not.toBeDisabled();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
+  });
   it("stops an existing MIT stream when firmware identity changes even if all modes remain MIT", async () => {
     vi.useFakeTimers(); const { bridge } = mount(bridgeDouble(capabilities())); await flush(); select(); arm(); start(); await flush();
     await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2);
