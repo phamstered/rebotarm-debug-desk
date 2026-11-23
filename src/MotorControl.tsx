@@ -42,7 +42,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const timerRef = useRef<number | null>(null), mountedRef = useRef(true), operationRef = useRef(0), pendingRef = useRef<Pending>(null);
   const capsRef = useRef<MotorControlCapabilities | null>(null), seenV2Ref = useRef(false), canRunRef = useRef(active && !controlLocked);
   const stopProofRef = useRef<{ previous: MotorControlCapabilities | null; stamp: bigint | null; sequence?: number } | null>(null);
-  const capsReceivedAtRef = useRef(0);
+  const capsReceivedAtRef = useRef(0), reconnectStopRef = useRef(false);
   const evidenceWatermarkRef = useRef<MotorEvidenceWatermark | null>(null);
   const statusStampRef = useRef<bigint | null>(null), callbackRef = useRef(onStreamingChange);
   callbackRef.current = onStreamingChange; canRunRef.current = active && !controlLocked;
@@ -59,7 +59,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     timerRef.current = null; setStreaming(false);
   }
   function finishStop() {
-    stopProofRef.current = null; setStopRequested(false); setOperation(null); callbackRef.current(false);
+    reconnectStopRef.current = false; stopProofRef.current = null; setStopRequested(false); setOperation(null); callbackRef.current(false);
     if (modeEvidenceRef.current) logMode("停止反馈：已核验输出关闭；此前模式事务结果保留，不代表模式切换成功。");
     setResult("已确认输出关闭；机械臂是否停稳请核对现场。重新开始需再次确认。");
   }
@@ -81,10 +81,16 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       }
     }
     capsRef.current = next; setCapabilities(next); setCapabilityError("");
+    if (reconnectStopRef.current && accepted.advanced && next.supported && next.fresh) {
+      if (next.disabled_verified && next.mode === 3 && next.enabled_joint_mask === 0 && next.lease_id === 0
+        && next.owner_source_id === "0" && !next.switching && next.fault_code === 0) finishStop();
+      else setResult("已重连，输出关闭尚未确认。请核对现场支撑后点击“停止并 DISABLE”，等待新鲜固件关闭输出证明。");
+    }
     const proof = stopProofRef.current;
     if (proof?.previous && proof.sequence !== undefined && hasStopProof(next, proof.previous, proof.sequence)) finishStop();
   }
   async function disable() {
+    reconnectStopRef.current = false;
     ++operationRef.current; stopTimer(); setArmed(false); setSupportConfirmed(false); setShowConfiguration(false);
     setStopRequested(true); setOperation("stopping"); callbackRef.current(true);
     const proof = { previous: capsRef.current, stamp: statusStampRef.current, sequence: undefined as number | undefined };
@@ -138,7 +144,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     if (message.op === "disconnected") {
       setModeLog([]); modeEvidenceRef.current = "";
       ++operationRef.current; stopTimer(); setArmed(false); setSupportConfirmed(false); setLegacyConfirmed(false); setOperation(null); callbackRef.current(false);
-      stopProofRef.current = null; setStopRequested(true);
+      reconnectStopRef.current = true; stopProofRef.current = null; setStopRequested(true);
       if (!seenV2Ref.current) { capsRef.current = null; setCapabilities(null); }
       if (seenV2Ref.current && capsRef.current) acceptCapabilities({ ...capsRef.current, fresh: false, reason: "连接已断开，等待重新读回" });
       setResult("连接已断开，控制已停止发送；输出关闭尚未确认。");
@@ -303,6 +309,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     <aside className="motor-command-card">
       <div className="motor-card-title"><div><strong>电机控制</strong><span>模式选择仅编辑候选，实际模式以固件读回为准</span></div></div>
       <fieldset className="motor-drive-selector"><legend>驱动模式</legend>{(["MIT", "POS_VEL"] as const).map(value => <ActionButton key={value} aria-pressed={drive === value} disabled={busy || (value === "POS_VEL" && posUnavailable)} title={value === "POS_VEL" && posUnavailable ? posReason : undefined} onClick={() => { edited(); setDrive(value); setShowConfiguration(false); }}>{value}</ActionButton>)}</fieldset>
+      {stopRequested && <p className="mode-description">模式选择已锁定：正在等待输出关闭证明；DISABLE 状态本身不代表全部电机输出已核验关闭。请核对现场支撑后点击“停止并 DISABLE”。</p>}
       {posUnavailable && <p className="mode-description">POS_VEL 不可用：{posReason}</p>}
       {capabilities?.supported && <div className="motor-mode-application"><span>{!capabilities.disabled_verified ? "先停止并验证输出关闭，才能应用驱动模式" : gate || `实际 ${drive} 已确认`}</span><ActionButton disabled={busy || !configurationMask || !capabilities.fresh || capabilities.switching || !capabilities.disabled_verified || capabilities.enabled_joint_mask !== 0 || !active || controlLocked || (drive === "POS_VEL" && (capabilities.pos_vel_supported_mask & mask) !== mask)} onClick={() => { setShowConfiguration(true); setSupportConfirmed(false); setArmed(false); }}>应用驱动模式…</ActionButton></div>}
       {showConfiguration && <div className="motor-mode-confirmation"><strong>{drive === "MIT" ? "恢复整组 MIT（7 轴）：" : "应用至 "}{motors.slice(0, 7).flatMap((row, i) => (drive === "MIT" || row.enabled) ? [jointState?.name?.[i] ?? jointLabel(i)] : []).join("、")}</strong><p>{actualDriveMode(capabilities, configurationMask)} → {drive}；申请期间会关闭输出，并逐轴写入、读回模式。</p><label className="arm-check"><input type="checkbox" aria-label="现场支撑确认" checked={supportConfirmed} disabled={busy} onChange={event => setSupportConfirmed(event.target.checked)} />已支撑机械臂，确认失能及模式切换不会造成跌落</label><ActionButton disabled={busy || !supportConfirmed} onClick={() => void applyMode()}>确认应用驱动模式</ActionButton><ActionButton disabled={busy} onClick={() => setShowConfiguration(false)}>取消</ActionButton></div>}
