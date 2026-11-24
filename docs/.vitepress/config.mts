@@ -43,6 +43,7 @@ export default defineConfig({
           { text: 'TODO / 待办列表', link: '/todo' },
           { text: '重力辨识', link: '/gravity-identification' },
           { text: '位置管理 / MoveIt2（方案 Draft）', link: '/positions-moveit-design' },
+          { text: '3DGS 应用集成（方案 Draft）', link: '/3dgs-application-design' },
         ],
       },
     ],
