@@ -1,0 +1,22 @@
+import { render, screen } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import { StatusPage } from './StatusPage';
+import { defaultProfile } from './types';
+const state=vi.hoisted(()=>({manager: null as any, task: null as any}));
+vi.mock('./controllerManagerLogic',()=>({useControllerManager:()=>state.manager}));
+vi.mock('./nativeTaskSnapshotLogic',()=>({useNativeTaskSnapshot:()=>({task:state.task,error:'',loaded:true})}));
+vi.mock('./nativeWorkspaceLogic',()=>({nativeDesktop:()=>true}));
+const props={controlView:true,renderControl:(node:any)=>node,stage:'connected',sshOk:true,bridgeUp:true,localPort:18765,profile:defaultProfile,hello:null,agentStatus:null,agentError:'',agentChecked:false,hardwareStatus:{mode:3,mode_name:'DISABLE',fault_code:0,last_command_sequence:1},jointState:{name:['j1'],position:[0]},jointStateSample:undefined,lastKnownDomainId:0,rosControl:{manager:'/controller_manager',fresh:true,available:true,controllers:[{name:'arm_teleop_controller',state:'active',typeName:'test'}],message:''}};
+it('never offers rebuilding Teleop while Manager observations conflict or a task remains owned',()=>{
+ state.manager={snapshot:{manager:'/controller_manager',available:false,controllers:[]},fresh:true,refresh:vi.fn()};state.task={kind:'arm_mode',phase:'stopping',message:'remote pending'};
+ const view=render(<StatusPage {...props}/>);
+ expect(screen.getByTestId('current-control-mode')).toHaveTextContent('状态不一致');
+ expect(screen.queryByRole('button',{name:'重建控制会话'})).not.toBeInTheDocument();
+ expect(screen.getByRole('button',{name:'等待状态核验'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'直接解除电机输出'})).toBeVisible();
+ state.manager={snapshot:{manager:'/controller_manager',available:true,controllers:props.rosControl.controllers},fresh:true,refresh:vi.fn()};
+ view.rerender(<StatusPage {...props}/>);
+ expect(screen.getByRole('button',{name:'等待状态核验'})).toBeDisabled();
+ state.task=null;view.rerender(<StatusPage {...props}/>);
+ expect(screen.getByRole('button',{name:'重建控制会话'})).toBeEnabled();
+});

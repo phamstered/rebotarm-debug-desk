@@ -109,3 +109,13 @@ it('keeps start enabled during background reads with a fresh snapshot and explai
  expect(screen.getByRole('dialog')).toBeVisible();
  expect(ipc.invoke.mock.calls.some(([command])=>command==='controller_manager_manage')).toBe(false);
 });
+
+it('uses the supplied shared Manager observation without starting another query',async()=>{
+ const refresh=vi.fn();
+ const manager={snapshot:snapshot(),fresh:false,busy:false,refreshing:false,syncing:false,error:'',logs:[],refresh,execute:vi.fn()};
+ render(<ControllerManagerPanel profile={defaultProfile} connected active disabledReason="" presets={null} manager={manager}/>);
+ expect(screen.getByText('Manager 状态待确认')).toBeVisible();
+ expect(screen.getByRole('button',{name:'停止 Manager'})).toHaveAttribute('title','等待新鲜 Manager 状态');
+ expect(screen.getAllByText('—')).toHaveLength(2);
+ expect(ipc.invoke).not.toHaveBeenCalled();
+});
