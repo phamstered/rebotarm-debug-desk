@@ -1,3 +1,5 @@
+import { openTerminal } from "./terminalLogLogic";
+vi.mock("./terminalLogLogic", async importOriginal => ({ ...await importOriginal<typeof import("./terminalLogLogic")>(), openTerminal: vi.fn() }));
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -266,14 +268,15 @@ it("shows RETURN as an unfinished stop and blocks starting either selected mode"
   expect(action).not.toHaveBeenCalled();
 });
 
-it("follows the starting controller and resets manual log selection when the controller changes", async () => {
+it("opens the unified Terminal at the source of the starting controller", async () => {
   const user = userEvent.setup();
   const { rerender } = render(<StatusPage controlView {...baseProps} />);
-  await user.selectOptions(screen.getByRole("combobox", {name: "日志来源"}), "realsense");
+  await user.click(screen.getByRole("button",{name:"查看启动及 ROS 日志"}));
+  expect(openTerminal).toHaveBeenLastCalledWith("teleop",undefined,"main");
   rerender(<StatusPage controlView {...baseProps} workflow={{mode: "trajectory", stage: "startup", message: "starting", failed: false, running: true}} />);
-  expect(screen.getByRole("combobox", {name: "日志来源"})).toHaveValue("auto");
-  expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", {name: "跟随最新"})).toBeChecked();
+  await user.click(screen.getByRole("button",{name:"查看启动及 ROS 日志"}));
+  expect(openTerminal).toHaveBeenLastCalledWith("trajectory",undefined,"main");
+  expect(screen.queryByRole("combobox",{name:"日志来源"})).not.toBeInTheDocument();
 });
 
 it("keeps the last target/log after verified stop and treats manager shutdown as expected", async () => {
@@ -284,7 +287,8 @@ it("keeps the last target/log after verified stop and treats manager shutdown as
     armMode={{...baseProps.armMode, teleopRunning: true}} workflow={{mode: "stop", stage: "ready", message: "stopped", failed: false, running: false}} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
   expect(screen.getByRole("button", {name: "Trajectory"})).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByRole("option", {name: "当前模式（Trajectory）"})).toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"查看启动及 ROS 日志"}));
+  expect(openTerminal).toHaveBeenLastCalledWith("trajectory",undefined,"main");
   expect(screen.getByText("控制环境已退出（预期）")).toBeVisible();
 });
 

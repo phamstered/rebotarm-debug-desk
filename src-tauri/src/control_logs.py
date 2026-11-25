@@ -36,7 +36,7 @@ def capture_baseline(home=None):
     return result
 
 
-def read_log(source, download=False, home=None, baseline=None):
+def read_log(source, download=False, home=None, baseline=None, incremental=False):
     home = Path(home or Path.home())
     cache = home / '.cache/robot-console'
     if source in ('teleop', 'trajectory', 'teaching', 'vla', 'realsense', 'moveit'):
@@ -79,12 +79,41 @@ def read_log(source, download=False, home=None, baseline=None):
             line_truncated = len(lines) > 2000
             if line_truncated:
                 data = b''.join(lines[-2000:])
+        if incremental:
+            end = info.st_size
+            if data and not data.endswith(b'\n'):
+                partial = data.rsplit(b'\n', 1)[-1]
+                if len(partial) < limit:
+                    end -= len(partial)
+                    data = data[:-len(partial)]
+                else:
+                    line_truncated = True
+            result['cursor'] = dict(device=info.st_dev, inode=info.st_ino,
+                                    size=end, digest=fingerprint(stream, end))
         result.update(exists=True, content=data.decode('utf-8', errors='replace'), truncated=start > offset or line_truncated,
                       sizeBytes=info.st_size, revision=f'{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}')
     return result
 
 
+def terminal_batch(cursors, home=None):
+    """One SSH request, allowlisted sources, byte cursors with rotation detection."""
+    entries = []
+    next_cursors = {}
+    for source in ('teleop', 'trajectory', 'teaching', 'moveit', 'controller', 'realsense'):
+        snapshot = read_log(source, home=home, baseline=cursors, incremental=True)
+        if not snapshot['exists']:
+            continue
+        if snapshot['truncated']:
+            entries.append(dict(source=source, message='WARN 日志增量窗口已截断，请下载源日志'))
+        entries.extend(dict(source=source, message=line) for line in snapshot['content'].splitlines() if line)
+        next_cursors[snapshot['path']] = snapshot['cursor']
+    return dict(entries=entries, cursors=next_cursors)
+
+
 if __name__ == '__main__':
-    result = capture_baseline() if sys.argv[1:3] == ['session', 'baseline'] else read_log(
-        sys.argv[1], sys.argv[2] == 'download', baseline=json.loads(sys.argv[3]) if len(sys.argv) > 3 else None)
+    if sys.argv[1:3] == ['terminal', 'batch']:
+        result = terminal_batch(json.loads(sys.argv[3]))
+    else:
+        result = capture_baseline() if sys.argv[1:3] == ['session', 'baseline'] else read_log(
+            sys.argv[1], sys.argv[2] == 'download', baseline=json.loads(sys.argv[3]) if len(sys.argv) > 3 else None)
     print(json.dumps(result, ensure_ascii=True))

@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton, IconButton } from "./ActionButton";
 import { UrdfPanelDivider } from "./UrdfPanelDivider";
 import { Component, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
@@ -40,6 +41,7 @@ function Inspector({ active, xml, bridge, jointState, receivedAt, topic, liveUpd
   const [axes, setAxes] = useState(true), [inertia, setInertia] = useState(true);
   const [focus, setFocus] = useState({ selected: false, revision: 0 });
   const [robot, setRobot] = useState<URDFRobot | null>(null), [loadError, setLoadError] = useState(''), [loading, setLoading] = useState(false), [retry, setRetry] = useState(0);
+  useTerminalMessage("URDF",loadError,"error");
   const [details, setDetails] = useState('parameters'), [world, setWorld] = useState('—');
   const [layout] = useState(loadInspectorLayout);
   const [treeOpen, setTreeOpen] = useState(layout.treeOpen), [propertiesOpen, setPropertiesOpen] = useState(layout.propertiesOpen);

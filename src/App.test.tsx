@@ -1,3 +1,4 @@
+import { readTerminal } from "./terminalLogLogic";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,9 @@ import { defaultProfile } from "./types";
 import { EXPECTED_BRIDGE_BUILD_ID } from "./bridgeVersion";
 import type { MotionGroup } from "./motionGroupsLogic";
 
+let logAfter=0;
+beforeEach(async()=>{logAfter=(await readTerminal(0)).latest;});
+async function logText(){return (await readTerminal(logAfter)).entries.map(e=>e.message).join("\n");}
 const doubles = vi.hoisted(() => ({
   invoke: vi.fn(),
   controllers: vi.fn(),
@@ -197,6 +201,7 @@ describe("App workflow", () => {
       if (command === "stop_rosbag_playback") return Promise.resolve({ playing: false, pid: 0, bagPath: "robot-console-bags/demo", message: "rosbag 回放已停止" });
       if (command === "native_bridge_context") return Promise.resolve({epoch:0,connected:false,profile:null,error:null});
       if (command === "start_session") return Promise.resolve(19001);
+      if(command === "terminal_read")return Promise.resolve({entries:[],cursor:0,latest:0,session:"local",host:"本地",sessions:{local:"本地"},truncated:false,archive_dropped:0});
       return Promise.resolve(undefined);
     });
   });
@@ -217,9 +222,13 @@ describe("App workflow", () => {
     const view = render(<App />);
     const expected = corrupt ? "任务恢复异常" : "Controller 切换 · 结果未确认";
     try {
+      if(!screen.queryByRole("status",{name:"原生共享运动任务"}))await user.click(screen.getByRole("button",{name:"查看当前任务"}));
       expect(await screen.findByRole("status", {name:"原生共享运动任务"})).toHaveTextContent(expected);
+      expect(screen.getAllByRole("status", {name:"原生共享运动任务"})).toHaveLength(1);
       await user.click(await screen.findByRole("button", {name:"返回已打开页面"}));
+      if(!screen.queryByRole("status",{name:"原生共享运动任务"}))await user.click(screen.getByRole("button",{name:"查看当前任务"}));
       expect(await screen.findByRole("status", {name:"原生共享运动任务"})).toHaveTextContent(expected);
+      expect(screen.getAllByRole("status", {name:"原生共享运动任务"})).toHaveLength(1);
       expect(screen.getByRole("combobox", {name:"已打开页面"})).toHaveValue("monitor");
       expect(doubles.connect).not.toHaveBeenCalled();
       expect(doubles.invoke).not.toHaveBeenCalledWith("start_session", expect.anything());
@@ -300,10 +309,14 @@ describe("App workflow", () => {
     });
     const main = render(<App />), child = render(<App hostedPage="status" />);
     const labels = ["原生共享运动任务", "原生手眼任务", "原生 rosbag 操作", "原生采集操作"];
-    const assertCounts = async (count: number) => waitFor(() => {
+    const assertCounts = async (count: number) => {
+      if(!within(main.container).queryByRole("status",{name:labels[0]}))await userEvent.click(within(main.container).getByRole("button",{name:"查看当前任务"}));
+      if(count===2&&!within(child.container).queryByRole("status",{name:labels[0]}))await userEvent.click(within(child.container).getByRole("button",{name:"查看当前任务"}));
+      return waitFor(() => {
       for (const name of labels) expect(screen.getAllByRole("status", { name })).toHaveLength(count);
       expect(within(main.container).getByRole("button", { name: "取消直接轨迹" })).toBeEnabled();
     });
+    };
     const publish = async () => act(async () => { workspaceListeners.forEach(listener => listener({ payload: snapshot() })); });
     try {
       await screen.findByRole("button", { name: "断开" });
@@ -602,7 +615,7 @@ describe("App workflow", () => {
     expect(within(dialog).getByRole("button", { name: "跳过" })).toBeVisible();
     await user.click(within(dialog).getByRole("button", { name: "跳过" }));
     expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
-    expect(screen.getAllByText(/已跳过 Bridge 升级/).length).toBeGreaterThan(0);
+    await waitFor(async()=>expect(await logText()).toContain("已跳过 Bridge 升级"));
   });
 
   it("runs deploy_bridge when upgrade is confirmed", async () => {
@@ -674,18 +687,18 @@ describe("App workflow", () => {
       doubles.deployListener?.({ payload: "[build] starting" });
       doubles.deployListener?.({ payload: "[remote] compiling\n[remote] linking" });
     });
-    const log = screen.getByRole("log", { name: "Bridge 升级日志输出" });
-    expect(log).toHaveTextContent("准备升级 Bridge");
-    expect(log).toHaveTextContent("[build] starting");
-    expect(log).toHaveTextContent("[remote] linking");
+    expect(screen.getByRole("button",{name:"查看部署日志"})).toBeVisible();
+    expect(await logText()).toContain("准备升级 Bridge");
+    expect(await logText()).toContain("[build] starting");
+    expect(await logText()).toContain("[remote] linking");
     await act(async () => fail(new Error("build failed")));
-    expect(log).toHaveTextContent("[build] starting");
-    expect(log).toHaveTextContent("[error] build failed");
+    expect(await logText()).toContain("[build] starting");
+    expect(await logText()).toContain("[error] build failed");
     expect(doubles.deployUnlisten).toHaveBeenCalled();
     act(() => doubles.deployListener?.({ payload: "obsolete output" }));
-    expect(log).not.toHaveTextContent("obsolete output");
+    expect(await logText()).not.toContain("obsolete output");
     await user.click(screen.getByRole("button", { name: /^重试$/ }));
-    expect(screen.queryByRole("log", { name: "Bridge 升级日志输出" })).not.toBeInTheDocument();
+    expect(await logText()).toContain("[build] starting"); // Retry keeps the unified diagnostic history.
   });
 
   it("warns without forcing upgrade when hello lacks build id", async () => {
@@ -698,7 +711,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     await screen.findByRole("toolbar", { name: "应用工具栏" });
     expect(screen.queryByRole("dialog", { name: "Bridge 版本不匹配" })).not.toBeInTheDocument();
-    expect(screen.getAllByText(/无法确认版本/).length).toBeGreaterThan(0);
+    await waitFor(async()=>expect(await logText()).toContain("无法确认版本"));
   });
   it("clears all previous connection data before reconnecting", async () => {
     const user = userEvent.setup();
@@ -857,7 +870,7 @@ describe("App workflow", () => {
     expect(doubles.invoke.mock.calls.some(([c])=>c==="controller_manager_manage")).toBe(false);
     await user.click(screen.getByRole("checkbox",{name:"已核对操作对象、现场支撑及运动区域"}));
     await user.click(screen.getByRole("button",{name:"确认执行"}));
-    await screen.findByText("切换已核验");
+    await waitFor(async()=>expect(await logText()).toContain("切换已核验"));
     expect(doubles.invoke).toHaveBeenCalledWith("controller_manager_manage",expect.objectContaining({request:{action:"switch",activate:[],deactivate:["joint_state_broadcaster"],expected:"a".repeat(64)}}));
   });
 
@@ -1354,7 +1367,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: /开始录制/ }));
     expect(doubles.invoke).toHaveBeenCalledWith("start_rosbag_recording", { profile: expect.any(Object) });
     expect(await screen.findByRole("button", { name: /停止录制/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getAllByText(/rosbag 录制已开始/).length).toBeGreaterThan(0);
+    await waitFor(async()=>expect(await logText()).toContain("rosbag 录制已开始"));
 
     await user.click(screen.getByRole("button", { name: /停止录制/ }));
     expect(doubles.invoke).toHaveBeenCalledWith("stop_rosbag_recording", { profile: expect.any(Object) });
@@ -1617,7 +1630,7 @@ describe("App workflow", () => {
     await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" })); emitRosReady();
     await user.click(screen.getByRole("button", {name: "VLA"}));
     await user.click(screen.getByRole("button", {name: /启动所选模式|切换模式（先回零）/}));
-    await waitFor(() => expect(screen.getByText(/旧进程未退出：cleanup refused/)).toBeVisible());
+    await waitFor(async()=>expect(await logText()).toContain("旧进程未退出：cleanup refused"));
     expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({mode: "vla"}));
     expect(doubles.invoke.mock.calls.some(([command]) => command === "switch_ros_controllers")).toBe(false);
     expect(doubles.request).not.toHaveBeenCalledWith(expect.objectContaining({op: "joint_command"}));
@@ -1639,7 +1652,7 @@ describe("App workflow", () => {
       await user.click(screen.getByRole("button", { name: /启动所选模式|切换模式（先回零）/ }));
     expect(screen.getByRole("button", { name: "切换中…" })).toBeDisabled();
     await act(async () => finish({ ok: false, exitCode: 1, message: "Teleop 启动失败", detail: "COMMAND_LOSS_LATCHED" }));
-    expect(await screen.findByText("Teleop 启动失败：COMMAND_LOSS_LATCHED")).toBeVisible();
+    await waitFor(async()=>expect(await logText()).toContain("Teleop 启动失败：COMMAND_LOSS_LATCHED"));
     expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled();
   });
 
@@ -1952,7 +1965,7 @@ describe("App workflow", () => {
     doubles.controllers.mockResolvedValue({manager:"/controller_manager",available:false,controllers:[],message:"Manager 暂不可用"});
     const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
     await user.click(screen.getByRole("button",{name:"启动所选模式"}));
-    expect(await screen.findByText(/模式启动后 Controller 状态未确认/)).toBeVisible();
+    await waitFor(async()=>expect(await logText()).toContain("模式启动后 Controller 状态未确认"));
     expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
   });
 

@@ -1,9 +1,12 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MotorControl } from "./MotorControl";
 import type { BridgeClient } from "./bridge";
 import type { BridgeEnvelope, MotorControlCapabilities } from "./types";
 
+const logging = vi.hoisted(() => ({ publish: vi.fn() }));
+vi.mock("./terminalLogLogic", async importOriginal => ({ ...await importOriginal<typeof import("./terminalLogLogic")>(), terminalPublish: logging.publish }));
+beforeEach(() => logging.publish.mockClear());
 function capabilities(patch: Partial<MotorControlCapabilities> = {}): MotorControlCapabilities {
   return { supported: true, fresh: true, reason: "", age_ms: 0, protocol_version: 2, boot_id: "9007199254740993", control_epoch: 2, source_id: "5", owner_source_id: "0", lease_id: 0, selected_joint_mask: 0, enabled_joint_mask: 0, verified_joint_mask: 127, pos_vel_supported_mask: 63, control_modes: Array(7).fill("MIT"), velocity_limit_max: Array(7).fill(2), position_min: Array(7).fill(-3), position_max: Array(7).fill(3), switching: false, disabled_verified: true, operation_id: 0, operation_state: 0, last_command_sequence: 40, mode: 3, fault_code: 0, error_code: 0, rejected_sequence: 0, reject_code: 0, stamp_ns: "1000000000", ...patch };
 }
@@ -285,7 +288,7 @@ describe("MotorControl V2", () => {
     expect(screen.getByText("模式申请中")).toBeVisible();
     const next = capabilities({ control_modes: ["POS_VEL", ...Array(6).fill("MIT")], operation_state: 2, operation_id: 8, control_epoch: 3, stamp_ns: "1100000000" });
     await act(async () => finish({ op: "motor_set_control_mode_result", terminal: true, motor_control: next }));
-    expect(screen.getByRole("log")).toHaveTextContent("应用成功：POS_VEL 已读回");
+    expect(logging.publish).toHaveBeenCalledWith(expect.objectContaining({source:"Motor",message:expect.stringContaining("应用成功：POS_VEL 已读回")}));
     expect(screen.getByText("实际驱动：POS_VEL（已读回）")).toBeVisible(); expect(screen.getByLabelText("安全确认")).not.toBeChecked(); expect(bridge.send).not.toHaveBeenCalled();
   });
   it("rejects an ACK without terminal readback and never auto-starts after partial configuration", async () => {
@@ -389,40 +392,40 @@ describe("Motor mode history", () => {
     });
     const stopped = { ...failed, stamp_ns: "3000000000", last_command_sequence: 42 };
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: stopped }));
-    const log = screen.getByRole("log", { name: "模式切换日志" });
-    expect(log).toHaveTextContent("joint7（gripper_finger_left_joint）");
-    expect(log).toHaveTextContent("mask=64");
-    expect(log).toHaveTextContent("error=10（超出固件已验证范围）");
-    expect(log).toHaveTextContent("应用失败 / 结果未确认");
-    expect(log).toHaveTextContent("停止反馈：已核验输出关闭");
+    const log = () => logging.publish.mock.calls.map(([entry])=>entry.message).join("\n");
+    expect(log()).toContain("joint7（gripper_finger_left_joint）");
+    expect(log()).toContain("mask=64");
+    expect(log()).toContain("error=10（超出固件已验证范围）");
+    expect(log()).toContain("应用失败 / 结果未确认");
+    expect(log()).toContain("停止反馈：已核验输出关闭");
     expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
     expect(screen.getByText(/当前反馈：joint7 0.511749 rad/)).toBeVisible();
-    const lines = log.querySelectorAll("p").length;
+    const lines = logging.publish.mock.calls.length;
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...stopped, stamp_ns: "4000000000" } }));
-    expect(log.querySelectorAll("p")).toHaveLength(lines);
+    expect(logging.publish).toHaveBeenCalledTimes(lines);
     // Stale success must not replace the accepted failure or pollute history.
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...failed, operation_state: 2, error_code: 0 } }));
-    expect(log.querySelectorAll("p")).toHaveLength(lines);
+    expect(logging.publish).toHaveBeenCalledTimes(lines);
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...stopped, stamp_ns: "5000000000" } }));
     fireEvent.click(screen.getByRole("button", { name: "应用驱动模式…" }));
-    expect(log).toHaveTextContent("应用失败 / 结果未确认");
+    expect(log()).toContain("应用失败 / 结果未确认");
     expect(bridge.command).toHaveBeenCalledTimes(2); // configure, then DISABLE only
     expect(bridge.send).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "清空切换日志" }));
-    expect(log).toHaveTextContent("暂无切换记录");
+    expect(screen.getByRole("button", {name:"查看模式切换日志"})).toBeEnabled();
+    expect(screen.queryByRole("log")).not.toBeInTheDocument();
     expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
   });
-  it("retains rapid observed pending/failure transitions, but clears history on disconnect", async () => {
+  it("retains rapid observed pending/failure transitions, and retains unified history on disconnect", async () => {
     const bridge = bridgeDouble(capabilities()); mount(bridge); await flush();
     await act(async () => {
       bridge.emit({ op: "motor_control_status", motor_control: capabilities({ operation_id: 1, operation_state: 1, stamp_ns: "2000000000" }) });
       bridge.emit({ op: "motor_control_status", motor_control: capabilities({ operation_id: 1, operation_state: 3, error_code: 13, stamp_ns: "3000000000" }) });
     });
-    const log = screen.getByRole("log");
-    expect(log).toHaveTextContent("进行中"); expect(log).toHaveTextContent("寄存器操作超时");
-    expect(log.querySelectorAll("time")).toHaveLength(2);
+    const log = () => logging.publish.mock.calls.map(([entry])=>entry.message).join("\n");
+    expect(log()).toContain("进行中"); expect(log()).toContain("寄存器操作超时");
+    expect(logging.publish).toHaveBeenCalledTimes(2);
     await act(async () => bridge.emit({ op: "disconnected" }));
-    expect(log).toHaveTextContent("暂无切换记录");
+    expect(log()).toContain("进行中"); expect(log()).toContain("寄存器操作超时");
     expect(bridge.command).not.toHaveBeenCalled();
   });
 });

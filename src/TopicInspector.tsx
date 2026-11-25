@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { IconButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
@@ -102,6 +103,7 @@ export function TopicInspector({
   const [topicDetails, setTopicDetails] = useState<TopicDetails | null>(null);
   const [nodeDetails, setNodeDetails] = useState<NodeDetails | null>(null);
   const [detailsError, setDetailsError] = useState("");
+  useTerminalMessage("Topics",detailsError,"error");
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsRevision, setDetailsRevision] = useState(0);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number; dashboardId: string | null } | null>(null);

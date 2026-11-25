@@ -1,3 +1,5 @@
+import { TerminalLink } from "./TerminalLink";
+import { useTerminalMessage, useTerminalLines } from "./terminalLogLogic";
 import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useNativeCollectionOperation } from "./NativeCollectionOperationStatus";
@@ -34,11 +36,15 @@ export function DataCollectionPage({
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
   const [notice, setNotice] = useState("");
+  useTerminalMessage("Collection",error,"error");
+  useTerminalMessage("Collection",notice);
   const [discardRequested, setDiscardRequested] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const sessionRef = useRef({ alive: false, busy: false });
   const nativeBusyRef = useRef(false);
   const shared = Boolean(observations);
+  useTerminalMessage("Collection",pollError,"error");
+  useTerminalLines("Collection",shared?[]:(status?.log??"").split("\n"));
   const refreshShared = observations?.refresh;
   const nativeOperation = useNativeCollectionOperation(shared);
   const nativeBusy = shared && (!nativeOperation.ready || Boolean(nativeOperation.error)
@@ -197,7 +203,7 @@ export function DataCollectionPage({
         {notice && <output className="collection-notice">{notice}</output>}
         {(error || pollError) && <pre className="collection-error" role="alert">{error || pollError}</pre>}
         <p className="collection-hint">{shared ? "应用统一查询状态，每次查询完成后间隔 5 秒；查询失败或过期时禁止操作。" : "每 5 秒刷新。"}采集中请勿重置场景；保存或丢弃后再复位物体。切换页面或断开连接后，Jetson 上的采集器仍继续运行。退出前请先保存或丢弃，再完成数据集。</p>
-        <details open className="collection-logs"><summary>采集器日志</summary><pre>{status?.log || "暂无日志"}</pre></details>
+        <TerminalLink source="Collection">查看采集器日志</TerminalLink>
       </section>
     </div>
   </section>;

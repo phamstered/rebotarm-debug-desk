@@ -1,3 +1,4 @@
+import { readTerminal } from "./terminalLogLogic";
 import {act, render, renderHook, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -33,9 +34,9 @@ describe('Controller management',()=>{
   expect(screen.getByText('停用：old')).toBeVisible();expect(screen.getByRole('button',{name:'确认执行'})).toBeDisabled();
   await user.click(screen.getByRole('checkbox',{name:'已核对操作对象、现场支撑及运动区域'}));
   await user.click(screen.getByRole('button',{name:'确认执行'}));
-  await screen.findByText('已核验');
+  await waitFor(async()=>expect((await readTerminal(0)).entries.some(e=>e.source==='Controller'&&e.message==='已核验')).toBe(true));
   expect(ipc.invoke).toHaveBeenCalledWith('controller_manager_manage',expect.objectContaining({request:{action:'switch',activate:['new'],deactivate:['old'],expected:'a'.repeat(64)},confirmed:true}));
-  await user.click(screen.getByRole('tab',{name:'模式预设'}));await user.click(screen.getByRole('tab',{name:'Controller 管理'}));expect(screen.getByText('已核验')).toBeVisible();
+  await user.click(screen.getByRole('tab',{name:'模式预设'}));await user.click(screen.getByRole('tab',{name:'Controller 管理'}));expect(screen.getByRole('button',{name:'查看 Controller 操作日志'})).toBeVisible();expect((await readTerminal(0)).entries.some(e=>e.message==='已核验')).toBe(true);
  });
  it('discards an old robot query after changing connection',async()=>{
   let resolve!:(s:ManagerSnapshot)=>void;

@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -66,6 +67,8 @@ export function GravityIdentificationPage({
   const [statusText, setStatusText] = useState("idle");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  useTerminalMessage("Gravity",error,"error");
+  useTerminalMessage("Gravity",notice);
   const [busy, setBusy] = useState<"start" | "abort" | "">("");
   const commandRef = useRef("");
   const operationRef = useRef(0);

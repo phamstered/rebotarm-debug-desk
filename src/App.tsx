@@ -1,11 +1,10 @@
+import { Terminal } from "./Terminal";
+import { TerminalLink } from "./TerminalLink";
+import { useTerminalMessage, useTerminalLines } from "./terminalLogLogic";
 import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions, NativePageActionsContext } from "./NativePageActions";
-import { NativeCollectionOperationStatus } from "./NativeCollectionOperationStatus";
-import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
-import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
 import { ownsPagePreference, usePagePreference } from "./pagePreferences";
 import { NativeWorkspaceHost, NativeOfflineWorkspace } from "./NativeWorkspace";
-import { NativeTaskStatus } from "./NativeTaskStatus";
 import { useMotionNavigation, pageWindowVisible, nativeDesktop, useNativeWorkspace, useNativePageSession, useNativeMainRecovery } from "./nativeWorkspaceLogic";
 import { sharedBagStatus } from "./nativeRosbagLogic";
 import { useNativeObservations, observationValue } from "./nativeObservationsLogic";
@@ -19,15 +18,12 @@ import { MotionControllersPanel } from "./MotionControllersPanel";
 import { ControllerManagerPanel } from "./ControllerManagerPanel";
 import { useRosControllers } from "./useRosControllers";
 import { controllerStatusFresh, controllerStatusLabel } from "./controllersInfoLogic";
-import { MotionTerminal } from "./MotionTerminal";
 import { MotionGroupsPage } from "./MotionGroupsPage";
 import { useMotionGroups } from "./useMotionGroups";
 import { MotionLayoutProvider } from "./MotionLayout";
 import { loadAppPage, loadMotionTab, loadMotionSidebar } from "./appNavigationLogic";
 import type { MotionTab } from "./appNavigationLogic";
-import { DeployProgressLog } from "./DeployProgressLog";
 import { appendDeployLog } from "./deployLogLogic";
-import { ControlLogViewer } from "./ControlLogViewer";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -1797,24 +1793,37 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     onBack={offline ? () => setManageMotionGroups(false) : undefined}
     onOpenPoseLibrary={(id,intent) => { if(id)setPositionEditRequest({id,intent}); if (offline) { setManageMotionGroups(false); setManagePositions(true); } else setMotionTab("positions"); }} />;
 
+  useTerminalLines("Deploy",nativeDesktop()?[]:deployProgress);
+  useTerminalMessage("Connection", hostedPage ? "" : error, "error");
+  useTerminalMessage("Connection", hostedPage ? "" : agentError, "error");
+  useTerminalMessage("Connection", hostedPage ? "" : stageNames[stage]);
+  useTerminalMessage("System", toolbarNotice);
+  useTerminalMessage("Controller", statusActionNotice);
+  useTerminalMessage("Topics", topicSubscribeError || topicRefreshError, "error");
+  useTerminalMessage("Motion", trajectoryStateError || poseSaveError, "error");
+  useTerminalMessage("Monitor", monitorHistoryError || motionErrorSubscriptionError, "error");
+  useTerminalMessage("Monitor", monitorHistoryNotice);
+  useTerminalMessage("Rosbag", bagNotice);
+  const terminal = <Terminal windowKey={hostedPage??"main"} profile={stage === "connected" ? profile : undefined} visible={!hostedPage || Boolean(workspace.snapshot.pages[hostedPage]?.detached || workspace.snapshot.pages[hostedPage]?.recovery_required)} />;
+
   if (nativeMain && stage !== "connected" && offlineWorkspace) {
-    return <NativeOfflineWorkspace page={appPage} snapshot={workspace.snapshot} onSelect={setAppPage}
+    return <div className="terminal-host"><NativeOfflineWorkspace page={appPage} snapshot={workspace.snapshot} onSelect={setAppPage}
       onConnection={() => setOfflineWorkspace(false)} onError={setError} error={workspace.error || error}
-      onDismissError={() => { workspace.dismissError(); setError(""); }} />;
+      onDismissError={() => { workspace.dismissError(); setError(""); }} />{terminal}</div>;
   }
   if (!hostedPage && stage !== "connected" && manageHandeye) {
-    return <main className="handeye-offline"><ActionButton onClick={() => setManageHandeye(false)}>返回连接</ActionButton><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>;
+    return <div className="terminal-host"><main className="handeye-offline"><ActionButton onClick={() => setManageHandeye(false)}>返回连接</ActionButton><HandeyeCalibrationPage session={handeyeSession} profile={profile} bridge={bridge} connected={false} active={windowVisible} onMotion={() => { setManageHandeye(false); setManagePositions(true); }} /></main>{terminal}</div>;
   }
 
   if (!hostedPage && stage !== "connected" && manageMotionGroups) {
-    return <main className="connect-shell"><section className="offline-motion-groups">
+    return <div className="terminal-host"><main className="connect-shell"><section className="offline-motion-groups">
       <MotionLayoutProvider active>{renderGroupEditor(true)}</MotionLayoutProvider>
-    </section></main>;
+    </section></main>{terminal}</div>;
   }
 
   if (!hostedPage && stage !== "connected" && managePositions) {
     return (
-      <main className="connect-shell">
+      <div className="terminal-host"><main className="connect-shell">
         <PositionPage
           profileKey={positionProfileKey}
           editRequest={positionEditRequest}
@@ -1825,15 +1834,14 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           motion={positionMotion}
           onBack={() => setManagePositions(false)}
        />
-      </main>
+      </main>{terminal}</div>
     );
   }
 
   if (!hostedPage && stage !== "connected") {
     return (
-      <main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
+      <div className="terminal-host"><main className="connect-shell" onKeyDown={handleConnectShellKeyDown}>
         <section className="connect-card">
-          {nativeMain && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
           <div className="brand"><img className="brand-mark" src={robotConsoleIcon} alt="" /><div><h1>Robot Console</h1><p>ROS 2 机器人调试工作台</p></div></div>
           {historyLine && (
             <p className="connect-history" aria-label="上次连接记录" title={historyLine}>{historyLine}</p>
@@ -1883,7 +1891,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           {mainRecovery.pending && <p role="status">正在恢复共享会话…</p>}
           {mainRecovery.error && <div role="alert">{mainRecovery.error}<ActionButton type="button" onClick={mainRecovery.retry}>重试恢复共享会话</ActionButton></div>}
           {openingOffline && <p role="status">正在同步离线配置…</p>}
-          {deployProgress.length > 0 && <DeployProgressLog lines={deployProgress} />}
+          {deployProgress.length > 0 && <TerminalLink source="Deploy">查看部署日志</TerminalLink>}
           {error && (
             <div className="error-panel" role="alert">
               <pre className="error-box">{error}</pre>
@@ -1894,7 +1902,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
             </div>
           )}
         </section>
-      </main>
+      </main>{terminal}</div>
     );
   }
 
@@ -1910,7 +1918,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
         </ActionButton>
         <IconButton icon="link" label="连接配置" type="button" className="toolbar-action" onClick={openConnectionSettings} title="编辑 SSH 与 ROS 连接配置；重连后生效" />
         <IconButton icon="settings" label="设置" type="button" className="toolbar-action" onClick={openToolbarSettings} title="配置自动刷新、诊断快照与连接后导航" />
-        {toolbarNotice && <output className="toolbar-notice" title={toolbarNotice}>{toolbarNotice}</output>}
+        {toolbarNotice && <TerminalLink source="System">查看操作结果</TerminalLink>}
         <ConnectStatusStrip
           lights={statusLights}
           domainHint={domainHint}
@@ -1994,8 +2002,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       {workspace.error && <div className="native-workspace-error" role="alert">{workspace.error}<IconButton icon="close" label="关闭提示" onClick={workspace.dismissError} /></div>}
       {monitorEditor.error && <div className="native-workspace-error" role="alert">{monitorEditor.error}</div>}
       {hostedPage && stage !== "connected" && error && <div className="native-workspace-error" role="status">{error}</div>}
-      {/* Embedded pages share the main window's banners; standalone/recovery windows need their own. */}
-      {nativeDesktop() && (!hostedPage || workspace.snapshot.pages[hostedPage]?.detached || workspace.snapshot.pages[hostedPage]?.recovery_required) && <><NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus /></>}
+      {/* Current motion actions stay available; diagnostic task history lives in Terminal. */}
       {positionMotion.busy && <div className="global-motion-status" role="status" aria-label="当前运动任务">
         <span>{positionMotionBusy(positionMotion.state.phase) && positionMotion.state.commandId ? `${positionMotion.state.label || "运动任务"} · ${positionMotion.state.phase} · ${positionMotion.state.message}` : "已有其他会话的运动任务正在执行"}</span>
         <ActionButton type="button" onClick={() => { if (positionMotion.state.group) setMotionTab("groups"); setAppPage("motion"); }}>返回 Motion</ActionButton>
@@ -2212,9 +2219,9 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       />}
       </TopicsPage>
       )}
-      {(!hostedPage || hostedPage === "motion") && <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
+      {(!hostedPage || hostedPage === "motion") && <MotionPage unifiedTerminal compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
         connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
-        tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <ActionButton className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</ActionButton>}{toolbarNotice && <span className="motion-toolbar-feedback" role="status" title={toolbarNotice}>{toolbarNotice}</span>}</>}
+        tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <ActionButton className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</ActionButton>}{toolbarNotice && <TerminalLink source="System">查看操作结果</TerminalLink>}</>}
         resetVersion={motionLayoutReset} visible={appPage === "motion"} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
         controllersOpen={motionControllersOpen} onToggleControllers={() => setMotionControllersOpen((current) => !current)}
         controllers={<MotionControllersPanel active={appPage === "motion" && motionControllersOpen} status={rosControl} refreshing={rosControlRefreshing} onRefresh={() => void refreshRosControllers()}
@@ -2284,11 +2291,11 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
          />
 </>}
         groups={renderGroupEditor()}
-        log={<MotionTerminal logs={positionMotion.logs} active={appPage === "motion" && windowVisible}
-          plannerLog={(outputActive) => <ControlLogViewer profile={profile} active={appPage === "motion" && windowVisible && outputActive} connected={stage === "connected"} preferredSource="moveit" />} />}
+        log={<TerminalLink source="Motion" />}
       />}
       </>}
       </div>
+      {terminal}
       </div>
       {poseToSave && <SavePoseDialog key={positionProfileKey} initial={poseToSave} urdfXml={urdf || previewUrdf}
         onClose={() => setPoseToSave(null)} onSave={createPosition} />}

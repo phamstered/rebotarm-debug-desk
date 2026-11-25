@@ -108,7 +108,7 @@ pub struct Runtime {
     pub collection_operations: Arc<super::collection_operation::Operations>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
-    motion_logs: Arc<super::motion_observations::MotionLogs>,
+    pub motion_logs: Arc<super::motion_observations::MotionLogs>,
     core: Arc<Mutex<Core>>,
     connect_gate: AsyncMutex<()>,
     subscriptions_gate: AsyncMutex<()>,

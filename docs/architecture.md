@@ -331,3 +331,12 @@ The fixed SSH journal's read-only query may attach fresh `arm_quiescent` evidenc
 ### Manager URDF 发布
 
 Manager startup/load ensures a companion robot_state_publisher before reporting success. The description matches the expanded Manager URDF (geometry canonicalization excludes ros2_control parameters). A reliable transient-local subscription validates the published model; existing publishers are reused, multiple/conflicting/unresponsive publishers are rejected, and same-domain local process checks cover delayed discovery/remapping. Starts share the arm-mode lock. A separate PID/start-time/executable/domain receipt identifies the owned companion; only that exact process is stopped after a verified Manager stop. No hardware activation or Bridge protocol change is involved.
+
+
+## 统一诊断日志
+
+`src-tauri/src/terminal.rs` 管理应用生命周期内的诊断历史、独立读游标和有界异步 JSONL 归档。来源包括原生任务状态事件、Bridge 部署 stdout/stderr、共享运动观察的新日志、共享采集器快照尾部，以及前端操作/资源错误。只读 SSH 聚合器使用固定来源白名单和文件字节游标；一次读取覆盖 arm/MoveIt/Controller/RealSense，VLA 与 trajectory 共用一份文件，不重复采集。重连保留同主机游标，迟到读结果写入发起时会话。
+
+`Terminal.tsx` 是主壳的底部 dock；原生嵌入 WebView 中的实例隐藏且只同步会话上下文，不复制整份日志；拆出后按独立游标恢复原生历史并显示自己的 dock。各窗口通过 `terminal_read` 分页，拥有独立过滤、清屏边界和跟随位置；`terminal-open` 只路由到发起页面所在主窗口或独立窗口。NativeWorkspaceHost 的 ResizeObserver 随 dock 高度更新嵌入视图边界。最大化通过布局将内容区缩至 1 px、扩大 Terminal，不用 CSS 覆盖原生子 WebView，也不调用 workspace_cover 或改变窗口可见状态/控制租约。日志详情在 dock 内展开，避免被原生子视图遮挡。
+
+日志通道只读观察控制系统。任务生命周期、恢复票据、反馈新鲜度与 DISABLE 路径不依赖日志结果。日志采集/归档失败不会阻止停止指令或解除安全门。内存、异步队列、前端保留窗口分别有行数/字节上限；归档文件总量和保留时长有界。敏感格式在原生落盘前统一清理，UI 将内容作为文本展示。

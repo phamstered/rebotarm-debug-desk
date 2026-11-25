@@ -32,7 +32,7 @@ import {
   type StatusCardModel,
   type StatusTone,
 } from "./statusLogic";
-import { ControlLogViewer } from "./ControlLogViewer";
+import { TerminalLink } from "./TerminalLink";
 import { ArmModeWorkflow } from "./ArmModeWorkflow";
 import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { isArmTeleopControllerActive, isArmTrajectoryControllerActive, isVlaControllerActive } from "./vlaLogic";
@@ -350,7 +350,7 @@ export function StatusPage({
                         onClick={() => { setSupported(false); setConfirmDisable(true); }}>直接解除电机输出</ActionButton>
                     </details>
                   </div>
-                  {actionNotice && <output className="status-action-notice" role="status">{actionNotice}</output>}
+                  {actionNotice && <TerminalLink source="Controller">查看操作结果</TerminalLink>}
                   {activeMode === "teaching" && <section className="teaching-gripper" aria-label="手动示教">
                     <strong>六轴与夹爪手动示教</strong>
                     <p>六轴保留重力补偿与阻尼；夹爪不主动保持位置，可用手拨动。请托住夹爪中的物体。</p>
@@ -395,8 +395,7 @@ export function StatusPage({
                 {zone.primary && <span className="status-zone-badge">主区</span>}
               </header>
               {body}
-              {isControl && controlView && <ControlLogViewer key={logSource} profile={profile} connected={sshOk} active={selectedTab === "control"}
-                preferredSource={logSource} />}
+              {isControl && controlView && <TerminalLink source={logSource === "vla" ? "trajectory" : logSource}>查看启动及 ROS 日志</TerminalLink>}
             </section>
           );
         })}

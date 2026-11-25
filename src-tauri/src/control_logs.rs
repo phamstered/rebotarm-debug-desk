@@ -173,3 +173,9 @@ mod tests {
         );
     }
 }
+
+pub async fn terminal_batch(profile:&ConnectionProfile,cursors:serde_json::Value,sessions:&LogSessions)->Result<serde_json::Value,String>{
+    let baseline=if cursors.is_object(){cursors}else{prepare(profile,sessions).await?};
+    let script=READER.replace('\'',"'\"'\"'");
+    execute(profile,format!("timeout 10 python3 -c '{script}' terminal batch '{}'",baseline.to_string().replace('\'',"'\"'\"'"))).await
+}

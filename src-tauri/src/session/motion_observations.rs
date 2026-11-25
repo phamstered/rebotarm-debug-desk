@@ -20,8 +20,10 @@ struct History {
     entries: VecDeque<(u64, Value, usize)>,
 }
 #[derive(Default)]
-pub struct MotionLogs(Mutex<History>);
+pub struct MotionLogs(Mutex<History>, Mutex<Option<LogSink>>);
+type LogSink = Arc<dyn Fn(u64, Vec<Value>, bool) + Send + Sync>;
 impl MotionLogs {
+    pub fn set_sink(&self, sink: LogSink) { *self.1.lock().unwrap() = Some(sink); }
     pub fn reset(&self, epoch: u64) {
         *self.0.lock().unwrap() = History {
             epoch,
@@ -87,10 +89,12 @@ impl MotionLogs {
                     .map_or(cursor, |entry| entry.0.saturating_sub(1)),
             );
         }
+        let mut received=Vec::new();
         for (seq, value, size) in validated {
             if seq <= history.cursor {
                 continue;
             }
+            received.push(value.clone());
             history.bytes += size;
             history.entries.push_back((seq, value, size));
             while history.bytes > 2 * 1024 * 1024 || history.entries.len() > 5000 {
@@ -100,6 +104,9 @@ impl MotionLogs {
             }
         }
         history.cursor = cursor;
+        drop(history);
+        let sink=self.1.lock().unwrap().clone();
+        if let Some(sink)=sink { sink(epoch,received,response["motion_log_truncated"]==true); }
         // Frequent status snapshots must not copy the full log history to every
         // window. Each caller reads a bounded page using its own cursor.
         response["motion_logs"] = json!([]);
@@ -194,6 +201,18 @@ mod tests {
     fn batch(first: u64, count: u64, text: &str) -> Value {
         json!({"op":"position_motion_info", "motion_log_session":"a", "motion_log_cursor":first + count - 1,
             "motion_log_truncated":false, "motion_logs":(first..first + count).map(|seq| json!({"seq":seq,"message":text})).collect::<Vec<_>>()})
+    }
+    #[test]
+    fn native_terminal_sink_receives_new_entries_without_a_window_and_ignores_stale_epoch() {
+        let logs=MotionLogs::default();let received=Arc::new(Mutex::new(Vec::new()));let sink=received.clone();
+        logs.set_sink(Arc::new(move |epoch,rows,gap|sink.lock().unwrap().push((epoch,rows,gap))));
+        logs.reset(1);logs.ingest(1,&mut batch(1,2,"first")).unwrap();
+        logs.ingest(1,&mut batch(1,2,"first")).unwrap();
+        assert_eq!(received.lock().unwrap().iter().map(|(_,rows,_)|rows.len()).sum::<usize>(),2);
+        logs.reset(2);assert!(logs.ingest(1,&mut batch(3,1,"late")).is_err());
+        let count=received.lock().unwrap().len();logs.ingest(2,&mut batch(1,1,"next")).unwrap();
+        assert_eq!(received.lock().unwrap().len(),count+1);
+        assert_eq!(received.lock().unwrap().last().unwrap().0,2);
     }
     #[test]
     fn windows_get_independent_pages_from_a_shared_history_and_replays_do_not_duplicate() {
