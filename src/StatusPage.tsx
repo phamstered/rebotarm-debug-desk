@@ -1,3 +1,7 @@
+import { useControllerManager } from "./controllerManagerLogic";
+import { reconcileControlState, controlTaskReason } from "./controlStateLogic";
+import { useNativeTaskSnapshot } from "./nativeTaskSnapshotLogic";
+import { nativeDesktop } from "./nativeWorkspaceLogic";
 import { ActionButton, IconButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { controllerStatusFresh } from "./controllersInfoLogic";
@@ -118,7 +122,7 @@ function StatusCard({
 }
 
 export function StatusPage({
-  controlView = false, renderControl, onManageControllers,
+  controlView = false, controlActive = true, renderControl, onManageControllers,
   clockSync,
   stage,
   sshOk,
@@ -149,7 +153,8 @@ export function StatusPage({
   onClearHighlight,
 }: {
   controlView?: boolean;
-  renderControl?: (presets: import("react").ReactNode) => import("react").ReactNode;
+  controlActive?: boolean;
+  renderControl?: (presets: import("react").ReactNode, manager: ReturnType<typeof useControllerManager>, stateReason: string) => import("react").ReactNode;
   onManageControllers?: () => void;
   clockSync?: ClockStatus;
   stage: string;
@@ -180,6 +185,16 @@ export function StatusPage({
   onSaveTeachingPose?: () => void;
   onQuickAction?: (id: "teleop" | "trajectory" | "vla" | "teaching" | "stop" | "disable-stop") => void;
 }) {
+  const managedView = controlView && Boolean(renderControl);
+  const manager = useControllerManager(profile, stage === "connected" && managedView, managedView && controlActive);
+  useEffect(() => {
+    if (managedView && controlActive && !actionBusy) void manager.refresh("background");
+  }, [managedView, controlActive, actionBusy, workflow?.stage]);
+  const sharedTask = useNativeTaskSnapshot(controlView && nativeDesktop());
+  const reconciled = reconcileControlState(manager.snapshot, manager.fresh, rosControl);
+  const observationReason = managedView ? reconciled.reason : "";
+  const taskReason = sharedTask.error || (!sharedTask.loaded ? "正在核验共享任务状态" : controlTaskReason(sharedTask.task));
+  const modeBlock = taskReason || observationReason;
   const [selectedTab, setSelectedTab] = useState<StatusZoneId>(() => controlView ? "control" : statusZoneForCard(highlightCardId) ?? "connection");
   useEffect(() => {
     const zone = statusZoneForCard(highlightCardId);
@@ -223,14 +238,14 @@ export function StatusPage({
     () => resolveActiveControlMode({ armMode, rosControl }),
     [armMode, rosControl],
   );
-  const activeMode = controlStopped ? null : observedMode;
+  const activeMode = controlStopped || (managedView && (reconciled.state === "offline" || !reconciled.modeKnown)) ? null : observedMode;
   const presetEnvironment = activeMode === "teaching" ? Boolean(armMode?.teachingRunning) :
     activeMode === "teleop" ? Boolean(armMode?.teleopRunning && armMode.teleopOwnsRos2Control) :
     activeMode === "trajectory" || activeMode === "vla" ? Boolean(armMode?.trajectoryRunning && armMode.trajectoryOwnsRos2Control) : false;
   const presetConfirmed = presetEnvironment && Boolean(rosControl?.controllers.some(c=>c.name === "gravity_compensation_controller" && c.state === "active"));
-  const customCombination = controllerStatusFresh(rosControl) && !presetConfirmed && rosControl!.controllers.some(c=>c.state === "active") && !controlStopped;
+  const customCombination = (!managedView || reconciled.state === "ready") && controllerStatusFresh(rosControl) && !presetConfirmed && rosControl!.controllers.some(c=>c.state === "active") && !controlStopped;
   useEffect(() => { }, [activeMode, hardwareStatus?.mode, hardwareStatus?.fault_code]);
-  const modeConfirmed = controllerStatusFresh(rosControl) || controlStopped;
+  const modeConfirmed = managedView ? reconciled.modeKnown : controllerStatusFresh(rosControl) || controlStopped;
   const [targetMode, setTargetMode] = useState<"teleop" | "trajectory" | "vla" | "teaching">("teleop");
   useEffect(() => { if (modeConfirmed && activeMode) setTargetMode(activeMode); }, [activeMode, modeConfirmed]);
   const modeNames = { teleop: "Teleop", trajectory: "Trajectory", vla: "VLA", teaching: "拖动示教" };
@@ -307,8 +322,8 @@ export function StatusPage({
                 <section className="status-mode-strip" aria-label="控制模式启停">
                   <header className="status-mode-current" aria-live="polite">
                     <span>当前模式</span>
-                    <strong data-testid="current-control-mode">{!modeConfirmed ? "待确认" : modeConflict ? "控制器状态冲突" : customCombination ? `自定义组合${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
-                    <span>{actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认，尚不能启用目标模式" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
+                    <strong data-testid="current-control-mode">{!modeConfirmed ? (managedView && reconciled.state === "conflict" ? "状态不一致 · 待核验" : "待确认") : modeConflict ? "控制器状态冲突" : customCombination ? `自定义组合${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
+                    <span>{modeBlock ? modeBlock : actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认，尚不能启用目标模式" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
                   </header>
                   <div className="status-mode-selection">
                     <span>选择目标模式</span>
@@ -320,8 +335,8 @@ export function StatusPage({
                           onClick={() => setTargetMode(action.id as typeof targetMode)}>{action.label}{controlView && <small aria-hidden="true">{{teleop:"主臂跟随与重力补偿",trajectory:"轨迹执行与 MoveIt 规划",teaching:"手动拖动、阻尼与重力补偿",vla:"策略推理驱动的关节目标"}[action.id as "teleop"|"trajectory"|"teaching"|"vla"]}</small>}</button>
                       ))}
                     </div>
-                    <ActionButton type="button" className="status-quick-action primary" disabled={targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && presetConfirmed && activeMode === targetMode)}
-                      onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : presetConfirmed && activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
+                    <ActionButton type="button" className="status-quick-action primary" title={modeBlock || undefined} disabled={Boolean(modeBlock) || targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && presetConfirmed && activeMode === targetMode)}
+                      onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{modeBlock ? "等待状态核验" : actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : presetConfirmed && activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
                   <p className="status-mode-explanation">目标：{modeNames[targetMode]} · {activeMode === "teaching" ? "退出示教前先支撑机械臂与物体，解除输出后再切换。" : "切换流程：安全停止旧模式 → 清理旧进程 → 启动并核验。"}</p>
@@ -329,7 +344,7 @@ export function StatusPage({
                     <div><ActionButton type="button" className="status-quick-action stop" disabled={quickActions.find((a) => a.id === "stop")?.disabled}
                       onClick={() => { if (activeMode === "teaching" || armMode?.teachingRunning) { setSupported(false); setConfirmDisable(true); } else onQuickAction?.("stop"); }}>{activeMode === "teaching" || armMode?.teachingRunning ? "支撑并退出示教" : "回零并退出控制"}</ActionButton>
                       <p>{activeMode === "teaching" || armMode?.teachingRunning ? "不会主动回零；确认支撑后关闭输出。" : "回到零位，确认输出关闭后退出。不是暂停或保持。"}</p></div>
-                    <details><summary>直接关闭输出…</summary>
+                    <details open={Boolean(sharedTask.task && ["stopping", "uncertain"].includes(sharedTask.task.phase))}><summary>直接关闭输出…</summary>
                       <p>不回零，机械臂与夹爪会失去电机输出；先在现场支撑。</p>
                       <ActionButton type="button" className="status-quick-action disable-stop" disabled={quickActions.find((a) => a.id === "disable-stop")?.disabled}
                         onClick={() => { setSupported(false); setConfirmDisable(true); }}>直接解除电机输出</ActionButton>
@@ -348,7 +363,7 @@ export function StatusPage({
                 </section>
               )}
               {isControl && controlView && !activeMode && (
-                <p className="status-mode-idle" data-testid="status-mode-idle">{modeConfirmed ? "当前无运行中模式 · 选择目标模式后点击启动" : "当前模式待确认 · 可刷新状态或尝试恢复启动"}</p>
+                <p className="status-mode-idle" data-testid="status-mode-idle">{modeBlock ? modeBlock : modeConfirmed ? "当前无运行中模式 · 选择目标模式后点击启动" : "当前模式待确认 · 等待状态核验后再启动"}</p>
               )}
               <div
                 className={`status-card-grid zone-${zone.id}${zone.primary ? " primary" : ""}`}
@@ -390,7 +405,7 @@ export function StatusPage({
         <header className="toolbar-modal-title"><strong>进入拖动示教</strong></header>
         <div className="toolbar-modal-content"><p>先按原模式安全停止，再启用六轴零位置刚度、阻尼与重力补偿。机械臂可能因模型误差或负载变化漂移；夹爪释放主动保持，可用手拨动；请托住夹爪中的物体。</p>
           <label className="safety-check"><input type="checkbox" checked={supported} onChange={(e) => setSupported(e.target.checked)} />已支撑机械臂与物体，运动区域安全，允许切换为柔顺模式</label></div>
-        <footer className="toolbar-modal-actions"><ActionButton onClick={() => setConfirmTeaching(false)}>取消</ActionButton><ActionButton disabled={!supported || Boolean(actionBusy)} onClick={() => { setConfirmTeaching(false); onQuickAction?.("teaching"); }}>确认进入拖动示教</ActionButton></footer>
+        <footer className="toolbar-modal-actions"><ActionButton onClick={() => setConfirmTeaching(false)}>取消</ActionButton><ActionButton disabled={!supported || Boolean(actionBusy) || Boolean(modeBlock)} onClick={() => { setConfirmTeaching(false); onQuickAction?.("teaching"); }}>确认进入拖动示教</ActionButton></footer>
       </section></div>}
       {confirmDisable && <div className="modal-backdrop">
         <section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="解除电机输出确认">
@@ -407,5 +422,5 @@ export function StatusPage({
       </div>}
     </main>
   );
-  return controlView && renderControl ? renderControl(content) : content;
+  return controlView && renderControl ? renderControl(content, manager, observationReason) : content;
 }

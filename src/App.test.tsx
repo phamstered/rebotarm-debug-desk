@@ -161,6 +161,7 @@ describe("App workflow", () => {
         const snapshot = {revision: before.revision + 1, content: args!.content!}; documents.set(key, snapshot);
         return Promise.resolve({accepted: true, snapshot});
       }
+      if (command === "controller_manager_snapshot") return Promise.resolve(doubles.controllers({op:"controllers_info",refresh:false})).then(status=>({manager:"/controller_manager",available:status.available,owned:false,updateRate:100,hardware:[],fingerprint:"a".repeat(64),controllers:status.controllers.map((c:any)=>({...c,interfacesKnown:true,requiredInterfaces:[],claimedInterfaces:[]}))}));
       if (command === "native_collection_operation_snapshot") return Promise.resolve(null);
       if (command === "native_bag_operation_snapshot") return Promise.resolve([]);
       if (command === "check_ssh") return Promise.resolve("ready");
@@ -1927,10 +1928,10 @@ describe("App workflow", () => {
       const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));
       expect(await screen.findByText(/当前 Bridge 不支持常驻 Controller 查询/)).toBeVisible();
       await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
-      await user.click(screen.getByRole("button",{name:"启动所选模式"}));
+      expect(screen.getByRole("button",{name:"等待状态核验"})).toBeDisabled();
       await waitFor(()=>expect(screen.getByRole("button",{name:"Teleop"})).toBeEnabled());
       expect(doubles.invoke.mock.calls.some(([command,args])=>command==="start_arm_mode"&&args.mode==="teleop")).toBe(false);
-      expect(doubles.controllers).not.toHaveBeenCalled();
+      expect(doubles.controllers.mock.calls.every(([message])=>message.refresh===false)).toBe(true);
       await user.click(screen.getByRole("button",{name:"回零并退出控制"}));
       await waitFor(()=>expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode",expect.objectContaining({mode:"stop"})));
     }finally{doubles.connect.mockImplementation(connect);}
@@ -1940,7 +1941,7 @@ describe("App workflow", () => {
     doubles.controllers.mockImplementation(()=>({manager:"/controller_manager",available:started,controllers:started?[{name:"arm_teleop_controller",typeName:"test/Controller",state:"active"},{name:"gravity_compensation_controller",typeName:"test/Controller",state:"active"}]:[],message:started?"":"等待 Controller Manager 启动"}));
     doubles.invoke.mockImplementation((command,args)=>{if(command==="start_arm_mode"&&args.mode==="teleop")started=true;if(command==="probe_arm_mode"&&started)return Promise.resolve({mode:"teleop",teleopRunning:true,teleopOwnsRos2Control:true,trajectoryRunning:false,trajectoryOwnsRos2Control:false,realsenseRunning:false,teleopPid:42,trajectoryPid:0,realsensePid:0,message:""});return base(command,args);});
     const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
-    expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");
+    expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
     await user.click(screen.getByRole("button",{name:"启动所选模式"}));
     await waitFor(()=>expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Teleop"));
     expect(doubles.controllers.mock.calls.filter(([message])=>message.refresh===true).length).toBeGreaterThanOrEqual(2);
@@ -1952,7 +1953,7 @@ describe("App workflow", () => {
     const user=userEvent.setup();render(<App/>);await user.click(screen.getByRole("button",{name:"连接 Jetson"}));await user.click(screen.getByRole("button",{name:"Status"}));await user.click(screen.getByRole("button",{name:"控制模式"}));await user.click(screen.getByRole("tab",{name:"模式预设"}));emitRosReady();
     await user.click(screen.getByRole("button",{name:"启动所选模式"}));
     expect(await screen.findByText(/模式启动后 Controller 状态未确认/)).toBeVisible();
-    expect(screen.getByTestId("current-control-mode")).toHaveTextContent("待确认");
+    expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
   });
 
 
