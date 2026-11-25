@@ -1,6 +1,9 @@
+import { TerminalLink } from "./TerminalLink";
+import { useTerminalMessage } from "./terminalLogLogic";
 import { workflowSteps, type ArmWorkflow } from "./armModeWorkflowLogic";
 
 export function ArmModeWorkflow({ workflow }: { workflow: ArmWorkflow | null }) {
+  useTerminalMessage("Controller",workflow?.message,workflow?.failed?"error":"info");
   if (!workflow) return null;
   const steps = workflowSteps(workflow.mode);
   const index = steps.findIndex((step) => step.id === workflow.stage);
@@ -11,6 +14,6 @@ export function ArmModeWorkflow({ workflow }: { workflow: ArmWorkflow | null }) 
         <span>{state === "done" ? "✓" : state === "failed" ? "!" : i + 1}</span>{step.label}
       </li>;
     })}</ol>
-    <p role={workflow.failed ? "alert" : undefined}>{workflow.message}</p>
+    <TerminalLink source="Controller">{workflow.failed ? "启动失败 · 查看日志" : "查看启动详情"}</TerminalLink>
   </section>;
 }

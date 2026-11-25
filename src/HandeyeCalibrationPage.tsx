@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton, IconButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useHandeyeInvoke } from "./handeyeTaskLogic";
@@ -97,6 +98,8 @@ export function HandeyeCalibrationPage({
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  useTerminalMessage("Handeye",error,"error");
+  useTerminalMessage("Handeye",notice);
   const [boardImage, setBoardImage] = useState("");
   const [preview, setPreview] = useState("");
   const [previewOriginal, setPreviewOriginal] = useState("");

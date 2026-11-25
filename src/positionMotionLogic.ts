@@ -1,3 +1,4 @@
+import { terminalPublish } from "./terminalLogLogic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
 import { nativeDesktop } from "./nativeWorkspaceLogic";
@@ -53,6 +54,7 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
   const recordLog = useCallback((phase: string, message: string, level: MotionLogEntry["level"] = "info", commandId = "") => {
     if (!logContext.valid) return; // Late TCP completions cannot contaminate a new session.
     const entry: MotionLogEntry = { seq: --localSequence.current, timestamp_ms: Date.now(), command_id: commandId, phase, message: message.slice(0, 8192), level };
+    terminalPublish({source:"Motion",message:`${phase} · ${message}`,level,task:commandId});
     setLogs((value) => [...value, entry].slice(-5000));
   }, [logContext]);
   const [state, setState] = useState<PositionMotionState>(idle);

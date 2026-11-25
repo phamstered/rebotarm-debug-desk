@@ -1,8 +1,4 @@
 import { ActionButton, IconButton } from "./ActionButton";
-import { NativeTaskStatus } from "./NativeTaskStatus";
-import { NativeCollectionOperationStatus } from "./NativeCollectionOperationStatus";
-import { NativeBagOperationStatus } from "./NativeBagOperationStatus";
-import { NativeLocalTaskStatus } from "./NativeLocalTaskStatus";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 import type { AppPage } from "./appNavigationLogic";
@@ -91,7 +87,6 @@ export function NativeOfflineWorkspace({ page, snapshot, onSelect, onConnection,
       <ActionButton onClick={onConnection}>返回连接</ActionButton>
     </header>
     {error && <div className="native-workspace-error" role="alert">{error}<IconButton icon="close" label="关闭提示" onClick={onDismissError} /></div>}
-    <NativeTaskStatus /><NativeLocalTaskStatus /><NativeBagOperationStatus /><NativeCollectionOperationStatus />
     <NativeWorkspaceHost page={page} snapshot={snapshot} covered={false} onError={onError} />
   </main>;
 }

@@ -802,3 +802,20 @@ Startup restores occupancy before workspace initialization and does not connect.
 - `controller_manager_snapshot(profile)`：固定 SSH 程序读取 `/controller_manager` 的 ListControllers、ListHardwareComponents、ListParameters/GetParameters。返回 available、owned、updateRate、controllers（name/typeName/state/claimedInterfaces/requiredInterfaces/interfacesKnown/loadError）、hardware 和 fingerprint。离线时列出当前 overlay 默认机器人配置。它不 load 或 activate。
 - `controller_manager_manage(profile, request, confirmed, onProgress)`：request.action 为 start/load/switch/stop；switch 提供 activate/deactivate 数组；switch/stop 必须提供确认时的 expected fingerprint。名称限定字母、数字、下划线及命名空间斜杠，最多 256 个；未知操作拒绝。原生校验实际 WebView 身份与当前连接，使用共享有限任务锁及 durable journal。
 - `ROBOT_CONSOLE_MANAGER_RECEIPT=` 是固定远端程序的有界完成回执，包含 action、ok、fingerprint 和 message。部分 load/configure 失败可产生已核验的失败回执；超时和无法确认执行结束不产生成功证明。原生只在同一机器人重新读取 fingerprint 一致后释放操作，不能把一次请求受理视为成功。崩溃恢复只查票据，不重放写操作。
+
+
+## 桌面 Terminal IPC（不改变 Bridge wire 协议）
+
+授权调用窗口为 `main` 和已知 `page-*` 页面。日志不含任何控制授权能力。
+
+| 命令 | 参数 | 结果 |
+| --- | --- | --- |
+| `terminal_append` | `session: string \| null`、`entries: Input[]` | 追加至已知会话；null 使用接收时原生连接上下文。最多 256 项，无效级别/长度/未知会话拒绝 |
+| `terminal_read` | `after: u64` | `{entries,cursor,latest,session,host,sessions,truncated,archive_dropped,archive_error}`；最多 256 项，每个消费者独立游标 |
+| `terminal_export` | `.log` 绝对 `path`、可空 `session/source/level/task/search`、`after: u64` | 导出保留窗口中符合组合筛选的文本；`level="info+"` 排除 debug；搜索覆盖完整格式化记录，和前端一致 |
+
+`Input`：`{source,level,task?,message,key?}`；level 为 debug/info/warn/error。source 至多 80 字节，task 至多 200 字节，key 至多 512 字节，输入 message 至多 128 KiB，清理后的正文保留至多 16 KiB。可选 key 在同会话内合并内容未变的状态重复；普通事件无 key，不按正文误删重复事件。`Entry`：`{id,time,session,host,source,level,task,message}`；id 为应用内单调接收序号，time 为桌面 Unix 毫秒，session 由 epoch/profile_revision/connected 构成。日志不修改原始任务状态；未知结果仍由原有协议核验。
+
+`terminal-open` 事件携带 `{target,source?,task?}`，target 为 main 或页面名，供页内日志入口定位 dock；`terminal-storage-error` 通知本地归档错误，同时错误保留在下一次 read 响应中。清屏和跟随均为本地视图行为，无修改服务端历史的 IPC。
+
+SSH 日志批次按普通文件设备号/inode/字节长度/前缀指纹校验游标，保留未完成 UTF-8 行至下一次读取。每来源最多 128 KiB / 2000 行，超量插入显式截断提示；替换、截短重新读当前允许文件，不发送任意远端命令。归档只保留诊断，不参与控制任务票据恢复。

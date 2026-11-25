@@ -1,3 +1,5 @@
+import { TerminalLink } from "./TerminalLink";
+import { useTerminalMessage } from "./terminalLogLogic";
 import { controlTaskReason } from "./controlStateLogic";
 import { useEffect, useState, type ReactNode } from "react";
 import { activationPlan, useControllerManager, type ManagerRequest } from "./controllerManagerLogic";
@@ -19,7 +21,7 @@ function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props &
  const nativeTask=useNativeTaskSnapshot(nativeDesktop());
  const nativeBlock=nativeTask.error || (!nativeTask.loaded ? "正在核验共享任务状态" : controlTaskReason(nativeTask.task));
  const blockReason=disabledReason || nativeBlock;
- const {snapshot,fresh,busy,refreshing,syncing,error,logs}=manager;
+ const {snapshot,fresh,busy,refreshing,syncing,error}=manager;
  const [tab,setTab]=useState<"presets"|"controllers">("controllers");
  const [search,setSearch]=useState(""),[selected,setSelected]=useState<string[]>([]);
  const [confirmation,setConfirmation]=useState<ManagerRequest|null>(null),[supported,setSupported]=useState(false),[planError,setPlanError]=useState("");
@@ -31,6 +33,7 @@ function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props &
  const stateLabel:Record<string,string>={unloaded:"未加载",unconfigured:"未配置",inactive:"已加载 · 未激活",active:"运行中",finalized:"已结束",error:"异常",unknown:"未知"};
  function ask(request:ManagerRequest){setPlanError("");setSupported(false);setConfirmation({...request,expected:snapshot?.fingerprint});}
  function activate(names:string[]){if(!snapshot)return;const plan=activationPlan(snapshot,names);if(plan.error){setPlanError(plan.error);return;}if(!plan.activate.length&&!plan.deactivate.length){setPlanError("所选 Controller 已激活");return;}ask({action:"switch",activate:plan.activate,deactivate:plan.deactivate});}
+ useTerminalMessage("Controller",planError,"error");
  const mismatch=confirmation?.expected!==snapshot?.fingerprint;
  return <div className="controller-manager-page">
   <section className="manager-summary" aria-label="Controller Manager">
@@ -40,7 +43,7 @@ function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props &
   </section>
   <p className="manager-note" aria-live="polite">{busy?"正在执行管理操作":syncing?"后台同步状态；操作可用性以状态新鲜度和任务占用为准":fresh?"状态已同步":"等待状态核验"}{!snapshot?.available&&fresh?" · Manager 未启动，无需停止":""}</p>
   <p className="manager-note">默认全部加载并配置为 inactive，按需启用。停用 Controller 会保留加载状态；它不等同于关闭电机输出。</p>
-  {blockReason&&<div role="status" className="manager-warning"><p>{blockReason}</p>{nativeTask.task&&["arm_mode","controller"].includes(nativeTask.task.kind)&&<><p>{nativeTask.task.phase === "running" || nativeTask.task.phase === "submitting" ? "原任务正在执行，等待执行结果。" : "恢复顺序：核验原远端操作结束 → 现场支撑并关闭输出 → 核验新的 DISABLE 反馈 → 释放任务占用。Manager 未启动或输出已关闭，均不能单独证明原任务已结束。"}</p><details><summary>原任务详情</summary><p>{nativeTask.task.message}</p></details><ActionButton onClick={()=>setTab("presets")}>查看任务与关闭输出</ActionButton></>}</div>}
+  {blockReason&&<div role="status" className="manager-warning manager-block"><span>{blockReason}</span><TerminalLink source="Task">查看任务详情</TerminalLink>{nativeTask.task&&["arm_mode","controller"].includes(nativeTask.task.kind)&&<ActionButton onClick={()=>setTab("presets")}>查看任务与关闭输出</ActionButton>}</div>}
   {(error||planError)&&<p role="alert" className="manager-error">{planError||error}</p>}
   <div className="manager-tabs" role="tablist" aria-label="控制管理"><button role="tab" aria-selected={tab==="presets"} onClick={()=>setTab("presets")}>模式预设</button><button role="tab" aria-selected={tab==="controllers"} onClick={()=>setTab("controllers")}>Controller 管理</button></div>
   <section hidden={tab!=="presets"} role="tabpanel" aria-label="模式预设">{presets}</section>
@@ -52,7 +55,7 @@ function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props &
    {!rows.length&&<p className="manager-empty">{fresh&&!snapshot?.available?"启动 Manager 后，从机器人配置加载 Controller。":"等待 Manager 配置与实际状态。"}</p>}
    {snapshot?.hardware.map(h=><p className="manager-note" key={h.name}>硬件 {h.name} · {h.state}</p>)}
   </section>
-  <section className="manager-history" aria-label="管理操作历史"><header><h3>操作历史</h3><span>保留本次连接最近 200 条 · 切换页面不清除</span></header>{logs.length?<ol>{logs.map((l,i)=><li key={i}><time>{new Date(l.at).toLocaleTimeString()}</time><span>{l.message}</span></li>)}</ol>:<p>尚无管理操作。操作进度和失败原因会保留在这里。</p>}</section>
+  <TerminalLink source="Controller">查看 Controller 操作日志</TerminalLink>
   {confirmation&&<div className="modal-backdrop"><section className="toolbar-modal" role="dialog" aria-modal="true" aria-label="确认 Controller Manager 操作"><header className="toolbar-modal-title"><strong>确认 {confirmation.action==="switch"?"Controller 切换":confirmation.action==="stop"?"停止 Manager":"加载 Controller"}</strong></header><div className="toolbar-modal-content">
    {confirmation.action==="switch"?<><p>启用：{confirmation.activate?.join(", ")||"无"}</p><p className={confirmation.deactivate?.length?"manager-warning":""}>停用：{confirmation.deactivate?.join(", ")||"无"}</p><p>启用可能激活硬件并产生保持力矩；若存在接口冲突，将先停用上面列出的 Controller。实际结果以服务执行后的读回为准。</p></>:<p>{confirmation.action==="stop"?"仅停止本应用创建的进程。必须全部停用且核验新鲜 DISABLE，停止进程不能替代关闭输出。":"加载当前机器人配置中的全部 Controller，包括 broadcaster；只配置到 inactive，不自动激活。已有 active 保持不变。"}</p>}
    <label className="safety-check"><input type="checkbox" checked={supported} onChange={e=>setSupported(e.target.checked)}/>已核对操作对象、现场支撑及运动区域</label>{mismatch&&<p role="alert">实际状态已改变，请取消并重新确认。</p>}</div><footer className="toolbar-modal-actions"><ActionButton onClick={()=>setConfirmation(null)}>取消</ActionButton><ActionButton disabled={!supported||blocked||!fresh||mismatch} onClick={()=>{const request=confirmation;setConfirmation(null);void manager.execute(request);}}>确认执行</ActionButton></footer></section></div>}

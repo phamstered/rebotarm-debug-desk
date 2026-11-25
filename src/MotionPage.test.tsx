@@ -143,3 +143,15 @@ it("retains visible editing controls when only drawing is suspended", async () =
   await user.click(screen.getByRole("tab", {name:"动作组"})); expect(change).toHaveBeenCalledWith("groups");
   view.rerender(<MotionPage {...props} visible={false} />); expect(screen.getByLabelText("Draft")).not.toBeVisible();
 });
+
+
+it("uses the global Terminal for logs and keeps the local panel for reports",async()=>{
+  const user=userEvent.setup();
+  render(<MotionPage unifiedTerminal active tab="robot" onTabChange={()=>{}} controllersOpen={false} onToggleControllers={()=>{}} controllers={null} readiness={null} robot={<div data-testid="unified-scene"/>} positions={null} log={<div>old local log</div>}/>);
+  const scene=screen.getByTestId("unified-scene");
+  expect(screen.queryByText("old local log")).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab",{name:"执行日志"})).not.toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"查看 Motion 日志"})).toBeVisible();
+  await user.click(screen.getByRole("button",{name:/执行报告/}));
+  expect(screen.getByText(/暂无动作组执行报告/)).toBeVisible();expect(screen.getByTestId("unified-scene")).toBe(scene);
+});

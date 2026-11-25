@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { createContext, useContext, useId, useState } from "react";
 import type { ReactNode } from "react";
 import type { AppPage } from "./appNavigationLogic";
@@ -33,6 +34,7 @@ export function NativePageActions() {
   const context = useContext(NativePageActionsContext);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  useTerminalMessage("Window",error,"error");
   const hintId = useId();
   if (!context) return null;
   const { page, state, connected, busyReason, profileName, onAction } = context;

@@ -1,3 +1,4 @@
+import { readTerminal } from "./terminalLogLogic";
 import { act, renderHook, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { defaultProfile } from "./types";
@@ -26,7 +27,8 @@ describe("arm mode workflow", () => {
     expect(hook.result.current.workflow).toMatchObject({stage: "cleanup", failed: true, running: false});
     render(<ArmModeWorkflow workflow={hook.result.current.workflow} />);
     expect(screen.getByText("清理旧进程").closest("li")).toHaveAttribute("data-state", "failed");
-    expect(screen.getByRole("alert")).toHaveTextContent("owner did not exit");
+    expect(screen.getByRole("button",{name:"启动失败 · 查看日志"})).toBeVisible();
+    expect((await readTerminal(0)).entries.some(e=>e.source==="Controller"&&e.message.includes("owner did not exit"))).toBe(true);
     act(() => { mock.invoke.mock.calls.at(-1)![1].onProgress.onmessage({stage: "startup", message: "late", failed: false}); });
     expect(hook.result.current.workflow?.stage).toBe("cleanup");
   });

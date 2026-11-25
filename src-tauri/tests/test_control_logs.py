@@ -127,5 +127,38 @@ class LogTests(unittest.TestCase):
         path.unlink(); os.mkfifo(path)
         with self.assertRaisesRegex(ValueError, '普通文件'): reader.capture_baseline(self.home)
 
+    def test_terminal_byte_cursor_retains_split_utf8_without_replaying_complete_lines(self):
+        path = self.cache / 'arm-teleop.log'
+        path.write_bytes(b'complete\n' + '中'.encode()[:1])
+        first = reader.terminal_batch({}, self.home)
+        self.assertEqual([e['message'] for e in first['entries']], ['complete'])
+        self.assertEqual(first['cursors'][str(path)]['size'], len(b'complete\n'))
+        with path.open('ab') as stream: stream.write('中'.encode()[1:] + b'\n')
+        second = reader.terminal_batch(first['cursors'], self.home)
+        self.assertEqual([e['message'] for e in second['entries']], ['中'])
+        self.assertEqual(reader.terminal_batch(second['cursors'], self.home)['entries'], [])
+
+    def test_terminal_rotation_and_high_volume_are_explicit_and_bounded(self):
+        path = self.cache / 'arm-trajectory.log'
+        path.write_text('x\n' * 2100)
+        first = reader.terminal_batch({}, self.home)
+        self.assertEqual(len(first['entries']), 2001)
+        self.assertIn('截断', first['entries'][0]['message'])
+        self.assertEqual(reader.terminal_batch(first['cursors'], self.home)['entries'], [])
+        path.rename(self.cache / 'old.log'); path.write_text('new run\n')
+        second = reader.terminal_batch(first['cursors'], self.home)
+        self.assertEqual([e['message'] for e in second['entries']], ['new run'])
+        self.assertEqual([e['source'] for e in second['entries']], ['trajectory'])
+
+    def test_terminal_long_unterminated_and_invalid_utf8_output_does_not_stall(self):
+        path = self.cache / 'arm-teleop.log'
+        path.write_bytes(b'x' * (130 * 1024))
+        first = reader.terminal_batch({}, self.home)
+        self.assertIn('截断', first['entries'][0]['message'])
+        self.assertEqual(reader.terminal_batch(first['cursors'], self.home)['entries'], [])
+        with path.open('ab') as stream: stream.write(b'bad \xff\n')
+        second = reader.terminal_batch(first['cursors'], self.home)
+        self.assertEqual([e['message'] for e in second['entries']], ['bad \ufffd'])
+
 
 if __name__ == '__main__': unittest.main()

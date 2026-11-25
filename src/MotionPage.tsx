@@ -7,7 +7,8 @@ import { MotionOutputPanel, MotionOutputProvider } from "./MotionOutput";
 import type { MotionTab } from "./appNavigationLogic";
 
 export function MotionPage({ active, visible = active, tab, onTabChange, controllersOpen, onToggleControllers,
-  controllers, readiness, robot, urdf, positions, groups, log, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators }: {
+  controllers, readiness, robot, urdf, positions, groups, log, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators, unifiedTerminal = false }: {
+  unifiedTerminal?: boolean;
   compact?: boolean; focusMode?: boolean; onToggleFocus?(): void; connection?: ReactNode; connectionLabel?: ReactNode; tools?: ReactNode; indicators?: ReactNode;
   resetVersion?: number;
   active: boolean;
@@ -24,7 +25,7 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
   groups?: ReactNode;
   log: ReactNode;
 }) {
-  return <MotionLayoutProvider active={active} visible={visible} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!visible} aria-label="Motion">
+  return <MotionLayoutProvider active={active} visible={visible} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider unified={unifiedTerminal}><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!visible} aria-label="Motion">
     <header className="motion-workspace-header native-window-header">
       <div className="motion-workspace-navigation">
         {!compact && <strong>Motion</strong>}

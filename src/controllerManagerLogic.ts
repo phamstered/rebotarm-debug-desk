@@ -1,3 +1,4 @@
+import { terminalPublish, terminalSession, logLevel, useTerminalMessage } from "./terminalLogLogic";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { ConnectionProfile, RemoteActionResult } from "./types";
@@ -29,7 +30,8 @@ export function useControllerManager(profile:ConnectionProfile, connected:boolea
   const [at,setAt]=useState(0),[now,setNow]=useState(Date.now());
   const [syncing,setSyncing]=useState(false),[refreshing,setRefreshing]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [logs,setLogs]=useState<{at:number;message:string}[]>([]);
-  const append=(message:string)=>setLogs(old=>[...old,{at:Date.now(),message:message.slice(0,4000)}].slice(-200));
+  const append=(message:string,task="",session?:string)=>{terminalPublish({source:"Controller",message,level:logLevel(message),task},session);setLogs(old=>[...old,{at:Date.now(),message:message.slice(0,4000)}].slice(-200));};
+  useTerminalMessage("Controller",error,"error");
   async function refresh(source: "manual"|"background" = "manual") {
     if(!connected || busyRef.current) return;
     const ticket=generation.current,key=context;
@@ -70,12 +72,15 @@ export function useControllerManager(profile:ConnectionProfile, connected:boolea
     if(busyRef.current || !connected)return;
     const key=context,ticket=generation.current;
     const current=()=>latest.current===key&&generation.current===ticket;
-    busyRef.current=true;setBusy(true);append(`提交 ${request.action}${request.activate?.length?` · 启用 ${request.activate.join(", ")}`:""}${request.deactivate?.length?` · 停用 ${request.deactivate.join(", ")}`:""}`);
-    const onProgress=new Channel<ArmProgress>();onProgress.onmessage=event=>{if(current())append(event.message);};
+    let finished=false;
+    const session=terminalSession(),task=`controller-${Date.now()}-${ticket}`;
+    const log=(message:string)=>append(message,task,session);
+    busyRef.current=true;setBusy(true);log(`提交 ${request.action}${request.activate?.length?` · 启用 ${request.activate.join(", ")}`:""}${request.deactivate?.length?` · 停用 ${request.deactivate.join(", ")}`:""}`);
+    const onProgress=new Channel<ArmProgress>();onProgress.onmessage=event=>{if(!finished)log(event.message);};
     try {const result=await invoke<RemoteActionResult>("controller_manager_manage",{profile,request,confirmed:true,onProgress});
-      if(current()){append([result.message,result.detail].filter(Boolean).join("："));if(!result.ok)setError(result.detail||result.message);}
-    }catch(reason){if(current()){setError(String(reason));append(String(reason));}}
-    finally{if(current()){await pending.current;if(current()){busyRef.current=false;setBusy(false);await refresh("background");}}}
+      log([result.message,result.detail].filter(Boolean).join("："));if(current()){if(!result.ok)setError(result.detail||result.message);}
+    }catch(reason){log(String(reason));if(current()){setError(String(reason));}}
+    finally{finished=true;if(current()){await pending.current;if(current()){busyRef.current=false;setBusy(false);await refresh("background");}}}
   }
   return {snapshot,fresh:connected&&at>0&&now-at<10000,refreshing,syncing,busy,error,logs,refresh,execute};
 }

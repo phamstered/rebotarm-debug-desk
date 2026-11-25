@@ -1,3 +1,4 @@
+mod terminal;
 mod handeye;
 mod session;
 use serde::{Deserialize, Serialize};
@@ -1494,6 +1495,7 @@ pub fn run() {
         .manage(session::workspace::Workspace::default())
         .manage(session::documents::Documents::default())
         .manage(control_logs::LogSessions::default())
+        .manage(terminal::Terminal::default())
         .on_page_load(|view, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 session::workspace::Workspace::page_loading(view);
@@ -1510,6 +1512,7 @@ pub fn run() {
     });
     builder
         .invoke_handler(tauri::generate_handler![
+            terminal::terminal_read, terminal::terminal_append, terminal::terminal_export,
             session::documents::editor_document_read,
             session::documents::editor_document_commit,
             session::ipc::native_bridge_context,
@@ -1587,6 +1590,7 @@ pub fn run() {
                 .set_changed(std::sync::Arc::new(move || {
                     let _ = handle.emit("native-session-changed", ());
                 }));
+            terminal::initialize(app.handle());
             session::finite_recovery::initialize(app.handle());
             session::motor_recovery::initialize(app.handle());
             session::leased_recovery::initialize(app.handle());

@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { VisualPickPanel } from "./VisualPickPanel";
 import { VisualPickPreviewLayer } from "./VisualPickPreviewLayer";
@@ -254,6 +255,7 @@ export function UrdfViewer({
   const [loading, setLoading] = useState("");
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [error, setError] = useState("");
+  useTerminalMessage("URDF",error,"error");
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<{ target: Vec3; error: string; positionError: number; orientationError: number } | null>(null);
   const [status, setStatus] = useState<ViewerStatus | null>(null);

@@ -1,3 +1,5 @@
+import { TerminalLink } from "./TerminalLink";
+import { terminalPublish, logLevel, useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
@@ -7,7 +9,7 @@ import { motorRangeFor, parseMotorUrdfRanges } from "./motorRangeLogic";
 import type { CommandMode, MotorRowInput } from "./motorLogic";
 import { actualDriveMode, acceptMotorEvidence, controlGate, type MotorEvidenceWatermark, createPosVelPayload, hasStopProof, parsePosVelValues, selectedMotorMask } from "./motorControlLogic";
 
-import { appendMotorModeLog, formatMotorNumber, motorAxisNames, motorFirmwareRanges, motorModeEvidence, motorModeFailure, type MotorModeLogEntry } from "./motorModeLogLogic";
+import { formatMotorNumber, motorAxisNames, motorFirmwareRanges, motorModeEvidence, motorModeFailure, type MotorModeLogEntry } from "./motorModeLogLogic";
 
 type JointState = { name?: string[]; position?: number[]; velocity?: number[]; effort?: number[] };
 type Pending = "starting" | "configuring" | "stopping" | null;
@@ -36,7 +38,6 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const [streaming, setStreaming] = useState(false), [pending, setPending] = useState<Pending>(null), [stopRequested, setStopRequested] = useState(false);
   const [capabilities, setCapabilities] = useState<MotorControlCapabilities | null>(null), [capabilityError, setCapabilityError] = useState("");
   const [legacyConfirmed, setLegacyConfirmed] = useState(false);
-  const [modeLog, setModeLog] = useState<MotorModeLogEntry[]>([]);
   const modeEvidenceRef = useRef("");
   const [result, setResult] = useState(""), [sequence, setSequence] = useState<number | undefined>();
   const timerRef = useRef<number | null>(null), mountedRef = useRef(true), operationRef = useRef(0), pendingRef = useRef<Pending>(null);
@@ -52,7 +53,8 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const busy = streaming || pending !== null || stopRequested;
   const gate = !capabilities && !legacyConfirmed ? capabilityError || "正在读取驱动能力" : controlGate(capabilities, seenV2Ref.current, drive, mask);
 
-  function logMode(message: string) { setModeLog(entries => appendMotorModeLog(entries, message)); }
+  useTerminalMessage("Motor",result);
+  function logMode(message: string) { terminalPublish({source:"Motor",message,level:logLevel(message)}); }
   function setOperation(value: Pending) { pendingRef.current = value; setPending(value); }
   function stopTimer() {
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
@@ -142,7 +144,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   useEffect(() => bridge.onMessage(message => {
     if (message.motor_control) acceptCapabilities(message.motor_control);
     if (message.op === "disconnected") {
-      setModeLog([]); modeEvidenceRef.current = "";
+      modeEvidenceRef.current = "";
       ++operationRef.current; stopTimer(); setArmed(false); setSupportConfirmed(false); setLegacyConfirmed(false); setOperation(null); callbackRef.current(false);
       reconnectStopRef.current = true; stopProofRef.current = null; setStopRequested(true);
       if (!seenV2Ref.current) { capsRef.current = null; setCapabilities(null); }
@@ -326,14 +328,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       <div className="control-actions"><ActionButton className="send-command" disabled={busy || controlLocked || !active || !armed || !!gate} onClick={() => void start()}>{mainLabel}</ActionButton><ActionButton className="stop-command" onClick={() => void disable()}>停止并 DISABLE</ActionButton></div>
       {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {selectedCount} 轴</div>}
       {result && <div className="command-result" aria-live="polite">{result}</div>}
-      <details className="motor-mode-log" open>
-        <summary>模式切换日志（{modeLog.length}）</summary>
-        <small>保留本页当前连接最近 100 条记录；失败不会被停止确认覆盖。断开连接或关闭本页后清除。</small>
-        <ActionButton disabled={busy || modeLog.length === 0} onClick={() => setModeLog([])}>清空切换日志</ActionButton>
-        <div className="motor-mode-log-entries" role="log" aria-label="模式切换日志" aria-live="polite" tabIndex={0}>
-          {modeLog.length === 0 ? <p>暂无切换记录</p> : modeLog.map((entry, i) => <p key={`${entry.at}-${i}`}><time dateTime={entry.at}>{new Date(entry.at).toLocaleTimeString("zh-CN", { hour12: false })}.{entry.at.slice(20, 23)}</time> {entry.message}</p>)}
-        </div>
-      </details>
+      <TerminalLink source="Motor">查看模式切换日志</TerminalLink>
       <details className="motor-control-details"><summary>控制详情</summary><dl><dt>指令流</dt><dd>20 Hz · 固定参数快照</dd><dt>sequence</dt><dd>{sequence ?? "—"}</dd><dt>lease</dt><dd>{drive === "POS_VEL" ? capabilities?.lease_id ?? "—" : "V1 原生准入"}</dd><dt>反馈龄上界</dt><dd>{capabilities ? `${capabilities.age_ms} ms${capabilities.fresh ? "" : "（过期）"}` : "旧协议"}</dd><dt>Topic</dt><dd>{drive === "POS_VEL" ? `${commandTopic}_v2` : commandTopic}</dd></dl></details>
       <small className="safety-note">停止或离开页面会请求关闭输出，结果以新鲜固件反馈为准。滑块范围来自当前 URDF；POS_VEL 下发还须满足固件已验证范围。未选择的轴不发送运动目标。断流可能触发故障锁存，不会自动恢复控制。</small>
     </aside>

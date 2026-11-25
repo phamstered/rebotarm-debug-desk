@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { IconButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import type { BridgeClient } from "./bridge";
@@ -67,6 +68,7 @@ export function TopicGraph({
   const [graph, setGraph] = useState<RosGraph>(EMPTY_GRAPH);
   const [loading, setLoading] = useState(false);
   const [graphError, setGraphError] = useState("");
+  useTerminalMessage("Topics",graphError,"error");
   const [focusedId, setFocusedId] = useState("");
   const [showBridge, setShowBridge] = useState(loadBridgeVisibility);
   const [viewport, setViewport] = useState({ width: 1200, height: 560 });

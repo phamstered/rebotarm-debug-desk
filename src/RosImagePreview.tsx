@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { useEffect, useRef, useState } from "react";
 import { decodeRosImage } from "./imageTopicLogic";
 
@@ -6,6 +7,7 @@ export function RosImagePreview({ data }: { data: unknown }) {
   const latestDataRef = useRef(data);
   const frameRef = useRef<number | null>(null);
   const [status, setStatus] = useState({ width: 0, height: 0, encoding: "", error: "等待图像数据…" });
+  useTerminalMessage("Camera",status.error === "等待图像数据…" ? "" : status.error,"error");
   latestDataRef.current = data;
 
   useEffect(() => {
