@@ -1,3 +1,4 @@
+import { terminalOutput } from "./test/terminal";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,7 +78,7 @@ describe("GravityIdentificationPage", () => {
 
     expect(screen.getByText("CAPTURING")).toBeVisible();
     expect(screen.getByText("2/8")).toBeVisible();
-    expect(screen.getByText("capturing pose 2")).toBeVisible();
+    expect(await terminalOutput("Gravity")).toContain("capturing pose 2");
 
     await user.click(screen.getByRole("button", { name: "Abort" }));
     await waitFor(() => {

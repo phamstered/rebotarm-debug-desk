@@ -1,3 +1,4 @@
+import { terminalOutput } from "./test/terminal";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BridgeEnvelope } from "./types";
@@ -221,6 +222,7 @@ it("keeps paginated server audit independently of current command and resets on 
   expect(result.current.state.phase).toBe("idle");
   await waitFor(() => expect(request.mock.calls.some(([m]) => m.motion_log_after === 8 && m.motion_log_session === "epoch1")).toBe(true));
   expect(result.current.logs.filter((e) => e.seq === 8)).toHaveLength(1);
+  expect((await terminalOutput("Motion")).match(/service slow/g)).toHaveLength(1);
   expect(result.current.logs.some((e) => e.message === "local preview")).toBe(true);
   const obsoleteRecord = result.current.recordLog;
   rerender({ connected: false, profile: "logs", block: "" });
@@ -229,4 +231,5 @@ it("keeps paginated server audit independently of current command and resets on 
   await waitFor(() => expect(result.current.reason).toBe(""));
   act(() => obsoleteRecord("tcp", "obsolete completion"));
   expect(result.current.logs.some((e) => e.message === "obsolete completion")).toBe(false);
+  expect(await terminalOutput("Motion")).not.toContain("obsolete completion");
 });

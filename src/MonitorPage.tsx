@@ -1,3 +1,5 @@
+import { OperationLogNotice } from "./OperationLogNotice";
+import { useTerminalMessage } from "./terminalLogLogic";
 import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -41,6 +43,7 @@ export type MonitorSourceMode = "live" | "bag";
 export function MonitorPage({
   workspace,
   historyNotice,
+  externalMessagesLogged = false,
   active = true,
   jointStateTopic,
   liveUpdates,
@@ -72,6 +75,8 @@ export function MonitorPage({
 }: {
   workspace: MonitorWorkspace;
   historyNotice?: string;
+  /** App owns these streams even while the Monitor page is unmounted. */
+  externalMessagesLogged?: boolean;
   active?: boolean;
   jointStateTopic: string;
   liveUpdates: boolean;
@@ -114,6 +119,9 @@ export function MonitorPage({
   const [layoutPresets, setLayoutPresets] = useState<MonitorLayoutPreset[]>(() => loadLayoutPresets());
   const [presetName, setPresetName] = useState("");
   const [presetNotice, setPresetNotice] = useState("");
+  useTerminalMessage("Monitor",externalMessagesLogged ? "" : historyNotice);
+  useTerminalMessage("Rosbag",externalMessagesLogged ? "" : bagNotice);
+  useTerminalMessage("Rosbag",externalMessagesLogged || bagStatus?.message === bagNotice ? "" : bagStatus?.message);
   const [wallTick, setWallTick] = useState(() => performance.now());
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -461,7 +469,8 @@ export function MonitorPage({
             ))}
           </ul>
         )}
-        {presetNotice && <p className="monitor-layout-preset-notice">{presetNotice}</p>}
+        {presetNotice === "请输入布局名称" && <p role="alert">{presetNotice}</p>}
+        <OperationLogNotice source="Monitor" notice={presetNotice.includes("失败") ? "" : presetNotice} error={presetNotice.includes("失败") ? presetNotice : ""} />
       </section>
 
       {mode === "bag" && (
@@ -537,11 +546,8 @@ export function MonitorPage({
             {" "}
             进度为已播放估算（总时长未知）；scrub/seek 为后续工作。
           </p>
-          {(pathError || bagNotice || bagStatus?.message) && (
-            <p className={`monitor-bag-status ${pathError ? "error" : ""}`}>
-              {pathError || bagNotice || bagStatus?.message}
-            </p>
-          )}
+          {pathError && <p className="monitor-bag-status error">{pathError}</p>}
+          <OperationLogNotice source="Rosbag" />
         </section>
       )}
 

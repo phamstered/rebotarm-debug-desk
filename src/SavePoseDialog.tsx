@@ -1,3 +1,4 @@
+import { useTerminalMessage, terminalPublish } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { useEffect, useRef, useState } from "react";
 import { ModalShell } from "./ModalShell";
@@ -16,6 +17,7 @@ export function SavePoseDialog({ initial, urdfXml, onSave, onClose }: {
   const [includeGripper, setIncludeGripper] = useState(initial.gripperPosition !== undefined);
   const [gripper, setGripper] = useState(initial.gripperPosition === undefined ? "" : String(initial.gripperPosition * 1000));
   const [error, setError] = useState("");
+  useTerminalMessage("Motion",error,"error");
   const [saving, setSaving] = useState(false);
   const busy = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -29,7 +31,7 @@ export function SavePoseDialog({ initial, urdfXml, onSave, onClose }: {
     try {
       const failure = await onSave({ ...initial, name, note, gripperPosition: includeGripper ? Number(gripper) / 1000 : undefined });
       if (!mounted.current) return;
-      if (failure) setError(failure); else onClose();
+      if (failure) setError(failure); else { terminalPublish({source:"Motion",level:"info",message:`已保存姿态「${name}」`}); onClose(); }
     } catch (reason) { if (mounted.current) setError(String(reason)); }
     finally { busy.current = false; if (mounted.current) setSaving(false); }
   }

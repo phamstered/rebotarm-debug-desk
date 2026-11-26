@@ -1,3 +1,4 @@
+import { terminalOutput } from "./test/terminal";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -215,7 +216,7 @@ describe("MonitorPage", () => {
     expect(onClearPanels).toHaveBeenCalledWith(workspace.selectedDashboardId);
 
     await user.click(screen.getByRole("button", { name: "Bag 回放" }));
-    expect(screen.getByText("note")).toBeVisible();
+    expect(await terminalOutput("Rosbag")).toContain("note");
     await user.click(screen.getByRole("button", { name: "刷新状态" }));
     expect(onRefresh).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "停止回放" }));
@@ -357,7 +358,7 @@ describe("MonitorPage", () => {
     );
     await user.type(screen.getByLabelText("布局预设名称"), "我的布局");
     await user.click(screen.getByRole("button", { name: "保存布局" }));
-    expect(screen.getByText(/已保存布局「我的布局」/)).toBeVisible();
+    expect(await terminalOutput("Monitor")).toContain("已保存布局「我的布局」");
     expect(screen.getByTitle("加载布局 我的布局")).toBeVisible();
 
     workspace = addMonitorDashboard(workspace, createEmptyDashboard("Empty", "dash-empty"));
@@ -400,4 +401,11 @@ describe("MonitorPage", () => {
     await user.click(screen.getByRole("button", { name: "暂停" }));
     expect(onStop).toHaveBeenCalledOnce();
   });
+});
+
+it("does not republish external streams already recorded by App when Monitor mounts", async()=>{
+ render(<MonitorPage {...baseProps()} workspace={createDefaultMonitorWorkspace("/stm32/joint_states")} externalMessagesLogged historyNotice="parent history message" bagNotice="parent bag message" bagStatus={{message:"parent status message"} as any}/>);
+ expect(await terminalOutput("Monitor")).not.toContain("parent history message");
+ expect(await terminalOutput("Rosbag")).not.toContain("parent bag message");
+ expect(await terminalOutput("Rosbag")).not.toContain("parent status message");
 });

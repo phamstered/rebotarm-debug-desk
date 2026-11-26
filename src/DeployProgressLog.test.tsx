@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { readTerminal } from "./terminalLogLogic";
+import { render, screen } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { DeployProgressLog } from "./DeployProgressLog";
 import { appendDeployLog, DEPLOY_LOG_MAX_LINES } from "./deployLogLogic";
@@ -12,21 +13,12 @@ it("appends multiline output without terminal escapes and bounds retained histor
   expect(lines.at(-2)).toBe("new");
   expect(lines.at(-1)).toHaveLength(4096);
 });
-it("retains history, pauses follow only on user scrolling and resumes without losing records", () => {
-  const view = render(<DeployProgressLog lines={["first", "second"]} />);
-  const log = screen.getByRole("log", { name: "Bridge 升级日志输出" });
-  Object.defineProperties(log, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { value: 200 } });
-  log.scrollTop = 0;
-  fireEvent.scroll(log);
-  expect(screen.getByRole("checkbox", { name: "跟随最新" })).toBeChecked();
-  fireEvent.wheel(log); fireEvent.scroll(log);
-  expect(screen.getByRole("checkbox", { name: "跟随最新" })).not.toBeChecked();
-  view.rerender(<DeployProgressLog lines={["first", "second", "third"]} />);
-  expect(log.scrollTop).toBe(0);
-  expect(log).toHaveTextContent("first"); expect(log).toHaveTextContent("third");
-  fireEvent.click(screen.getByRole("checkbox", { name: "跟随最新" }));
-  expect(log.scrollTop).toBe(1000);
-  Object.defineProperty(log, "scrollHeight", { value: 1200 });
-  view.rerender(<DeployProgressLog lines={["first", "second", "third", "fourth"]} />);
-  expect(log.scrollTop).toBe(1200);
+it("publishes successive deployment lines to Terminal without a second output pane", async () => {
+  const view=render(<DeployProgressLog lines={["deploy first", "deploy second"]}/>);
+  view.rerender(<DeployProgressLog lines={["deploy first", "deploy second", "deploy third"]}/>);
+  expect(screen.queryByRole("log")).toBeNull();
+  expect(screen.getByRole("button",{name:"查看部署日志"})).toBeVisible();
+  const rows=(await readTerminal(0)).entries.filter(e=>e.source==="Deploy");
+  expect(rows.filter(e=>e.message==="deploy first")).toHaveLength(1);
+  expect(rows.some(e=>e.message==="deploy third")).toBe(true);
 });

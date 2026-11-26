@@ -1,3 +1,4 @@
+import { OperationLogNotice } from "./OperationLogNotice";
 import { useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
@@ -67,8 +68,7 @@ export function GravityIdentificationPage({
   const [statusText, setStatusText] = useState("idle");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  useTerminalMessage("Gravity",error,"error");
-  useTerminalMessage("Gravity",notice);
+  useTerminalMessage("Gravity", feedback?.message);
   const [busy, setBusy] = useState<"start" | "abort" | "">("");
   const commandRef = useRef("");
   const operationRef = useRef(0);
@@ -228,8 +228,7 @@ export function GravityIdentificationPage({
         </span>
       </div>
 
-      {error && <div className="calibration-alert" role="alert"><div><strong>错误</strong><span>{error}</span></div></div>}
-      {notice && <div className="calibration-notice">{notice}</div>}
+      <OperationLogNotice source="Gravity" error={error} notice={notice} />
 
       <div className="calibration-grid gravity-id-grid">
         <section className="calibration-control-card">
@@ -364,7 +363,7 @@ export function GravityIdentificationPage({
             <div><span>rmse_running</span><strong>{fmt(feedback?.rmseRunning, 4)}</strong></div>
             <div><span>fault</span><strong>{feedback ? faultCodeLabel(feedback.faultCode) : "—"}</strong></div>
           </div>
-          <p className="gravity-id-message">{feedback?.message || "等待 Feedback…"}</p>
+          {!feedback && <p className="gravity-id-message">等待 Feedback…</p>}
           <div className="gravity-id-table-wrap">
             <table className="gravity-id-table">
               <thead>
@@ -396,7 +395,6 @@ export function GravityIdentificationPage({
               <div><span>rmse_total</span><strong>{fmt(result.rmseTotal, 4)}</strong></div>
               <div><span>fault</span><strong>{faultCodeLabel(result.faultCode)}</strong></div>
               <div><span>yaml_path</span><strong className="gravity-id-path">{result.yamlPath || "—"}</strong></div>
-              <div><span>message</span><strong>{result.message || "—"}</strong></div>
             </div>
             <div className="gravity-id-table-wrap">
               <table className="gravity-id-table">

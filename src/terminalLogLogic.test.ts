@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterTerminal, formatTerminal, logLevel, terminalPublish, readTerminal, retainTerminal, type TerminalEntry } from './terminalLogLogic';
+import { operationFailureSummary, filterTerminal, formatTerminal, logLevel, terminalPublish, readTerminal, retainTerminal, type TerminalEntry } from './terminalLogLogic';
 const entry = (id:number, patch:Partial<TerminalEntry>={}):TerminalEntry => ({id,time:id,session:'one',host:'jetson',source:'Controller',task:'switch-1',message:'已请求 DISABLE',level:'info',...patch});
 describe('unified Terminal history',()=>{
  it('marks producer truncation without splitting UTF-16 surrogate pairs',async()=>{const after=(await readTerminal(0)).latest;terminalPublish({source:'System',level:'info',message:'x'.repeat(15999)+'😀end'});const message=(await readTerminal(after)).entries[0].message;expect(message).toBe('x'.repeat(15999)+'…[前端截断]');});
@@ -21,4 +21,13 @@ describe('unified Terminal history',()=>{
   expect(kept.length).toBeLessThan(2000);expect(kept.at(-1)?.id).toBe(3999);
   expect(new TextEncoder().encode(kept.map(e=>JSON.stringify(e)).join('')).length).toBeLessThanOrEqual(20*1024*1024);
  });
+});
+
+it('keeps only a bounded current reason beside connection controls while the original output is retained',async()=>{
+ const message='SSH handshake failed\nTraceback: remote command detail';
+ expect(operationFailureSummary(message)).toBe('SSH handshake failed');
+ expect(operationFailureSummary('😀'.repeat(181))).toBe('😀'.repeat(180)+'…');
+ const cursor=(await readTerminal(0)).latest;
+ terminalPublish({source:'Connection',level:'error',message});
+ expect((await readTerminal(cursor)).entries[0].message).toBe(message);
 });

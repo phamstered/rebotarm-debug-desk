@@ -43,7 +43,7 @@ function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props &
   </section>
   <ControlPageGuidance><div className="manager-tabs" role="tablist" aria-label="控制管理"><button role="tab" aria-selected={tab==="presets"} onClick={()=>setTab("presets")}>模式预设</button><button role="tab" aria-selected={tab==="controllers"} onClick={()=>setTab("controllers")}>Controller 管理</button></div></ControlPageGuidance>
   {blockReason&&<div role="status" className="manager-warning manager-block"><span>{blockReason}</span>{nativeTask.task&&["arm_mode","controller"].includes(nativeTask.task.kind)&&<ActionButton onClick={()=>setTab("presets")}>前往停止操作</ActionButton>}</div>}
-  {(error||planError)&&<p role="alert" className="manager-error">{planError||error}</p>}
+  {(error||planError)&&<p role="alert" className="manager-error">{planError||"Manager 查询或操作失败，详细原因见底部 Terminal"}</p>}
 
   <section hidden={tab!=="presets"} role="tabpanel" aria-label="模式预设">{presets}</section>
   <section hidden={tab!=="controllers"} role="tabpanel" aria-label="Controller 管理">

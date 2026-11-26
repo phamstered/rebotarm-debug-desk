@@ -1503,7 +1503,9 @@ describe("App workflow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "连接 Jetson" }));
     expect((await screen.findAllByText(/SSH 认证失败/)).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Permission denied/).length).toBeGreaterThan(0);
+    expect(await logText()).toContain("Permission denied (publickey)");
+    expect(screen.getByRole("button", {name:"查看连接日志"})).toBeVisible();
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Permission denied");
     expect(screen.getByLabelText("连接步骤")).toBeVisible();
     expect(screen.getByLabelText("连接状态灯")).toBeVisible();
     expect(screen.getByText("SSH 失败")).toBeVisible();

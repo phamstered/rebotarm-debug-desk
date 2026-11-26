@@ -1,6 +1,6 @@
 import { Terminal } from "./Terminal";
 import { TerminalLink } from "./TerminalLink";
-import { useTerminalMessage, useTerminalLines } from "./terminalLogLogic";
+import { operationFailureSummary, useTerminalMessage, useTerminalLines } from "./terminalLogLogic";
 import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions, NativePageActionsContext } from "./NativePageActions";
 import { ownsPagePreference, usePagePreference } from "./pagePreferences";
@@ -1799,11 +1799,14 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   useTerminalMessage("Connection", hostedPage ? "" : stageNames[stage]);
   useTerminalMessage("System", toolbarNotice);
   useTerminalMessage("Controller", statusActionNotice);
-  useTerminalMessage("Topics", topicSubscribeError || topicRefreshError, "error");
-  useTerminalMessage("Motion", trajectoryStateError || poseSaveError, "error");
-  useTerminalMessage("Monitor", monitorHistoryError || motionErrorSubscriptionError, "error");
-  useTerminalMessage("Monitor", monitorHistoryNotice);
+  useTerminalMessage("Topics", [topicSubscribeError,topicRefreshError].filter(Boolean).join("\n"), "error");
+  useTerminalMessage("Motion", [trajectoryStateError,poseSaveError].filter(Boolean).join("\n"), "error");
+  useTerminalMessage("Monitor", [monitorHistoryError,motionErrorSubscriptionError].filter(Boolean).join("\n"), "error");
+  useTerminalMessage("Monitor", [monitorCapture.notice,monitorHistoryNotice].filter(Boolean).join("；"));
   useTerminalMessage("Rosbag", bagNotice);
+  useTerminalMessage("Rosbag", rosbagPlayStatus?.message === bagNotice ? "" : rosbagPlayStatus?.message);
+  useTerminalMessage("Window", workspace.error, "error");
+  useTerminalMessage("Connection", mainRecovery.error, "error");
   const terminal = <Terminal windowKey={hostedPage??"main"} profile={stage === "connected" ? profile : undefined} visible={!hostedPage || Boolean(workspace.snapshot.pages[hostedPage]?.detached || workspace.snapshot.pages[hostedPage]?.recovery_required)} />;
 
   if (nativeMain && stage !== "connected" && offlineWorkspace) {
@@ -1894,7 +1897,8 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           {deployProgress.length > 0 && <TerminalLink source="Deploy">查看部署日志</TerminalLink>}
           {error && (
             <div className="error-panel" role="alert">
-              <pre className="error-box">{error}</pre>
+              <p className="error-box">{operationFailureSummary(error)}</p>
+              <TerminalLink source="Connection">查看连接日志</TerminalLink>
               <div className="error-panel-actions">
                 <IconButton icon="copy" label={errorCopied ? "已复制" : "复制错误"} type="button" className="copy-error" onClick={() => void copyConnectError()} />
                 <IconButton icon="close" label="关闭" type="button" className="dismiss-error" onClick={() => { setError(""); setErrorCopied(false); }} title="Esc 也可关闭" />
@@ -2056,7 +2060,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           onSessionActiveChange={setGravitySessionActive}
        />
       ) : appPage === "monitor" ? (
-        <MonitorPage
+        <MonitorPage externalMessagesLogged
           workspace={monitorWorkspace}
           historyNotice={nativeMonitor ? [monitorCapture.notice,monitorHistoryError,monitorHistoryNotice].filter(Boolean).join("；") : ""}
           active={windowVisible}
@@ -2219,7 +2223,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       />}
       </TopicsPage>
       )}
-      {(!hostedPage || hostedPage === "motion") && <MotionPage unifiedTerminal compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
+      {(!hostedPage || hostedPage === "motion") && <MotionPage compact focusMode={motionFocus} onToggleFocus={() => setMotionFocus(v => !v)} connection={connectionPanel}
         connectionLabel={<span className={motionWarning ? "motion-health-warning" : "motion-health-ready"}>● {profile.name || profile.host} · {motionWarning || "就绪"}</span>}
         tools={workspaceTools} indicators={<>{!liveUpdates && <span className="motion-active-indicator">显示已暂停</span>}{rosbagStatus?.recording && <ActionButton className="motion-recording-indicator" disabled={!!toolbarBusy} onClick={() => void toggleRosbagRecording()}>● 录制中 · 停止</ActionButton>}{toolbarNotice && <TerminalLink source="System">查看操作结果</TerminalLink>}</>}
         resetVersion={motionLayoutReset} visible={appPage === "motion"} active={appPage === "motion" && windowVisible} tab={motionTab} onTabChange={setMotionTab}
@@ -2248,7 +2252,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
               } : positionMotion.busy ? { state: "position", label: "点位运动", phase: "validating", message: "已有会话的点位任务尚未结束" } : { state: "idle" }}
               onSendTrajectory={sendTrajectory}
               jointMotion={positionMotion}
-              showMotionTerminal={false}
               onSavePose={openSavePose}
               savePoseDisabledReason={captureError}
               savePoseError={poseSaveError}
@@ -2291,7 +2294,6 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
          />
 </>}
         groups={renderGroupEditor()}
-        log={<TerminalLink source="Motion" />}
       />}
       </>}
       </div>

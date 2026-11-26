@@ -8,7 +8,6 @@ import { ObjectDetectionControls } from "./ObjectDetectionControls";
 import { ClockSyncStatus } from "./ClockSyncStatus";
 import type { ClockSyncStatus as ClockStatus } from "./clockSyncLogic";
 import { GRIPPER_JOINT_NAME } from "./positionLogic";
-import { MotionTerminal } from "./MotionTerminal";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -163,8 +162,6 @@ export function UrdfViewer({
   active = true,
   motionInfo = { state: "idle" },
   jointMotion: providedJointMotion,
-  plannerLog,
-  showMotionTerminal = true,
   onSavePose,
   savePoseDisabledReason = "",
   savePoseError = "",
@@ -187,8 +184,6 @@ export function UrdfViewer({
   active?: boolean;
   motionInfo?: MotionControlInfo;
   jointMotion?: PositionMotionControls;
-  plannerLog?: ReactNode;
-  showMotionTerminal?: boolean;
   onSavePose?(): void;
   savePoseDisabledReason?: string;
   savePoseError?: string;
@@ -256,8 +251,11 @@ export function UrdfViewer({
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [error, setError] = useState("");
   useTerminalMessage("URDF",error,"error");
+  useTerminalMessage("Motion",poseInputError,"error");
+  useTerminalMessage("Camera",rgbdStatus?.tfError,"error");
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<{ target: Vec3; error: string; positionError: number; orientationError: number } | null>(null);
+  useTerminalMessage("Motion",preview?.error,"error");
   const [status, setStatus] = useState<ViewerStatus | null>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const draggingRef = useRef(false);
@@ -602,7 +600,6 @@ export function UrdfViewer({
         </Scene>
       </Canvas>
       </div>
-      {jointMotion && showMotionTerminal && <MotionTerminal logs={jointMotion.logs} active={active} plannerLog={plannerLog} />}
     </div>
   );
 }

@@ -13,6 +13,6 @@ export function ArmModeWorkflow({ workflow }: { workflow: ArmWorkflow | null }) 
         <span>{state === "done" ? "✓" : state === "failed" ? "!" : i + 1}</span>{step.label}
       </li>;
     })}</ol>
-    {workflow.failed && <p className="arm-workflow-failure" role="alert">操作失败：{workflow.message}</p>}
+    {workflow.failed && <p className="arm-workflow-failure" role="alert">控制操作失败，详细原因见底部 Terminal</p>}
   </section>;
 }

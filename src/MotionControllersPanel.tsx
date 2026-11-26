@@ -1,3 +1,4 @@
+import { OperationLogNotice } from "./OperationLogNotice";
 import { IconButton, ActionButton } from "./ActionButton";
 import { useEffect, useState } from "react";
 import { controllerStatusFresh } from "./controllersInfoLogic";
@@ -77,16 +78,7 @@ export function MotionControllersPanel({
       {disabledReason && (
         <p className="controller-disabled-reason">{disabledReason}</p>
       )}
-      {error && (
-        <p className="controller-action-feedback error" role="alert">
-          {error}
-        </p>
-      )}
-      {message && (
-        <p className="controller-action-feedback success" role="status">
-          {message}
-        </p>
-      )}
+      <OperationLogNotice source="Controller" error={error} notice={message} />
       <ControllerList
         status={status}
         focusController={focusController}

@@ -22,3 +22,5 @@
 .terminal-tools button{flex:0 0 auto;white-space:nowrap}
 .global-terminal footer{flex-wrap:wrap;padding-top:3px;padding-bottom:3px}
 .terminal-header{min-width:0}.terminal-header>button{flex-shrink:0}.terminal-header .terminal-task{min-width:0;flex:0 1 auto}
+
+.operation-log-notice{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:6px 0;font-size:12px;color:#8da9b7}.operation-log-notice[role=alert]{color:#f4a29b}.operation-log-notice .terminal-link{padding:4px 8px;white-space:nowrap}

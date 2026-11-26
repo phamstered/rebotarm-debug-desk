@@ -1,3 +1,4 @@
+import { OperationLogNotice } from "./OperationLogNotice";
 import { ActionButton, IconButton } from "./ActionButton";
 import {
   useEffect,
@@ -1137,11 +1138,7 @@ function Editor({
           </ActionButton>
         </div>
       )}
-      {(error || notice.includes("失败")) && (
-        <p className="motion-editor-notice" role="alert">
-          {error || notice}
-        </p>
-      )}
+      <OperationLogNotice source="Motion" error={error || (notice.includes("失败") ? notice : "")} notice={notice.includes("失败") ? "" : notice} />
       {pending && (
         <MotionGroupDialog title="未保存修改" onClose={() => setPending(null)}>
           <p>当前动作组有未保存修改。保存成功后才会切换。</p>
@@ -1382,7 +1379,7 @@ function Editor({
           <header className="motion-groups-header">
             <div>
               <strong>{draft?.name || "创建你的第一个动作组"}</strong>
-              <span className="motion-save-state" role="status" title={notice}>
+              <span className="motion-save-state" role="status">
                 {saving || working
                   ? "处理中…"
                   : dirty

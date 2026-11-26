@@ -1,3 +1,4 @@
+import { terminalOutput } from "./test/terminal";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,7 +92,7 @@ describe("DataCollectionPage", () => {
     expect(task).toBeEnabled();
     fireEvent.change(task, { target: { value: "pick cube first second third" } });
     await act(async () => rejectPoll(new Error("status unavailable")));
-    expect(screen.getByRole("alert")).toHaveTextContent("status unavailable");
+    expect(screen.getByRole("alert")).toHaveTextContent("操作失败"); expect(await terminalOutput("Collection")).toContain("status unavailable");
     expect(task).toBeEnabled();
     expect(task).toHaveFocus();
     expect(task).toHaveValue("pick cube first second third");
@@ -111,7 +112,7 @@ describe("DataCollectionPage", () => {
     expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "保存成功 Episode" }));
     await user.click(screen.getByRole("button", { name: "结束并完成数据集" }));
-    expect(screen.getByText("dataset finalized")).toBeVisible();
+    expect(await terminalOutput("Collection")).toContain("dataset finalized");
     expect(screen.getByLabelText("任务描述")).toBeEnabled();
     expect(invoke.mock.calls.map(([, args]) => args.action)).toEqual(["status", "launch", "start_episode", "save_episode", "finish"]);
   });
@@ -124,7 +125,7 @@ describe("DataCollectionPage", () => {
     await user.click(screen.getByRole("button", { name: "丢弃 Episode" }));
     expect(invoke).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "确认丢弃" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("disk failure");
+    expect(screen.getByRole("alert")).toHaveTextContent("操作失败"); expect(await terminalOutput("Collection")).toContain("disk failure");
     expect(screen.getByRole("button", { name: "开始 Episode" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeDisabled();
   });
@@ -259,7 +260,7 @@ it("uses application collection snapshots without per-page SSH polling, and fail
   expect(screen.getByText("状态待确认")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "保存成功 Episode" })).toBeDisabled();
   rerender(<DataCollectionPage {...props} observations={sharedCollection(idle, 2, { error: "SSH gone" })} />);
-  expect(screen.getByRole("alert")).toHaveTextContent("SSH gone");
+  expect(screen.getByRole("alert")).toHaveTextContent("操作失败"); expect(await terminalOutput("Collection")).toContain("SSH gone");
   expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeDisabled();
   rerender(<DataCollectionPage {...props} observations={sharedCollection(idle, 3)} />);
   expect(screen.getByRole("button", { name: "结束并完成数据集" })).toBeEnabled();
