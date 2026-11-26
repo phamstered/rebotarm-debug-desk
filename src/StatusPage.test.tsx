@@ -226,7 +226,10 @@ it("separates current mode from target selection and waits for explicit switch",
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory");
   await user.click(screen.getByRole("button", {name: "切换模式（先回零）"}));
   expect(action).toHaveBeenCalledTimes(1); expect(action).toHaveBeenCalledWith("teleop");
+  expect(screen.getByText(/不是暂停或保持/)).not.toBeVisible();
+  await user.click(screen.getByText("操作说明"));
   expect(screen.getByText(/不是暂停或保持/)).toBeVisible();
+  expect(action).toHaveBeenCalledTimes(1);
 });
 
 it("shows one busy notice and disables conflicting mode and stop operations", async () => {
@@ -247,7 +250,7 @@ it("offers explicit same-mode session rebuild after firmware DISABLE without aut
   expect(screen.getByRole("button", { name: "当前模式已启用" })).toBeDisabled();
   rerender(<StatusPage controlView {...props} hardwareStatus={{ mode: 3, mode_name: "DISABLE", fault_code: 0, last_command_sequence: 0 }} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("Trajectory（输出已关闭）");
-  expect(screen.getByText("下位机输出已关闭，旧控制会话需要重建")).toBeVisible();
+  expect(screen.getByText("旧控制会话需要重建")).toBeVisible();
   expect(action).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "重建控制会话" }));
   expect(action).toHaveBeenCalledExactlyOnceWith("trajectory");
@@ -268,15 +271,17 @@ it("shows RETURN as an unfinished stop and blocks starting either selected mode"
   expect(action).not.toHaveBeenCalled();
 });
 
-it("opens the unified Terminal at the source of the starting controller", async () => {
+it("uses one unfiltered Terminal entry for operations, tasks and ROS output", async () => {
   const user = userEvent.setup();
   const { rerender } = render(<StatusPage controlView {...baseProps} />);
-  await user.click(screen.getByRole("button",{name:"查看启动及 ROS 日志"}));
-  expect(openTerminal).toHaveBeenLastCalledWith("teleop",undefined,"main");
+  await user.click(screen.getByRole("button",{name:"查看日志"}));
+  expect(openTerminal).toHaveBeenLastCalledWith(undefined,undefined,"main");
   rerender(<StatusPage controlView {...baseProps} workflow={{mode: "trajectory", stage: "startup", message: "starting", failed: false, running: true}} />);
-  await user.click(screen.getByRole("button",{name:"查看启动及 ROS 日志"}));
-  expect(openTerminal).toHaveBeenLastCalledWith("trajectory",undefined,"main");
+  await user.click(screen.getByRole("button",{name:"查看日志"}));
+  expect(openTerminal).toHaveBeenLastCalledWith(undefined,undefined,"main");
   expect(screen.queryByRole("combobox",{name:"日志来源"})).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button",{name:"查看日志"})).toHaveLength(1);
+  expect(screen.queryByRole("button",{name:"查看启动详情"})).not.toBeInTheDocument();
 });
 
 it("keeps the last target/log after verified stop and treats manager shutdown as expected", async () => {
@@ -287,8 +292,8 @@ it("keeps the last target/log after verified stop and treats manager shutdown as
     armMode={{...baseProps.armMode, teleopRunning: true}} workflow={{mode: "stop", stage: "ready", message: "stopped", failed: false, running: false}} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
   expect(screen.getByRole("button", {name: "Trajectory"})).toHaveAttribute("aria-pressed", "true");
-  await user.click(screen.getByRole("button",{name:"查看启动及 ROS 日志"}));
-  expect(openTerminal).toHaveBeenLastCalledWith("trajectory",undefined,"main");
+  await user.click(screen.getByRole("button",{name:"查看日志"}));
+  expect(openTerminal).toHaveBeenLastCalledWith(undefined,undefined,"main");
   expect(screen.getByText("控制环境已退出（预期）")).toBeVisible();
 });
 

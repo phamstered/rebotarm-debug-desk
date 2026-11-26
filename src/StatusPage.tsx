@@ -32,7 +32,7 @@ import {
   type StatusCardModel,
   type StatusTone,
 } from "./statusLogic";
-import { TerminalLink } from "./TerminalLink";
+import { ControlPageGuidance } from "./ControlPageGuidance";
 import { ArmModeWorkflow } from "./ArmModeWorkflow";
 import type { ArmWorkflow } from "./armModeWorkflowLogic";
 import { isArmTeleopControllerActive, isArmTrajectoryControllerActive, isVlaControllerActive } from "./vlaLogic";
@@ -145,7 +145,6 @@ export function StatusPage({
   realsenseTopicSample,
   vlaChunkSample,
   actionBusy = null,
-  actionNotice = "",
   workflow = null,
   onCardAction,
   onQuickAction,
@@ -261,8 +260,6 @@ export function StatusPage({
   });
 
   const targetAction = quickActions.find((action) => action.id === targetMode)!;
-  const logMode = workflow && (workflow.running || workflow.failed || actionBusy) && ["teleop", "trajectory", "vla", "teaching"].includes(workflow.mode) ? workflow.mode : (modeConfirmed ? activeMode : null) ?? targetMode;
-  const logSource = workflow?.mode === "moveit" || (workflow?.mode === "trajectory" && workflow.stage === "planner") ? "moveit" : logMode === "teaching" ? "teaching" : logMode === "vla" ? "vla" : logMode === "trajectory" ? "trajectory" : "teleop";
   const content = (
     <main className="status-page">
       {!controlView && <header className="status-page-header native-window-header">
@@ -310,6 +307,7 @@ export function StatusPage({
           </button>;
         })}
       </div>}
+      {controlView && !managedView && <ControlPageGuidance />}
       <div className="status-zones">
         {zones.map((zone) => {
           const isControl = zone.id === "control";
@@ -323,10 +321,10 @@ export function StatusPage({
                   <header className="status-mode-current" aria-live="polite">
                     <span>当前模式</span>
                     <strong data-testid="current-control-mode">{!modeConfirmed ? (managedView && reconciled.state === "conflict" ? "状态不一致 · 待核验" : "待确认") : modeConflict ? "控制器状态冲突" : customCombination ? `自定义组合${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
-                    <span>{modeBlock ? modeBlock : actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认，尚不能启用目标模式" : disabledSession ? "下位机输出已关闭，旧控制会话需要重建" : activeMode && modeConfirmed ? "控制器已激活" : "以控制器实时状态为准"}</span>
+                    {(!managedView && modeBlock) ? <span role="status">{modeBlock}</span> : !modeBlock && (actionBusy || returningSession || disabledSession) ? <span>{actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认" : "旧控制会话需要重建"}</span> : null}
                   </header>
                   <div className="status-mode-selection">
-                    <span>选择目标模式</span>
+                    <span>选择目标模式 · {modeNames[targetMode]}</span>
                     <div className="status-mode-segment" role="group" aria-label="选择目标模式">
                       {quickActions.filter((action) => action.id === "teleop" || action.id === "trajectory" || action.id === "vla" || action.id === "teaching").map((action) => (
                         <button key={action.id} type="button" className={`status-quick-action${targetMode === action.id ? " active" : ""}`}
@@ -339,18 +337,16 @@ export function StatusPage({
                       onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{modeBlock ? "等待状态核验" : actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : presetConfirmed && activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
                     {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
                   </div>
-                  <p className="status-mode-explanation">目标：{modeNames[targetMode]} · {activeMode === "teaching" ? "退出示教前先支撑机械臂与物体，解除输出后再切换。" : "切换流程：安全停止旧模式 → 清理旧进程 → 启动并核验。"}</p>
                   <div className="status-mode-stops">
                     <div><ActionButton type="button" className="status-quick-action stop" disabled={quickActions.find((a) => a.id === "stop")?.disabled}
                       onClick={() => { if (activeMode === "teaching" || armMode?.teachingRunning) { setSupported(false); setConfirmDisable(true); } else onQuickAction?.("stop"); }}>{activeMode === "teaching" || armMode?.teachingRunning ? "支撑并退出示教" : "回零并退出控制"}</ActionButton>
-                      <p>{activeMode === "teaching" || armMode?.teachingRunning ? "不会主动回零；确认支撑后关闭输出。" : "回到零位，确认输出关闭后退出。不是暂停或保持。"}</p></div>
+                      <p>{activeMode === "teaching" || armMode?.teachingRunning ? "先现场支撑，关闭输出后退出。" : "回零后关闭输出并退出。"}</p></div>
                     <details open={Boolean(sharedTask.task && ["stopping", "uncertain"].includes(sharedTask.task.phase))}><summary>直接关闭输出…</summary>
                       <p>不回零，机械臂与夹爪会失去电机输出；先在现场支撑。</p>
                       <ActionButton type="button" className="status-quick-action disable-stop" disabled={quickActions.find((a) => a.id === "disable-stop")?.disabled}
                         onClick={() => { setSupported(false); setConfirmDisable(true); }}>直接解除电机输出</ActionButton>
                     </details>
                   </div>
-                  {actionNotice && <TerminalLink source="Controller">查看操作结果</TerminalLink>}
                   {activeMode === "teaching" && <section className="teaching-gripper" aria-label="手动示教">
                     <strong>六轴与夹爪手动示教</strong>
                     <p>六轴保留重力补偿与阻尼；夹爪不主动保持位置，可用手拨动。请托住夹爪中的物体。</p>
@@ -361,9 +357,6 @@ export function StatusPage({
                   </section>}
                   <ArmModeWorkflow workflow={workflow} />
                 </section>
-              )}
-              {isControl && controlView && !activeMode && (
-                <p className="status-mode-idle" data-testid="status-mode-idle">{modeBlock ? modeBlock : modeConfirmed ? "当前无运行中模式 · 选择目标模式后点击启动" : "当前模式待确认 · 等待状态核验后再启动"}</p>
               )}
               <div
                 className={`status-card-grid zone-${zone.id}${zone.primary ? " primary" : ""}`}
@@ -395,7 +388,6 @@ export function StatusPage({
                 {zone.primary && <span className="status-zone-badge">主区</span>}
               </header>
               {body}
-              {isControl && controlView && <TerminalLink source={logSource === "vla" ? "trajectory" : logSource}>查看启动及 ROS 日志</TerminalLink>}
             </section>
           );
         })}

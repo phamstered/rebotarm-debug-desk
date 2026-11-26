@@ -1,10 +1,9 @@
-import { TerminalLink } from "./TerminalLink";
 import { useTerminalMessage } from "./terminalLogLogic";
 import { workflowSteps, type ArmWorkflow } from "./armModeWorkflowLogic";
 
 export function ArmModeWorkflow({ workflow }: { workflow: ArmWorkflow | null }) {
   useTerminalMessage("Controller",workflow?.message,workflow?.failed?"error":"info");
-  if (!workflow) return null;
+  if (!workflow || (!workflow.running && !workflow.failed)) return null;
   const steps = workflowSteps(workflow.mode);
   const index = steps.findIndex((step) => step.id === workflow.stage);
   return <section className="arm-workflow" aria-label="控制器启动流程" aria-live="polite">
@@ -14,6 +13,6 @@ export function ArmModeWorkflow({ workflow }: { workflow: ArmWorkflow | null }) 
         <span>{state === "done" ? "✓" : state === "failed" ? "!" : i + 1}</span>{step.label}
       </li>;
     })}</ol>
-    <TerminalLink source="Controller">{workflow.failed ? "启动失败 · 查看日志" : "查看启动详情"}</TerminalLink>
+    {workflow.failed && <p className="arm-workflow-failure" role="alert">操作失败：{workflow.message}</p>}
   </section>;
 }
