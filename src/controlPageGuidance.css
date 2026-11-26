@@ -1,0 +1,13 @@
+.control-guidance { margin: 12px 0 18px; min-width: 0; }
+.control-guidance-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding-bottom: 12px; border-bottom: 1px solid #29424f; }
+.control-guidance .manager-tabs { flex: 1; margin: 0; padding: 0; border: 0; }
+.control-guidance-spacer { flex: 1; }
+.control-guidance-actions { display: flex; gap: 8px; margin-left: auto; }
+.control-guidance-actions button { flex: 0 0 auto; padding: 6px 10px; border: 1px solid #294653; border-radius: 6px; background: transparent; color: #9bb5c3; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.control-guidance-actions .terminal-link { color: #82cfc2; }
+.control-guidance-actions button[aria-expanded=true] { background: #153e3a; border-color: #34635e; }
+.control-guidance-content { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 12px; margin-top: 6px; border: 1px solid #294653; border-radius: 8px; background: #0b1922; font-size: 12px; }
+.control-guidance-content[hidden] { display: none; }
+.control-guidance-content strong { color: #b9d1dd; }
+.control-guidance-content p { color: #8da9b7; margin: 6px 0 0; line-height: 1.7; overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .control-guidance-content { grid-template-columns: 1fr; gap: 12px; } }

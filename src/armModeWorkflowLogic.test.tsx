@@ -27,7 +27,8 @@ describe("arm mode workflow", () => {
     expect(hook.result.current.workflow).toMatchObject({stage: "cleanup", failed: true, running: false});
     render(<ArmModeWorkflow workflow={hook.result.current.workflow} />);
     expect(screen.getByText("清理旧进程").closest("li")).toHaveAttribute("data-state", "failed");
-    expect(screen.getByRole("button",{name:"启动失败 · 查看日志"})).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("owner did not exit");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect((await readTerminal(0)).entries.some(e=>e.source==="Controller"&&e.message.includes("owner did not exit"))).toBe(true);
     act(() => { mock.invoke.mock.calls.at(-1)![1].onProgress.onmessage({stage: "startup", message: "late", failed: false}); });
     expect(hook.result.current.workflow?.stage).toBe("cleanup");
@@ -48,10 +49,11 @@ describe("arm mode workflow", () => {
   });
 
   it("shows stop as a cleanup flow and never shows fictitious start or verify nodes", () => {
-    render(<ArmModeWorkflow workflow={{mode: "stop", stage: "ready", message: "stopped", failed: false, running: false}} />);
+    render(<ArmModeWorkflow workflow={{mode: "stop", stage: "cleanup", message: "stopping", failed: false, running: true}} />);
     expect(screen.queryByText("启动控制器")).not.toBeInTheDocument();
     expect(screen.queryByText("核验反馈")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("listitem").every((node) => node.getAttribute("data-state") === "done")).toBe(true);
+    expect(screen.getByText("清理旧进程").closest("li")).toHaveAttribute("data-state", "current");
+    expect(screen.getByText("完成").closest("li")).toHaveAttribute("data-state", "waiting");
   });
 
   it("does not invent arm cleanup/startup steps for an independent camera restart", async () => {
@@ -60,4 +62,13 @@ describe("arm mode workflow", () => {
     await act(async () => { await hook.result.current.run("realsense"); });
     expect(hook.result.current.workflow).toBeNull();
   });
+});
+
+
+it("removes completed steps from the operation area while retaining their diagnostic output", async () => {
+  const view = render(<ArmModeWorkflow workflow={{mode:"stop", stage:"cleanup", message:"清理中", failed:false, running:true}} />);
+  expect(screen.getByRole("region", {name:"控制器启动流程"})).toBeVisible();
+  view.rerender(<ArmModeWorkflow workflow={{mode:"stop", stage:"ready", message:"已核验退出完成", failed:false, running:false}} />);
+  expect(screen.queryByRole("region", {name:"控制器启动流程"})).not.toBeInTheDocument();
+  expect((await readTerminal(0)).entries.some(e=>e.message==="已核验退出完成")).toBe(true);
 });

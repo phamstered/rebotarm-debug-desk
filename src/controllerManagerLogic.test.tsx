@@ -36,7 +36,7 @@ describe('Controller management',()=>{
   await user.click(screen.getByRole('button',{name:'确认执行'}));
   await waitFor(async()=>expect((await readTerminal(0)).entries.some(e=>e.source==='Controller'&&e.message==='已核验')).toBe(true));
   expect(ipc.invoke).toHaveBeenCalledWith('controller_manager_manage',expect.objectContaining({request:{action:'switch',activate:['new'],deactivate:['old'],expected:'a'.repeat(64)},confirmed:true}));
-  await user.click(screen.getByRole('tab',{name:'模式预设'}));await user.click(screen.getByRole('tab',{name:'Controller 管理'}));expect(screen.getByRole('button',{name:'查看 Controller 操作日志'})).toBeVisible();expect((await readTerminal(0)).entries.some(e=>e.message==='已核验')).toBe(true);
+  await user.click(screen.getByRole('tab',{name:'模式预设'}));await user.click(screen.getByRole('tab',{name:'Controller 管理'}));expect(screen.getByRole('button',{name:'查看日志'})).toBeVisible();expect((await readTerminal(0)).entries.some(e=>e.message==='已核验')).toBe(true);
  });
  it('discards an old robot query after changing connection',async()=>{
   let resolve!:(s:ManagerSnapshot)=>void;
