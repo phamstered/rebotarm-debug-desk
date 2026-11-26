@@ -134,3 +134,9 @@ it('serializes reads, reports read errors, and ignores a pending result after un
  view.unmount();await act(async()=>complete({entries:[row(1,{message:'old session output'})],session:'one',sessions:{one:'robot'},latest:1,cursor:1}));
  expect(screen.queryByText('old session output')).toBeNull();
 });
+it('notification navigation reveals an exact historical entry despite clear, filters and a collapsed dock',async()=>{
+ mock.rows=[row(1,{session:'two',source:'Motor',task:'operation-4',level:'error',message:'original mode failure'}),row(2,{session:'two',source:'Task',task:'operation-4',message:'stop acknowledged'})];render(<Terminal/>);await tick(0);
+ fireEvent.change(screen.getByLabelText('日志来源'),{target:{value:'Controller'}});fireEvent.change(screen.getByRole('searchbox'),{target:{value:'unrelated'}});fireEvent.click(screen.getByRole('button',{name:'清屏'}));fireEvent.click(screen.getByRole('button',{name:'收起 Terminal'}));
+ act(()=>window.dispatchEvent(new CustomEvent('terminal-open',{detail:{target:'main',entry:mock.rows[0]}})));
+ expect(screen.getByRole('log')).toHaveTextContent('original mode failure');expect(screen.getByRole('log')).toHaveTextContent('stop acknowledged');expect(screen.getByRole('dialog',{name:'日志详情'})).toHaveTextContent('original mode failure');expect(screen.getByRole('searchbox')).toHaveValue('');expect(screen.getByLabelText('跟随最新')).not.toBeChecked();
+});

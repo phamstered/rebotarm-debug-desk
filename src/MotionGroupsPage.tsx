@@ -140,10 +140,12 @@ function Editor({
     [playhead, setPlayhead] = useState(0);
   const [zoom, setZoom] = useState(40),
     [snap, setSnap] = useState(true);
-  const [notice, setNotice] = useState(""),
+  const [notice, setNoticeValue] = useState(""),
     [pending, setPending] = useState<PendingNavigation | null>(null),
     [deleting, setDeleting] = useState(false),
     [working, setWorking] = useState(false);
+  const [noticeFailed,setNoticeFailed]=useState(false);
+  function setNotice(value:string, failed=false) {setNoticeFailed(failed);setNoticeValue(value);}
   const pendingSnapshot = useRef<MotionGroup | null>(null);
   const [lastResult, setLastResult] = useState<{
     state: PositionMotionState;
@@ -444,7 +446,7 @@ function Editor({
     } catch (cause) {
       if (live.current)
         setNotice(
-          `保存失败：${cause instanceof Error ? cause.message : String(cause)}`,
+          `保存失败：${cause instanceof Error ? cause.message : String(cause)}`, true,
         );
     } finally {
       locked.current = false;
@@ -559,7 +561,7 @@ function Editor({
     try {
       await callback();
     } catch (cause) {
-      if (live.current) setNotice(String(cause));
+      if (live.current) setNotice(String(cause),true);
     } finally {
       locked.current = false;
       if (live.current) setWorking(false);
@@ -747,7 +749,7 @@ function Editor({
         if (!live.current) return;
         setGroupEditorHistory((c) => ({ ...c, base: JSON.stringify(copy) }));
       } catch (e) {
-        if (live.current) setNotice(`保存失败：${e}`);
+        if (live.current) setNotice(`保存失败：${e}`,true);
         return;
       } finally {
         locked.current = false;
@@ -1138,7 +1140,7 @@ function Editor({
           </ActionButton>
         </div>
       )}
-      <OperationLogNotice source="Motion" error={error || (notice.includes("失败") ? notice : "")} notice={notice.includes("失败") ? "" : notice} />
+      <OperationLogNotice source="Motion" error={error || (noticeFailed ? notice : "")} notice={noticeFailed ? "" : notice} />
       {pending && (
         <MotionGroupDialog title="未保存修改" onClose={() => setPending(null)}>
           <p>当前动作组有未保存修改。保存成功后才会切换。</p>
@@ -2544,7 +2546,7 @@ function Editor({
             <ActionButton
               className="motion-stop"
               onClick={() =>
-                void motion.cancel().catch((c) => setNotice(String(c)))
+                void motion.cancel().catch((c) => setNotice(String(c),true))
               }
             >
               停止动作组

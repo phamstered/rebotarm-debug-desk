@@ -1,5 +1,5 @@
 import { OperationLogNotice } from "./OperationLogNotice";
-import { terminalPublish, logLevel, useTerminalMessage } from "./terminalLogLogic";
+import { terminalPublish, reportOperationFailure, logLevel, useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BridgeClient } from "./bridge";
@@ -9,7 +9,7 @@ import { motorRangeFor, parseMotorUrdfRanges } from "./motorRangeLogic";
 import type { CommandMode, MotorRowInput } from "./motorLogic";
 import { actualDriveMode, acceptMotorEvidence, controlGate, type MotorEvidenceWatermark, createPosVelPayload, hasStopProof, parsePosVelValues, selectedMotorMask } from "./motorControlLogic";
 
-import { formatMotorNumber, motorAxisNames, motorFirmwareRanges, motorModeEvidence, motorModeFailure, type MotorModeLogEntry } from "./motorModeLogLogic";
+import { formatMotorNumber, motorAxisNames, motorFirmwareRanges, motorModeEvidence, motorModeError, type MotorModeLogEntry } from "./motorModeLogLogic";
 
 type JointState = { name?: string[]; position?: number[]; velocity?: number[]; effort?: number[] };
 type Pending = "starting" | "configuring" | "stopping" | null;
@@ -39,6 +39,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const [capabilities, setCapabilities] = useState<MotorControlCapabilities | null>(null), [capabilityError, setCapabilityError] = useState("");
   const [legacyConfirmed, setLegacyConfirmed] = useState(false);
   const modeEvidenceRef = useRef("");
+  const modeAttempt = useRef<{key:string; previous:number; firmware?:number} | undefined>(undefined);
   const [inputError, setInputError] = useState("");
   useTerminalMessage("Motor",inputError,"error");
   useTerminalMessage("Motor",capabilityError,"error");
@@ -52,6 +53,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   callbackRef.current = onStreamingChange; canRunRef.current = active && !controlLocked;
   const mode = drive === "MIT" ? mitMode : posMode, motors = drive === "MIT" ? mitMotors : posMotors;
   const mask = selectedMotorMask(motors), selectedCount = motors.filter(row => row.enabled).length;
+  const jointFeedback = useRef(jointState); jointFeedback.current = jointState;
   const configurationMask = drive === "MIT" ? 0x7f : mask;
   const busy = streaming || pending !== null || stopRequested;
   const gate = !capabilities && !legacyConfirmed ? capabilityError || "正在读取驱动能力" : controlGate(capabilities, seenV2Ref.current, drive, mask);
@@ -81,7 +83,14 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       const evidence = motorModeEvidence(next);
       if (evidence !== modeEvidenceRef.current) {
         modeEvidenceRef.current = evidence;
-        logMode(`固件读回：${evidence}；${motorFirmwareRanges(next, next.selected_joint_mask)}`);
+        const failed = next.operation_state === 3 && previous?.supported && previous.boot_id === next.boot_id
+          && (previous.operation_id !== next.operation_id || previous.operation_state !== 3);
+        if(modeAttempt.current && next.operation_id > modeAttempt.current.previous && modeAttempt.current.firmware === undefined) modeAttempt.current.firmware = next.operation_id;
+        const key=modeAttempt.current?.firmware===next.operation_id ? modeAttempt.current.key : `firmware:${next.boot_id}:${next.operation_id}`;
+        const feedback = Array.from({length:7},(_,i)=>i).filter(i=>next.selected_joint_mask & (1<<i)).map(i=>`joint${i+1} ${formatMotorNumber(jointFeedback.current?.position?.[i])} rad`).join("；");
+        terminalPublish({source:"Motor",level:next.operation_state===3?"error":logLevel(evidence),
+          message:`固件读回：${evidence}；${motorFirmwareRanges(next,next.selected_joint_mask)}${failed ? `；界面最近反馈（记录时间 ${Date.now()}，非固件失败瞬间读数）：${feedback}` : ""}`,
+          failure:failed ? {key,title:"Motor · 驱动模式应用失败",summary:`固件模式校验未通过：${motorModeError(next.error_code)}。完整读回见日志。`} : undefined});
       }
     }
     capsRef.current = next; setCapabilities(next); setCapabilityError("");
@@ -108,7 +117,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       if (proof.previous && proof.sequence !== undefined && capsRef.current && hasStopProof(capsRef.current, proof.previous, proof.sequence)) finishStop();
     } catch (reason) {
       if (!mountedRef.current || stopProofRef.current !== proof) return;
-      setOperation(null); callbackRef.current(false); setResult(`停止未确认：${String(reason)}`);
+      setOperation(null); callbackRef.current(false); setResult(`停止未确认：${String(reason)}`); reportOperationFailure("Motor",`停止未确认：${String(reason)}`,{title:"Motor · 停止结果未确认"});
     }
   }
   const disableRef = useRef(disable); disableRef.current = disable;
@@ -155,6 +164,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     }
     if (message.op === "error" && !message.request_id && timerRef.current !== null) {
       const error = message.message ?? "命令发送失败";
+      reportOperationFailure("Motor",error,{key:`stream:${operationRef.current}`,title:"Motor · 指令发送失败"});
       void disableRef.current().then(() => { if (mountedRef.current) setResult(`${error}；已请求停止，等待反馈确认。`); });
     }
     if ((message.op === "joint_command_ack" || message.op === "motor_command_v2_ack") && message.sequence !== undefined) setSequence(message.sequence);
@@ -211,6 +221,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     if (!supportConfirmed || !canRunRef.current || busy || !configurationMask) return;
     const current = capsRef.current;
     if (!current?.supported || !current.fresh || current.switching || !current.disabled_verified) { setResult("缺少新鲜驱动读回或输出关闭证明，不能应用模式"); return; }
+    modeAttempt.current={key:crypto.randomUUID(),previous:current.operation_id};
     logMode(`申请 ${actualDriveMode(current, configurationMask)} → ${drive}；${motorAxisNames(configurationMask, jointState?.name)}；mask=${configurationMask}；${motorFirmwareRanges(current, configurationMask)}`);
     logMode("请求关闭输出、写入驱动模式并等待读回；尚未确认切换成功。");
     edited(); setOperation("configuring"); callbackRef.current(true); const operation = ++operationRef.current;
@@ -226,7 +237,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       setShowConfiguration(false); setResult(`实际驱动 ${drive} 已读回；请核对参数并重新安全确认。`);
     } catch (reason) {
       if (mountedRef.current && operation === operationRef.current) {
-        logMode(`应用失败 / 结果未确认：${String(reason)}；请求 DISABLE，不会自动重试。`);
+        reportOperationFailure("Motor",`应用失败 / 结果未确认：${String(reason)}；请求 DISABLE，不会自动重试。`,{key:modeAttempt.current?.key,title:"Motor · 驱动模式应用失败",summary:capsRef.current?.error_code ? `固件模式校验未通过：${motorModeError(capsRef.current.error_code)}。正在请求 DISABLE。` : "模式结果未确认，正在请求 DISABLE。"});
         if (capsRef.current) acceptCapabilities({ ...capsRef.current, fresh: false, reason: "配置结果未确认，请等待新鲜读回" });
         await disable();
         if (mountedRef.current) setResult(`模式应用失败 / 结果未确认：${String(reason)}。已请求停止，不会自动重试或执行目标。`);
@@ -273,7 +284,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       if (!mountedRef.current || operation !== operationRef.current) return;
       setOperation(null); setArmed(false); callbackRef.current(false);
       await disable();
-      if (mountedRef.current) setResult(`控制未开始：${String(reason)}；已请求停止。`);
+      if (mountedRef.current) {setResult(`控制未开始：${String(reason)}；已请求停止。`);reportOperationFailure("Motor",`控制未开始：${String(reason)}；已请求停止。`,{key:`start:${operation}`,title:"Motor · 控制启动失败"});}
     }
   }
 
@@ -317,12 +328,6 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       {posUnavailable && <p className="mode-description">POS_VEL 不可用：{posReason}</p>}
       {capabilities?.supported && <div className="motor-mode-application"><span>{!capabilities.disabled_verified ? "先停止并验证输出关闭，才能应用驱动模式" : gate || `实际 ${drive} 已确认`}</span><ActionButton disabled={busy || !configurationMask || !capabilities.fresh || capabilities.switching || !capabilities.disabled_verified || capabilities.enabled_joint_mask !== 0 || !active || controlLocked || (drive === "POS_VEL" && (capabilities.pos_vel_supported_mask & mask) !== mask)} onClick={() => { setShowConfiguration(true); setSupportConfirmed(false); setArmed(false); }}>应用驱动模式…</ActionButton></div>}
       {showConfiguration && <div className="motor-mode-confirmation"><strong>{drive === "MIT" ? "恢复整组 MIT（7 轴）：" : "应用至 "}{motors.slice(0, 7).flatMap((row, i) => (drive === "MIT" || row.enabled) ? [jointState?.name?.[i] ?? jointLabel(i)] : []).join("、")}</strong><p>{actualDriveMode(capabilities, configurationMask)} → {drive}；申请期间会关闭输出，并逐轴写入、读回模式。</p><label className="arm-check"><input type="checkbox" aria-label="现场支撑确认" checked={supportConfirmed} disabled={busy} onChange={event => setSupportConfirmed(event.target.checked)} />已支撑机械臂，确认失能及模式切换不会造成跌落</label><ActionButton disabled={busy || !supportConfirmed} onClick={() => void applyMode()}>确认应用驱动模式</ActionButton><ActionButton disabled={busy} onClick={() => setShowConfiguration(false)}>取消</ActionButton></div>}
-      {motorModeFailure(capabilities) && <div className="motor-mode-failure" role="note">{motorModeFailure(capabilities)}</div>}
-      {drive === "POS_VEL" && capabilities?.supported && configurationMask !== 0 && <div className="motor-firmware-ranges">
-        <strong>固件已验证范围{capabilities.fresh ? "" : "（反馈过期）"}</strong>
-        <p>{motorFirmwareRanges(capabilities, configurationMask)}</p>
-        <p>当前反馈：{motors.slice(0, 7).flatMap((row, i) => row.enabled ? [`joint${i + 1} ${formatMotorNumber(jointState?.position?.[i])} rad`] : []).join("；")}（仅供核对，切换以固件实时校验为准）</p>
-      </div>}
       <label>执行状态<select value={mode} disabled={busy} onChange={event => { edited(); drive === "MIT" ? setMitMode(Number(event.target.value) as CommandMode) : setPosMode(Number(event.target.value) as 0 | 1); }}>{modes.filter(item => item.value !== 3 && (drive === "MIT" || item.value !== 2)).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
       <p className="mode-description">{drive === "MIT" ? selectedMode.description : mode === 0 ? "由固件锁存新鲜当前位置并保持；表单目标不下发" : "逐轴目标位置 + 正速度上限；执行后持续保持"}</p>
       {drive === "MIT" && <div className="command-grid shared-command-grid">{([["Velocity · rad/s", velocity, setVelocity], ["Kp", kp, setKp], ["Kd", kd, setKd], ["Effort · Nm", effort, setEffort]] as const).map(([label, value, setter]) => <label key={label}>{label}<input type="text" inputMode="decimal" disabled={busy} value={value} onChange={event => decimal(event.target.value, setter)} /></label>)}</div>}

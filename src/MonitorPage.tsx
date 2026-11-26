@@ -118,7 +118,9 @@ export function MonitorPage({
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
   const [layoutPresets, setLayoutPresets] = useState<MonitorLayoutPreset[]>(() => loadLayoutPresets());
   const [presetName, setPresetName] = useState("");
-  const [presetNotice, setPresetNotice] = useState("");
+  const [presetNotice, setPresetNoticeValue] = useState("");
+  const [presetFailed,setPresetFailed]=useState(false);
+  function setPresetNotice(value:string,failed=false){setPresetFailed(failed);setPresetNoticeValue(value);}
   useTerminalMessage("Monitor",externalMessagesLogged ? "" : historyNotice);
   useTerminalMessage("Rosbag",externalMessagesLogged ? "" : bagNotice);
   useTerminalMessage("Rosbag",externalMessagesLogged || bagStatus?.message === bagNotice ? "" : bagStatus?.message);
@@ -281,13 +283,13 @@ export function MonitorPage({
       const text = await file.text();
       const result = importLayoutPresetsJson(text, layoutPresets);
       if (result.error) {
-        setPresetNotice(`导入失败：${result.error}`);
+        setPresetNotice(`导入失败：${result.error}`,true);
         return;
       }
       setLayoutPresets(result.presets);
       setPresetNotice(`已导入 ${result.imported} 个布局预设`);
     } catch (reason) {
-      setPresetNotice(`导入失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      setPresetNotice(`导入失败：${reason instanceof Error ? reason.message : String(reason)}`,true);
     }
   };
 
@@ -470,7 +472,7 @@ export function MonitorPage({
           </ul>
         )}
         {presetNotice === "请输入布局名称" && <p role="alert">{presetNotice}</p>}
-        <OperationLogNotice source="Monitor" notice={presetNotice.includes("失败") ? "" : presetNotice} error={presetNotice.includes("失败") ? presetNotice : ""} />
+        <OperationLogNotice source="Monitor" notice={presetFailed ? "" : presetNotice} error={presetFailed ? presetNotice : ""} />
       </section>
 
       {mode === "bag" && (
