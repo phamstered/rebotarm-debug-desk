@@ -397,10 +397,12 @@ describe("Motor mode history", () => {
     expect(log()).toContain("joint7（gripper_finger_left_joint）");
     expect(log()).toContain("mask=64");
     expect(log()).toContain("error=10（超出固件已验证范围）");
-    expect(log()).toContain("应用失败 / 结果未确认");
+    expect(log()).toContain("joint7 0.511749 rad");
+    expect(await terminalOutput("Motor")).toContain("应用失败 / 结果未确认");
     expect(log()).toContain("停止反馈：已核验输出关闭");
-    expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
-    expect(screen.getByText(/当前反馈：joint7 0.511749 rad/)).toBeVisible();
+    expect(screen.queryByText(/固件模式事务 #4 失败/)).toBeNull();
+    expect(screen.queryByText("固件已验证范围")).toBeNull();
+    expect(screen.getByLabelText("gripper_finger_left_joint 行程 min")).toBeVisible();
     const lines = logging.publish.mock.calls.length;
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...stopped, stamp_ns: "4000000000" } }));
     expect(logging.publish).toHaveBeenCalledTimes(lines);
@@ -409,12 +411,12 @@ describe("Motor mode history", () => {
     expect(logging.publish).toHaveBeenCalledTimes(lines);
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...stopped, stamp_ns: "5000000000" } }));
     fireEvent.click(screen.getByRole("button", { name: "应用驱动模式…" }));
-    expect(log()).toContain("应用失败 / 结果未确认");
+    expect(await terminalOutput("Motor")).toContain("应用失败 / 结果未确认");
     expect(bridge.command).toHaveBeenCalledTimes(2); // configure, then DISABLE only
     expect(bridge.send).not.toHaveBeenCalled();
     expect(screen.getByRole("button", {name:"查看操作日志"})).toBeEnabled();
     expect(screen.queryByRole("log")).not.toBeInTheDocument();
-    expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
+    expect(screen.queryByText(/固件模式事务 #4 失败/)).toBeNull();
   });
   it("retains rapid observed pending/failure transitions, and retains unified history on disconnect", async () => {
     const bridge = bridgeDouble(capabilities()); mount(bridge); await flush();

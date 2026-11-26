@@ -27,21 +27,22 @@ export function Terminal({visible=true,profile,windowKey="main"}:{visible?:boole
  const mounted=useRef(true);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
  const cursor=useRef(0),viewport=useRef<HTMLDivElement>(null),drag=useRef<{y:number;height:number}|null>(null),state=useRef({expanded,follow,visible,source,level,task,search,session});state.current={expanded,follow,visible,source,level,task,search,session};
+ const focusEntry=useRef<number|null>(null);
  const bootstrap=useRef<number|null>(null);
  const revealed=useRef(new Set<string>());
  useEffect(()=>{let alive=true,timer:ReturnType<typeof setTimeout>;if(!visible){setEntries([]);cursor.current=0;bootstrap.current=null;}const poll=async()=>{try{const page=await readTerminal(visible?cursor.current:Number.MAX_SAFE_INTEGER);if(!alive)return;setCurrent(page.session);setSessions(page.sessions);if(!visible){timer=setTimeout(()=>void poll(),2000);return;}if(bootstrap.current===null)bootstrap.current=page.latest;cursor.current=page.cursor;
   if(page.archive_error)setNotice(`本地归档失败：${page.archive_error}`);if(page.truncated)setNotice('历史窗口已截断，较早日志可在本地归档或源日志中查找');if(page.archive_dropped)setNotice(`归档队列已丢弃 ${page.archive_dropped} 条，保留日志仍可导出`);
-  if(page.entries.length){setEntries(old=>retainTerminal([...old,...page.entries]));const errors=page.entries.filter(e=>e.level==='error'&&e.id>bootstrap.current!);setUnread(n=>n+errors.filter(e=>!state.current.visible||!state.current.expanded||!state.current.follow||Boolean(state.current.source&&state.current.source!==e.source)||Boolean(state.current.task&&state.current.task!==e.task)||Boolean(state.current.search)||!['','info+','error'].includes(state.current.level)||e.session!==page.session).length);
+  if(page.entries.length){setEntries(old=>retainTerminal([...old,...page.entries.filter(row=>!old.some(e=>e.id===row.id))]));const errors=page.entries.filter(e=>e.level==='error'&&e.id>bootstrap.current!);setUnread(n=>n+errors.filter(e=>!state.current.visible||!state.current.expanded||!state.current.follow||Boolean(state.current.source&&state.current.source!==e.source)||Boolean(state.current.task&&state.current.task!==e.task)||Boolean(state.current.search)||!['','info+','error'].includes(state.current.level)||e.session!==page.session).length);
    const first=errors.find(e=>e.session===page.session&&e.task&&!revealed.current.has(`${e.session}:${e.task}`));if(first){revealed.current.add(`${first.session}:${first.task}`);setExpanded(true);}
   }setError('');timer=setTimeout(()=>void poll(),page.cursor<page.latest?10:500);
  }catch(e){if(alive){setError(String(e));timer=setTimeout(()=>void poll(),2000);}}};void poll();return()=>{alive=false;clearTimeout(timer);};},[visible]);
  useEffect(()=>{
   let alive=true;const stops:(()=>void)[]=[];
-  const open=(detail?:{source?:string;task?:string;target?:string})=>{if(detail?.target&&detail.target!==windowKey)return;if(detail?.source==="Task")setTaskDetails(true);setExpanded(true);setSession('current');setSource(detail?.source??'');setTask(detail?.task??'');setSearch('');setLevel('info+');setAfter(0);setFollow(true);};
+  const open=(detail?:{source?:string;task?:string;target?:string;entry?:TerminalEntry})=>{if(detail?.target&&detail.target!==windowKey)return;if(detail?.source==="Task")setTaskDetails(true);setExpanded(true);setSession('current');setSource(detail?.source??'');setTask(detail?.task??'');setSearch('');setLevel('info+');setAfter(0);setFollow(true);if(detail?.entry){const entry=detail.entry;setEntries(old=>retainTerminal([...old.filter(e=>e.id!==entry.id),entry].sort((a,b)=>a.id-b.id)));setSession(entry.session);setSource(entry.task?'':entry.source);setTask(entry.task);setLevel('');setFollow(false);focusEntry.current=entry.id;setDetails(entry);}};
   const localOpen=(event:Event)=>open((event as CustomEvent).detail);
   const failure=(event:Event)=>setNotice((event as CustomEvent).detail);
   window.addEventListener('terminal-open',localOpen);window.addEventListener('terminal-error',failure);
-  if(nativeDesktop())for(const promise of [listen<{source?:string;task?:string;target?:string}>('terminal-open',e=>open(e.payload)),listen<string>('terminal-storage-error',e=>setNotice(`本地日志归档失败：${e.payload}`))])void promise.then(stop=>{if(alive)stops.push(stop);else stop();}).catch(e=>{if(alive)setNotice(String(e));});
+  if(nativeDesktop())for(const promise of [listen<{source?:string;task?:string;target?:string;entry?:TerminalEntry}>('terminal-open',e=>open(e.payload)),listen<string>('terminal-storage-error',e=>setNotice(`本地日志归档失败：${e.payload}`))])void promise.then(stop=>{if(alive)stops.push(stop);else stop();}).catch(e=>{if(alive)setNotice(String(e));});
   return()=>{alive=false;window.removeEventListener('terminal-open',localOpen);window.removeEventListener('terminal-error',failure);stops.forEach(stop=>stop());};
  },[windowKey]);
  useEffect(()=>{localStorage.setItem(`terminal-open-${windowKey}`,String(expanded));localStorage.setItem(`terminal-height-${windowKey}`,String(height));window.dispatchEvent(new Event('resize'));},[expanded,height,maximized,visible]);
@@ -65,6 +66,7 @@ export function Terminal({visible=true,profile,windowKey="main"}:{visible?:boole
   }catch(e){if(stillCurrent())setNotice(`源日志下载失败：${String(e)}`);}
   finally{if(mounted.current)setSaving(false);}
  }
+ useEffect(()=>{if(focusEntry.current===null||!expanded)return;const index=filtered.findIndex(e=>e.id===focusEntry.current);if(index>=0&&viewport.current){const offset=Math.max(0,index*28-28);viewport.current.scrollTop=offset;setTop(offset);focusEntry.current=null;}},[filtered,expanded]);
  const start=Math.max(0,Math.floor(top/28)-5),end=Math.min(filtered.length,start+Math.ceil((maximized?window.innerHeight:height)/28)+12);
  const summary=!taskState.loaded?'任务状态同步中':taskState.error?'任务状态待核验':taskState.task?`${taskState.task.kind==='arm_mode'?'控制环境':taskState.task.kind} · ${phases[taskState.task.phase]}`:'共享控制空闲 · 任务详情';
  return <section className={`global-terminal${expanded?' expanded':''}${maximized&&expanded?' maximized':''}`} hidden={!visible} aria-label="全局 Terminal" style={{height:expanded?(maximized?'auto':height):36}}>

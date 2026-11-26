@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { nativeDesktop } from './nativeWorkspaceLogic';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-export type TerminalInput = { source: string; level: LogLevel; task?: string; message: string; key?: string };
+export type TerminalInput = { source: string; level: LogLevel; task?: string; message: string; key?: string; failure?: { key: string; title: string; summary?:string } };
 export type TerminalEntry = TerminalInput & { id: number; time: number; session: string; host: string; task: string };
 export type TerminalPage = { entries: TerminalEntry[]; cursor: number; latest: number; session: string; host: string; truncated: boolean; sessions: Record<string, string>; archive_dropped: number; archive_error?: string };
 export type TerminalFilter = { session: string; source: string; level: string; task: string; search: string; after: number };
@@ -42,7 +42,9 @@ export function terminalPublish(entry: TerminalInput, context?: string) {
   if(message.length<entry.message.length){if(/[\uD800-\uDBFF]$/.test(message))message=message.slice(0,-1);message+='…[前端截断]';}
   const bounded = { ...entry, message, task: entry.task?.slice(0, 200) };
   if (!nativeDesktop()) {
-    local = retainTerminal([...local, { ...bounded, id: ++seq, time: Date.now(), session: context ?? session, host: '本地', task: entry.task ?? '' }]);
+    const row = { ...bounded, id: ++seq, time: Date.now(), session: context ?? session, host: '本地', task: entry.task ?? '' };
+    local = retainTerminal([...local, row]);
+    if (entry.failure) window.dispatchEvent(new CustomEvent('operation-failure', {detail:{entry:row,...entry.failure}}));
     return;
   }
   if (queue.length >= 256) { queue.shift(); dropped++; }
@@ -57,7 +59,12 @@ async function flush() {
       const context = queue[0].session, entries: TerminalInput[] = [];
       while (queue.length && queue[0].session === context && entries.length < 128) entries.push(queue.shift()!.entry);
       if (dropped) { entries.push({ source: 'System', level: 'warn', message: `前端日志队列溢出，丢弃 ${dropped} 条` }); dropped = 0; }
-      try { await invoke('terminal_append', { session: context, entries }); }
+      try {
+        const rows = await invoke<(TerminalEntry | null)[]>('terminal_append', { session: context, entries: entries.map(({failure: _failure, ...row})=>row) });
+        for (const [i, input] of entries.entries()) if (input.failure && rows?.[i]) {
+          void invoke('notification_show', {id:rows[i]!.id,key:input.failure.key,heading:input.failure.title,summary:input.failure.summary??null}).catch(error=>window.dispatchEvent(new CustomEvent('terminal-error',{detail:`错误浮层不可用，详情仍在 Terminal：${String(error)}`})));
+        }
+      }
       catch (error) { window.dispatchEvent(new CustomEvent('terminal-error', { detail: `日志写入失败：${String(error)}` })); }
     }
   } finally { flushing = false; }
@@ -74,12 +81,15 @@ export async function readTerminal(after: number): Promise<TerminalPage> {
 }
 export function useTerminalMessage(source: string, message: string | null | undefined, level?: LogLevel, task = '') {
   const last = useRef('');
+  const mounted = useRef(false);
   useEffect(() => {
+    const initial = !mounted.current; mounted.current = true;
     const key = JSON.stringify([session, source, task, level, message]);
     if (!message) { last.current = ''; return; }
     if (last.current === key) return;
     last.current = key;
-    terminalPublish({ source, message, level: level ?? logLevel(message), task });
+    terminalPublish({ source, message, level: level ?? logLevel(message), task,
+      failure: !initial && level === 'error' ? {key:task || crypto.randomUUID(),title:`${source} · 操作失败`} : undefined });
   }, [source, message, level, task]);
 }
 export function useTerminalLines(source: string, lines: readonly string[], task = '') {
@@ -93,8 +103,8 @@ export function useTerminalLines(source: string, lines: readonly string[], task 
     previous.current = { key, lines: [...lines] };
   }, [source, lines, task]);
 }
-export function openTerminal(source?: string, task?: string, target="main") {
-  const detail = { source, task, target };
+export function openTerminal(source?: string, task?: string, target="main", entry?: TerminalEntry) {
+  const detail = { source, task, target, ...(entry ? {entry} : {}) };
   if (nativeDesktop()) void emit('terminal-open', detail).catch(error => window.dispatchEvent(new CustomEvent('terminal-error', { detail: String(error) })));
   else window.dispatchEvent(new CustomEvent('terminal-open', { detail }));
 }
@@ -106,4 +116,9 @@ export function filterTerminal(entries: TerminalEntry[], filter: TerminalFilter)
   return entries.filter(e => e.id > filter.after && (!filter.session || e.session === filter.session) && (!filter.source || e.source === filter.source)
     && (!filter.level || (filter.level === 'info+' ? e.level !== 'debug' : e.level === filter.level)) && (!filter.task || e.task === filter.task)
     && (!query || formatTerminal(e).toLowerCase().includes(query)));
+}
+
+/** Explicit failure event: call once at the operation boundary, never from log parsing. */
+export function reportOperationFailure(source:string, message:string, options:{key?:string;title?:string;summary?:string;task?:string;session?:string}={}) {
+ terminalPublish({source,message,level:'error',task:options.task,failure:{key:options.key??crypto.randomUUID(),title:options.title??`${source} · 操作失败`,summary:options.summary}},options.session);
 }

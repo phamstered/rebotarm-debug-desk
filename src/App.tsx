@@ -1,6 +1,7 @@
+import {useOperationNotice} from "./useOperationNotice";
 import { Terminal } from "./Terminal";
 import { TerminalLink } from "./TerminalLink";
-import { operationFailureSummary, useTerminalMessage, useTerminalLines } from "./terminalLogLogic";
+import { operationFailureSummary, reportOperationFailure, useTerminalMessage, useTerminalLines } from "./terminalLogLogic";
 import { IconButton, ActionButton } from "./ActionButton";
 import { NativePageActions, NativePageActionsContext } from "./NativePageActions";
 import { ownsPagePreference, usePagePreference } from "./pagePreferences";
@@ -437,7 +438,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [usbChecked, setUsbChecked] = useState(false);
   const [armMode, setArmMode] = useState<ArmModeStatus | null>(null);
   const [statusActionBusy, setStatusActionBusy] = useState<string | null>(null);
-  const [statusActionNotice, setStatusActionNotice] = useState("");
+  const [statusActionNotice, setStatusActionNotice] = useOperationNotice("Controller");
   const bridge = useMemo(() => new BridgeClient(), []);
   const sharedObservations = useNativeObservations(nativeDesktop() && stage === "connected",
     JSON.stringify([profile.id, profile.host, profile.username, profile.sshPort, profile.localPort, profile.remotePort, profile.rosDomainId, profile.rosSetupScript]));
@@ -481,7 +482,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const bagObservations = sharedBagStatus(sharedObservations);
   const rosbagPlayStatus = nativeDesktop() ? bagObservations.play.status : localRosbagPlayStatus;
   const [bagBusy, setBagBusy] = useState(false);
-  const [bagNotice, setBagNotice] = useState("");
+  const [bagNotice, setBagNotice] = useOperationNotice("Rosbag");
   const [bagClockMs, setBagClockMs] = useState<number | null>(null);
   const [bagOriginMs, setBagOriginMs] = useState<number | null>(null);
   const [bagWallStartedAtMs, setBagWallStartedAtMs] = useState<number | null>(null);
@@ -515,7 +516,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const [localRosbagStatus, setRosbagStatus] = useState<RosbagStatus | null>(null);
   const rosbagStatus = nativeDesktop() ? bagObservations.record.status : localRosbagStatus;
   const [toolbarBusy, setToolbarBusy] = useState<"record" | "diagnostics" | "">("");
-  const [toolbarNotice, setToolbarNotice] = useState("");
+  const [toolbarNotice, setToolbarNotice] = useOperationNotice("System");
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState<ConnectionProfile>(profile);
   const [pendingProfile, setPendingProfile] = useState<ConnectionProfile | null>(null);
@@ -703,7 +704,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   function openSavePose() {
     if (armMode?.teachingRunning) {
       const captured = captureTeachingPose(messages[TEACHING_FEEDBACK_TOPIC], performance.now());
-      if ("error" in captured) { setPoseSaveError(captured.error); setStatusActionNotice(captured.error); return; }
+      if ("error" in captured) { setPoseSaveError(captured.error); setStatusActionNotice(captured.error,true); return; }
       setPoseSaveError("");
       setPoseToSave({ name: nextCapturedPoseName(positionStore.profiles[positionProfileKey]?.positions ?? []),
         ...captured, source: "feedback", note: "拖动示教：同一帧六轴与标定夹爪" });
@@ -1043,7 +1044,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       setStatusActionNotice(`已重新初始化控制环境；${notice}`);
     } catch (reason) {
       if (actionGeneration !== connectionGenerationRef.current) return;
-      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
+      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason),true);
       try { await refreshRosControllers(); } catch { /* ignore */ }
     } finally {
       if (actionGeneration === connectionGenerationRef.current) {
@@ -1083,7 +1084,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           if (actionGeneration !== connectionGenerationRef.current) return;
           // If VLA was not loaded, deactivation may fail — surface but continue.
           const err = reason instanceof Error ? reason.message : String(reason);
-          setStatusActionNotice((current) => (current ? `${current}；VLA 停止：${err}` : `VLA 停止：${err}`));
+          setStatusActionNotice((current) => (current ? `${current}；VLA 停止：${err}` : `VLA 停止：${err}`),true);
         }
       } else if (!alsoStopArm) {
         setStatusActionNotice("VLA 未运行");
@@ -1094,7 +1095,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       await refreshUsbAndArm();
     } catch (reason) {
       if (actionGeneration !== connectionGenerationRef.current) return;
-      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
+      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason),true);
     } finally {
       if (actionGeneration === connectionGenerationRef.current) {
         statusActionInFlightRef.current = false;
@@ -1114,7 +1115,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       if (mode === "agent") {
         const result = await invoke<RemoteActionResult>("restart_micro_ros_agent", { profile });
         if (actionGeneration !== connectionGenerationRef.current) return;
-        setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
+        setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`,!result.ok);
         try {
           const agent = nativeDesktop() ? observationValue<AgentServiceStatus>(await sharedObservations.refresh("agent", true)) : await invoke<AgentServiceStatus>("check_micro_ros_agent", { profile });
           if (actionGeneration !== connectionGenerationRef.current) return;
@@ -1138,7 +1139,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       }
       const result = await armWorkflow.run(mode, mode === "teaching");
       if (actionGeneration !== connectionGenerationRef.current) return;
-      setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`);
+      setStatusActionNotice(result.ok ? result.message : `${result.message}：${result.detail || result.exitCode}`,!result.ok);
       await refreshUsbAndArm();
       if (result.ok && ["teleop", "trajectory", "teaching", "moveit"].includes(mode)) {
         const verified = await fetchRosControllers(true, true);
@@ -1148,7 +1149,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       } else await refreshRosControllers();
     } catch (reason) {
       if (actionGeneration !== connectionGenerationRef.current) return;
-      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason));
+      setStatusActionNotice(reason instanceof Error ? reason.message : String(reason),true);
     } finally {
       if (actionGeneration === connectionGenerationRef.current) {
         statusActionInFlightRef.current = false;
@@ -1394,7 +1395,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       if (!nativeDesktop()) {
       void invoke<RosbagStatus>("get_rosbag_status", { profile })
         .then(setRosbagStatus)
-        .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`));
+        .catch((reason) => setToolbarNotice(`无法读取 rosbag 状态：${reason instanceof Error ? reason.message : String(reason)}`,true));
       void invoke<RosbagPlayStatus>("get_rosbag_play_status", { profile })
         .then(setRosbagPlayStatus)
         .catch(() => undefined);
@@ -1542,7 +1543,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       setToolbarNotice(`${status.message}${status.outputPath ? `：${status.outputPath}` : ""}`);
     } catch (reason) {
       if (generation !== connectionGenerationRef.current) return;
-      setToolbarNotice(`rosbag 操作失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      setToolbarNotice(`rosbag 操作失败：${reason instanceof Error ? reason.message : String(reason)}`,true);
     } finally {
       if (generation === connectionGenerationRef.current) setToolbarBusy("");
     }
@@ -1570,7 +1571,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       }
     } catch (reason) {
       if (generation !== connectionGenerationRef.current) return;
-      setBagNotice(`无法读取 bag 回放状态：${reason instanceof Error ? reason.message : String(reason)}`);
+      setBagNotice(`无法读取 bag 回放状态：${reason instanceof Error ? reason.message : String(reason)}`,true);
     }
   }
 
@@ -1609,7 +1610,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
     } catch (reason) {
       if (generation !== connectionGenerationRef.current) return;
       if (!nativeDesktop()) { bagPlayingRef.current = false; setBagWallStartedAtMs(null); }
-      setBagNotice(`bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      setBagNotice(`bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`,true);
     } finally {
       if (generation === connectionGenerationRef.current) setBagBusy(false);
     }
@@ -1631,7 +1632,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       setBagNotice(status.message);
     } catch (reason) {
       if (generation !== connectionGenerationRef.current) return;
-      setBagNotice(`停止 bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      setBagNotice(`停止 bag 回放失败：${reason instanceof Error ? reason.message : String(reason)}`,true);
     } finally {
       if (generation === connectionGenerationRef.current) {
         if (!nativeDesktop()) {
@@ -1671,7 +1672,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
       });
       setToolbarNotice(`诊断快照已保存：${localPath}`);
     } catch (reason) {
-      setToolbarNotice(`诊断快照保存失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      setToolbarNotice(`诊断快照保存失败：${reason instanceof Error ? reason.message : String(reason)}`,true);
     } finally {
       setToolbarBusy("");
     }
@@ -1722,6 +1723,13 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   const connectBusy = mainRecovery.pending || Boolean(mainRecovery.error) || openingOffline || ["ssh", "tunnel", "bridge", "upgrading"].includes(stage);
   const historyLine = formatConnectHistoryLine(connectHistory);
   const faultCode = hardwareStatus?.fault_code;
+  const previousFault = useRef<number | undefined>(undefined);
+  useEffect(()=>{
+    if(hostedPage || stage !== "connected") {previousFault.current=undefined;return;}
+    if(faultCode !== undefined && faultCode !== previousFault.current && faultCode !== 0 && previousFault.current !== undefined)
+      reportOperationFailure("Motor",`硬件出现故障，fault_code=${faultCode}`,{title:"Motor · 新硬件故障"});
+    previousFault.current=faultCode;
+  },[faultCode,stage,hostedPage]);
   const faultModeLabel = hardwareStatus ? formatHardwareMode(hardwareStatus) : "";
   const faultMode = faultModeLabel && faultModeLabel !== "—" ? faultModeLabel : null;
 
@@ -1797,13 +1805,10 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
   useTerminalMessage("Connection", hostedPage ? "" : error, "error");
   useTerminalMessage("Connection", hostedPage ? "" : agentError, "error");
   useTerminalMessage("Connection", hostedPage ? "" : stageNames[stage]);
-  useTerminalMessage("System", toolbarNotice);
-  useTerminalMessage("Controller", statusActionNotice);
   useTerminalMessage("Topics", [topicSubscribeError,topicRefreshError].filter(Boolean).join("\n"), "error");
   useTerminalMessage("Motion", [trajectoryStateError,poseSaveError].filter(Boolean).join("\n"), "error");
   useTerminalMessage("Monitor", [monitorHistoryError,motionErrorSubscriptionError].filter(Boolean).join("\n"), "error");
   useTerminalMessage("Monitor", [monitorCapture.notice,monitorHistoryNotice].filter(Boolean).join("；"));
-  useTerminalMessage("Rosbag", bagNotice);
   useTerminalMessage("Rosbag", rosbagPlayStatus?.message === bagNotice ? "" : rosbagPlayStatus?.message);
   useTerminalMessage("Window", workspace.error, "error");
   useTerminalMessage("Connection", mainRecovery.error, "error");

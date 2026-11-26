@@ -1,4 +1,5 @@
 mod terminal;
+mod notifications;
 mod handeye;
 mod session;
 use serde::{Deserialize, Serialize};
@@ -1496,13 +1497,15 @@ pub fn run() {
         .manage(session::documents::Documents::default())
         .manage(control_logs::LogSessions::default())
         .manage(terminal::Terminal::default())
+        .manage(notifications::Notifications::default())
         .on_page_load(|view, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Started {
+            if payload.event() == tauri::webview::PageLoadEvent::Started && !view.label().starts_with("notice-") {
                 session::workspace::Workspace::page_loading(view);
             }
         });
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     let builder = builder.on_web_content_process_terminate(|view| {
+        if let Some(id)=view.label().strip_prefix("notice-").and_then(|id|id.parse().ok()) {notifications::remove(view.app_handle(),id);return;}
         session::workspace::Workspace::page_loading(view);
         // A custom termination handler replaces tauri-runtime-wry's default
         // reload handler. Keep that recovery after fencing the old document.
@@ -1513,6 +1516,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             terminal::terminal_read, terminal::terminal_append, terminal::terminal_export,
+            notifications::notification_show, notifications::notification_read, notifications::notification_presented, notifications::notification_close,
             session::documents::editor_document_read,
             session::documents::editor_document_commit,
             session::ipc::native_bridge_context,
@@ -1591,6 +1595,7 @@ pub fn run() {
                     let _ = handle.emit("native-session-changed", ());
                 }));
             terminal::initialize(app.handle());
+            notifications::initialize(app.handle());
             session::finite_recovery::initialize(app.handle());
             session::motor_recovery::initialize(app.handle());
             session::leased_recovery::initialize(app.handle());

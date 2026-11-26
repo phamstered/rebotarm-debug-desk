@@ -1,0 +1,1 @@
+{"identifier":"notifications","description":"Read-only error notification windows","windows":["notice-*"],"permissions":["core:event:default"]}

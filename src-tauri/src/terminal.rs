@@ -53,7 +53,7 @@ struct History {
 }
 #[derive(Default)]
 pub struct Terminal(Mutex<History>);
-fn clean(text: &str, limit: usize) -> String {
+pub(crate) fn clean(text: &str, limit: usize) -> String {
     // Strip escape sequences and control characters; do not render terminal commands.
     let mut output = String::new();
     let mut escape = 0;
@@ -174,7 +174,7 @@ fn clean(text: &str, limit: usize) -> String {
     output
 }
 impl Terminal {
-    fn context(&self, context: &Value) -> (String, String) {
+    pub fn context(&self, context: &Value) -> (String, String) {
         let session = format!(
             "{}:{}:{}",
             context["epoch"], context["profile_revision"], context["connected"]
@@ -209,7 +209,7 @@ impl Terminal {
         h.task_sessions.insert(key, session.clone());
         session
     }
-    fn append(&self, session: &str, input: Input, key: Option<&str>) -> Result<(), String> {
+    fn append(&self, session: &str, input: Input, key: Option<&str>) -> Result<Option<Entry>, String> {
         if input.key.as_ref().is_some_and(|s| s.len() > 512)
             || input.message.len() > 128 * 1024
             || input.source.len() > 80
@@ -224,14 +224,14 @@ impl Terminal {
         let host = h.sessions.get(session).cloned().ok_or("日志会话已失效")?;
         let message = clean(&input.message, 16384);
         if message.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         if let Some(key) = key {
             let key = format!("{session}:{key}");
             let signature: [u8; 32] =
                 Sha256::digest(format!("{}:{}", input.level, message).as_bytes()).into();
             if h.seen.get(&key) == Some(&signature) {
-                return Ok(());
+                return Ok(None);
             }
             if h.seen.len() > 4096 {
                 h.seen.clear();
@@ -258,7 +258,7 @@ impl Terminal {
         } else {
             h.dropped += 1;
         }
-        h.rows.push_back(entry);
+        h.rows.push_back(entry.clone());
         while h.rows.len() > MAX_ROWS || h.bytes > MAX_BYTES {
             if let Some(old) = h.rows.pop_front() {
                 h.bytes = h
@@ -266,7 +266,10 @@ impl Terminal {
                     .saturating_sub(serde_json::to_vec(&old).unwrap().len());
             }
         }
-        Ok(())
+        Ok(Some(entry))
+    }
+    pub fn entry(&self, id: u64) -> Option<Entry> {
+        self.0.lock().unwrap().rows.iter().find(|row| row.id == id).cloned()
     }
     fn page(&self, after: u64) -> Value {
         let h = self.0.lock().unwrap();
@@ -310,18 +313,19 @@ pub fn terminal_append(
     runtime: tauri::State<crate::session::runtime::Runtime>,
     session: Option<String>,
     entries: Vec<Input>,
-) -> Result<(), String> {
+) -> Result<Vec<Option<Entry>>, String> {
     allowed(&window)?;
     let (current, _) = terminal.context(&runtime.context());
     let session = session.unwrap_or(current);
     if entries.len() > 256 {
         return Err("日志批次过大".into());
     }
+    let mut written = Vec::new();
     for input in entries {
         let key = input.key.clone();
-        terminal.append(&session, input, key.as_deref())?;
+        written.push(terminal.append(&session, input, key.as_deref())?);
     }
-    Ok(())
+    Ok(written)
 }
 #[tauri::command]
 pub fn terminal_export(
