@@ -1,4 +1,4 @@
-import { TerminalLink } from "./TerminalLink";
+import { OperationLogNotice } from "./OperationLogNotice";
 import { terminalPublish, logLevel, useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +39,9 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const [capabilities, setCapabilities] = useState<MotorControlCapabilities | null>(null), [capabilityError, setCapabilityError] = useState("");
   const [legacyConfirmed, setLegacyConfirmed] = useState(false);
   const modeEvidenceRef = useRef("");
+  const [inputError, setInputError] = useState("");
+  useTerminalMessage("Motor",inputError,"error");
+  useTerminalMessage("Motor",capabilityError,"error");
   const [result, setResult] = useState(""), [sequence, setSequence] = useState<number | undefined>();
   const timerRef = useRef<number | null>(null), mountedRef = useRef(true), operationRef = useRef(0), pendingRef = useRef<Pending>(null);
   const capsRef = useRef<MotorControlCapabilities | null>(null), seenV2Ref = useRef(false), canRunRef = useRef(active && !controlLocked);
@@ -53,7 +56,6 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const busy = streaming || pending !== null || stopRequested;
   const gate = !capabilities && !legacyConfirmed ? capabilityError || "正在读取驱动能力" : controlGate(capabilities, seenV2Ref.current, drive, mask);
 
-  useTerminalMessage("Motor",result);
   function logMode(message: string) { terminalPublish({source:"Motor",message,level:logLevel(message)}); }
   function setOperation(value: Pending) { pendingRef.current = value; setPending(value); }
   function stopTimer() {
@@ -190,7 +192,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     };
   }, [bridge]);
 
-  function edited() { setArmed(false); setSupportConfirmed(false); }
+  function edited() { setInputError(""); setArmed(false); setSupportConfirmed(false); }
   function updateMotor(index: number, patch: Partial<MotorRowInput>) {
     edited();
     const update = (rows: MotorRowInput[]) => rows.map((row, i) => i === index ? { ...row, ...patch } : row);
@@ -236,7 +238,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
 
   async function start() {
     if (!canRunRef.current || busy || pendingRef.current) return;
-    if (!armed) { setResult("请先核对参数并勾选安全确认"); return; }
+    if (!armed) { setInputError("请先核对参数并勾选安全确认"); return; }
     const currentGate = !capsRef.current && !legacyConfirmed ? capabilityError || "正在读取驱动能力" : controlGate(capsRef.current, seenV2Ref.current, drive, mask);
     if (currentGate) { setResult(currentGate); return; }
     if (capsRef.current?.supported && !capsRef.current.disabled_verified) { setResult("请先停止并确认全部输出已关闭，再开始控制"); return; }
@@ -244,7 +246,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     let payload: BridgeEnvelope;
     const parsedMit = drive === "MIT" ? parseCommandValues({ velocity, kp, kd, effort }, motors) : null;
     const parsedPos = drive === "POS_VEL" && capsRef.current ? parsePosVelValues(motors, velocityLimits, capsRef.current, mode) : null;
-    if ((drive === "MIT" && !parsedMit?.values) || (drive === "POS_VEL" && !parsedPos?.values)) { setResult(parsedMit?.error || parsedPos?.error || "控制参数无效"); return; }
+    if ((drive === "MIT" && !parsedMit?.values) || (drive === "POS_VEL" && !parsedPos?.values)) { setInputError(parsedMit?.error || parsedPos?.error || "控制参数无效"); return; }
     setOperation("starting"); callbackRef.current(true); const operation = ++operationRef.current;
     try {
       if (drive === "POS_VEL") {
@@ -327,8 +329,8 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       <label className="arm-check"><input type="checkbox" checked={armed} disabled={busy || controlLocked || !active || !!gate} aria-label="安全确认" onChange={event => setArmed(event.target.checked)} />已核对所选关节、参数及现场安全</label>
       <div className="control-actions"><ActionButton className="send-command" disabled={busy || controlLocked || !active || !armed || !!gate} onClick={() => void start()}>{mainLabel}</ActionButton><ActionButton className="stop-command" onClick={() => void disable()}>停止并 DISABLE</ActionButton></div>
       {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {selectedCount} 轴</div>}
-      {result && <div className="command-result" aria-live="polite">{result}</div>}
-      <TerminalLink source="Motor">查看模式切换日志</TerminalLink>
+      {inputError && <p className="error" role="alert">{inputError}</p>}
+      <OperationLogNotice source="Motor" notice={result} label={stopRequested ? "等待输出关闭确认" : streaming ? "持续控制中" : "控制操作已有更新"} />
       <details className="motor-control-details"><summary>控制详情</summary><dl><dt>指令流</dt><dd>20 Hz · 固定参数快照</dd><dt>sequence</dt><dd>{sequence ?? "—"}</dd><dt>lease</dt><dd>{drive === "POS_VEL" ? capabilities?.lease_id ?? "—" : "V1 原生准入"}</dd><dt>反馈龄上界</dt><dd>{capabilities ? `${capabilities.age_ms} ms${capabilities.fresh ? "" : "（过期）"}` : "旧协议"}</dd><dt>Topic</dt><dd>{drive === "POS_VEL" ? `${commandTopic}_v2` : commandTopic}</dd></dl></details>
       <small className="safety-note">停止或离开页面会请求关闭输出，结果以新鲜固件反馈为准。滑块范围来自当前 URDF；POS_VEL 下发还须满足固件已验证范围。未选择的轴不发送运动目标。断流可能触发故障锁存，不会自动恢复控制。</small>
     </aside>

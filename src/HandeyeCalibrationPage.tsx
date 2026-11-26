@@ -1,4 +1,4 @@
-import { useTerminalMessage } from "./terminalLogLogic";
+import { OperationLogNotice } from "./OperationLogNotice";
 import { ActionButton, IconButton } from "./ActionButton";
 import { NativePageActions } from "./NativePageActions";
 import { useHandeyeInvoke } from "./handeyeTaskLogic";
@@ -98,8 +98,6 @@ export function HandeyeCalibrationPage({
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  useTerminalMessage("Handeye",error,"error");
-  useTerminalMessage("Handeye",notice);
   const [boardImage, setBoardImage] = useState("");
   const [preview, setPreview] = useState("");
   const [previewOriginal, setPreviewOriginal] = useState("");
@@ -377,16 +375,7 @@ export function HandeyeCalibrationPage({
         ))}
       </div>
       {busy && <p role="status">{busy}…</p>}
-      {error && (
-        <p role="alert" className="handeye-error">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="handeye-notice">
-          {notice}
-        </p>
-      )}
+      <OperationLogNotice source="Handeye" error={error} notice={notice} />
       {!connected && (
         <p className="handeye-warning">
           未连接 Jetson。仍可配置标定板、载入样本、求解和导出。

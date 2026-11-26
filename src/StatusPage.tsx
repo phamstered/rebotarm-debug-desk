@@ -274,7 +274,7 @@ export function StatusPage({
         <NativePageActions />
       </header>}
       {!controlView && <p className="status-page-banner" role="note">
-        控制环境启停、Controller 管理与操作日志已集中到「控制模式」。
+        控制环境启停与 Controller 管理位于「控制模式」，操作日志统一显示在底部 Terminal。
         <ActionButton onClick={onManageControllers}>打开控制模式</ActionButton>
       </p>}
       {stickyAlert && (

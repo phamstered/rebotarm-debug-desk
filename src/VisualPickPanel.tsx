@@ -1,3 +1,4 @@
+import { useTerminalMessage } from "./terminalLogLogic";
 import { ActionButton } from "./ActionButton";
 import { useEffect, useRef, useState } from "react";
 import { bridgeReceivedAt } from "./nativeBridgeLogic";
@@ -13,6 +14,8 @@ export function VisualPickPanel({bridge,token,selected,selectionRevision=0,activ
   onPreview(value:VisualPickPreview|null):void;onBusy(value:boolean):void;onClear():void;
 }) {
   const [preview,setPreview]=useState<VisualPickPreview|null>(null),[state,setState]=useState(idle),[error,setError]=useState("");
+  useTerminalMessage("Motion",error,"error");
+  useTerminalMessage("Motion",state.message, state.phase==="failed"?"error":"info",state.command_id);
   const owns=useRef("");
   const stateAt=useRef(-Infinity),finished=useRef("");
   function applyState(message:BridgeEnvelope){

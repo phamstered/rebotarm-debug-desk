@@ -27,7 +27,8 @@ describe("arm mode workflow", () => {
     expect(hook.result.current.workflow).toMatchObject({stage: "cleanup", failed: true, running: false});
     render(<ArmModeWorkflow workflow={hook.result.current.workflow} />);
     expect(screen.getByText("清理旧进程").closest("li")).toHaveAttribute("data-state", "failed");
-    expect(screen.getByRole("alert")).toHaveTextContent("owner did not exit");
+    expect(screen.getByRole("alert")).toHaveTextContent("控制操作失败");
+    expect(screen.queryByText("owner did not exit")).toBeNull();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect((await readTerminal(0)).entries.some(e=>e.source==="Controller"&&e.message.includes("owner did not exit"))).toBe(true);
     act(() => { mock.invoke.mock.calls.at(-1)![1].onProgress.onmessage({stage: "startup", message: "late", failed: false}); });

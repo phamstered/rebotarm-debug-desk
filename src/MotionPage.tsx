@@ -7,8 +7,7 @@ import { MotionOutputPanel, MotionOutputProvider } from "./MotionOutput";
 import type { MotionTab } from "./appNavigationLogic";
 
 export function MotionPage({ active, visible = active, tab, onTabChange, controllersOpen, onToggleControllers,
-  controllers, readiness, robot, urdf, positions, groups, log, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators, unifiedTerminal = false }: {
-  unifiedTerminal?: boolean;
+  controllers, readiness, robot, urdf, positions, groups, resetVersion, compact = false, focusMode = false, onToggleFocus, connection, connectionLabel, tools, indicators }: {
   compact?: boolean; focusMode?: boolean; onToggleFocus?(): void; connection?: ReactNode; connectionLabel?: ReactNode; tools?: ReactNode; indicators?: ReactNode;
   resetVersion?: number;
   active: boolean;
@@ -23,9 +22,8 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
   urdf?: ReactNode;
   positions: ReactNode;
   groups?: ReactNode;
-  log: ReactNode;
 }) {
-  return <MotionLayoutProvider active={active} visible={visible} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider unified={unifiedTerminal}><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!visible} aria-label="Motion">
+  return <MotionLayoutProvider active={active} visible={visible} compact={compact} focusMode={focusMode} exitFocus={()=>{if(focusMode)onToggleFocus?.();}} resetVersion={resetVersion}><MotionOutputProvider><main className={`motion-workspace${controllersOpen && !focusMode ? "" : " controllers-collapsed"}${compact ? " compact-workspace" : ""}${focusMode ? " focus-mode" : ""}`} hidden={!visible} aria-label="Motion">
     <header className="motion-workspace-header native-window-header">
       <div className="motion-workspace-navigation">
         {!compact && <strong>Motion</strong>}
@@ -61,7 +59,7 @@ export function MotionPage({ active, visible = active, tab, onTabChange, control
       <div id="motion-positions" className="motion-positions" hidden={tab !== "positions"}>{positions}</div>
       <div id="motion-groups" className="motion-groups" hidden={tab !== "groups"}>{groups}</div>
     </section>
-    <MotionDivider size="logHeight" label="调整 Motion 日志高度" axis="y" edge="end" panel=".motion-workspace-log" container=".motion-workspace" maxFraction={.5} className="motion-log-divider" />
-    <section className="motion-workspace-log" aria-label="Motion 输出"><MotionOutputPanel log={log} /></section>
+    <MotionDivider size="logHeight" label="调整 Motion 报告高度" axis="y" edge="end" panel=".motion-workspace-log" container=".motion-workspace" maxFraction={.5} className="motion-log-divider" />
+    <section className="motion-workspace-log" aria-label="Motion 报告"><MotionOutputPanel /></section>
   </main></MotionOutputProvider></MotionLayoutProvider>;
 }

@@ -1,3 +1,4 @@
+import { useTerminalMessage, terminalPublish } from "./terminalLogLogic";
 import { ActionButton, IconButton } from "./ActionButton";
 import { useEffect, useRef, useState } from "react";
 import { positionFingerprint } from "./positionStore";
@@ -59,6 +60,8 @@ function PositionEditor({
   const [editorOpen, setEditorOpen] = useState(cached?.editorOpen ?? false);
   const [editingId, setEditingId] = useState<string | null>(cached?.editingId ?? null);
   const [formError, setFormError] = useState("");
+  useTerminalMessage("Motion",error,"error");
+  useTerminalMessage("Motion",formError,"error");
   const [pendingDelete, setPendingDelete] = useState("");
   const baseline = useRef(cached?.baseline ?? ""), deleteBaseline = useRef("");
   const handledRequest = useRef(cached?.handledRequest);
@@ -108,7 +111,7 @@ function PositionEditor({
     try {
       const failure = await action();
       if (!mounted.current || profile.current !== profileKey) return;
-      if (failure) setFormError(failure); else after();
+      if (failure) setFormError(failure); else { terminalPublish({source:"Motion",level:"info",message:"姿态库操作已保存"}); after(); }
     } catch (reason) { if (mounted.current && profile.current === profileKey) setFormError(String(reason)); }
     finally { busy.current = false; if (mounted.current) setPending(false); }
   }

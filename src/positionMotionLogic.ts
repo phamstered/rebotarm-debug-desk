@@ -107,7 +107,14 @@ export function usePositionMotion(bridge: Pick<BridgeClient, "request" | "onMess
           logCursor = reply.motion_log_cursor ?? 0;
           if (restarted) recordLog("bridge", "Bridge 已重启，日志序列重新开始", "warn");
           if (reply.motion_log_truncated) recordLog("bridge", "日志同步窗口已溢出，部分历史请查看 Jetson Bridge 原始日志", "warn");
-          if (reply.motion_logs.length) setLogs((value) => [...value, ...reply.motion_logs!].slice(-5000));
+          if (reply.motion_logs.length) {
+            setLogs((value) => [...value, ...reply.motion_logs!].slice(-5000));
+            // Native sessions already publish these rows through MotionLogs' sink.
+            if (!nativeDesktop()) for (const entry of reply.motion_logs) terminalPublish({
+              source: "Motion", task: entry.command_id, level: entry.level,
+              message: `${entry.phase} · ${entry.message}`,
+            });
+          }
         }
         if (gripperExpiry !== undefined) window.clearTimeout(gripperExpiry);
         const age = reply.gripper_feedback_age_ms === undefined ? 0 : typeof reply.gripper_feedback_age_ms === "number" && Number.isFinite(reply.gripper_feedback_age_ms) && reply.gripper_feedback_age_ms >= 0 ? reply.gripper_feedback_age_ms : 1000;

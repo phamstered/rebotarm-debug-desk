@@ -89,3 +89,48 @@ it('does not replicate history into embedded docks, then restores it when detach
  expect(screen.getByText('300 条')).toBeVisible();
  expect(mock.invoke).toHaveBeenCalledWith('terminal_read',{after:0});
 });
+
+it('preserves search and paused scroll across polling and exports all retained rows independently of filtering',async()=>{
+ mock.rows=[row(1,{message:'first INFO'}),row(2,{level:'error',message:'Controller timeout'})];render(<Terminal/>);await tick(0);
+ const log=screen.getByRole('log'),search=screen.getByLabelText('搜索统一日志');
+ fireEvent.change(search,{target:{value:'TIMEOUT'}});expect(log).toHaveTextContent('Controller timeout');expect(log).not.toHaveTextContent('first INFO');
+ fireEvent.wheel(log,{deltaY:-20});log.scrollTop=123;mock.rows.push(row(3,{message:'next timeout'}));await tick();
+ expect(search).toHaveValue('TIMEOUT');expect(log.scrollTop).toBe(123);expect(screen.getByLabelText('跟随最新')).not.toBeChecked();
+ mock.save.mockResolvedValue('/tmp/all.log');await act(async()=>fireEvent.click(screen.getByRole('button',{name:'导出会话'})));
+ expect(mock.invoke).toHaveBeenCalledWith('terminal_export',expect.objectContaining({session:'one',source:null,task:null,search:null,level:null,after:0}));
+});
+it('reports export errors and skips a cancelled save dialog',async()=>{
+ render(<Terminal/>);await tick(0);mock.save.mockResolvedValueOnce(null);
+ await act(async()=>fireEvent.click(screen.getByRole('button',{name:'导出筛选'})));
+ expect(mock.invoke.mock.calls.some(([c])=>c==='terminal_export')).toBe(false);
+ const base=mock.invoke.getMockImplementation()!;mock.invoke.mockImplementation((c,a)=>c==='terminal_export'?Promise.reject('disk full'):base(c,a));
+ mock.save.mockResolvedValue('/tmp/export.log');await act(async()=>fireEvent.click(screen.getByRole('button',{name:'导出筛选'})));
+ expect(screen.getByRole('status')).toHaveTextContent('导出失败：disk full');
+});
+it('downloads the original source without applying display search and does not change follow preferences',async()=>{
+ const {defaultProfile}=await import('./types');render(<Terminal profile={defaultProfile}/>);await tick(0);
+ fireEvent.change(screen.getByLabelText('日志来源'),{target:{value:'teleop'}});fireEvent.change(screen.getByLabelText('搜索统一日志'),{target:{value:'ERROR'}});fireEvent.click(screen.getByLabelText('跟随最新'));
+ mock.save.mockResolvedValue('/tmp/original.log');await act(async()=>fireEvent.click(screen.getByRole('button',{name:'下载源日志'})));
+ expect(mock.invoke).toHaveBeenCalledWith('download_control_log',{profile:defaultProfile,source:'teleop',localPath:'/tmp/original.log'});
+ expect(screen.getByLabelText('搜索统一日志')).toHaveValue('ERROR');expect(screen.getByLabelText('跟随最新')).not.toBeChecked();
+});
+it.each(['disconnect','host','session','hidden'] as const)('does not download a stale source after %s while the save dialog is open',async(change)=>{
+ const {defaultProfile}=await import('./types');const view=render(<Terminal profile={defaultProfile}/>);await tick(0);
+ fireEvent.change(screen.getByLabelText('日志来源'),{target:{value:'teleop'}});
+ let finish!:(path:string)=>void;mock.save.mockImplementation(()=>new Promise(resolve=>finish=resolve));fireEvent.click(screen.getByRole('button',{name:'下载源日志'}));
+ if(change==='disconnect')view.rerender(<Terminal/>);
+ if(change==='host')view.rerender(<Terminal profile={{...defaultProfile,host:'other'}}/>);
+ if(change==='session'){mock.session='two';await tick();}
+ if(change==='hidden')view.rerender(<Terminal profile={defaultProfile} visible={false}/>);
+ await act(async()=>finish('/tmp/old.log'));
+ expect(mock.invoke.mock.calls.some(([c])=>c==='download_control_log')).toBe(false);
+});
+it('serializes reads, reports read errors, and ignores a pending result after unmount',async()=>{
+ let fail!:(reason:unknown)=>void;const base=mock.invoke.getMockImplementation()!;
+ mock.invoke.mockImplementation((c,a)=>c==='terminal_read'?new Promise((_resolve,reject)=>fail=reject):base(c,a));
+ const view=render(<Terminal/>);await tick(5000);expect(mock.invoke.mock.calls.filter(([c])=>c==='terminal_read')).toHaveLength(1);
+ await act(async()=>fail('service unavailable'));expect(screen.getByRole('status')).toHaveTextContent('service unavailable');
+ let complete!:(page:unknown)=>void;mock.invoke.mockImplementation((c,a)=>c==='terminal_read'?new Promise(resolve=>complete=resolve):base(c,a));await tick(2000);
+ view.unmount();await act(async()=>complete({entries:[row(1,{message:'old session output'})],session:'one',sessions:{one:'robot'},latest:1,cursor:1}));
+ expect(screen.queryByText('old session output')).toBeNull();
+});

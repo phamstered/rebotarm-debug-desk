@@ -22,6 +22,10 @@ export function Terminal({visible=true,profile,windowKey="main"}:{visible?:boole
  const [follow,setFollow]=useState(true),[after,setAfter]=useState(0),[error,setError]=useState(''),[notice,setNotice]=useState(''),[unread,setUnread]=useState(0),[top,setTop]=useState(0);
  const [details,setDetails]=useState<TerminalEntry|null>(null),[taskDetails,setTaskDetails]=useState(false),[saving,setSaving]=useState(false);
  const taskState=useNativeTaskSnapshot(nativeDesktop());
+ const downloadContext=useRef({current,profile:JSON.stringify(profile),visible});
+ downloadContext.current={current,profile:JSON.stringify(profile),visible};
+ const mounted=useRef(true);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
  const cursor=useRef(0),viewport=useRef<HTMLDivElement>(null),drag=useRef<{y:number;height:number}|null>(null),state=useRef({expanded,follow,visible,source,level,task,search,session});state.current={expanded,follow,visible,source,level,task,search,session};
  const bootstrap=useRef<number|null>(null);
  const revealed=useRef(new Set<string>());
@@ -50,7 +54,17 @@ export function Terminal({visible=true,profile,windowKey="main"}:{visible?:boole
  if(nativeDesktop())await invoke('terminal_export',{path,session:all?current:filter.session||null,source:all?null:source||null,level:all?null:level||null,task:all?null:task||null,search:all?null:search||null,after:all?0:after});
  else {const content=(all?entries.filter(e=>e.session===current):filtered).map(formatTerminal).join('\n');await invoke('save_motion_log',{localPath:path,content});}
  setNotice('已导出保留日志');}catch(e){setNotice(`导出失败：${String(e)}`);}finally{setSaving(false);}}
- async function downloadSource(){if(!profile||!source||saving)return;setSaving(true);try{const path=await save({defaultPath:`robot-${source}.log`,filters:[{name:'Log',extensions:['log']}]});if(path)await invoke('download_control_log',{profile,source,localPath:path});}catch(e){setNotice(`源日志下载失败：${String(e)}`);}finally{setSaving(false);}}
+ async function downloadSource(){
+  if(!profile||!source||saving)return;
+  const started=downloadContext.current;
+  const stillCurrent=()=>mounted.current&&downloadContext.current.visible&&downloadContext.current.current===started.current&&downloadContext.current.profile===started.profile;
+  setSaving(true);
+  try{
+   const path=await save({defaultPath:`robot-${source}.log`,filters:[{name:'Log',extensions:['log']}]});
+   if(path&&stillCurrent())await invoke('download_control_log',{profile,source,localPath:path});
+  }catch(e){if(stillCurrent())setNotice(`源日志下载失败：${String(e)}`);}
+  finally{if(mounted.current)setSaving(false);}
+ }
  const start=Math.max(0,Math.floor(top/28)-5),end=Math.min(filtered.length,start+Math.ceil((maximized?window.innerHeight:height)/28)+12);
  const summary=!taskState.loaded?'任务状态同步中':taskState.error?'任务状态待核验':taskState.task?`${taskState.task.kind==='arm_mode'?'控制环境':taskState.task.kind} · ${phases[taskState.task.phase]}`:'共享控制空闲 · 任务详情';
  return <section className={`global-terminal${expanded?' expanded':''}${maximized&&expanded?' maximized':''}`} hidden={!visible} aria-label="全局 Terminal" style={{height:expanded?(maximized?'auto':height):36}}>

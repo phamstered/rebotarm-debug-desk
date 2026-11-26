@@ -18,6 +18,12 @@ export function logLevel(message: string): LogLevel {
   message=message.replace(/\berror(?:_code)?\s*[=:]\s*0\b/gi, "");
   return /\b(error|fatal)\b|失败|异常/i.test(message) ? 'error' : /\bwarn(?:ing)?\b|未确认|待核验/i.test(message) ? 'warn' : 'info';
 }
+/** A current failure reason may stay beside its control; full output stays in Terminal. */
+export function operationFailureSummary(message: string) {
+  const line = message.split(/\r?\n/).find(value => value.trim())?.trim() ?? "操作失败";
+  const characters = Array.from(line);
+  return characters.length > 180 ? characters.slice(0, 180).join("") + "…" : line;
+}
 /** Apply both limits in each consumer, independently of native retention. */
 export function retainTerminal(entries: TerminalEntry[]) {
   let bytes = 0, start = entries.length;

@@ -1,3 +1,4 @@
+import { terminalOutput } from "./test/terminal";
 import {
   act,
   fireEvent,
@@ -17,8 +18,9 @@ import { MotionLayoutProvider } from "./MotionLayout";
 import type { CustomPosition } from "./positionLogic";
 import type { MotionGroup } from "./motionGroupsLogic";
 import type { PositionMotionControls } from "./positionMotionLogic";
+beforeEach(()=>localStorage.removeItem("robot-console-motion-report-open"));
 function MotionGroupsPage(props: MotionGroupsPageProps) {
-  return <MotionOutputProvider><Editor {...props} /><MotionOutputPanel log={<div>执行日志内容</div>} /></MotionOutputProvider>;
+  return <MotionOutputProvider><Editor {...props} /><MotionOutputPanel /></MotionOutputProvider>;
 }
 const position: CustomPosition = {
   id: "p",
@@ -165,7 +167,7 @@ describe("MotionGroupsPage", () => {
     });
     await user.click(screen.getByRole("button", { name: "另一组 · 2 帧" }));
     await user.click(screen.getByRole("button", { name: "保存并切换" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("磁盘已满");
+    expect(screen.getByRole("alert")).toHaveTextContent("操作失败"); expect(await terminalOutput("Motion")).toContain("磁盘已满");
     expect(screen.getByLabelText("动作组名称")).toHaveValue("编辑中");
     await user.click(screen.getByRole("button", { name: "保存并切换" }));
     expect(screen.getByLabelText("动作组名称")).toHaveValue("编辑中");
@@ -381,7 +383,7 @@ describe("MotionGroupsPage", () => {
     expect(screen.getByLabelText("动作组名称")).toHaveValue("离线编辑");
     await user.click(screen.getByRole("button", { name: "返回连接" }));
     await user.click(screen.getByRole("button", { name: "保存并切换" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("只读目录");
+    expect(screen.getByRole("alert")).toHaveTextContent("操作失败"); expect(await terminalOutput("Motion")).toContain("只读目录");
     expect(onBack).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "保存并切换" }));
     expect(onBack).not.toHaveBeenCalled();
@@ -421,7 +423,7 @@ describe("MotionGroupsPage", () => {
       },
     };
     render(<MotionGroupsPage {...value} />);
-    await user.click(screen.getByRole("tab", { name: "执行报告" }));
+    await user.click(screen.getByRole("button", { name: /^执行报告 / }));
     expect(
       screen.getByRole("status", { name: "最近动作组执行结果" }),
     ).toHaveTextContent("第 1/2 帧 · HOME · 首帧准备");
@@ -463,7 +465,7 @@ describe("MotionGroupsPage", () => {
         motion={{ ...value.motion, busy: true, state }}
       />,
     );
-    await user.click(screen.getByRole("tab", { name: "执行报告" }));
+    await user.click(screen.getByRole("button", { name: /^执行报告 / }));
     await waitFor(() =>
       expect(
         screen.getByRole("status", { name: "最近动作组执行结果" }),
@@ -545,7 +547,7 @@ describe("MotionGroupsPage", () => {
     const view = render(
       <MotionGroupsPage {...value} motion={{ ...value.motion, state }} />,
     );
-    fireEvent.click(screen.getByRole("tab", { name: "执行报告" }));
+    fireEvent.click(screen.getByRole("button", { name: /^执行报告 / }));
     expect(
       screen.getByRole("status", { name: "最近动作组执行结果" }),
     ).toHaveTextContent("已取消");
@@ -624,14 +626,14 @@ describe("MotionGroupsPage", () => {
         />,
       );
       expect(scroll).not.toHaveBeenCalled();
-      expect(screen.getByRole("tab", { name: "执行日志" })).toHaveAttribute("aria-selected", "true");
-      await user.click(screen.getByRole("button", { name: "收起执行面板" }));
+      expect(screen.queryByRole("tab", { name: "执行日志" })).toBeNull();
+      if (screen.getByRole("button", { name: /^执行报告 / }).getAttribute("aria-expanded") === "true") await user.click(screen.getByRole("button", { name: /^执行报告 / }));
       await user.click(screen.getByRole("button", { name: "查看执行报告" }));
       expect(scroll).not.toHaveBeenCalled();
-      expect(screen.getByRole("tab", { name: "执行报告" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("button", { name: /^执行报告 / })).toHaveAttribute("aria-expanded", "true");
       const report = screen.getByRole("status", { name: "最近动作组执行结果" });
       expect(report.closest(".motion-groups-editor")).toBeNull();
-      expect(report.closest('[role="tabpanel"]')).toHaveAccessibleName("执行报告");
+      expect(report.closest('[aria-label="Motion 执行报告"]')).toHaveAccessibleName("Motion 执行报告");
       expect(screen.getByLabelText("动作组名称")).toHaveValue("取放");
     } finally {
       if (descriptor)
@@ -781,7 +783,7 @@ describe("MotionGroupsPage", () => {
     });
     await user.click(screen.getByRole("button", { name: "执行前检查" }));
     await user.click(screen.getByRole("button", { name: "保存并执行" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("磁盘已满");
+    expect(await screen.findByRole("alert")).toHaveTextContent("操作失败"); expect(await terminalOutput("Motion")).toContain("磁盘已满");
     expect(value.motion.executeGroup).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "执行前检查" })).toBeVisible();
   });

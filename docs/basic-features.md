@@ -70,10 +70,10 @@ macOS 本机安装使用 `npm run install:mac`：先编译 release 版，再将
 - 页面导航只保留在左侧 Navigation，**Status** 为第一项，其后为控制模式、Topics、Motion、Monitor、数据采集、手眼标定、Motor 和重力辨识。Topics 集中 Graph / Inspector、Topic 列表与 Controller 只读浏览；Motion 提供 Robot View / 姿态库 / 动作组 三个局部 Tab、可折叠 Controllers 状态侧栏和共享运动日志。数值曲线在 Monitor 导航页。顶部工具栏不再重复品牌或导航。
 - **Status** 页复用现有连接态并增强详情：SSH/隧道、Bridge WS + hello、micro-ROS Agent（`check_micro_ros_agent` / `restart_micro_ros_agent`）、HardwareStatus（成功时「无故障 · mode」、失败时 fault 描述）、JointState 冒烟与 Hz、`check_ros_controllers`、ROS_DOMAIN_ID；USB CDC 经 SSH `probe_jetson_usb`（MCU `0483:5740`、串口、RealSense `8086:*`）仅「刷新检测」；控制模式页的 Teleop / Trajectory 与硬件区的 RealSense 卡片经 `probe_arm_mode` / `start_arm_mode` 一键拉起（SSH BatchMode，优先从当前 ROS setup 目录定位工作区，可用 `LEADER_FOLLOWER_WS` 覆盖，并兼容旧 `leader_follower` 目录；启动前读取新鲜 HardwareStatus，拒绝未恢复的锁存故障；停止旧 Teleop / Trajectory 前调用现有硬件 safe_stop（按当前增益执行 RETURN → DISABLE），等待 STM32 DISABLE 确认后仅通知启动脚本清理，不发送孤立 HOLD；安全停止被拒绝或确认超时时保留命令进程并报错；SSH 侧互斥保护并等待脚本完整自检与非零命令确认后才报告启动成功，超时保留 PID 供「停止」处理）。回零停不下来时可选择「解除输出并停止」，确认现场支撑后由控制器 `~/disable` 服务持续发送零输出 DISABLE，收到 STM32 回执后才停进程（需要支持该服务的 ROS 控制插件）；服务缺失或回执失败时不会改用外部发布者或强杀。一键 Teleop 执行 `scripts/start_arm_teleop.sh --position-controller=teleop --gravity=true --gripper=true --clean=false --start-leader=true`。一键 Trajectory 执行 `scripts/start_arm_teleop.sh --position-controller=trajectory --gravity=true --clean=false`，并按新鲜硬件使能掩码的 bit0x40 选择 `--gripper=true/false`，默认同时启用独立的 `gravity_compensation_controller`；仍等待启动脚本完成控制器状态自检后才报告成功。**VLA** 卡片经 `switch_ros_controllers` 启停 `vla_position_controller`（互斥 `arm_teleop_controller` / `arm_trajectory_controller`，保持 `gravity_compensation_controller`）；启动时与 Teleop/Trajectory 一样，先安全回零、确认 DISABLE、清理并核验旧模式，再以 Trajectory+gravity 初始化新控制环境，在同一原生互斥锁内切到 VLA；不复用旧命令状态，初始化/清理失败则中止；成功后校验 controller active（及可用时的 TRACK）；`fault_code=11` 禁用启动类按钮。可选采样 `/vla/joint_chunk`（`VlaJointChunk`）。Monitor 提供 `+VLA` 模板（`positions[0..5]`）。完整用法见 [VLA 使用指南](./vla)。无一键升级全部或自动刷写 STM32。
 - Status 分为「连接 / 硬件健康 / 控制模式」三个 Tab；硬件健康包含 USB、Hardware、时钟同步和 RealSense，控制模式包含 ros2_control、ROS 就绪及当前运行模式卡片（未启用模式时仍显示前两张）；默认打开连接。Tab 按卡片状态聚合，异常优先于注意、未知、正常、空闲，隐藏分区仍持续更新汇总；支持左右方向键、Home/End。Fault 芯片会自动打开硬件 Tab 并高亮 Hardware，HOLD / 故障提示在所有 Tab 保留。
-- 独立控制模式页的「模式预设」保留互斥模式条与停止/解除输出确认，并提供实时日志：默认按当前模式选 Teleop、Trajectory 或 ROS 控制器/VLA，也可选择 RealSense。通过 Tauri `read_control_log` 走只读 SSH，每轮完成后间隔 1 秒刷新，仅在模式预设和窗口可见、SSH 可用时工作；搜索不区分大小写并移除终端控制字符。关闭「跟随最新」或向上滚动后保留阅读位置，刷新不覆盖搜索内容。
+- 独立控制模式页的「模式预设」保留互斥模式条与停止/解除输出确认；控制日志统一进入底部 Terminal。「查看日志」打开当前会话的全部来源，可筛选 Teleop、Trajectory / VLA、拖动示教、MoveIt、ROS Controller 和 RealSense。原生采集不依赖当前页面、页签或窗口是否可见。
 
 Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩色图像、对齐深度和 CameraInfo；一键 RealSense 启动 ROS 栈的 `left_wrist_camera.launch.py`，启用深度对齐和时间同步，并把 `camera_link` 接到相机的 `left_arm/wrist_link`。Bridge 对三个流分别选择兼容的可靠性，均以 `VOLATILE` 订阅，兼容 RealSense 图像与 CameraInfo 不同的 durability；点云帧最多等待 150 毫秒获取采集时刻 TF。若 500 毫秒内有成功帧，短暂 TF 失败不会中断上一帧；持续失败会隐藏过期点云并显示错误，避免与实时 URDF 姿态错位。点云开关、着色、点大小和近远距离控件可交互；尚未收到完整 RGBD 帧时显示等待提示。修改过的自定义 Topic 配置不会被默认迁移覆盖。启动文件需先安装到 Jetson 的 `rebotarm_gazebo` 包。
-- 日志窗口展示末尾 128 KiB / 2000 行；「下载完整日志」通过保存对话框保存未经过搜索过滤的 `.log` 文件（最大 32 MiB，超过时明确拒绝）。来源仅限 `$HOME/.cache/robot-console/arm-{teleop,trajectory,realsense}.log` 和 `$HOME/.ros/log/ros2_control_node_*.log` 中最新文件；VLA 日志随宿主控制器进程记录。缺失日志显示等待，读取/下载失败显示原因；SSH 操作有 10 秒远端 / 15 秒本机超时，切换来源、隐藏或断开后忽略旧响应。此功能不启停 ROS 或机械臂。
+- ROS 源文件由原生 Terminal 采集器按游标增量读取，来源白名单、32 MiB 源日志下载上限及超时保持有效。Terminal 保留预算、截断提示、筛选、归档与导出规则见[全局 Terminal](#全局-terminal)。下载源日志不应用界面的搜索条件；保存对话框等待期间断线、切换机器人/会话或隐藏窗口会取消旧上下文的下载。日志操作不启停 ROS 或机械臂。
 - 已连接工具条与 Navigation 标题共享顶部行高度，两侧底部分隔线始终对齐；窄窗口时状态灯换到下一行并同步撑高标题区。导航列表与主页面内容在标题区下方独立滚动，不与连接控件重叠。
 - 已连接顶部工具条提供「断开并重连…」、连接配置、设置、压缩状态灯（含 ROS 就绪 / Bridge 版本徽章 / Fault 芯片 / Domain 提示）、连接名、隧道端口、Agent 与断开；全局工具栏保留全部刷新、实时显示暂停/恢复、rosbag 录制、诊断快照与重置布局。
 - Topics 页的 Topics、ROS Control、Inspector 三个区域可独立展开/收起；左右侧栏也可整列最小化并恢复，状态保存在本机。Topics 与 ROS Control 会自动使用另一面板释放出的高度。
@@ -91,7 +91,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - Motion 可在 ROS 未就绪时进入，查看已保存位置及就绪原因；执行继续要求连接、MoveIt、active 控制器、新鲜反馈、时钟和既有安全确认。
 - Topics 的 Controller 卡片提供「查看 Graph」和「管理」导航；实际启停在控制模式页，确认前重新核对状态；运行中的运动或其他控制任务会阻止切换。控制模式页同时保留整栈启动、安全退出与解除输出。
 - Motion 顶部展示机械臂/夹爪控制器、MoveIt、关节反馈和时钟状态；Robot View、姿态库与动作组共用全局 Terminal 的 Motion 日志。左侧 Controllers 默认收起，可通过工作栏“面板”展开；已有展开偏好继续恢复。
-- Controllers 宽度、日志高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄姿态库页改为列表/编辑上下分区。
+- Controllers 宽度、执行报告高度和点位列表/编辑区可拖动分隔条调整。方向键每次调整 10px，Shift + 方向键每次 40px，Home/End 到边界，双击分隔条恢复该项默认值。窄姿态库页改为列表/编辑上下分区。
 - Robot View 画布铺满内容区；「运动控制」「时钟同步 / RGBD」「TCP / 关节操作」支持画布内浮窗。紧凑工作台的 TCP / 关节操作默认停靠右侧，可切换浮窗，也可直接拖动标题脱离停靠（单击标题不会切换）；未保存偏好时运动状态和 RGBD 默认折叠，异常仍在状态摘要或面板标题提示。拖动标题移动，右下角手柄调整大小；标题和缩放手柄也支持方向键每次 10px、Shift 每次 40px。每个浮窗可折叠，画布顶部按钮可重新展开并置于最前；「重置浮窗」恢复默认位置、大小和展开状态。折叠保留当前编辑内容，不改变点云订阅或执行状态。面板内滚动/点击不操作相机，拖动浮窗不下发运动。
 - 分隔尺寸独立保存于 `robot-console-motion-layout`；浮窗位置、大小和折叠状态保存于 `robot-console-viewer-floating-panels-v1`，重启恢复。缩小窗口限制浮窗及其标题在画布内，面板内容独立滚动；仅显示尺寸约束不覆盖宽屏偏好。在 Motion 点击全局“重置布局”恢复分隔尺寸和所有浮窗并恢复图标导航、收起 Controllers 和输出区，保留当前 Tab 与编辑内容。
 - 导航页、Motion Tab 与 Controllers 展开状态独立记忆。Motion 默认 Robot View；旧 `dashboard` 导航标识继续表示 Topics。连接后默认跳 Status 的既有独立设置继续适用。
@@ -100,13 +100,13 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 ### Motion 紧凑工作台
 
 - Motion 将连接状态、全局工具和三个视图 Tab 合并为单条工作栏。主机按钮展示就绪或当前异常，展开可查看 SSH/Bridge/Agent/硬件/时钟及连接操作；Controllers 位于“面板”，刷新、实时显示、录制、诊断和布局重置位于“更多工具”。显示暂停和录制中保留常驻标记。后台轮询与原有安全核验保持运行，切换/断线清除会话数据的行为不变。
-- Motion 默认图标导航，其他页面保留自己的展开偏好。“专注模式”临时隐藏导航、资源、属性、Controllers、Robot View 操作窗和展开日志；退出恢复原布局，不清除未保存编辑或预览。主动打开属性/输出/Controllers 时退出专注。正在运行的任务、取消/停止、执行前检查和故障摘要持续可见。
+- Motion 默认图标导航，其他页面保留自己的展开偏好。“专注模式”临时隐藏导航、资源、属性、Controllers、Robot View 操作窗和展开的执行报告；退出恢复原布局，不清除未保存编辑或预览。主动打开属性/输出/Controllers 时退出专注。正在运行的任务、取消/停止、执行前检查和故障摘要持续可见。
 - 动作组左侧使用“动作组 / 姿态库”资源 Tab 和名称搜索；属性默认收起，单击块选择并本地预览，双击或菜单“属性”展开。属性可固定，下次恢复；未固定时仍保留当前会话展开状态。预览与时间轴支持分屏、仅预览、仅时间轴，资源区也可单独收起。窄宽度的属性区使用可关闭抽屉，不额外增加一行编辑区。
 - 动作组、源姿态、Pose/Action 块、轨道和时间轴空白支持右键菜单；工作区与卡片提供 `⋯` 替代入口。菜单支持 Shift+F10、方向键、Enter、Escape 和点击外部关闭。工具弹层也支持 Escape 收起并返回入口，不要求先点击或聚焦弹层内容；已由上层对话框处理的按键不再关闭其后的工具弹层。文本输入保留系统右键操作。Pose 可替换快照、前后插入、复制、添加拍照和删除；Action 可修改属性/依赖、复制和删除。删除 Pose 同步移除依赖 Action/同步点，撤销可恢复。轨道仅允许删除未使用轨道，且至少保留一个机械臂轨道。
 - 持久化动作组/姿态删除继续确认，切换未保存动作组继续提供保存/放弃/返回。编排块修改使用既有撤销记录；运行组锁定编辑，菜单和快捷键不能绕过。实际运动与 Controller 切换不由右键快捷触发，继续使用明确入口及原安全确认。
-- 工作台快捷键：⌘/Ctrl+S 保存动作组，⌘/Ctrl+Z 与 Shift+⌘/Ctrl+Z 撤销/重做，Space 播放/暂停本地预览；选中且聚焦的编排块可用 Delete/Backspace 删除并撤销。输入框、对话框、菜单、隐藏页面或拖动中不截获这些快捷键；不映射真实运动或停止指令。保存反馈位于组名旁，失败仍明确显示原因。
+- 工作台快捷键：⌘/Ctrl+S 保存动作组，⌘/Ctrl+Z 与 Shift+⌘/Ctrl+Z 撤销/重做，Space 播放/暂停本地预览；选中且聚焦的编排块可用 Delete/Backspace 删除并撤销。输入框、对话框、菜单、隐藏页面或拖动中不截获这些快捷键；不映射真实运动或停止指令。保存反馈位于组名旁，失败时可从「查看操作日志」读取完整原因，仍禁止执行未保存版本。
 - Robot View 画布右键或 `⋯` 提供适应模型、正/侧/俯视图、网格/坐标轴开关和打开 TCP 操作区。这些操作不修改目标关节或下发运动，青色球与 XYZ/RPY 微调、确认执行、保存实测姿态保持可用。
-- 紧凑面板偏好使用 `robot-console-workspace-*` 本地键，分隔尺寸和浮窗位置沿用原键。专注模式不覆写这些偏好。输出区默认折叠，展开偏好继续记忆；报告可随时通过标签或“查看执行报告”打开。正常保存不再显示占据整行的提示。
+- 紧凑面板偏好使用 `robot-console-workspace-*` 本地键，分隔尺寸和浮窗位置沿用原键。专注模式不覆写这些偏好。输出区默认折叠，展开偏好继续记忆；报告可随时通过报告栏或“查看执行报告”打开。正常保存不再显示占据整行的提示。
 
 ## 4. Topic Graph、Inspector 与 Monitor
 
@@ -679,3 +679,12 @@ Status / Motion 的整栈启动、模式切换、相机重启、MoveIt 启动及
 - Manager 下方统一提供「操作说明」和「查看日志」。说明默认收起，集中解释加载/停用、模式切换及退出语义；查看日志打开本窗口对应 Terminal 的当前会话、全部来源，重置旧筛选和清屏条件，涵盖 Controller 操作、共享任务与 ROS 输出。两个管理页签共用这一入口。
 - 操作区保留停止/直接关闭输出、就近简短风险提示及现场确认。阻塞原因、失败信息继续可见；正在执行或失败的流程显示实际步骤，已完成步骤不长期占据操作区，完成结果保留在 Terminal 历史。收起说明或查看日志不改变控制权限和任务状态。
 - Terminal 的筛选、跟随与导出控件按可用宽度换行，复选框使用独立固定尺寸；窄窗口工具栏可滚动，避免文字与按钮重叠。
+
+
+### 全页面操作日志统一
+
+- 所有页面的控制/操作日志只在底部 Terminal 输出；Motion 的普通、紧凑、Robot View 和独立窗口均使用这一入口，没有可切回旧日志面板的布局分支。Motion 本地保留可折叠的结构化执行报告（关键帧、数值误差和判定结果），其尺寸与展开状态独立于 Terminal。
+- 数据采集、手眼、重力辨识、Motor、动作组编辑和 Monitor 的操作结果在页面仅显示简短状态与「查看操作日志」，原始消息、异常和多行输出进入对应来源。控制页运行/失败流程保留步骤和简短失败状态；连接失败就近保留有界的当前原因，完整输出在 Terminal。
+- 补齐姿态编辑/保存、动作组编辑、Monitor 预设导入/导出、视觉抓取、RGBD/模型错误、窗口操作及重力辨识文字反馈。浏览器模式直接收到的 Motion 远端日志也进入 Terminal；原生模式由应用级采集器记录，页面不重复转载远端行。
+- 输入校验、实时硬件/控制状态、故障与安全确认、结构化标定结果和 Topic 原始数据继续在业务位置显示；它们不构成另一个控制日志窗口。日志显示与清屏均不授予控制权，也不代表任务完成。
+- 逐页数据路径、回归测试及实际验证范围见[Terminal 全页面检查表](./terminal-output-audit)。

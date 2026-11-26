@@ -1,3 +1,4 @@
+import { terminalOutput } from "./test/terminal";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MotorControl } from "./MotorControl";
@@ -59,10 +60,10 @@ describe("MotorControl legacy MIT", () => {
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3, active_joint_mask: 0, position: [] }));
     expect(screen.getByLabelText("安全确认")).not.toBeChecked();
-    expect(screen.getByText(/已请求 DISABLE，停止确认中/)).toBeVisible();
+    expect(await terminalOutput("Motor")).toMatch(/已请求 DISABLE，停止确认中/);
     await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2);
     await act(async () => bridge.emit({ op: "topic_message", topic: "/stm32/status", data: { header: { stamp: { sec: 2, nanosec: 0 } }, mode: 3, fault_code: 0, last_command_sequence: 42 } }));
-    expect(screen.getByText(/已确认输出关闭/)).toBeVisible(); expect(screen.getByRole("button", { name: "开始控制" })).toBeDisabled();
+    expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/); expect(screen.getByRole("button", { name: "开始控制" })).toBeDisabled();
   });
   it("rejects empty selection and excessive effort, preserving unrestricted MIT numeric targets", async () => {
     const { bridge } = mount(bridgeDouble(), { urdfXml: motorUrdf(urdfJoint("joint1", -0.3, 0.3)) }); await flush(); arm(); start(); expect(screen.getByText("请至少选择一个关节")).toBeVisible(); expect(bridge.command).not.toHaveBeenCalled();
@@ -74,15 +75,15 @@ describe("MotorControl legacy MIT", () => {
   it("requests DISABLE after an ambiguous first-frame failure instead of assuming nothing was published", async () => {
     const bridge = bridgeDouble(); bridge.command.mockRejectedValueOnce(new Error("ACK timeout")); mount(bridge); await flush(); select(); arm(); start(); await flush();
     expect(bridge.command).toHaveBeenNthCalledWith(1, expect.objectContaining({ mode: 1 })); expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
-    expect(screen.getByText(/控制未开始：Error: ACK timeout；已请求停止/)).toBeVisible(); expect(bridge.send).not.toHaveBeenCalled(); expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    expect(await terminalOutput("Motor")).toMatch(/控制未开始：Error: ACK timeout；已请求停止/); expect(bridge.send).not.toHaveBeenCalled(); expect(screen.getByLabelText("安全确认")).not.toBeChecked();
   });
   it("uses the configured status topic and requires advancing source feedback after STOP", async () => {
     const { bridge } = mount(bridgeDouble(), { statusTopic: "/arm/status" }); await flush();
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     const feedback = (topic: string, sec: number) => ({ op: "topic_message", topic, data: { header: { stamp: { sec, nanosec: 0 } }, mode: 3, fault_code: 0, last_command_sequence: 42 } });
-    await act(async () => bridge.emit(feedback("/stm32/status", 2))); expect(screen.queryByText(/已确认输出关闭/)).not.toBeInTheDocument();
-    await act(async () => bridge.emit(feedback("/arm/status", 2))); expect(screen.queryByText(/已确认输出关闭/)).not.toBeInTheDocument();
-    await act(async () => bridge.emit(feedback("/arm/status", 3))); expect(screen.getByText(/已确认输出关闭/)).toBeVisible();
+    await act(async () => bridge.emit(feedback("/stm32/status", 2))); expect(await terminalOutput("Motor")).not.toMatch(/已确认输出关闭/);
+    await act(async () => bridge.emit(feedback("/arm/status", 2))); expect(await terminalOutput("Motor")).not.toMatch(/已确认输出关闭/);
+    await act(async () => bridge.emit(feedback("/arm/status", 3))); expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/);
   });
   it("shows read-only model bounds by joint name while preserving the seven command slots", async () => {
     const urdfXml = motorUrdf(urdfJoint("joint3", -2, 2), urdfJoint("joint1", -0.1, 0.2));
@@ -246,7 +247,7 @@ describe("MotorControl live model ranges", () => {
     expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("3");
     fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "2" } });
     fireEvent.change(screen.getByLabelText("joint1 速度上限 · rad/s"), { target: { value: "0.2" } }); arm(); start("执行目标并保持"); await flush();
-    expect(screen.getByText(/joint1 Position 超过已验证范围/)).toBeVisible();
+    expect(await terminalOutput("Motor")).toMatch(/joint1 Position 超过已验证范围/);
     expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
   });
 });
@@ -265,7 +266,7 @@ describe("MotorControl V2", () => {
   it("does not acquire control or apply mode without verified output-off evidence", async () => {
     const { bridge } = mount(bridgeDouble(capabilities({ disabled_verified: false }))); await flush(); select();
     expect(screen.getByRole("button", { name: "应用驱动模式…" })).toBeDisabled(); arm(); start();
-    expect(bridge.command).not.toHaveBeenCalled(); expect(screen.getByText(/请先停止并确认全部输出已关闭/)).toBeVisible();
+    expect(bridge.command).not.toHaveBeenCalled(); expect(await terminalOutput("Motor")).toMatch(/请先停止并确认全部输出已关闭/);
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
   });
@@ -295,7 +296,7 @@ describe("MotorControl V2", () => {
     const { bridge } = mount(bridgeDouble(capabilities())); await flush(); select(); fireEvent.click(screen.getByRole("button", { name: "POS_VEL" })); fireEvent.click(screen.getByRole("button", { name: "应用驱动模式…" }));
     bridge.command.mockResolvedValueOnce({ op: "motor_set_control_mode_result", terminal: true, motor_control: capabilities({ verified_joint_mask: 126, operation_state: 3 }) });
     fireEvent.click(screen.getByLabelText("现场支撑确认")); fireEvent.click(screen.getByRole("button", { name: "确认应用驱动模式" })); await flush();
-    expect(screen.getByText(/模式应用失败 \/ 结果未确认/)).toBeVisible(); expect(screen.getByRole("button", { name: "执行目标并保持" })).toBeDisabled(); expect(bridge.send).not.toHaveBeenCalled();
+    expect(await terminalOutput("Motor")).toMatch(/模式应用失败 \/ 结果未确认/); expect(screen.getByRole("button", { name: "执行目标并保持" })).toBeDisabled(); expect(bridge.send).not.toHaveBeenCalled();
   });
   it("acquires a fresh lease and continuously publishes only POS parameters, including HOLD", async () => {
     vi.useFakeTimers(); const current = capabilities({ control_modes: Array(7).fill("POS_VEL") }); const { bridge } = mount(bridgeDouble(current)); await flush(); select(); fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
@@ -307,7 +308,7 @@ describe("MotorControl V2", () => {
     await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2); expect(screen.getByRole("button", { name: "持续控制中" })).toBeDisabled(); expect(screen.getByText("20 Hz · 固定参数快照")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...leased, last_command_sequence: 42, stamp_ns: "2000000000", enabled_joint_mask: 0, mode: 3, lease_id: 0, owner_source_id: "0" } }));
-    expect(screen.getByText(/已确认输出关闭/)).toBeVisible(); fireEvent.change(screen.getByLabelText("执行状态"), { target: { value: "0" } }); expect(screen.getByRole("button", { name: "保持当前位置" })).toBeDisabled();
+    expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/); fireEvent.change(screen.getByLabelText("执行状态"), { target: { value: "0" } }); expect(screen.getByRole("button", { name: "保持当前位置" })).toBeDisabled();
     bridge.command.mockResolvedValueOnce({ op: "motor_control_lease_ack", motor_control: { ...leased, lease_id: 10, stamp_ns: "2100000000" } }); arm(); start("保持当前位置"); await flush();
     expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ op: "motor_command_v2", mode: 0, lease_id: 10, position: Array(7).fill(0) }));
   });
@@ -326,8 +327,8 @@ describe("MotorControl V2", () => {
   });
   it("rejects a stale V2 stop snapshot and requires advancing readback", async () => {
     const current = capabilities(); const { bridge } = mount(bridgeDouble(current)); await flush(); fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
-    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...current, last_command_sequence: 42 } })); expect(screen.queryByText(/已确认输出关闭/)).not.toBeInTheDocument();
-    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...current, last_command_sequence: 42, stamp_ns: "2000000000" } })); expect(screen.getByText(/已确认输出关闭/)).toBeVisible();
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...current, last_command_sequence: 42 } })); expect(await terminalOutput("Motor")).not.toMatch(/已确认输出关闭/);
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...current, last_command_sequence: 42, stamp_ns: "2000000000" } })); expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/);
   });
   it("revokes authorization on a firmware reboot and does not send on reconnect", async () => {
     const { bridge } = mount(bridgeDouble(capabilities())); await flush(); select(); arm();
@@ -341,7 +342,7 @@ describe("MotorControl V2", () => {
     expect(screen.getByRole("button", { name: "POS_VEL" })).toBeDisabled(); // Replayed stamp cannot unlock.
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: capabilities({ boot_id: reboot ? "99" : "9007199254740993", stamp_ns: "2000000000" }) }));
     expect(screen.getByRole("button", { name: "POS_VEL" })).not.toBeDisabled();
-    expect(screen.getByText(/已确认输出关闭/)).toBeVisible();
+    expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/);
     expect(screen.getByLabelText("安全确认")).not.toBeChecked();
     expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
   });
@@ -411,7 +412,7 @@ describe("Motor mode history", () => {
     expect(log()).toContain("应用失败 / 结果未确认");
     expect(bridge.command).toHaveBeenCalledTimes(2); // configure, then DISABLE only
     expect(bridge.send).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", {name:"查看模式切换日志"})).toBeEnabled();
+    expect(screen.getByRole("button", {name:"查看操作日志"})).toBeEnabled();
     expect(screen.queryByRole("log")).not.toBeInTheDocument();
     expect(screen.getByText(/固件模式事务 #4 失败/)).toBeVisible();
   });
