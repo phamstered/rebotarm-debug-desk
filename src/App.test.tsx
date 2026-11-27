@@ -1606,13 +1606,17 @@ describe("App workflow", () => {
     await screen.findByRole("heading", { name: "Status" });
     await user.click(screen.getByRole("button", { name: "控制模式" })); await user.click(screen.getByRole("tab", { name: "模式预设" }));
     emitRosReady();
+    // These controls remain mounted across all five cycles. Avoid repeatedly
+    // traversing the entire application accessibility tree on slower CI hosts.
+    const teleop = screen.getByRole("button", { name: "Teleop" });
+    const stop = screen.getByRole("button", { name: "回零并退出控制" });
     for (let cycle = 0; cycle < 5; cycle += 1) {
-      await user.click(screen.getByRole("button", { name: "Teleop" }));
+      await user.click(teleop);
       await user.click(screen.getByRole("button", { name: /启动所选模式|切换模式（先回零）/ }));
       await waitFor(() => expect(doubles.invoke).toHaveBeenCalledWith("start_arm_mode", expect.objectContaining({ mode: "teleop" })));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Teleop" })).toBeEnabled());
-      await user.click(screen.getByRole("button", { name: "回零并退出控制" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "回零并退出控制" })).toBeEnabled());
+      await waitFor(() => expect(teleop).toBeEnabled());
+      await user.click(stop);
+      await waitFor(() => expect(stop).toBeEnabled());
     }
     expect(doubles.invoke.mock.calls.filter(([command, args]) => command === "start_arm_mode" && args.mode === "teleop")).toHaveLength(5);
     expect(doubles.invoke.mock.calls.filter(([command, args]) => command === "start_arm_mode" && args.mode === "stop")).toHaveLength(5);
