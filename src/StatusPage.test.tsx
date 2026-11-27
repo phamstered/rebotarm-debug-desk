@@ -183,7 +183,7 @@ it("surfaces disabledReasons as on-page hints for gated quick actions", async ()
       />,
     );
     expect(screen.getByRole("button", { name: "Teleop" })).toBeDisabled();
-    expect(screen.getByTestId("status-mode-disabled")).toHaveTextContent("SSH 未就绪");
+    expect(screen.getByRole("status", {name:"控制提示"})).toHaveTextContent("SSH 未就绪");
   });
 });
 
@@ -271,17 +271,18 @@ it("shows RETURN as an unfinished stop and blocks starting either selected mode"
   expect(action).not.toHaveBeenCalled();
 });
 
-it("uses one unfiltered Terminal entry for operations, tasks and ROS output", async () => {
-  const user = userEvent.setup();
-  const { rerender } = render(<StatusPage controlView {...baseProps} />);
-  await user.click(screen.getByRole("button",{name:"查看日志"}));
-  expect(openTerminal).toHaveBeenLastCalledWith(undefined,undefined,"main");
-  rerender(<StatusPage controlView {...baseProps} workflow={{mode: "trajectory", stage: "startup", message: "starting", failed: false, running: true}} />);
-  await user.click(screen.getByRole("button",{name:"查看日志"}));
-  expect(openTerminal).toHaveBeenLastCalledWith(undefined,undefined,"main");
-  expect(screen.queryByRole("combobox",{name:"日志来源"})).not.toBeInTheDocument();
-  expect(screen.getAllByRole("button",{name:"查看日志"})).toHaveLength(1);
-  expect(screen.queryByRole("button",{name:"查看启动详情"})).not.toBeInTheDocument();
+it("moves workflow output to Terminal and shows only current progress at the top", async () => {
+ const {rerender}=render(<StatusPage controlView {...baseProps} workflow={{mode:"trajectory",stage:"startup",message:"remote process details",failed:false,running:true}}/>);
+ expect(screen.getByRole("status",{name:"控制提示"})).toHaveTextContent("正在执行");
+ expect(screen.queryByText("remote process details")).not.toBeInTheDocument();
+ expect(screen.queryByLabelText("控制器启动流程")).not.toBeInTheDocument();
+ expect(screen.queryByRole("button",{name:"查看日志"})).not.toBeInTheDocument();
+ const {readTerminal}=await import("./terminalLogLogic");
+ expect((await readTerminal(0)).entries.some(row=>row.message==="remote process details")).toBe(true);
+ rerender(<StatusPage controlView {...baseProps} workflow={{mode:"trajectory",stage:"startup",message:"remote failure details",failed:true,running:false}}/>);
+ expect(screen.getByRole("status",{name:"控制提示"})).toHaveTextContent("控制操作失败");
+ expect(screen.queryByText("remote failure details")).not.toBeInTheDocument();
+ expect((await readTerminal(0)).entries.some(row=>row.message==="remote failure details")).toBe(true);
 });
 
 it("keeps the last target/log after verified stop and treats manager shutdown as expected", async () => {
@@ -292,8 +293,8 @@ it("keeps the last target/log after verified stop and treats manager shutdown as
     armMode={{...baseProps.armMode, teleopRunning: true}} workflow={{mode: "stop", stage: "ready", message: "stopped", failed: false, running: false}} />);
   expect(screen.getByTestId("current-control-mode")).toHaveTextContent("未启用控制");
   expect(screen.getByRole("button", {name: "Trajectory"})).toHaveAttribute("aria-pressed", "true");
-  await user.click(screen.getByRole("button",{name:"查看日志"}));
-  expect(openTerminal).toHaveBeenLastCalledWith(undefined,undefined,"main");
+  const {readTerminal}=await import("./terminalLogLogic");
+  expect((await readTerminal(0)).entries.some(row=>row.message==="stopped")).toBe(true);
   expect(screen.getByText("控制环境已退出（预期）")).toBeVisible();
 });
 

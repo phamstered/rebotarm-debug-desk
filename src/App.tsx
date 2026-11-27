@@ -2026,7 +2026,7 @@ export default function App({ hostedPage }: { hostedPage?: AppPage } = {}) {
           controlView={appPage === "control"}
           controlActive={windowVisible}
           onManageControllers={() => setAppPage("control")}
-          renderControl={(presets, manager, stateReason) => <main className="status-page"><header className="status-page-header native-window-header"><div><h1>控制模式</h1><span>Controller Manager · 模式预设与按需启停</span></div><NativePageActions /></header><ControllerManagerPanel manager={manager} profile={profile} connected={stage === "connected"} active={appPage === "control" && windowVisible} disabledReason={stateReason || controllerDisabledReason || (armMode?.teachingRunning ? "拖动示教运行中，请在模式预设中支撑并退出示教后再管理 Controller" : "")} presets={presets}/></main>}
+          renderControl={(presets, manager, stateReason, notices) => <main className="status-page"><header className="status-page-header native-window-header"><div><h1>控制模式</h1><span>Controller Manager · 模式预设与按需启停</span></div><NativePageActions /></header><ControllerManagerPanel notices={notices} manager={manager} profile={profile} connected={stage === "connected"} active={appPage === "control" && windowVisible} disabledReason={stateReason || controllerDisabledReason || (armMode?.teachingRunning ? "拖动示教运行中，请在模式预设中支撑并退出示教后再管理 Controller" : "")} presets={presets}/></main>}
           clockSync={clockSync}
           workflow={armWorkflow.workflow}
           stage={stage}
