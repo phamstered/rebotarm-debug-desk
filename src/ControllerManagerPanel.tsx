@@ -1,3 +1,4 @@
+import { ControlNoticeBar } from "./ControlNoticeBar";
 import { ControlPageGuidance } from "./ControlPageGuidance";
 import { useTerminalMessage } from "./terminalLogLogic";
 import { controlTaskReason } from "./controlStateLogic";
@@ -9,7 +10,7 @@ import "./controllerManager.css";
 import { nativeDesktop } from "./nativeWorkspaceLogic";
 import { useNativeTaskSnapshot } from "./nativeTaskSnapshotLogic";
 
-type Props = {profile:ConnectionProfile;connected:boolean;active:boolean;disabledReason:string;presets:ReactNode;manager?:ReturnType<typeof useControllerManager>};
+type Props = {notices?:string[];profile:ConnectionProfile;connected:boolean;active:boolean;disabledReason:string;presets:ReactNode;manager?:ReturnType<typeof useControllerManager>};
 export function ControllerManagerPanel(props: Props) {
  return props.manager ? <ManagerPanel {...props} manager={props.manager}/> : <StandaloneManagerPanel {...props}/>;
 }
@@ -17,7 +18,7 @@ function StandaloneManagerPanel(props: Props) {
  const manager=useControllerManager(props.profile,props.connected,props.active);
  return <ManagerPanel {...props} manager={manager}/>;
 }
-function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props & {manager:ReturnType<typeof useControllerManager>}) {
+function ManagerPanel({profile,connected,disabledReason,presets,manager,notices=[]}:Props & {manager:ReturnType<typeof useControllerManager>}) {
  const nativeTask=useNativeTaskSnapshot(nativeDesktop());
  const nativeBlock=nativeTask.error || (!nativeTask.loaded ? "正在核验共享任务状态" : controlTaskReason(nativeTask.task));
  const blockReason=disabledReason || nativeBlock;
@@ -35,21 +36,23 @@ function ManagerPanel({profile,connected,disabledReason,presets,manager}:Props &
  function activate(names:string[]){if(!snapshot)return;const plan=activationPlan(snapshot,names);if(plan.error){setPlanError(plan.error);return;}if(!plan.activate.length&&!plan.deactivate.length){setPlanError("所选 Controller 已激活");return;}ask({action:"switch",activate:plan.activate,deactivate:plan.deactivate});}
  useTerminalMessage("Controller",planError,"error");
  const mismatch=confirmation?.expected!==snapshot?.fingerprint;
+ useTerminalMessage("Controller",snapshot?.controllers.filter(c=>c.loadError).map(c=>`${c.name}：${c.loadError}`).join("\n"),"error");
  return <div className="controller-manager-page">
+  <ControlNoticeBar messages={[...notices,blockReason,planError ? "Controller 操作未提交，详细原因见底部 Terminal" : error ? "Manager 查询或操作失败，详细原因见底部 Terminal" : "",snapshot?.controllers.some(c=>c.loadError) ? "部分 Controller 加载失败，详细原因见底部 Terminal" : ""]}>
+   {nativeTask.task&&["arm_mode","controller"].includes(nativeTask.task.kind)&&<ActionButton onClick={()=>setTab("presets")}>前往停止操作</ActionButton>}
+  </ControlNoticeBar>
   <section className="manager-summary" aria-label="Controller Manager">
    <div><div className="manager-summary-labels"><span className="manager-eyebrow">CONTROLLER MANAGER</span><span className="manager-sync" role="status">{busy?"操作中":syncing?"同步中":fresh?"已同步":"待核验"}</span></div><h2>{fresh?(snapshot?.available?"Manager 在线":"Manager 未启动"):"Manager 状态待确认"}</h2><p>{snapshot?.manager??"/controller_manager"} · {snapshot?.updateRate??"—"} Hz · {snapshot?.owned?"应用管理的进程":"外部或尚未启动"}</p></div>
    <div className="manager-counts"><strong>{fresh ? rows.filter(r=>r.state!=="unloaded").length : "—"}<small>已加载 / {rows.length}</small></strong><strong>{fresh ? rows.filter(r=>r.state==="active").length : "—"}<small>已激活</small></strong></div>
    <div className="manager-actions"><ActionButton title={startReason||undefined} disabled={blocked||!fresh} onClick={()=>ask({action:snapshot?.available?"load":"start"})}>{snapshot?.available?"补加载 / 重试未配置项":"启动并加载全部"}</ActionButton><ActionButton disabled={refreshing||busy||!connected} onClick={()=>void manager.refresh()}>{refreshing?"刷新中…":"刷新"}</ActionButton><ActionButton title={stopReason||undefined} disabled={Boolean(stopReason)||busy} onClick={()=>ask({action:"stop"})}>停止 Manager</ActionButton></div>
   </section>
   <ControlPageGuidance><div className="manager-tabs" role="tablist" aria-label="控制管理"><button role="tab" aria-selected={tab==="presets"} onClick={()=>setTab("presets")}>模式预设</button><button role="tab" aria-selected={tab==="controllers"} onClick={()=>setTab("controllers")}>Controller 管理</button></div></ControlPageGuidance>
-  {blockReason&&<div role="status" className="manager-warning manager-block"><span>{blockReason}</span>{nativeTask.task&&["arm_mode","controller"].includes(nativeTask.task.kind)&&<ActionButton onClick={()=>setTab("presets")}>前往停止操作</ActionButton>}</div>}
-  {(error||planError)&&<p role="alert" className="manager-error">{planError||"Manager 查询或操作失败，详细原因见底部 Terminal"}</p>}
 
   <section hidden={tab!=="presets"} role="tabpanel" aria-label="模式预设">{presets}</section>
   <section hidden={tab!=="controllers"} role="tabpanel" aria-label="Controller 管理">
    <div className="manager-toolbar"><label>搜索 Controller<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="名称、类型或接口"/></label><span>已选 {selected.length}</span><ActionButton disabled={blocked||!fresh||!selected.length} onClick={()=>activate(selected)}>启用所选</ActionButton><ActionButton disabled={blocked||!fresh||!selected.some(n=>rows.find(r=>r.name===n)?.state==="active")} onClick={()=>ask({action:"switch",activate:[],deactivate:selected.filter(n=>rows.find(r=>r.name===n)?.state==="active")})}>停用所选</ActionButton></div>
    <div className="manager-table-scroll"><table className="manager-table"><thead><tr><th>选择</th><th>Controller / 类型</th><th>实际状态</th><th>所需命令接口</th><th>操作</th></tr></thead><tbody>
-    {rows.filter(c=>JSON.stringify(c).toLowerCase().includes(search.toLowerCase())).map(c=><tr key={c.name}><td><input type="checkbox" aria-label={`选择 ${c.name}`} checked={selected.includes(c.name)} onChange={e=>setSelected(s=>e.target.checked?[...s,c.name]:s.filter(n=>n!==c.name))}/></td><td><strong>{c.name}</strong><small>{c.typeName}</small>{c.loadError&&<small className="manager-error">上次加载失败：{c.loadError}</small>}</td><td><span className={`manager-state ${fresh?c.state:"unknown"}`}>{fresh?(stateLabel[c.state]??c.state):"未知（上次状态）"}</span></td><td><details><summary>{c.interfacesKnown?`${c.requiredInterfaces.length} 个接口`:"等待配置 / 接口信息"}</summary>{c.requiredInterfaces.map(i=><code key={i}>{i}</code>)}</details></td><td><ActionButton disabled={blocked||!fresh||!["active","inactive"].includes(c.state)} onClick={()=>c.state==="active"?ask({action:"switch",activate:[],deactivate:[c.name]}):activate([c.name])}>{c.state==="active"?"停用":"启用"}</ActionButton></td></tr>)}
+    {rows.filter(c=>JSON.stringify(c).toLowerCase().includes(search.toLowerCase())).map(c=><tr key={c.name}><td><input type="checkbox" aria-label={`选择 ${c.name}`} checked={selected.includes(c.name)} onChange={e=>setSelected(s=>e.target.checked?[...s,c.name]:s.filter(n=>n!==c.name))}/></td><td><strong>{c.name}</strong><small>{c.typeName}</small></td><td><span className={`manager-state ${fresh?c.state:"unknown"}`}>{fresh?(stateLabel[c.state]??c.state):"未知（上次状态）"}</span></td><td><details><summary>{c.interfacesKnown?`${c.requiredInterfaces.length} 个接口`:"等待配置 / 接口信息"}</summary>{c.requiredInterfaces.map(i=><code key={i}>{i}</code>)}</details></td><td><ActionButton disabled={blocked||!fresh||!["active","inactive"].includes(c.state)} onClick={()=>c.state==="active"?ask({action:"switch",activate:[],deactivate:[c.name]}):activate([c.name])}>{c.state==="active"?"停用":"启用"}</ActionButton></td></tr>)}
    </tbody></table></div>
    {!rows.length&&<p className="manager-empty">{fresh&&!snapshot?.available?"启动 Manager 后，从机器人配置加载 Controller。":"等待 Manager 配置与实际状态。"}</p>}
    {snapshot?.hardware.map(h=><p className="manager-note" key={h.name}>硬件 {h.name} · {h.state}</p>)}

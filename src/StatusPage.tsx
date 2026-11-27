@@ -1,3 +1,6 @@
+import { ControlNoticeBar } from "./ControlNoticeBar";
+import { useTerminalMessage } from "./terminalLogLogic";
+import { workflowSteps } from "./armModeWorkflowLogic";
 import { useControllerManager } from "./controllerManagerLogic";
 import { reconcileControlState, controlTaskReason } from "./controlStateLogic";
 import { useNativeTaskSnapshot } from "./nativeTaskSnapshotLogic";
@@ -46,12 +49,16 @@ function StatusCard({
   highlighted,
   onAction,
   compact,
+  diagnosticsInTerminal,
 }: {
   card: StatusCardModel;
   highlighted: boolean;
   onAction?: (action: StatusCardAction, card: StatusCardModel) => void;
   compact?: boolean;
+  diagnosticsInTerminal?: boolean;
 }) {
+  useTerminalMessage("Controller",diagnosticsInTerminal ? card.failureReason : "","error");
+  useTerminalMessage("Controller",diagnosticsInTerminal ? card.detail : "");
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!highlighted || !ref.current) return;
@@ -73,8 +80,8 @@ function StatusCard({
         </div>
         <ToneBadge tone={card.tone} />
       </header>
-      {card.detail && <p className="status-card-detail" data-testid={`status-detail-${card.id}`}>{card.detail}</p>}
-      {card.failureReason && (
+      {card.detail && !diagnosticsInTerminal && <p className="status-card-detail" data-testid={`status-detail-${card.id}`}>{card.detail}</p>}
+      {card.failureReason && !diagnosticsInTerminal && (
         <p className="status-card-failure" role="alert" data-testid={`status-failure-${card.id}`}>
           {card.failureReason}
         </p>
@@ -87,7 +94,7 @@ function StatusCard({
           </div>
         ))}
       </dl>
-      {card.warning && (
+      {card.warning && !diagnosticsInTerminal && (
         <p className="status-card-warning" role="note" data-testid={`status-warning-${card.id}`}>
           {card.warning}
         </p>
@@ -153,7 +160,7 @@ export function StatusPage({
 }: {
   controlView?: boolean;
   controlActive?: boolean;
-  renderControl?: (presets: import("react").ReactNode, manager: ReturnType<typeof useControllerManager>, stateReason: string) => import("react").ReactNode;
+  renderControl?: (presets: import("react").ReactNode, manager: ReturnType<typeof useControllerManager>, stateReason: string, notices: string[]) => import("react").ReactNode;
   onManageControllers?: () => void;
   clockSync?: ClockStatus;
   stage: string;
@@ -260,8 +267,16 @@ export function StatusPage({
   });
 
   const targetAction = quickActions.find((action) => action.id === targetMode)!;
+  const controlNotices = controlView ? [...new Set([
+    stickyAlert && `${stickyAlert.title}：${stickyAlert.message}`,
+    modeBlock, targetAction.disabledReason,
+    workflow?.failed ? "控制操作失败，详细原因见底部 Terminal" : workflow?.running ? `正在执行：${workflowSteps(workflow.mode).find(step=>step.id===workflow.stage)?.label ?? "控制操作"}` : "",
+    returningSession ? "等待回零及 DISABLE 确认" : disabledSession ? "旧控制会话需要重建" : "",
+    ...cards.filter(card=>[activeMode,"ros2-control","ros-ready"].includes(card.id)).flatMap(card=>[card.failureReason ? `${card.title} 异常，详细原因见底部 Terminal` : "",card.warning]),
+  ].filter((value):value is string=>Boolean(value)))] : [];
   const content = (
     <main className="status-page">
+      {controlView && !managedView && <ControlNoticeBar messages={controlNotices}/> }
       {!controlView && <header className="status-page-header native-window-header">
         <div>
           <h1>Status</h1>
@@ -277,7 +292,7 @@ export function StatusPage({
         控制环境启停与 Controller 管理位于「控制模式」，操作日志统一显示在底部 Terminal。
         <ActionButton onClick={onManageControllers}>打开控制模式</ActionButton>
       </p>}
-      {stickyAlert && (
+      {!controlView && stickyAlert && (
         <div
           className={`status-sticky-alert tone-${stickyAlert.tone}`}
           role="alert"
@@ -321,7 +336,7 @@ export function StatusPage({
                   <header className="status-mode-current" aria-live="polite">
                     <span>当前模式</span>
                     <strong data-testid="current-control-mode">{!modeConfirmed ? (managedView && reconciled.state === "conflict" ? "状态不一致 · 待核验" : "待确认") : modeConflict ? "控制器状态冲突" : customCombination ? `自定义组合${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : activeMode ? `${modeNames[activeMode]}${disabledSession ? "（输出已关闭）" : returningSession ? "（回零中）" : ""}` : "未启用控制"}</strong>
-                    {(!managedView && modeBlock) ? <span role="status">{modeBlock}</span> : !modeBlock && (actionBusy || returningSession || disabledSession) ? <span>{actionBusy ? "正在执行模式操作，等待核验结果" : returningSession ? "等待回零及 DISABLE 确认" : "旧控制会话需要重建"}</span> : null}
+
                   </header>
                   <div className="status-mode-selection">
                     <span>选择目标模式 · {modeNames[targetMode]}</span>
@@ -335,7 +350,7 @@ export function StatusPage({
                     </div>
                     <ActionButton type="button" className="status-quick-action primary" title={modeBlock || undefined} disabled={Boolean(modeBlock) || targetAction.disabled || activeMode === "teaching" || returningSession || (modeConfirmed && !modeConflict && !disabledSession && presetConfirmed && activeMode === targetMode)}
                       onClick={() => { if (targetMode === "teaching") { setSupported(false); setConfirmTeaching(true); } else onQuickAction?.(targetMode); }}>{modeBlock ? "等待状态核验" : actionBusy ? "切换中…" : activeMode === "teaching" ? "请先支撑并退出示教" : returningSession ? "等待回零完成" : disabledSession ? "重建控制会话" : presetConfirmed && activeMode === targetMode && modeConfirmed && !modeConflict ? "当前模式已启用" : activeMode ? "切换模式（先回零）" : "启动所选模式"}</ActionButton>
-                    {targetAction.disabledReason && <p className="status-disabled-hint" data-testid="status-mode-disabled">{targetAction.disabledReason}</p>}
+
                   </div>
                   <div className="status-mode-stops">
                     <div><ActionButton type="button" className="status-quick-action stop" disabled={quickActions.find((a) => a.id === "stop")?.disabled}
@@ -355,7 +370,7 @@ export function StatusPage({
                     </div>
                     <p>保存同一帧的六轴与夹爪实测姿态，可在 Motion 姿态库查看；松手不保证机械臂保持原位。</p>
                   </section>}
-                  <ArmModeWorkflow workflow={workflow} />
+                  <ArmModeWorkflow workflow={workflow} logOnly />
                 </section>
               )}
               <div
@@ -368,6 +383,7 @@ export function StatusPage({
                     card={card}
                     highlighted={highlightCardId === card.id && selectedTab === zone.id}
                     onAction={isControl && !controlView ? () => onManageControllers?.() : onCardAction}
+                    diagnosticsInTerminal={controlView}
                     compact={zone.id === "connection"}
                  />
                 ))}
@@ -413,5 +429,5 @@ export function StatusPage({
       </div>}
     </main>
   );
-  return controlView && renderControl ? renderControl(content, manager, observationReason) : content;
+  return controlView && renderControl ? renderControl(content, manager, observationReason, controlNotices) : content;
 }

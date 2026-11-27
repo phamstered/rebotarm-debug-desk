@@ -1,4 +1,3 @@
-import { TerminalLink } from "./TerminalLink";
 import { useId, useState, type ReactNode } from "react";
 import "./controlPageGuidance.css";
 
@@ -11,7 +10,6 @@ export function ControlPageGuidance({ children }: { children?: ReactNode }) {
       {children ?? <span className="control-guidance-spacer" />}
       <div className="control-guidance-actions">
         <button type="button" aria-expanded={expanded} aria-controls={helpId} onClick={() => setExpanded(value => !value)}>操作说明</button>
-        <TerminalLink>查看日志</TerminalLink>
       </div>
     </div>
       <div id={helpId} hidden={!expanded} className="control-guidance-content">

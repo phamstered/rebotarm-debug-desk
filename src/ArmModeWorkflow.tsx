@@ -1,9 +1,9 @@
 import { useTerminalMessage } from "./terminalLogLogic";
 import { workflowSteps, type ArmWorkflow } from "./armModeWorkflowLogic";
 
-export function ArmModeWorkflow({ workflow }: { workflow: ArmWorkflow | null }) {
+export function ArmModeWorkflow({ workflow, logOnly = false }: { workflow: ArmWorkflow | null; logOnly?:boolean }) {
   useTerminalMessage("Controller",workflow?.message,workflow?.failed?"error":"info");
-  if (!workflow || (!workflow.running && !workflow.failed)) return null;
+  if (logOnly || !workflow || (!workflow.running && !workflow.failed)) return null;
   const steps = workflowSteps(workflow.mode);
   const index = steps.findIndex((step) => step.id === workflow.stage);
   return <section className="arm-workflow" aria-label="控制器启动流程" aria-live="polite">
