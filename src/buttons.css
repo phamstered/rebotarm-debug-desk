@@ -1,6 +1,6 @@
 /* Shared action controls. Navigation, tabs, cards and drag handles keep their own layout. */
 :root {
-  --button-height: 32px;
+  --button-height: 28px;
   --button-radius: 5px;
   --button-text: #b6cbd5;
   --button-line: #2a414d;
@@ -9,7 +9,7 @@
 :root .ui-button.ui-button {
   min-height: var(--button-height);
   height: auto;
-  padding: 5px 10px;
+  padding: 3px 9px;
   border: 1px solid var(--button-line);
   border-radius: var(--button-radius);
   background: var(--button-surface);
