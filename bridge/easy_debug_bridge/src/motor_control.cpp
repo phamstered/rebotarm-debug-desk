@@ -83,6 +83,7 @@ struct MotorControl::Impl {
   Safety safety;
   mutable std::mutex mutex;
   Cache cache;
+  CommandStream stream;
   std::map<uint64_t, Connection> connections;
   std::optional<Pending> pending;
   uint32_t operation_counter{};
@@ -185,7 +186,7 @@ struct MotorControl::Impl {
     return out.str();
   }
   void revoke(const std::string &reason) {
-    ++generation; stream_owner = 0; waiting_first_frame = false;
+    ++generation; stream_owner = 0; waiting_first_frame = false; stream.clear();
 #ifdef EASY_DEBUG_HAS_MOTOR_V2
     if (service_request) { client->remove_pending_request(*service_request); service_request.reset(); }
 #endif
@@ -205,6 +206,20 @@ struct MotorControl::Impl {
     }
   }
 #ifdef EASY_DEBUG_HAS_MOTOR_V2
+  uint32_t publish_command(Command command, Time now) {
+    // Called under the same mutex as revoke/DISABLE and connection retirement.
+    validate_command(cache, command, now);
+    if (!safety(command.mask)) throw std::runtime_error("STM32 status / joint feedback 不新鲜或存在故障");
+    if (!publisher->get_subscription_count()) throw std::runtime_error("V2 command subscriber 不可用");
+    command.sequence = next_sequence();
+    CommandMessage message; message.header.stamp = node.now(); message.header.frame_id = "base_link";
+    message.boot_id = command.boot; message.control_epoch = command.epoch;
+    message.source_id = command.source; message.lease_id = command.lease;
+    message.sequence = command.sequence; message.mode = command.mode; message.control_mode = pos_vel;
+    message.active_joint_mask = command.mask; message.position = command.position; message.velocity_limit = command.velocity_limit;
+    publisher->publish(message); stream.published(now);
+    return command.sequence;
+  }
   void observe(const StatusMessage &m) {
     std::lock_guard<std::mutex> lock(mutex);
     Status s;
@@ -251,6 +266,11 @@ struct MotorControl::Impl {
     if (stream_owner && (!cache.fresh(now) || now - last_command >= std::chrono::milliseconds(waiting_first_frame ? 500 : 250))) stop("POS_VEL 指令或固件反馈超时，已请求 DISABLE");
     confirm_stop(now);
 #ifdef EASY_DEBUG_HAS_MOTOR_V2
+    if (stream_owner && !waiting_first_frame && !stop_barrier && !pending) {
+      try {
+        if (auto command = stream.due(cache, now)) publish_command(*command, now);
+      } catch (const std::exception &e) { stop(std::string("POS_VEL 持续保持中止：") + e.what()); }
+    }
     if (pending) {
       auto &t = pending->transaction;
       if (now >= t.deadline || !cache.fresh(now) || cache.status.boot_id != t.boot) stop("V2 操作超时或固件身份失效，已请求 DISABLE；需核验输出关闭");
@@ -348,13 +368,15 @@ void MotorControl::request(uint64_t owner, const Tree &request, Send send, std::
       command.velocity_limit = numbers(parameters.get_child("velocity_limit"));
       validate_command(impl_->cache, command, now);
 #ifdef EASY_DEBUG_HAS_MOTOR_V2
-      if (!impl_->publisher->get_subscription_count()) throw std::runtime_error("V2 command subscriber 不可用");
-      command.sequence = impl_->next_sequence();
-      Impl::CommandMessage message; message.header.stamp = impl_->node.now(); message.header.frame_id = "base_link";
-      message.boot_id = boot; message.control_epoch = epoch; message.source_id = source; message.lease_id = command.lease;
-      message.sequence = command.sequence; message.mode = command.mode; message.control_mode = pos_vel;
-      message.active_joint_mask = mask; message.position = command.position; message.velocity_limit = command.velocity_limit;
-      impl_->publisher->publish(message); impl_->last_command = now; impl_->waiting_first_frame = false;
+      if (now - impl_->last_command >= std::chrono::milliseconds(impl_->waiting_first_frame ? 500 : 250)) {
+        impl_->stop("POS_VEL 客户端指令超时，已请求 DISABLE");
+        throw std::runtime_error("POS_VEL 客户端指令超时，必须停止后重新开始");
+      }
+      try {
+        impl_->stream.renew(impl_->cache, command, now);
+        command.sequence = impl_->publish_command(command, now);
+        impl_->last_command = now; impl_->waiting_first_frame = false;
+      } catch (...) { impl_->stop("POS_VEL 发布失败，已请求 DISABLE"); throw; }
 #endif
       const auto json = "{\"op\":\"motor_command_v2_ack\",\"request_id\":" + quote(id) + ",\"sequence\":" + std::to_string(command.sequence) +
           ",\"mode\":" + std::to_string(command.mode) + ",\"boot_id\":" + quote(std::to_string(boot)) + ",\"control_epoch\":" + std::to_string(epoch) + ",\"lease_id\":" + std::to_string(command.lease) + "}";

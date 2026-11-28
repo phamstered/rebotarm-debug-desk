@@ -93,16 +93,30 @@ def main(binary):
                 pos_vel={'velocity_limit': [.2, 0., 0., 0., 0., 0., 0.]}, confirmation='ARMED')
             time.sleep(.2)  # a bounded, output-off startup window tolerates service/status RTT
             sequences = []
-            for _ in range(6):
+            for _ in range(60):
                 ack = client.request('motor_command_v2', **frame)
                 assert ack['op'] == 'motor_command_v2_ack', ack
                 sequences.append(ack['sequence'])
-                time.sleep(.04)
+                # More than the MCU 100 ms frame deadline: local ROS renewal must
+                # preserve the target while this live client is briefly delayed.
+                time.sleep(.16)
+                held = caps()
+                assert held['lease_id'] == lease_id and held['mode'] == 1 and held['enabled_joint_mask'] == 1, held
             state = caps()
             assert state['enabled_joint_mask'] == 1 and state['mode'] == 1, state
             assert len(set(sequences)) == len(sequences)
             stopped = stop(observer)  # global stop from a different socket always works
             assert client.request('motor_command_v2', **frame)['op'] == 'error'  # stale lease cannot revive
+            # Client silence is still bounded; local publication cannot renew
+            # client authority, and a late packet cannot revive an expired lease.
+            lease = client.request('motor_control_lease', lease_action='acquire', control_mode='POS_VEL',
+                boot_id=state['boot_id'], control_epoch=state['control_epoch'], active_joint_mask=1, confirmation='ARMED')
+            assert lease['op'] == 'motor_control_lease_ack', lease
+            frame['lease_id'] = lease['motor_control']['lease_id']
+            assert client.request('motor_command_v2', **frame)['op'] == 'motor_command_v2_ack'
+            time.sleep(.4)
+            wait(lambda: (s if (s := caps())['disabled_verified'] and s['mode'] == 3 and not s['lease_id'] else None))
+            assert client.request('motor_command_v2', **frame)['op'] == 'error'
             restored = configure('MIT', 127)
             assert restored['op'] == 'motor_set_control_mode_result', restored
             assert restored['motor_control']['owner_source_id'] == '0'

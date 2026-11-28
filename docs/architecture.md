@@ -346,3 +346,7 @@ Manager startup/load ensures a companion robot_state_publisher before reporting 
 `notifications.rs` 只接受已写入 Terminal 的 error 记录编号及明确的失败事件标识，校验当前日志会话和来源 WebView。原生通知窗口为非聚焦、无标题栏的父窗口子窗口，独立于业务子 WebView 层级；自身只挂载 `NativeErrorNotification`，不创建 App、Bridge 订阅或任务心跳。每个父窗口最多三个通知，呈现后开始原生 3 秒计时，未完成加载的通知最多保留 10 秒。通知导航由原生根据实际源 WebView 所在窗口路由到 Terminal；日志内容在原生清理后显示。记录历史不会触发提示，原始日志级别解析不参与通知决策。
 
 前端显式错误状态变化和操作失败边界提供通知标识。初始错误状态仅记录历史；Motor 使用本次模式申请标识关联固件读回与请求失败，避免一次事务多次提示。日志写入、通知呈现、任务控制分别独立，通知失败不会改变控制门禁或阻塞 DISABLE。
+
+## POS_VEL 持续目标保持
+
+WebView 每 50 ms 续发参数快照；Bridge 对有效 POS_VEL 指令进行校验并保存至当前连接的内存流。ROS 侧 20 ms 定时器续发同一目标，以隔离页面与 SSH 调度抖动。每一帧都重新检查硬件新鲜度、订阅者、boot/epoch/lease/来源/掩码与参数，并使用新的 sequence。该流与 DISABLE、断开及模式撤销共用互斥锁；撤销会清除快照，停止之后不能排入旧目标。客户端 250 ms 超时与固件 100 ms 看门狗分别保留；本机发布不刷新客户端计时。快照不持久化、不跨重连恢复，不自动续租。

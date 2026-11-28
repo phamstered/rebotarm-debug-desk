@@ -104,6 +104,31 @@ inline void validate_command(const Cache &cache, const Command &command, Time no
   }
 }
 
+// ROS publication is local and independent of WebView/SSH scheduling. Only a
+// live client can renew this bounded snapshot; publication never renews it.
+struct CommandStream {
+  static constexpr auto client_timeout = std::chrono::milliseconds(250);
+  static constexpr auto period = std::chrono::milliseconds(20);
+  std::optional<Command> command;
+  Time client_at{}, published_at{};
+  void clear() { command.reset(); }
+  void renew(const Cache &cache, const Command &next, Time now) {
+    if (command && now - client_at >= client_timeout)
+      throw std::runtime_error("POS_VEL 客户端续发超时，必须停止后重新开始");
+    validate_command(cache, next, now);
+    command = next; client_at = now;
+  }
+  std::optional<Command> due(const Cache &cache, Time now) const {
+    if (!command) return std::nullopt;
+    if (now - client_at >= client_timeout)
+      throw std::runtime_error("POS_VEL 客户端续发超时");
+    validate_command(cache, *command, now);
+    if (now - published_at < period) return std::nullopt;
+    return command;
+  }
+  void published(Time now) { published_at = now; }
+};
+
 enum class Stage { Stop, Service, Readback, Finished, Uncertain };
 struct Transaction {
   uint8_t action{}, requested_mode{}; // ROS CONFIGURE=1, ACQUIRE=2, RELEASE=3

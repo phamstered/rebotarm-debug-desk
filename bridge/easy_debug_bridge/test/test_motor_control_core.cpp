@@ -11,8 +11,55 @@ static Status fixture() {
   s.control_modes.fill(mit); s.velocity_limit_max.fill(2); s.position_min.fill(-3); s.position_max.fill(3);
   return s;
 }
+static void check_command_stream() {
+  const auto start = Clock::now(); Cache cache; auto status = fixture();
+  status.control_modes[0] = pos_vel; status.owner_source_id = 55;
+  status.lease_id = 9; status.selected_joint_mask = 1; status.mode = 1;
+  Command command; command.boot = status.boot_id; command.epoch = status.control_epoch;
+  command.source = 55; command.lease = 9; command.mask = 1; command.mode = 1;
+  command.position[0] = 0.25f; command.velocity_limit[0] = 0.1f;
+  CommandStream stream;
+  assert(!stream.due(cache, start));
+  assert(cache.observe(status, start));
+  stream.renew(cache, command, start); stream.published(start);
+  assert(!stream.due(cache, start + std::chrono::milliseconds(19)));
+  unsigned publications = 0;
+  // One minute at a fixed (already reached) target. Client jitter exceeds the
+  // firmware's 100 ms frame deadline, but stays within its own 250 ms deadline.
+  for (int ms = 20; ms <= 60000; ms += 20) {
+    const auto now = start + std::chrono::milliseconds(ms);
+    ++status.stamp_ns; assert(cache.observe(status, now));
+    if (ms % 180 == 0) stream.renew(cache, command, now);
+    auto next = stream.due(cache, now); assert(next);
+    assert(next->mode == 1 && next->position == command.position && next->lease == 9);
+    stream.published(now); ++publications;
+  }
+  assert(publications == 3000);
+  const auto renewed = start + std::chrono::seconds(61);
+  ++status.stamp_ns; assert(cache.observe(status, renewed));
+  // Use a new stream so expired state is never silently revived.
+  stream.clear(); stream.renew(cache, command, renewed); stream.published(renewed);
+  assert(stream.due(cache, renewed + std::chrono::milliseconds(249)));
+  assert(rejects([&]{stream.due(cache, renewed + std::chrono::milliseconds(250));}));
+  assert(rejects([&]{stream.renew(cache, command, renewed + std::chrono::milliseconds(250));}));
+  for (int failure = 0; failure < 8; ++failure) {
+    auto bad = cache; stream.clear(); stream.renew(cache, command, renewed);
+    if (failure == 0) bad.status.lease_id = 0;
+    if (failure == 1) ++bad.status.boot_id;
+    if (failure == 2) ++bad.status.control_epoch;
+    if (failure == 3) bad.status.fault_code = 11;
+    if (failure == 4) bad.status.switching = true;
+    if (failure == 5) bad.status.control_modes[0] = mit;
+    if (failure == 6) bad.have = false;
+    if (failure == 7) bad.status.owner_source_id++;
+    assert(rejects([&]{stream.due(bad, renewed + std::chrono::milliseconds(20));}));
+  }
+  stream.clear();
+  assert(!stream.due(cache, renewed + std::chrono::milliseconds(20))); // STOP/disconnect fence
+}
 int main() {
   check_motor_delivery();
+  check_command_stream();
   const auto now=Clock::now(); Cache c;
   assert(c.mit_allowed(now)); c.discovered(); assert(!c.mit_allowed(now));
   auto s=fixture(); assert(c.observe(s,now)); assert(c.mit_allowed(now));
