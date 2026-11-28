@@ -830,7 +830,7 @@ SSH 日志批次按普通文件设备号/inode/字节长度/前缀指纹校验�
 
 ## 驱动故障恢复（MotorControl 协议版本 3）
 
-`motor_capabilities.motor_control.protocol_version=3` 在原有 V2 ROS 消息/服务布局上增加清故障能力；版本 2 的配置、许可和控制帧仍受支持，但不允许恢复。需先更新桌面及 Bridge，再更新配套 executor 固件；旧 Bridge 不接受版本 3 状态。
+`motor_capabilities.motor_control.protocol_version=3` 在原有 V2 ROS 消息/服务布局上增加清故障能力；版本 2 的配置、许可和控制帧仍受支持，但不允许恢复。需先更新 ROS 硬件插件（支持版本 3 的 MotorModeGate）、桌面及 Bridge，再更新配套 executor 固件；旧 Bridge 和旧 ROS 硬件插件不接受版本 3 状态。
 
 请求：`{op:"motor_recover_fault", request_id, boot_id, control_epoch, active_joint_mask, confirmation:"ARMED", support_confirmation:"SUPPORTED"}`。mask 必须为非零七轴子集；不接受目标、速度、模式或租约字段。用户须确认支撑机械臂、排除阻碍并冷却。准入要求新鲜版本 3 状态、`mode=3`、`fault_code=7`、无使能、无租约及无进行中模式事务，且 HardwareStatus/JointState 新鲜、所选轴有效。其他故障不能通过此接口清除。
 
