@@ -56,7 +56,7 @@ describe("MotorControl legacy MIT", () => {
     expect(bridge.command).toHaveBeenCalledTimes(1);
     expect(bridge.command).toHaveBeenCalledWith(expect.objectContaining({ op: "joint_command", mode: 1, kp: 8, kd: 2, active_joint_mask: 3, position: [0, 0.2, 0, 0, 0, 0, 0], confirmation: "ARMED" }));
     await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2); expect(props.onStreamingChange).toHaveBeenCalledWith(true);
-    expect(screen.getByLabelText("Kp")).toBeDisabled(); expect(screen.getByLabelText("joint1 选择控制")).toBeDisabled();
+    expect(screen.getByLabelText("Kp")).toBeDisabled(); expect(screen.getByLabelText("joint1 选择控制")).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3, active_joint_mask: 0, position: [] }));
     expect(logging.publish).toHaveBeenCalledWith(expect.objectContaining({level: "warn", message: expect.stringContaining("原因：用户点击停止按钮")}));
@@ -486,7 +486,7 @@ describe("Motor continuous retargeting", () => {
     expect(screen.getByLabelText("joint1 Position 滑块")).toBeEnabled();
     expect(screen.getByLabelText("joint1 速度上限 · rad/s")).toBeEnabled();
     expect(screen.getByLabelText("joint2 Position · rad")).toBeDisabled();
-    expect(screen.getByLabelText("joint1 选择控制")).toBeDisabled();
+    expect(screen.getByLabelText("joint1 选择控制")).toBeEnabled();
     expect(screen.getByLabelText("执行状态")).toBeDisabled();
     expect(screen.getByRole("button", { name: "MIT" })).toBeDisabled();
     for (const value of ["0.6", "-0.5", "0.2"]) {
@@ -516,6 +516,74 @@ describe("Motor continuous retargeting", () => {
     expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ position: [0.3, 0, 0, 0, 0, 0, 0], pos_vel: { velocity_limit: [0.4, 0, 0, 0, 0, 0, 0] } }));
   });
 
+  it("selects a second axis with a different mode without changing or stopping the applied stream", async () => {
+    vi.useFakeTimers(); const { bridge, running } = await runningPos();
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...running, stamp_ns: "1300000000", control_modes: ["POS_VEL", ...Array(6).fill("MIT")] } }));
+    expect(screen.getByLabelText("joint2 选择控制")).toBeEnabled();
+    select(2);
+    expect(screen.getByLabelText("joint2 选择控制")).toBeChecked();
+    expect(screen.getByLabelText("joint2 Position · rad")).toBeEnabled();
+    expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "更新目标并保持" })).toBeDisabled();
+    expect(screen.getByText(/选轴草稿已更改，当前控制保持不变/)).toBeVisible();
+    expect(screen.getByText(/持续控制中 · POS_VEL \/ TRACK · 1 轴 · 待应用选轴 2 轴/)).toBeVisible();
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(bridge.command).toHaveBeenCalledTimes(2);
+    expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ active_joint_mask: 1, lease_id: 9, position: [0.3, 0, 0, 0, 0, 0, 0] }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复当前选轴" }));
+    expect(screen.getByLabelText("joint2 选择控制")).not.toBeChecked();
+    target("0.5"); arm(); update(); await flush();
+    expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ active_joint_mask: 1, position: [0.5, 0, 0, 0, 0, 0, 0] }));
+  });
+
+  it("selects and clears all draft axes while keeping the one-axis stream alive", async () => {
+    vi.useFakeTimers(); const { bridge } = await runningPos();
+    fireEvent.click(screen.getByRole("button", { name: "全选轴" }));
+    for (let i = 1; i <= 7; i++) expect(screen.getByLabelText(`joint${i} 选择控制`)).toBeChecked();
+    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+    expect(screen.getByText("已选 7/7")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+    expect(screen.getByText("已选 0/7")).toBeVisible();
+    expect(screen.getByRole("button", { name: "取消全选" })).toBeDisabled();
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(bridge.command).toHaveBeenCalledTimes(2);
+    expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ active_joint_mask: 1 }));
+  });
+
+  it("retains the new axis draft through an explicit stop and requires a new lease to execute it", async () => {
+    const { bridge, running } = await runningPos();
+    select(2);
+    fireEvent.change(screen.getByLabelText("joint2 Position · rad"), { target: { value: "0.2" } });
+    fireEvent.change(screen.getByLabelText("joint2 速度上限 · rad/s"), { target: { value: "0.3" } });
+    fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
+    expect(screen.getByLabelText("joint2 选择控制")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+    const stopped = { ...running, stamp_ns: "1400000000", disabled_verified: true, mode: 3, enabled_joint_mask: 0, lease_id: 0, owner_source_id: "0", last_command_sequence: 42 };
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: stopped }));
+    expect(screen.getByLabelText("joint2 选择控制")).toBeChecked();
+    expect(screen.getByLabelText("joint2 Position · rad")).toHaveValue("0.2");
+    expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    bridge.command.mockResolvedValueOnce({ op: "motor_control_lease_ack", motor_control: { ...stopped, stamp_ns: "1500000000", lease_id: 10, owner_source_id: "5", selected_joint_mask: 3 } });
+    arm(); start("执行目标并保持"); await flush();
+    expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ active_joint_mask: 3, lease_id: 10, position: [0.3, 0.2, 0, 0, 0, 0, 0] }));
+  });
+
+  it("does not bypass unsupported-axis validation when selecting all POS_VEL axes", async () => {
+    const { bridge } = mount(bridgeDouble(capabilities({ control_modes: Array(7).fill("POS_VEL"), pos_vel_supported_mask: 63 })));
+    await flush(); fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
+    fireEvent.click(screen.getByRole("button", { name: "全选轴" }));
+    expect(screen.getByText("已选 7/7")).toBeVisible();
+    expect(screen.getByLabelText("安全确认")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "执行目标并保持" })).toBeDisabled();
+    expect(bridge.command).not.toHaveBeenCalled();
+  });
+
+  it.each([{ active: false }, { controlLocked: true }])("locks single and batch selection when unavailable: %j", async extra => {
+    mount(bridgeDouble(), extra); await flush();
+    expect(screen.getByLabelText("joint1 选择控制")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+  });
+
   it("atomically replaces the interval snapshot while an update ACK is delayed", async () => {
     vi.useFakeTimers(); const { bridge } = await runningPos(); let complete!: (value: BridgeEnvelope) => void;
     target("0.8"); fireEvent.change(screen.getByLabelText("统一速度上限 · rad/s"), { target: { value: "0.2" } });
@@ -524,6 +592,8 @@ describe("Motor continuous retargeting", () => {
     arm(); update();
     expect(screen.getByRole("button", { name: "正在更新…" })).toBeDisabled();
     expect(screen.getByLabelText("joint1 Position · rad")).toBeDisabled();
+    expect(screen.getByLabelText("joint2 选择控制")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "停止并 DISABLE" })).toBeEnabled();
     await act(async () => vi.advanceTimersByTimeAsync(150));
     expect(bridge.send).toHaveBeenCalledTimes(3);

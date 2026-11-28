@@ -58,8 +58,13 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   const jointFeedback = useRef(jointState); jointFeedback.current = jointState;
   const configurationMask = drive === "MIT" ? 0x7f : mask;
   const busy = streaming || pending !== null || stopRequested;
+  const selectionLocked = pending !== null || stopRequested || !active || controlLocked;
+  const appliedMask = streaming ? Number(streamRef.current?.payload.active_joint_mask ?? 0) : 0;
+  const appliedCount = motors.filter((_, index) => (appliedMask & (1 << index)) !== 0).length;
+  const selectionChanged = streaming && mask !== appliedMask;
+  const selectionNotice = selectionChanged ? "选轴草稿已更改，当前控制保持不变。请先停止并 DISABLE，核验输出关闭，再为所选轴应用驱动模式并重新执行。" : "";
   const targetLocked = pending !== null || stopRequested || !active || controlLocked || (streaming && mode !== 1);
-  const gate = !capabilities && !legacyConfirmed ? capabilityError || "正在读取驱动能力" : controlGate(capabilities, seenV2Ref.current, drive, mask);
+  const gate = selectionNotice || (!capabilities && !legacyConfirmed ? capabilityError || "正在读取驱动能力" : controlGate(capabilities, seenV2Ref.current, drive, mask));
 
   function logMode(message: string) { terminalPublish({source:"Motor",message,level:logLevel(message)}); }
   function setOperation(value: Pending) { pendingRef.current = value; setPending(value); }
@@ -218,6 +223,12 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     (drive === "MIT" ? setMitMotors : setPosMotors)(update);
     if (patch.enabled !== undefined) (drive === "MIT" ? setPosMotors : setMitMotors)(rows => rows.map((row, i) => i === index ? { ...row, enabled: patch.enabled! } : row));
   }
+  function selectAxes(selected: (index: number) => boolean) {
+    if (selectionLocked) return;
+    edited();
+    const update = (rows: MotorRowInput[]) => rows.map((row, index) => ({ ...row, enabled: selected(index) }));
+    setMitMotors(update); setPosMotors(update);
+  }
   function decimal(value: string, setter: (next: string) => void) {
     const normalized = normalizeDecimal(value); if (normalized !== null) { edited(); setter(normalized); }
   }
@@ -301,7 +312,8 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   function streamInvalid(stream: NonNullable<typeof streamRef.current>): string | null {
     if (!seenV2Ref.current) return null;
     const current = capsRef.current, payload = stream.payload;
-    const gate = controlGate(current, true, drive, mask);
+    // A draft selection must not invalidate the independently applied stream.
+    const gate = controlGate(current, true, drive, Number(payload.active_joint_mask));
     if (gate) return gate;
     if (Date.now() - capsReceivedAtRef.current > 1500) return "驱动反馈源已超过 1500 ms 未推进";
     if (current?.boot_id !== stream.boot) return "固件启动身份变更";
@@ -313,7 +325,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
 
   async function updateTarget() {
     const stream = streamRef.current;
-    if (!canRunRef.current || pendingRef.current || stopRequested || !stream || !streaming || mode !== 1 || !targetDirty || !armed) return;
+    if (!canRunRef.current || pendingRef.current || stopRequested || !stream || !streaming || selectionChanged || mode !== 1 || !targetDirty || !armed) return;
     const stopReason = streamInvalid(stream);
     if (stopReason) { void disableRef.current(`更新目标前校验失败：${stopReason}`); return; }
     const current = capsRef.current;
@@ -352,13 +364,19 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     <section className="motor-status-card">
       <div className="control-status-row">
         <span className={faultCode === 0 ? "ok" : "fault"} title={currentFault?.description}>STM32 {capabilities?.supported ? `${capabilities.mode === 3 ? "DISABLE" : modes.find(item => item.value === capabilities.mode)?.label ?? "UNKNOWN"} · fault ${faultCode}` : status ? `${status.mode_name ?? status.mode} · fault ${faultCode} · ${currentFault?.name}` : "等待状态"}</span>
-        <span>实际驱动：{!capabilities && !legacyConfirmed ? "等待能力探测" : actualDriveMode(capabilities, mask)}</span><span>已选 {selectedCount}/{motors.length}</span><span>固件可用轴 {firmwareActive}</span>
+        <span>实际驱动：{!capabilities && !legacyConfirmed ? "等待能力探测" : actualDriveMode(capabilities, streaming ? appliedMask : mask)}</span><span>已选 {selectedCount}/{motors.length}</span><span>固件可用轴 {firmwareActive}</span>
         <span>{pending === "configuring" ? "模式申请中" : stopRequested ? "停止确认中" : streaming ? "持续控制中" : "未开始控制"}</span>
       </div>
+      {selectionNotice && <div className="motor-selection-notice" role="status">{selectionNotice}</div>}
       {currentFault && faultCode !== 0 && <div className="fault-detail" role="status"><strong>FAULT {faultCode} · {currentFault.name}</strong><span>{currentFault.description}</span></div>}
     </section>
     <section className="motor-joints-card">
-      <div className="motor-card-title"><div><strong>关节目标</strong><span>选择控制轴，核对实测位置与目标；两种驱动分别保留草稿</span></div><ActionButton className="use-current" disabled={targetLocked || mode === 0} onClick={useCurrentPositions}>使用当前位置</ActionButton></div>
+      <div className="motor-card-title"><div><strong>关节目标</strong><span>选择控制轴，核对实测位置与目标；两种驱动分别保留草稿</span></div><div className="motor-selection-actions">
+        <ActionButton disabled={selectionLocked || selectedCount === motors.length} onClick={() => selectAxes(() => true)}>全选轴</ActionButton>
+        <ActionButton disabled={selectionLocked || selectedCount === 0} onClick={() => selectAxes(() => false)}>取消全选</ActionButton>
+        {selectionChanged && <ActionButton disabled={selectionLocked} onClick={() => selectAxes(index => (appliedMask & (1 << index)) !== 0)}>恢复当前选轴</ActionButton>}
+        <ActionButton className="use-current" disabled={targetLocked || mode === 0} onClick={useCurrentPositions}>使用当前位置</ActionButton>
+      </div></div>
       {drive === "POS_VEL" && <div className="motor-batch-velocity"><label>统一速度上限 · rad/s<input aria-label="统一速度上限 · rad/s" type="text" inputMode="decimal" value={batchVelocity} disabled={targetLocked} onChange={event => decimal(event.target.value, setBatchVelocity)} /></label><ActionButton disabled={targetLocked || !mask} onClick={() => { edited(); setVelocityLimits(values => values.map((value, i) => motors[i]?.enabled ? batchVelocity : value)); }}>填写所选轴</ActionButton></div>}
       <div className="motor-list" role="list">{motors.map((motor, index) => {
         const feedback = jointState?.position?.[index], name = jointState?.name?.[index] ?? jointLabel(index);
@@ -367,7 +385,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
         const sliderMin = range.min ?? 0, sliderMax = range.max ?? 1;
         const sliderValue = hasRange ? Math.max(sliderMin, Math.min(sliderMax, Number(motor.position) || 0)) : 0.5;
         return <div className={`motor-row${motor.enabled ? " enabled" : ""}`} role="listitem" key={name}>
-          <label className="motor-enable"><input type="checkbox" checked={motor.enabled} disabled={busy} aria-label={`${name} 选择控制`} onChange={event => updateMotor(index, { enabled: event.target.checked })} /><span>{name}</span></label>
+          <label className="motor-enable"><input type="checkbox" checked={motor.enabled} disabled={selectionLocked} aria-label={`${name} 选择控制`} onChange={event => updateMotor(index, { enabled: event.target.checked })} /><span>{name}</span></label>
           <label className="motor-position"><span className="motor-position-label">Position · rad</span><input type="range" min={sliderMin} max={sliderMax} step="any" disabled={targetLocked || !motor.enabled || mode === 0 || !hasRange} value={sliderValue} aria-label={`${name} Position 滑块`} aria-describedby={`motor-range-${index}`} onChange={event => updateMotor(index, { position: event.target.value })} /><input type="text" inputMode="decimal" disabled={targetLocked || !motor.enabled || mode === 0} value={motor.position} placeholder={drive === "POS_VEL" ? "请填写" : undefined} aria-label={`${name} Position · rad`} onChange={event => decimal(event.target.value, value => updateMotor(index, { position: value }))} /></label>
           {drive === "POS_VEL" && <label className="motor-velocity-limit">速度上限 · rad/s<input type="text" inputMode="decimal" disabled={targetLocked || !motor.enabled} value={velocityLimits[index] ?? ""} placeholder="正数；按逐轴验证范围" aria-label={`${name} 速度上限 · rad/s`} onChange={event => decimal(event.target.value, value => setVelocityLimits(values => values.map((old, i) => i === index ? value : old)))} /></label>}
           <div className="motor-travel">{(["min", "max"] as const).map(bound => <label key={bound}>{bound}<input type="text" readOnly value={range[bound] === null ? "" : String(Number(range[bound]!.toPrecision(8)))} placeholder="—" title={range[bound] === null ? range.reason : String(range[bound])} aria-label={`${name} 行程 ${bound}`} /></label>)}<span className="motor-feedback" title="当前反馈">实测 {Number.isFinite(feedback) ? Number(feedback).toFixed(4) : "-"}</span></div>
@@ -387,7 +405,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       {drive === "MIT" && <div className="command-grid shared-command-grid">{([["Velocity · rad/s", velocity, setVelocity], ["Kp", kp, setKp], ["Kd", kd, setKd], ["Effort · Nm", effort, setEffort]] as const).map(([label, value, setter]) => <label key={label}>{label}<input type="text" inputMode="decimal" disabled={label === "Velocity · rad/s" ? targetLocked : busy} value={value} onChange={event => decimal(event.target.value, setter)} /></label>)}</div>}
       <label className="arm-check"><input type="checkbox" checked={armed} disabled={targetLocked || !!gate} aria-label="安全确认" onChange={event => setArmed(event.target.checked)} />已核对所选关节、参数及现场安全</label>
       <div className="control-actions"><ActionButton className="send-command" disabled={targetLocked || !armed || !!gate || (streaming && !targetDirty)} onClick={() => void (streaming ? updateTarget() : start())}>{mainLabel}</ActionButton><ActionButton className="stop-command" onClick={() => void disable("用户点击停止按钮")}>停止并 DISABLE</ActionButton></div>
-      {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {selectedCount} 轴{targetDirty ? " · 草稿待提交" : ""}</div>}
+      {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {appliedCount} 轴{selectionChanged ? ` · 待应用选轴 ${selectedCount} 轴` : ""}{targetDirty ? " · 草稿待提交" : ""}</div>}
       {inputError && <p className="error" role="alert">{inputError}</p>}
       <OperationLogNotice source="Motor" notice={result} label={stopRequested ? "等待输出关闭确认" : streaming ? "持续控制中" : "控制操作已有更新"} />
       <details className="motor-control-details"><summary>控制详情</summary><dl><dt>指令流</dt><dd>页面确认 20 Hz · 安装版原生续发 50 Hz · 最近提交目标</dd><dt>sequence</dt><dd>{sequence ?? "—"}</dd><dt>lease</dt><dd>{drive === "POS_VEL" ? capabilities?.lease_id ?? "—" : "V1 原生准入"}</dd><dt>反馈龄上界</dt><dd>{capabilities ? `${capabilities.age_ms} ms${capabilities.fresh ? "" : "（过期）"}` : "旧协议"}</dd><dt>Topic</dt><dd>{drive === "POS_VEL" ? `${commandTopic}_v2` : commandTopic}</dd></dl></details>
