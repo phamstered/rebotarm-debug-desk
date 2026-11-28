@@ -305,7 +305,7 @@ describe("MotorControl V2", () => {
     bridge.command.mockResolvedValueOnce({ op: "motor_control_lease_ack", motor_control: leased }).mockResolvedValueOnce({ op: "motor_command_v2_ack", sequence: 42 }); arm(); start("执行目标并保持"); await flush();
     expect(bridge.command).toHaveBeenNthCalledWith(1, expect.objectContaining({ op: "motor_control_lease", lease_action: "acquire" }));
     expect(bridge.command).toHaveBeenNthCalledWith(2, { op: "motor_command_v2", boot_id: current.boot_id, control_epoch: 2, lease_id: 9, control_mode: "POS_VEL", mode: 1, active_joint_mask: 1, position: [0.3, 0, 0, 0, 0, 0, 0], pos_vel: { velocity_limit: [0.4, 0, 0, 0, 0, 0, 0] }, confirmation: "ARMED" });
-    await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2); expect(screen.getByRole("button", { name: "持续控制中" })).toBeDisabled(); expect(screen.getByText("20 Hz · 固定参数快照")).toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2); expect(screen.getByRole("button", { name: "更新目标并保持" })).toBeDisabled(); expect(screen.getByText("20 Hz · 最近提交的目标快照")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...leased, last_command_sequence: 42, stamp_ns: "2000000000", enabled_joint_mask: 0, mode: 3, lease_id: 0, owner_source_id: "0" } }));
     expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/); fireEvent.change(screen.getByLabelText("执行状态"), { target: { value: "0" } }); expect(screen.getByRole("button", { name: "保持当前位置" })).toBeDisabled();
@@ -430,5 +430,116 @@ describe("Motor mode history", () => {
     await act(async () => bridge.emit({ op: "disconnected" }));
     expect(log()).toContain("进行中"); expect(log()).toContain("寄存器操作超时");
     expect(bridge.command).not.toHaveBeenCalled();
+  });
+});
+
+describe("Motor continuous retargeting", () => {
+  async function runningPos() {
+    const initial = capabilities({ control_modes: Array(7).fill("POS_VEL") });
+    const mounted = mount(bridgeDouble(initial), { urdfXml: motorUrdf(urdfJoint("joint1", -3, 3)) });
+    await flush(); select(); fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
+    fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value: "0.3" } });
+    fireEvent.change(screen.getByLabelText("joint1 速度上限 · rad/s"), { target: { value: "0.4" } });
+    const leased = { ...initial, owner_source_id: "5", lease_id: 9, selected_joint_mask: 1, stamp_ns: "1100000000" };
+    mounted.bridge.command.mockResolvedValueOnce({ op: "motor_control_lease_ack", motor_control: leased });
+    arm(); start("执行目标并保持"); await flush();
+    const running = { ...leased, disabled_verified: false, mode: 1, enabled_joint_mask: 1, stamp_ns: "1200000000" };
+    mounted.bridge.setCapabilities(running);
+    await act(async () => mounted.bridge.emit({ op: "motor_control_status", motor_control: running }));
+    return { ...mounted, running };
+  }
+  function target(value: string) { fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value } }); }
+  function update() { start("更新目标并保持"); }
+
+  it("edits a draft while holding, then repeatedly updates the same lease without DISABLE", async () => {
+    vi.useFakeTimers(); const { bridge, props } = await runningPos();
+    expect(screen.getByLabelText("joint1 Position · rad")).toBeEnabled();
+    expect(screen.getByLabelText("joint1 Position 滑块")).toBeEnabled();
+    expect(screen.getByLabelText("joint1 速度上限 · rad/s")).toBeEnabled();
+    expect(screen.getByLabelText("joint2 Position · rad")).toBeDisabled();
+    expect(screen.getByLabelText("joint1 选择控制")).toBeDisabled();
+    expect(screen.getByLabelText("执行状态")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "MIT" })).toBeDisabled();
+    for (const value of ["0.6", "-0.5", "0.2"]) {
+      const previous = bridge.command.mock.calls.at(-1)![0];
+      target(value);
+      expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+      expect(screen.getByRole("button", { name: "更新目标并保持" })).toBeDisabled();
+      await act(async () => vi.advanceTimersByTimeAsync(50));
+      expect(bridge.send).toHaveBeenLastCalledWith(previous);
+      arm(); update(); await flush();
+      await act(async () => vi.advanceTimersByTimeAsync(50));
+      expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ lease_id: 9, control_epoch: 2, active_joint_mask: 1, position: [Number(value), 0, 0, 0, 0, 0, 0] }));
+      expect(screen.getByRole("button", { name: "更新目标并保持" })).toBeDisabled();
+    }
+    expect(bridge.command.mock.calls.filter(([p]) => p.op === "motor_control_lease")).toHaveLength(1);
+    expect(bridge.command.mock.calls.some(([p]) => p.mode === 3)).toBe(false);
+    expect(props.onStreamingChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it.each([["", "0.4"], ["4", "0.4"], ["0.5", "0"], ["0.5", "3"]])("keeps the applied target on invalid draft position=%s speed=%s", async (position, speed) => {
+    vi.useFakeTimers(); const { bridge } = await runningPos();
+    target(position); fireEvent.change(screen.getByLabelText("joint1 速度上限 · rad/s"), { target: { value: speed } });
+    arm(); update(); await flush();
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(bridge.command).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ position: [0.3, 0, 0, 0, 0, 0, 0], pos_vel: { velocity_limit: [0.4, 0, 0, 0, 0, 0, 0] } }));
+  });
+
+  it("atomically replaces the interval snapshot while an update ACK is delayed", async () => {
+    vi.useFakeTimers(); const { bridge } = await runningPos(); let complete!: (value: BridgeEnvelope) => void;
+    target("0.8"); fireEvent.change(screen.getByLabelText("统一速度上限 · rad/s"), { target: { value: "0.2" } });
+    fireEvent.click(screen.getByRole("button", { name: "填写所选轴" }));
+    bridge.command.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    arm(); update();
+    expect(screen.getByRole("button", { name: "正在更新…" })).toBeDisabled();
+    expect(screen.getByLabelText("joint1 Position · rad")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "停止并 DISABLE" })).toBeEnabled();
+    await act(async () => vi.advanceTimersByTimeAsync(150));
+    expect(bridge.send).toHaveBeenCalledTimes(3);
+    for (const [p] of bridge.send.mock.calls) expect(p).toMatchObject({ position: [0.8, 0, 0, 0, 0, 0, 0], pos_vel: { velocity_limit: [0.2, 0, 0, 0, 0, 0, 0] }, lease_id: 9 });
+    await act(async () => complete({ op: "motor_command_v2_ack", sequence: 43 }));
+    expect(screen.getByLabelText("joint1 Position · rad")).toBeEnabled();
+  });
+
+  it.each(["stop", "hidden", "unmount", "disconnect"])("never resumes an update after %s, even with a late ACK", async action => {
+    vi.useFakeTimers(); const { bridge, props, rerender, unmount } = await runningPos(); let complete!: (value: BridgeEnvelope) => void;
+    target("0.8"); bridge.command.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; })); arm(); update();
+    if (action === "stop") fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" }));
+    else if (action === "hidden") { rerender(<MotorControl {...props} active={false} />); rerender(<MotorControl {...props} active />); }
+    else if (action === "unmount") unmount();
+    else await act(async () => bridge.emit({ op: "disconnected" }));
+    await flush(); const commandsAfterStop = bridge.command.mock.calls.length;
+    await act(async () => complete({ op: "motor_command_v2_ack", sequence: 43 }));
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(bridge.send).not.toHaveBeenCalled(); expect(bridge.command).toHaveBeenCalledTimes(commandsAfterStop);
+    if (action !== "disconnect") expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
+  });
+
+  it.each([{ lease_id: 10 }, { owner_source_id: "6" }, { boot_id: "100" }, { control_epoch: 3 }, { fresh: false }, { fault_code: 1 }])("does not apply a draft after control evidence changes: %j", async patch => {
+    vi.useFakeTimers(); const { bridge, running } = await runningPos(); target("0.8"); arm();
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...running, stamp_ns: "1300000000", ...patch } }));
+    update(); await act(async () => vi.advanceTimersByTimeAsync(50));
+    expect(bridge.command.mock.calls.filter(([p]) => p.op === "motor_command_v2")).toHaveLength(1);
+    expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
+    expect(bridge.send).not.toHaveBeenCalled();
+  });
+
+  it("stops on an ambiguous update failure instead of silently reverting a possibly applied target", async () => {
+    vi.useFakeTimers(); const { bridge } = await runningPos(); target("0.8");
+    bridge.command.mockRejectedValueOnce(new Error("ACK timeout")); arm(); update(); await flush();
+    expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
+    await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).not.toHaveBeenCalled();
+    expect(await terminalOutput("Motor")).toContain("目标更新结果未确认");
+  });
+
+  it("updates MIT position and velocity without changing gains, mask or restarting the stream", async () => {
+    vi.useFakeTimers(); const { bridge } = mount(); await flush(); select(); arm(); start(); await flush();
+    target("0.7"); fireEvent.change(screen.getByLabelText("Velocity · rad/s"), { target: { value: "0.1" } });
+    expect(screen.getByLabelText("Kp")).toBeDisabled(); expect(screen.getByLabelText("Kd")).toBeDisabled(); expect(screen.getByLabelText("Effort · Nm")).toBeDisabled();
+    arm(); update(); await flush(); await act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(bridge.command).toHaveBeenCalledTimes(2); expect(bridge.send).toHaveBeenCalledTimes(2);
+    expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ op: "joint_command", mode: 1, position: [0.7, 0, 0, 0, 0, 0, 0], velocity: 0.1, kp: 8, kd: 2, active_joint_mask: 1 }));
   });
 });
