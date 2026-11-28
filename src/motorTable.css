@@ -1,0 +1,73 @@
+/* Unified Motor workspace: one scrolling page, one row per joint. */
+.motor-control.motor-unified { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 12px 20px 20px; }
+.motor-unified > * { width: 100%; min-width: 0; }
+.motor-unified .motor-status-card { padding: 9px 12px; }
+.motor-unified .mode-description, .motor-unified .motor-top-guidance { margin: 6px 0 0; min-height: 0; color: #a7bdc8; font-size: 11px; line-height: 1.5; }
+.motor-unified .motor-selection-notice { margin-top: 6px; font-size: 11px; }
+.motor-unified .streaming-indicator { margin-top: 6px; }
+.motor-command-toolbar { position: sticky; top: 54px; z-index: 7; padding: 10px 12px; border: 1px solid #294252; border-radius: 8px; background: #0b1b25; }
+.motor-toolbar-primary { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+.motor-unified .motor-drive-selector { display: flex; align-items: center; gap: 5px; margin: 0; }
+.motor-unified .motor-drive-selector legend { float: left; margin: 0 7px 0 0; font-size: 11px; }
+.motor-unified .motor-drive-selector button { min-width: 64px; }
+.motor-unified .motor-mode-application { margin: 0; display: block; }
+.motor-toolbar-primary > label:not(.arm-check) { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.motor-unified .motor-toolbar-primary select { width: 95px; height: 32px; padding: 4px 8px; font-size: 12px; }
+.motor-unified .arm-check { margin: 0; align-items: center; font-size: 11px; }
+.motor-unified .control-actions { display: flex; gap: 12px; margin-left: auto; }
+.motor-unified .control-actions button { white-space: nowrap; }
+.motor-unified .motor-command-toolbar button, .motor-unified .motor-axis-batch button { min-height: 32px; padding: 5px 10px; font-size: 11px; border-radius: 6px; }
+.motor-unified .shared-command-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #233b49; }
+.motor-unified .shared-command-grid label { display: flex; align-items: center; gap: 8px; color: #91aab9; font-size: 11px; }
+.motor-unified .shared-command-grid input { width: 88px; height: 30px; text-align: right; }
+.motor-axis-panel { border: 1px solid #294252; border-radius: 9px; background: #0a1721; }
+.motor-axis-heading { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid #233b49; }
+.motor-axis-heading strong { font-size: 14px; color: #d7e8f0; }
+.motor-axis-heading > span { color: #91dfcf; font-size: 11px; }
+.motor-axis-batch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 9px 14px; }
+.motor-select-all { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.motor-axis-panel input[type="checkbox"] { width: 15px; height: 15px; accent-color: #42d6c7; }
+.motor-unified .motor-axis-batch button { color: #bdd6df; border: 1px solid #355566; background: #102630; }
+.motor-batch-input { display: flex; align-items: center; gap: 7px; color: #91aab9; font-size: 11px; }
+.motor-batch-input input { width: 78px; height: 30px; padding: 4px 7px; text-align: right; }
+.motor-axis-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.motor-axis-table .axis-select-col { width: 46px; }
+.motor-axis-table .axis-name-col { width: 110px; }
+.motor-axis-table .axis-feedback-col { width: 105px; }
+.motor-axis-table .axis-speed-col { width: 110px; }
+.motor-axis-table .axis-range-col { width: 172px; }
+.motor-axis-table th, .motor-axis-table td { padding: 7px 10px; border-top: 1px solid #233b49; text-align: left; }
+.motor-axis-table thead { color: #a8c1ce; background: #132a36; }
+.motor-axis-table thead th { height: 36px; font-size: 11px; font-weight: 600; }
+.motor-axis-table thead small { color: #7897a6; font-size: 10px; }
+.motor-axis-table tbody tr { height: 52px; }
+.motor-axis-table tbody tr.selected { background: #0c2325; }
+.motor-axis-table tbody tr:focus-within { background: #113136; }
+.motor-axis-table tbody th { color: #d6e8ef; overflow-wrap: anywhere; }
+.motor-axis-table .axis-feedback { text-align: right; font-variant-numeric: tabular-nums; color: #bdd3dd; }
+.axis-target { display: grid; grid-template-columns: minmax(30px, 1fr) 100px; align-items: center; gap: 12px; }
+.motor-axis-table input { min-width: 0; max-width: 100%; }
+.motor-axis-table input[type="text"] { width: 100%; height: 30px; padding: 4px 7px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.motor-axis-table input[type="range"] { width: 100%; accent-color: #42d6c7; }
+.motor-axis-table input:focus-visible, .motor-axis-batch input:focus-visible { outline: 2px solid #42d6c7; outline-offset: 2px; }
+.axis-range { display: flex; align-items: center; }
+.axis-range > span { flex: 1; min-width: 0; display: flex; align-items: center; }
+.motor-axis-table .axis-range input { border: 0; border-radius: 0; background: transparent; height: 20px; padding: 0 2px; font-size: 11px; }
+.axis-range-source { display: block; color: #7897a6; font-size: 9px; line-height: 1.25; overflow-wrap: anywhere; }
+.motor-axis-footer { padding: 8px 14px; border-top: 1px solid #233b49; color: #7897a6; font-size: 10px; }
+.motor-table-details { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.motor-table-details .motor-control-details { flex: 1; margin: 0; }
+.motor-table-details > button { white-space: nowrap; }
+@media (max-width: 1100px) {
+  .motor-control.motor-unified { padding: 10px 12px 16px; }
+  .motor-axis-table .axis-select-col { width: 36px; }
+  .motor-axis-table .axis-name-col { width: 85px; }
+  .motor-axis-table .axis-feedback-col { width: 85px; }
+  .motor-axis-table .axis-speed-col { width: 85px; }
+  .motor-axis-table .axis-range-col { width: 145px; }
+  .motor-axis-table th, .motor-axis-table td { padding: 7px 6px; }
+  .axis-target { grid-template-columns: minmax(20px, 1fr) 80px; gap: 6px; }
+  .motor-toolbar-primary { gap: 8px 10px; }
+}
+.motor-axis-table .axis-range > span:last-child input { text-align: left; }
+.motor-toolbar-primary > label:not(.arm-check) { white-space: nowrap; }
