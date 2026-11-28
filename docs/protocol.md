@@ -107,6 +107,9 @@ V1 `JointCommand` 类型/Topic/布局冻结为 MIT。非 DISABLE 的 `joint_comm
 
 V2 仅 mode=0 HOLD / mode=1 TRACK，两个数组恰好七个有限 float32；未选轴字段必须为零，选中轴速度上限为正且不超过已验证值，TRACK 目标在固件报告范围内。HOLD 由固件锁存当前位置。Bridge 分配统一序列并返回 `motor_command_v2_ack`（sequence/mode/boot_id/control_epoch/lease_id）；该 ACK 只说明发布，不能证明执行或到位。
 
+首帧验证并发布成功后，Bridge 保存同一来源、boot/epoch/lease/mask 的有效参数快照，并在本机 ROS 定时器中每 20 ms 续发；每帧重新分配 sequence 并复核固件身份、许可、硬件反馈和订阅者。页面仍每 50 ms 提交已确认的快照；本机续帧不刷新客户端存活时间。250 ms 未收到有效客户端指令、连接断开、显式 DISABLE 或上述校验失效会清除快照并请求关闭输出；等待首帧窗口仍为 500 ms。超时后的迟到请求不能恢复流或重新获取许可。到位本身不结束 TRACK，保持最后目标；HOLD 仍由固件锁存位置。固件 100 ms 续帧看门狗保持不变。
+
+
 ROS Topic 从实际 `command_topic` 派生：命令追加 `_v2`，同父 namespace 下的 `motor_control_status` 与 `motor_control` 分别用于状态及服务。旧 ROS overlay 不含 V2 头文件时 Bridge 仍可编译，能力明确不支持。所有模式配置、lease 与 V2 帧都参与原生全局任务锁，仍只允许 `page-motor` 发起；DISABLE 优先旁路。V2 停止完成需 HardwareStatus 加相同 boot 的新 MotorControlStatus 证明，包括本次序列、`disabled_verified`、lease=0、mode=3、无使能且无切换。恢复文件只保存原连接、任务编号和操作类别，不保存目标、lease 或恢复发送权限。
 
 JointTrajectory command (published to the `JointTrajectoryController`'s `~/joint_trajectory` subscription):
