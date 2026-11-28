@@ -2,7 +2,7 @@ export type MotorDriveMode = "UNKNOWN" | "MIT" | "POS_VEL";
 /** Runtime firmware evidence, never inferred from a requested drive mode. */
 export type MotorControlCapabilities = {
   supported: boolean; fresh: boolean; reason: string; age_ms: number;
-  protocol_version: number; boot_id: string; control_epoch: number;
+  protocol_version: number; /* 3 adds verified drive fault recovery, with the same ROS layout. */ boot_id: string; control_epoch: number;
   source_id: string; owner_source_id: string; lease_id: number;
   selected_joint_mask: number; enabled_joint_mask: number; verified_joint_mask: number;
   pos_vel_supported_mask: number; control_modes: MotorDriveMode[];

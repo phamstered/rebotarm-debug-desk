@@ -195,7 +195,7 @@ class Ros:
         from rclpy.qos import qos_profile_sensor_data
         valid = []
         def received(msg):
-            if (msg.protocol_version == 2 and msg.boot_id and not msg.switching
+            if (msg.protocol_version in (2, 3) and msg.boot_id and not msg.switching
                     and (disabled or (msg.verified_joint_mask == 127 and list(msg.control_modes) == [1] * 7))
                     and msg.owner_source_id == 0 and msg.lease_id == 0 and msg.fault_code == 0
                     and (not disabled or (msg.disabled_verified and msg.mode == 3 and msg.enabled_joint_mask == 0))):

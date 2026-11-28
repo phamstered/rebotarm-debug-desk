@@ -209,7 +209,7 @@ struct MotorControl::Impl {
   uint32_t publish_command(Command command, Time now) {
     // Called under the same mutex as revoke/DISABLE and connection retirement.
     validate_command(cache, command, now);
-    if (!safety(command.mask)) throw std::runtime_error("STM32 status / joint feedback 不新鲜或存在故障");
+    if (!safety(command.mask, false)) throw std::runtime_error("STM32 status / joint feedback 不新鲜或存在故障");
     if (!publisher->get_subscription_count()) throw std::runtime_error("V2 command subscriber 不可用");
     command.sequence = next_sequence();
     CommandMessage message; message.header.stamp = node.now(); message.header.frame_id = "base_link";
@@ -284,14 +284,15 @@ struct MotorControl::Impl {
             t.disable_sequence = disable_output();
           } else {
             const auto owner = pending->owner;
-            const auto op = t.action == 1 || t.configure_then_release ? "motor_set_control_mode_result" : "motor_control_lease_ack";
+            const auto op = t.action == 5 ? "motor_recover_fault_result" : t.action == 1 || t.configure_then_release ? "motor_set_control_mode_result" : "motor_control_lease_ack";
             enqueue(owner, pending->send, "{\"op\":" + quote(op) + ",\"request_id\":" + quote(pending->id) +
                 ",\"terminal\":true,\"motor_control\":" + capabilities(owner, now) + "}", false, now);
             if (t.action == 2) { stream_owner = owner; waiting_first_frame = true; last_command = now; }
+            if (t.action == 5) { stop_barrier = false; stop_sequence.reset(); }
             pending.reset();
           }
         } else if (t.stage == Stage::Readback && cache.status.operation_id == t.operation && cache.status.operation_state >= 3)
-          stop("固件模式操作失败或已取消，已请求 DISABLE");
+          stop("固件操作失败或已取消，已请求 DISABLE");
       } catch (const std::exception &e) { stop(std::string("V2 操作中止：") + e.what()); }
     }
 #endif
@@ -355,9 +356,10 @@ void MotorControl::request(uint64_t owner, const Tree &request, Send send, std::
     const auto boot = integer(request, "boot_id", UINT64_MAX);
     const auto epoch = uint32_t(integer(request, "control_epoch"));
     const auto mask = uint32_t(integer(request, "active_joint_mask"));
-    const auto requested_mode = drive(request);
+    const bool recovery = op == "motor_recover_fault";
+    const auto requested_mode = recovery ? uint8_t(0) : drive(request);
     impl_->cache.require_identity(boot, epoch, now);
-    if (!impl_->safety(mask)) throw std::runtime_error("STM32 status / joint feedback 不新鲜、存在故障或所选轴不可用");
+    if (!impl_->safety(mask, recovery)) throw std::runtime_error("STM32 status / joint feedback 不新鲜、存在故障或所选轴不可用");
     if (op == "motor_command_v2") {
       fields(request, {"op", "request_id", "boot_id", "control_epoch", "active_joint_mask", "control_mode", "lease_id", "mode", "position", "pos_vel", "confirmation"});
       if (impl_->pending || impl_->stop_barrier || impl_->stream_owner != owner || requested_mode != pos_vel) throw std::runtime_error("POS_VEL 流尚未获准或正在停止");
@@ -382,10 +384,14 @@ void MotorControl::request(uint64_t owner, const Tree &request, Send send, std::
           ",\"mode\":" + std::to_string(command.mode) + ",\"boot_id\":" + quote(std::to_string(boot)) + ",\"control_epoch\":" + std::to_string(epoch) + ",\"lease_id\":" + std::to_string(command.lease) + "}";
       lock.unlock(); send(json, now); return;
     }
-    if (impl_->pending || impl_->stream_owner || impl_->stop_barrier) throw std::runtime_error("已有 V2 操作或正在核验停止");
+    if (impl_->pending || impl_->stream_owner || (impl_->stop_barrier && !recovery)) throw std::runtime_error("已有 V2 操作或正在核验停止");
     Transaction t; t.boot = boot; t.epoch = epoch; t.mask = mask; t.source = source; t.requested_mode = requested_mode;
     t.operation = impl_->operation(); t.initial_stamp = impl_->cache.status.stamp_ns;
-    if (op == "motor_set_control_mode") {
+    if (recovery) {
+      fields(request, {"op", "request_id", "boot_id", "control_epoch", "active_joint_mask", "confirmation", "support_confirmation"});
+      if (request.get<std::string>("support_confirmation", "") != "SUPPORTED") throw std::runtime_error("清故障前必须确认支撑、排除阻碍并冷却");
+      t.action = 5;
+    } else if (op == "motor_set_control_mode") {
       fields(request, {"op", "request_id", "boot_id", "control_epoch", "active_joint_mask", "control_mode", "confirmation", "support_confirmation"});
       if (request.get<std::string>("support_confirmation", "") != "SUPPORTED") throw std::runtime_error("切换前必须确认机械臂已被可靠支撑");
       t.action = 1;

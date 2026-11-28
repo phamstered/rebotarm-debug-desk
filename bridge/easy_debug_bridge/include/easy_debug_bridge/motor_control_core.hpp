@@ -29,7 +29,7 @@ struct Status {
   uint8_t operation_state{}, mode{};
   uint16_t fault_code{}, error_code{}, reject_code{};
   bool valid() const {
-    if (protocol_version != 2 || !boot_id || !stamp_ns || mode > 3 || operation_state > 4 ||
+    if ((protocol_version != 2 && protocol_version != 3) || !boot_id || !stamp_ns || mode > 3 || operation_state > 4 ||
         ((selected_joint_mask | enabled_joint_mask | verified_joint_mask | pos_vel_supported_mask) & ~all_joints)) return false;
     for (size_t i = 0; i < 7; ++i) {
       if (control_modes[i] > pos_vel || !std::isfinite(velocity_limit_max[i]) ||
@@ -39,6 +39,9 @@ struct Status {
     return true;
   }
   bool disabled() const { return disabled_verified && mode == disable && !enabled_joint_mask && !lease_id && !switching; }
+  bool recovery_ready() const {
+    return protocol_version == 3 && mode == disable && !enabled_joint_mask && !lease_id && !switching && fault_code == 7;
+  }
   bool actual(uint32_t mask, uint8_t requested_mode) const {
     if (!mask_valid(mask) || (mask & verified_joint_mask) != mask) return false;
     for (size_t i = 0; i < 7; ++i) if ((mask & (1u << i)) && control_modes[i] != requested_mode) return false;
@@ -140,8 +143,12 @@ struct Transaction {
   void validate_start(const Cache &cache, Time now) const {
     cache.require_identity(boot, epoch, now);
     const auto &s = cache.status;
-    if (!source || !operation || !mask_valid(mask) || action < 1 || action > 3 ||
-        (requested_mode != mit && requested_mode != pos_vel)) throw std::runtime_error("V2 模式操作字段无效");
+    if (!source || !operation || !mask_valid(mask) || action < 1 || (action > 3 && action != 5) ||
+        (action != 5 && requested_mode != mit && requested_mode != pos_vel)) throw std::runtime_error("V2 模式操作字段无效");
+    if (action == 5) {
+      if (!s.recovery_ready()) throw std::runtime_error("清故障需要支持恢复的新固件、DISABLE、无租约/使能及驱动故障 7");
+      return;
+    }
     if (!s.disabled() || s.fault_code) throw std::runtime_error("配置或获取许可前需确认输出关闭且无故障");
     if (requested_mode == pos_vel && (mask & s.pos_vel_supported_mask) != mask) throw std::runtime_error("所选关节尚未通过 POS_VEL 验证");
     if (action == 2 && (requested_mode != pos_vel || !s.actual(mask, pos_vel) || s.owner_source_id != source))
@@ -151,12 +158,15 @@ struct Transaction {
   }
   bool stopped(const Cache &cache, Time now) const {
     return cache.fresh(now) && cache.status.boot_id == boot && cache.status.control_epoch == epoch &&
-        cache.status.stamp_ns > initial_stamp && cache.status.disabled() && !cache.status.fault_code &&
+        cache.status.stamp_ns > initial_stamp && (action == 5 ? cache.status.recovery_ready() : (cache.status.disabled() && !cache.status.fault_code)) &&
         cache.status.last_command_sequence == disable_sequence;
   }
   bool confirmed(const Cache &cache, Time now) const {
     if (stage != Stage::Readback || !cache.fresh(now)) return false;
     const auto &s = cache.status;
+    if (action == 5) return s.boot_id == boot && s.stamp_ns > initial_stamp && s.disabled() &&
+        !s.fault_code && s.operation_id == operation && s.operation_state == 2 && !s.error_code &&
+        s.control_epoch > epoch && !s.owner_source_id && !s.selected_joint_mask;
     if (s.boot_id != boot || s.stamp_ns <= initial_stamp || s.switching || s.fault_code || s.operation_id != operation ||
         s.operation_state != 2 || !s.actual(mask, requested_mode) || !s.disabled_verified || s.enabled_joint_mask || s.mode != disable) return false;
     if (action == 1) return s.control_epoch != epoch && !s.lease_id && s.owner_source_id == source;

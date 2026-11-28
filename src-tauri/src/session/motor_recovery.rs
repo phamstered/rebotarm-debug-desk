@@ -21,7 +21,7 @@ pub struct Record {
 }
 impl Record {
     fn validate(&self) -> Result<(), String> {
-        if self.operation.as_deref().is_some_and(|op| !matches!(op,"configuration"|"release"|"stream")) { return Err("Motor 恢复操作无效".into()); }
+        if self.operation.as_deref().is_some_and(|op| !matches!(op,"configuration"|"release"|"stream"|"fault_recovery")) { return Err("Motor 恢复操作无效".into()); }
         if !self.command_id.starts_with("motor-")
             || self.command_id.len() > 128
             || serde_json::to_vec(&self.profile)
