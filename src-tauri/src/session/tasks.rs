@@ -744,6 +744,9 @@ impl Tasks {
                     && message["command_id"] == task.snapshot.command_id
                     && !stopped(task))
             {
+                if is_motor && task.snapshot.kind == Kind::Motor && task.owner == owner && stopped(task) {
+                    return Err(format!("Motor 续发被停止状态拒绝：{}", task.snapshot.message));
+                }
                 return Err(format!(
                     "{} 持有运动任务 {}；需等待终态确认",
                     task.owner.window.label, task.snapshot.command_id
@@ -2023,6 +2026,17 @@ mod motor_tests {
         let admission = tasks.admit(owner("page-motor",1),&frame,Instant::now()).unwrap();
         assert!(!admission.permit.unwrap()()); assert_eq!(tasks.snapshot().unwrap().phase,Phase::Stopping);
         tasks.reply(Some(id),1,&frame,Ok(&ack)); assert_eq!(tasks.snapshot().unwrap().phase,Phase::Stopping);
+    }
+    #[test]
+    fn stopped_motor_renewal_reports_original_stop_cause_instead_of_self_conflict() {
+        let (tasks, frame, _, _) = v2_started();
+        let first=tasks.admit(owner("page-motor",1),&frame,Instant::now()).unwrap(); assert!(first.permit.unwrap()());
+        tasks.lost(None,"Motor 页面续期超时：302 ms ≥ 250 ms");
+        let error=tasks.admit(owner("page-motor",1),&frame,Instant::now()).err().unwrap();
+        assert!(error.contains("页面续期超时：302 ms"));
+        assert!(!error.contains("持有运动任务"));
+        let stop=tasks.admit(owner("page-motor",1),&json!({"op":"joint_command","mode":3}),Instant::now()).unwrap();
+        assert!(stop.permit.unwrap()());
     }
     #[test]
     fn acquired_lease_gets_one_500ms_first_write_window_then_250ms_stream_deadline() {
