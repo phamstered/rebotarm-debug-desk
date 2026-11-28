@@ -1,3 +1,4 @@
+import { MotorFaultRecovery, recoveryAvailable } from "./MotorFaultRecovery";
 import { MotorJointTable } from "./MotorJointTable";
 import { TerminalLink } from "./TerminalLink";
 import "./motorTable.css";
@@ -14,7 +15,7 @@ import { actualDriveMode, acceptMotorEvidence, delayedMotorQuery, controlGate, t
 import { formatMotorNumber, motorAxisNames, motorFirmwareRanges, motorModeEvidence, motorModeError, type MotorModeLogEntry } from "./motorModeLogLogic";
 
 type JointState = { name?: string[]; position?: number[]; velocity?: number[]; effort?: number[] };
-type Pending = "updating" | "starting" | "configuring" | "stopping" | null;
+type Pending = "recovering" | "updating" | "starting" | "configuring" | "stopping" | null;
 function blankPosMotors(): MotorRowInput[] { return createDefaultMotors().map(row => ({ ...row, position: "" })); }
 function sourceStamp(value: unknown): bigint | null {
   const data = value as { header?: { stamp?: { sec?: unknown; nanosec?: unknown } } } | undefined;
@@ -102,7 +103,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
         const feedback = Array.from({length:7},(_,i)=>i).filter(i=>next.selected_joint_mask & (1<<i)).map(i=>`joint${i+1} ${formatMotorNumber(jointFeedback.current?.position?.[i])} rad`).join("；");
         terminalPublish({source:"Motor",level:next.operation_state===3?"error":logLevel(evidence),
           message:`固件读回：${evidence}；${motorFirmwareRanges(next,next.selected_joint_mask)}${failed ? `；界面最近反馈（记录时间 ${Date.now()}，非固件失败瞬间读数）：${feedback}` : ""}`,
-          failure:failed ? {key,title:"Motor · 驱动模式应用失败",summary:`固件模式校验未通过：${motorModeError(next.error_code)}。完整读回见日志。`} : undefined});
+          failure:failed ? {key,title:pendingRef.current === "recovering" ? "Motor · 故障恢复失败" : "Motor · 驱动模式应用失败",summary:`${pendingRef.current === "recovering" ? "清故障核验" : "固件模式校验"}未通过：${motorModeError(next.error_code)}。完整读回见日志。`} : undefined});
       }
     }
     capsRef.current = next; setCapabilities(next); setCapabilityError("");
@@ -135,6 +136,37 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     } catch (reason) {
       if (!mountedRef.current || stopProofRef.current !== proof) return;
       setOperation(null); callbackRef.current(false); setResult(`停止未确认：${String(reason)}`); reportOperationFailure("Motor",`停止未确认：${String(reason)}`,{title:"Motor · 停止结果未确认"});
+    }
+  }
+  async function recoverFault(recoveryMask: number) {
+    const current = capsRef.current;
+    if (!current || !recoveryAvailable(current) || !canRunRef.current || streaming || pendingRef.current ||
+        Date.now() - capsReceivedAtRef.current >= 1000 || !recoveryMask || (recoveryMask & ~127)) return;
+    const operation = ++operationRef.current;
+    stopTimer(); setArmed(false); setSupportConfirmed(false); setShowConfiguration(false);
+    stopProofRef.current = null; reconnectStopRef.current = false;
+    setOperation("recovering"); callbackRef.current(true);
+    logMode(`请求清除驱动故障：${Array.from({length:7}, (_, i) => recoveryMask & (1 << i) ? `joint${i + 1}` : "").filter(Boolean).join("、")}；保持失能，不恢复旧目标`);
+    try {
+      const response = await bridge.request({ op: "motor_recover_fault", boot_id: current.boot_id,
+        control_epoch: current.control_epoch, active_joint_mask: recoveryMask, confirmation: "ARMED", support_confirmation: "SUPPORTED" }, 15_000);
+      if (!mountedRef.current || operationRef.current !== operation) return;
+      const next = response.motor_control;
+      if (response.op !== "motor_recover_fault_result" || response.terminal !== true || !next?.fresh || next.age_ms >= 1000 ||
+          next.boot_id !== current.boot_id || next.control_epoch <= current.control_epoch || BigInt(next.stamp_ns) <= BigInt(current.stamp_ns) ||
+          next.fault_code !== 0 || next.error_code !== 0 || next.operation_state !== 2 || next.switching || !next.disabled_verified ||
+          next.mode !== 3 || next.enabled_joint_mask !== 0 || next.lease_id !== 0 || next.owner_source_id !== "0" || next.selected_joint_mask !== 0) throw new Error("清故障结果缺少新鲜失能证明");
+      acceptCapabilities(next);
+      if (!capsRef.current?.fresh || capsRef.current.boot_id !== next.boot_id || capsRef.current.fault_code !== 0 ||
+          capsRef.current.control_epoch !== next.control_epoch || !capsRef.current.disabled_verified) throw new Error("恢复响应已被更新的固件状态取代");
+      finishStop();
+      setMitMotors(blankPosMotors()); setPosMotors(blankPosMotors()); setTargetDirty(false); setArmed(false);
+      setResult("驱动故障已清除并核验全部轴失能。请使用当前位置重新设置目标，应用驱动模式并再次安全确认。");
+    } catch (error) {
+      if (!mountedRef.current || operationRef.current !== operation) return;
+      setOperation(null); setStopRequested(true); callbackRef.current(false);
+      const message = `清故障失败或结果未确认：${String(error)}；保持停止，不恢复运动`;
+      setResult(message); reportOperationFailure("Motor", message, {title:"Motor · 故障恢复失败"});
     }
   }
   const disableRef = useRef(disable); disableRef.current = disable;
@@ -376,6 +408,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       {inputError && <p className="error" role="alert">{inputError}</p>}
       {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {appliedCount} 轴{selectionChanged ? ` · 待应用选轴 ${selectedCount} 轴` : ""}{targetDirty ? " · 草稿待提交" : ""}</div>}
       {capabilities?.supported && !selectionNotice && !stopRequested && <p className="motor-top-guidance">{!capabilities.disabled_verified ? "先停止并验证输出关闭，才能应用驱动模式" : gate || `实际 ${drive} 已确认`}</p>}
+      <MotorFaultRecovery capabilities={capabilities} blocked={!active || controlLocked || streaming || (pending !== null && pending !== "recovering")} pending={pending === "recovering"} onRecover={mask => void recoverFault(mask)} />
       {currentFault && faultCode !== 0 && <div className="fault-detail" role="status"><strong>FAULT {faultCode} · {currentFault.name}</strong><span>{currentFault.description}</span></div>}
     </section>
     <section className="motor-command-toolbar" aria-label="电机控制">

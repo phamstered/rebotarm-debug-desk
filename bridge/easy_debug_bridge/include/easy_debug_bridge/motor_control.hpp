@@ -13,7 +13,7 @@ class MotorControl {
   using Disable = std::function<uint32_t()>;
   using Sequence = std::function<uint32_t()>;
   using SyncSequence = std::function<void(uint32_t, bool)>;
-  using Safety = std::function<bool(uint32_t)>;
+  using Safety = std::function<bool(uint32_t, bool)>;
   MotorControl(rclcpp::Node &node, const std::string &command_topic, Disable disable,
                Sequence sequence, SyncSequence sync_sequence, Safety safety);
   ~MotorControl();

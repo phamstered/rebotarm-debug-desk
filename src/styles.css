@@ -1755,3 +1755,10 @@ body.native-page-body { min-width: 0; min-height: 0; }
 .motor-card-title > .motor-selection-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .motor-selection-actions button { font-size: 11px; padding: 6px 10px; border: 1px solid #355566; border-radius: 6px; color: #c8e0e7; background: #102630; }
 .motor-selection-notice { margin-top: 10px; color: #edbd70; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* Fault recovery stays with the compact Motor status entry, not the log body. */
+.motor-fault-recovery { flex-basis: 100%; min-width: 0; font-size: 12px; }
+.motor-fault-recovery > button { padding: 7px 10px; border: 1px solid #806333; border-radius: 6px; color: #dec69b; background: #242015; }
+.motor-fault-recovery > span { margin-left: 10px; }
+.motor-fault-recovery .control-actions { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 10px 0; }
+.motor-fault-recovery .motor-mode-confirmation > .arm-check { display: flex; margin-bottom: 12px; }

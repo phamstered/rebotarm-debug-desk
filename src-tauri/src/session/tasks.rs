@@ -730,7 +730,26 @@ impl Tasks {
                     motor.stopping(motor_context.as_ref(), owner.epoch, now);
                 }
             }
+            // A deliberate recovery may replace only this page's stopped Motor
+            // operation on the same robot. Keep its durable occupancy until proof.
+            let recovering = op == "motor_recover_fault" && task.snapshot.kind == Kind::Motor &&
+                (task.owner == owner || (task.owner.window.label == owner.window.label && task.owner.epoch != owner.epoch)) &&
+                stopped(task) && !task.motor_terminal &&
+                task.motor.as_ref().is_some_and(|motor| motor.matches(motor_context.as_ref(), owner.epoch));
+            if recovering {
+                let motor = super::motor_task::Motor::start_request(motor_context.as_ref(), owner.epoch, now, message)?;
+                task.motor = Some(motor);
+                task.owner = owner.clone();
+                task.snapshot.epoch = owner.epoch;
+                task.snapshot.phase = Phase::Submitting;
+                task.snapshot.message = "正在清除驱动故障并核验失能；不恢复运动".into();
+                task.admitted = false;
+                task.stop_pending = false;
+                task.inflight = None;
+                task.seen = now;
+            }
             if actuation(op, message)
+                && !recovering
                 && !(is_motor
                     && task.snapshot.kind == Kind::Motor
                     && task.owner == owner
@@ -2013,6 +2032,68 @@ mod motor_tests {
         tasks.reply(admission.ticket,1,&request,Ok(&reply)); tasks.observe(1,&reply);
         let frame = json!({"op":"motor_command_v2","boot_id":"99","control_epoch":7,"active_joint_mask":1,"control_mode":"POS_VEL","lease_id":12,"mode":1,"confirmation":"ARMED"});
         (tasks, frame, leased, admission.ticket.unwrap())
+    }
+    #[test]
+    fn fault_recovery_replaces_only_owned_stopped_motor_and_retains_lock_until_proof() {
+        use super::super::motor_v2_task::tests::{fault_caps,recovery,recovered};
+        let (tasks, _, _, id)=v2_started(); let now=Instant::now();
+        let mut fault=fault_caps();fault["stamp_ns"]=json!("102");
+        tasks.observe(1,&json!({"motor_control":fault}));
+        let stop_request=json!({"op":"joint_command","mode":3});
+        let stop=tasks.admit(owner("page-motor",1),&stop_request,now).unwrap(); assert!(stop.permit.unwrap()());
+        tasks.reply(stop.ticket,1,&stop_request,Ok(&json!({"op":"joint_command_ack","mode":3,"sequence":5})));
+        assert!(tasks.admit(owner("other",1),&recovery(),now).is_err());
+        let pending_stop=tasks.poll(1,now);
+        let r=tasks.admit(owner("page-motor",1),&recovery(),now).unwrap();
+        assert_eq!(r.ticket,Some(id));assert!(r.permit.unwrap()());
+        if let Some(old)=pending_stop {assert!(!(old.permit)());}
+        assert!(tasks.migration("page-motor").is_err());
+        assert!(tasks.admit(owner("page-motion",1),&json!({"op":"position_move","command_id":"new"}),now).is_err());
+        assert!(tasks.poll(1,now+Duration::from_millis(300)).is_none());
+        let mut reply=recovered();reply["motor_control"]["stamp_ns"]=json!("103");
+        tasks.reply(Some(id),1,&recovery(),Ok(&reply));
+        assert!(tasks.snapshot().is_none());
+    }
+    #[test]
+    fn restored_fault_recovery_requires_original_robot_and_rebinds_only_explicit_request() {
+        use super::super::motor_v2_task::tests::{fault_caps,recovery,recovered};
+        let tasks=Arc::new(Tasks::default());
+        let id=tasks.restore_motor("motor-faulted".into(),&profile("first"),true).unwrap();
+        tasks.configure_motor(1,&profile("other"));tasks.observe(1,&feedback(1,3,1));
+        tasks.observe(1,&json!({"motor_control":fault_caps()}));
+        assert!(tasks.admit(owner("page-motor",1),&recovery(),Instant::now()).is_err());
+        tasks.configure_motor(2,&profile("first"));tasks.observe(2,&feedback(1,3,1));
+        tasks.observe(2,&json!({"motor_control":fault_caps()}));
+        assert_eq!(tasks.snapshot().unwrap().epoch,0); // reconnect alone does not send clear or transfer owner
+        let r=tasks.admit(owner("page-motor",2),&recovery(),Instant::now()).unwrap();
+        assert_eq!(r.ticket,Some(id));assert!(r.permit.unwrap()());
+        assert_eq!(tasks.snapshot().unwrap().epoch,2);
+        tasks.reply(Some(id),0,&recovery(),Ok(&recovered()));assert!(tasks.motor_terminal().is_none());
+        tasks.reply(Some(id),2,&recovery(),Ok(&recovered()));assert!(tasks.motor_terminal().is_some());
+        assert!(tasks.migration("page-motor").is_err()); // durable cleanup still owns reservation
+    }
+    #[test]
+    fn failed_recovery_keeps_previous_motion_reservation_and_requests_disable() {
+        use super::super::motor_v2_task::tests::{fault_caps,recovery};
+        let (tasks,_,_,id)=v2_started();let now=Instant::now();
+        let mut fault=fault_caps();fault["stamp_ns"]=json!("102");
+        tasks.observe(1,&json!({"motor_control":fault}));
+        tasks.admit(owner("page-motor",1),&json!({"op":"joint_command","mode":3}),now).unwrap();
+        let r=tasks.admit(owner("page-motor",1),&recovery(),now).unwrap();assert!(r.permit.unwrap()());
+        tasks.reply(Some(id),1,&recovery(),Err("timeout"));
+        assert!(tasks.snapshot().is_some());assert!(tasks.migration("page-motor").is_err());
+        let stop=tasks.poll(1,now).unwrap();assert_eq!(stop.message["mode"],3);assert!((stop.permit)());
+    }
+    #[test]
+    fn recovery_stop_fences_queued_request_and_late_success() {
+        use super::super::motor_v2_task::tests::{fault_caps,recovery,recovered};
+        let tasks=Arc::new(Tasks::default());tasks.configure_motor(1,&profile("first"));
+        tasks.observe(1,&feedback(1,3,1));tasks.observe(1,&json!({"motor_control":fault_caps()}));
+        let r=tasks.admit(owner("page-motor",1),&recovery(),Instant::now()).unwrap();
+        let stop=tasks.admit(owner("page-status",1),&json!({"op":"joint_command","mode":3}),Instant::now()).unwrap();
+        assert!(stop.permit.unwrap()());assert!(!r.permit.unwrap()());
+        tasks.reply(r.ticket,1,&recovery(),Ok(&recovered()));
+        assert!(tasks.snapshot().is_some());
     }
     #[test]
     fn late_ack_does_not_renew_transport_deadline_or_revive_stopped_v2_stream() {

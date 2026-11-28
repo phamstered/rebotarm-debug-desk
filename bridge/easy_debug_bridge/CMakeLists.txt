@@ -114,6 +114,10 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_motor_control_ros.py $<TARGET_FILE:bridge_node>)
   set_tests_properties(motor_control_ros PROPERTIES
     ENVIRONMENT "ROS_DOMAIN_ID=227;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
+  add_test(NAME motor_recovery_ros
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_motor_recovery_ros.py $<TARGET_FILE:bridge_node>)
+  set_tests_properties(motor_recovery_ros PROPERTIES
+    ENVIRONMENT "ROS_DOMAIN_ID=227;ROS_LOCALHOST_ONLY=1" RUN_SERIAL TRUE TIMEOUT 90)
   if(controller_manager_msgs_FOUND)
     add_test(NAME joint4_task_ros
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_joint4_task_ros.py $<TARGET_FILE:bridge_node>)

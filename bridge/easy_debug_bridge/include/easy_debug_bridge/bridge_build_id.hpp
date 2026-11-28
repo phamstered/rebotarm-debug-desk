@@ -2,4 +2,4 @@
 #pragma once
 
 #define EASY_DEBUG_BRIDGE_VERSION "0.1.0"
-#define EASY_DEBUG_BRIDGE_BUILD_ID "e2f5eea4dd69"
+#define EASY_DEBUG_BRIDGE_BUILD_ID "313d73ec0be2"

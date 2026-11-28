@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn disable_fences_v2_configuration_lease_and_frames_but_not_capability_queries() {
         let queue = Arc::new(CommandQueue::default());
-        let permits: Vec<_> = ["motor_set_control_mode", "motor_control_lease", "motor_command_v2"].iter()
+        let permits: Vec<_> = ["motor_set_control_mode", "motor_control_lease", "motor_command_v2", "motor_recover_fault"].iter()
             .map(|op| queue.prepare(&json!({"op":op}), None).unwrap()).collect();
         assert!(queue.prepare(&json!({"op":"motor_capabilities"}), None).is_none());
         queue.prepare(&json!({"op":"joint_command","mode":3}), None);

@@ -463,8 +463,8 @@ class BridgeNode : public rclcpp::Node {
         motor_sequence_v2_ = true;
         if (boot_changed || !have_remote_sequence_ || easy_debug_bridge::motor_v2::sequence_after(sequence, sequence_)) sequence_ = sequence;
         have_remote_sequence_ = true; },
-      [this](uint32_t mask) { std::lock_guard<std::mutex> lock(control_mutex_); const auto at=std::chrono::steady_clock::now();
-        return easy_debug_bridge::motor_v2::mask_valid(mask) && have_status_ && have_joint_state_ && latest_status_.fault_code == 0 &&
+      [this](uint32_t mask, bool recovery) { std::lock_guard<std::mutex> lock(control_mutex_); const auto at=std::chrono::steady_clock::now();
+        return easy_debug_bridge::motor_v2::mask_valid(mask) && have_status_ && have_joint_state_ && (recovery ? latest_status_.fault_code == 7 && latest_status_.mode == 3 : latest_status_.fault_code == 0) &&
           (latest_status_.active_joint_mask & mask) == mask && at-status_received_at_<std::chrono::seconds(1) && at-joint_received_at_<std::chrono::seconds(1); });
     controller_registry_ = std::make_shared<easy_debug_bridge::ControllerRegistry>(*this);
     position_motion_ = std::make_unique<easy_debug_bridge::PositionMotion>(*this, joint_state_topic_, status_topic_, controller_registry_, [this] { return publish_task_disable(); });
@@ -601,7 +601,7 @@ class BridgeNode : public rclcpp::Node {
     const std::string request_id = request.get<std::string>("request_id", "");
     const auto motor_generation = motor_stop_generation_.load();
     try {
-      const bool motor_v2=op=="motor_set_control_mode" || op=="motor_control_lease" || op=="motor_command_v2";
+      const bool motor_v2=op=="motor_recover_fault" || op=="motor_set_control_mode" || op=="motor_control_lease" || op=="motor_command_v2";
       const bool starts=motor_v2 || op=="position_move" || op=="position_group_start" || op=="position_group_resume" ||
         op=="visual_pick_start" || op=="trajectory_command" || op=="gravity_id_send_goal" || op=="joint4_start" || op=="joint4_capture" ||
         (op=="joint_command" && request.get<int>("mode",-1)!=3);

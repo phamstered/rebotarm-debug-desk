@@ -688,3 +688,45 @@ describe("Motor unified joint table", () => {
     expect(bridge.command).not.toHaveBeenCalled();
   });
 });
+
+
+describe("Motor drive fault recovery", () => {
+  const fault = () => capabilities({ protocol_version: 3, fault_code: 7, disabled_verified: false });
+  function chooseRecovery() {
+    fireEvent.click(screen.getByRole("button", {name:"清除驱动故障…"}));
+    fireEvent.click(screen.getByLabelText("恢复 joint3"));
+    expect(screen.getByRole("button", {name:"确认清故障并保持失能"})).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("故障恢复现场确认"));
+  }
+  it("recovers selected joint independently of motion selection and never enables or replays targets", async () => {
+    const bridge=bridgeDouble(fault());mount(bridge);await flush();chooseRecovery();
+    const recovered=capabilities({protocol_version:3,control_epoch:3,stamp_ns:"1000000001",operation_state:2});
+    bridge.command.mockResolvedValueOnce({op:"motor_recover_fault_result",terminal:true,motor_control:recovered});
+    fireEvent.click(screen.getByRole("button",{name:"确认清故障并保持失能"}));await flush();
+    expect(bridge.command).toHaveBeenCalledTimes(1);
+    expect(bridge.command).toHaveBeenCalledWith({op:"motor_recover_fault",boot_id:fault().boot_id,control_epoch:2,active_joint_mask:4,confirmation:"ARMED",support_confirmation:"SUPPORTED"});
+    expect(bridge.send).not.toHaveBeenCalled();expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("");
+    expect(await terminalOutput("Motor")).toContain("驱动故障已清除并核验全部轴失能");
+  });
+  it.each([{protocol_version:2},{fault_code:11},{lease_id:2},{enabled_joint_mask:4},{fresh:false}])("rejects unsupported or unsafe recovery %j", async patch => {
+    const bridge=bridgeDouble({...fault(),...patch});mount(bridge);await flush();
+    const button=screen.queryByRole("button",{name:"清除驱动故障…"});
+    if(button)expect(button).toBeDisabled();expect(bridge.command).not.toHaveBeenCalled();
+  });
+  it("keeps STOP available and ignores a late recovery success after STOP", async () => {
+    const bridge=bridgeDouble(fault());let resolve!: (v:BridgeEnvelope)=>void;
+    bridge.command.mockImplementationOnce(()=>new Promise(r=>{resolve=r;}));mount(bridge);await flush();chooseRecovery();
+    fireEvent.click(screen.getByRole("button",{name:"确认清故障并保持失能"}));await flush();
+    expect(screen.getByRole("button",{name:"停止并 DISABLE"})).toBeEnabled();
+    fireEvent.click(screen.getByRole("button",{name:"停止并 DISABLE"}));await flush();
+    await act(async()=>resolve({op:"motor_recover_fault_result",terminal:true,motor_control:capabilities({protocol_version:3,control_epoch:3,stamp_ns:"1000000001",operation_state:2})}));
+    expect(await terminalOutput("Motor")).not.toContain("驱动故障已清除并核验全部轴失能");expect(bridge.send).not.toHaveBeenCalled();
+  });
+  it.each([{fault_code:7},{disabled_verified:false},{boot_id:"100"},{stamp_ns:"1000000000"},{selected_joint_mask:4}])("refuses unproven success %j", async patch => {
+    const bridge=bridgeDouble(fault());mount(bridge);await flush();chooseRecovery();
+    bridge.command.mockResolvedValueOnce({op:"motor_recover_fault_result",terminal:true,motor_control:capabilities({protocol_version:3,control_epoch:3,stamp_ns:"1000000001",operation_state:2,...patch})});
+    fireEvent.click(screen.getByRole("button",{name:"确认清故障并保持失能"}));await flush();
+    expect(await terminalOutput("Motor")).toContain("清故障失败或结果未确认");expect(bridge.send).not.toHaveBeenCalled();
+  });
+});

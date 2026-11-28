@@ -826,3 +826,16 @@ SSH 日志批次按普通文件设备号/inode/字节长度/前缀指纹校验�
 ### Motor 能力查询回执排序
 
 同一 boot 与 control_epoch 的有效 `motor_capabilities` 查询回执可能晚于新状态推送到达。桌面与原生忽略这种更旧的查询快照，保留最新源时间戳及其原始有效期；不会用迟到查询续期。推送时间戳回退、旧启动/配置代次、显式失效或过期反馈仍按失效处理。发送停止诊断分别记录页面确认超时、原生发送间隔超时，以及反馈/许可失效的实际身份与反馈龄，统一写入 Terminal。
+
+
+## 驱动故障恢复（MotorControl 协议版本 3）
+
+`motor_capabilities.motor_control.protocol_version=3` 在原有 V2 ROS 消息/服务布局上增加清故障能力；版本 2 的配置、许可和控制帧仍受支持，但不允许恢复。需先更新 ROS 硬件插件（支持版本 3 的 MotorModeGate）、桌面及 Bridge，再更新配套 executor 固件；旧 Bridge 和旧 ROS 硬件插件不接受版本 3 状态。
+
+请求：`{op:"motor_recover_fault", request_id, boot_id, control_epoch, active_joint_mask, confirmation:"ARMED", support_confirmation:"SUPPORTED"}`。mask 必须为非零七轴子集；不接受目标、速度、模式或租约字段。用户须确认支撑机械臂、排除阻碍并冷却。准入要求新鲜版本 3 状态、`mode=3`、`fault_code=7`、无使能、无租约及无进行中模式事务，且 HardwareStatus/JointState 新鲜、所选轴有效。其他故障不能通过此接口清除。
+
+Bridge 保留互斥，先发布 DISABLE 并等待源时间、序列号推进，然后调用现有 MotorControl 服务 `action=5`（`control_mode=0, lease_id=0`）。驱动故障可能使 `disabled_verified=false`；仅恢复准入使用独立门禁，普通配置、启动及轨迹门禁不变。固件验证实际 STOP 已发送、七轴静止且反馈新鲜，向所选驱动按实际 MIT/POS_VEL CAN ID 发送一次 `FF FF FF FF FF FF FF FB`，发送后再读取七轴状态。持续失能、无驱动故障至少 200 ms，才清除 MCU DRIVE 故障锁存并增加 epoch。2 s 内无法取得证明则失败；不发送 FC 使能、FE 零位或运动帧。
+
+只有新鲜且匹配 boot/operation 的终态返回 `{op:"motor_recover_fault_result", request_id, terminal:true, motor_control}`；必须满足 `operation_state=2,error_code=0,fault_code=0,mode=3,disabled_verified=true,enabled_joint_mask=0,lease_id=0,owner_source_id="0",selected_joint_mask=0`，且 epoch/源时间推进。服务 accepted 不是恢复成功。失败/超时保留停止门禁并继续 DISABLE；显式停止、断连撤销未完成恢复，旧响应不复活任务。
+
+原生任务将其记为 `fault_recovery`，与其他控制任务互斥；同页面持有的已停止 Motor 任务可以转入恢复，保留原占用直到证明完成。重连或重启桌面后，必须连接身份与原记录一致并重新明确提交恢复，才将该停止任务绑定到新连接；重连本身不发清错。恢复不能接管其他页面或其他机器人任务。持久化仅保存恢复核验元数据，重启不重发 FB/目标。成功后 UI 撤销安全确认、清空旧目标，重新运动必须显式配置并确认。

@@ -57,7 +57,33 @@ static void check_command_stream() {
   stream.clear();
   assert(!stream.due(cache, renewed + std::chrono::milliseconds(20))); // STOP/disconnect fence
 }
+static void check_fault_recovery() {
+  const auto now=Clock::now(); Cache c; auto s=fixture();
+  s.protocol_version=3;s.fault_code=7;s.disabled_verified=false;s.control_modes[2]=pos_vel;
+  assert(c.observe(s,now));
+  Transaction t;t.action=5;t.boot=123;t.epoch=7;t.source=55;t.mask=4;t.operation=9;t.disable_sequence=12;t.initial_stamp=s.stamp_ns;
+  t.validate_start(c,now);assert(!t.stopped(c,now));
+  s.stamp_ns++;s.last_command_sequence=12;assert(c.observe(s,now));assert(t.stopped(c,now));
+  for(int i=0;i<7;++i) {
+    auto bad=c;
+    if(i==0)bad.status.protocol_version=2;if(i==1)bad.status.mode=1;if(i==2)bad.status.fault_code=11;
+    if(i==3)bad.status.enabled_joint_mask=4;if(i==4)bad.status.lease_id=1;if(i==5)bad.status.switching=true;if(i==6)bad.have=false;
+    assert(rejects([&]{t.validate_start(bad,now);}));assert(!t.stopped(bad,now));
+  }
+  assert(rejects([&]{t.validate_start(c,now+std::chrono::seconds(1));}));
+  s.stamp_ns++;s.control_epoch++;s.fault_code=0;s.disabled_verified=true;s.operation_id=9;s.operation_state=2;
+  assert(c.observe(s,now));assert(!t.confirmed(c,now));t.stage=Stage::Readback;assert(t.confirmed(c,now));
+  for(int i=0;i<10;++i) {
+    auto bad=c;
+    if(i==0)bad.status.fault_code=7;if(i==1)bad.status.operation_id=8;if(i==2)bad.status.error_code=1;
+    if(i==3)bad.status.disabled_verified=false;if(i==4)bad.status.enabled_joint_mask=4;if(i==5)bad.status.lease_id=1;
+    if(i==6)bad.status.owner_source_id=55;if(i==7)bad.status.selected_joint_mask=4;if(i==8)bad.status.boot_id++;
+    if(i==9)bad.status.control_epoch=7;
+    assert(!t.confirmed(bad,now));
+  }
+}
 int main() {
+  check_fault_recovery();
   check_motor_delivery();
   check_command_stream();
   const auto now=Clock::now(); Cache c;
