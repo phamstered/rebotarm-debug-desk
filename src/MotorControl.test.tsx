@@ -59,6 +59,7 @@ describe("MotorControl legacy MIT", () => {
     expect(screen.getByLabelText("Kp")).toBeDisabled(); expect(screen.getByLabelText("joint1 选择控制")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3, active_joint_mask: 0, position: [] }));
+    expect(logging.publish).toHaveBeenCalledWith(expect.objectContaining({level: "warn", message: expect.stringContaining("原因：用户点击停止按钮")}));
     expect(screen.getByLabelText("安全确认")).not.toBeChecked();
     expect(await terminalOutput("Motor")).toMatch(/已请求 DISABLE，停止确认中/);
     await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2);
@@ -123,6 +124,7 @@ describe("MotorControl legacy MIT", () => {
     rerender(<MotorControl {...props} active={kind !== "hidden"} controlLocked={kind === "locked"} />); await flush(); await act(async () => vi.advanceTimersByTimeAsync(300));
     expect(bridge.send).toHaveBeenCalledTimes(2); expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 })); expect(screen.getByLabelText("安全确认")).not.toBeChecked();
     expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.2");
+    expect(logging.publish).toHaveBeenCalledWith(expect.objectContaining({message: expect.stringContaining(kind === "hidden" ? "原因：页面不再活动" : "原因：其他控制任务占用")}));
   });
 });
 
@@ -462,6 +464,20 @@ describe("Motor continuous retargeting", () => {
     // Polling older evidence cannot keep the source fresh forever.
     await act(async () => vi.advanceTimersByTime(2000));
     expect(bridge.command.mock.calls.some(([m]) => m.mode === 3)).toBe(true);
+  });
+
+  it.each([
+    ["older push", { stamp_ns: "1150000000" }, "源时间戳回退"],
+    ["lease loss", { stamp_ns: "1300000000", lease_id: 0 }, "控制租约变更或已失效"],
+    ["fault", { stamp_ns: "1300000000", fault_code: 2 }, "固件故障 2"],
+  ])("records the specific %s stop and pre-stop lease evidence", async (_name, patch, reason) => {
+    vi.useFakeTimers(); const { bridge, running } = await runningPos();
+    await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...running, ...patch } }));
+    await act(async () => vi.advanceTimersByTime(50));
+    expect(bridge.command).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 3 }));
+    const entry = logging.publish.mock.calls.map(([entry]) => entry.message).find(message => message.startsWith("请求 DISABLE · 原因："));
+    expect(entry).toContain(reason); expect(entry).toContain("/9；owner=5；source=5");
+    if (_name === "older push") expect(entry).toContain("stamp=1150000000，watermark=1200000000");
   });
 
   it("edits a draft while holding, then repeatedly updates the same lease without DISABLE", async () => {

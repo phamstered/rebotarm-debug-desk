@@ -78,7 +78,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     // Once V2 was observed, loss of its evidence must never restore legacy admission.
     let next = !value.supported && seenV2Ref.current && capsRef.current?.supported ? { ...capsRef.current, fresh: false, reason: value.reason || "V2 能力丢失" } : value;
     const accepted = acceptMotorEvidence(evidenceWatermarkRef.current, next);
-    if (accepted.error) next = { ...(capsRef.current ?? next), fresh: false, reason: accepted.error };
+    if (accepted.error) next = { ...(capsRef.current ?? next), fresh: false, reason: `${accepted.error}（${query ? "查询" : "推送/事务"} stamp=${value.stamp_ns}，watermark=${evidenceWatermarkRef.current?.stamp}，boot=${value.boot_id}，epoch=${value.control_epoch}）` };
     else if (accepted.advanced) { evidenceWatermarkRef.current = accepted.watermark; capsReceivedAtRef.current = Date.now() - next.age_ms; }
     else if (next.supported && next.fresh && capsRef.current) next = { ...capsRef.current, age_ms: Math.max(capsRef.current.age_ms, next.age_ms) };
     const previous = capsRef.current;
@@ -106,7 +106,12 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     const proof = stopProofRef.current;
     if (proof?.previous && proof.sequence !== undefined && hasStopProof(next, proof.previous, proof.sequence)) finishStop();
   }
-  async function disable() {
+  function logStop(reason: string) {
+    const current = capsRef.current, stream = streamRef.current;
+    terminalPublish({source: "Motor", level: "warn", message: `请求 DISABLE · 原因：${reason}；active=${active}；locked=${controlLocked}；visibility=${document.visibilityState}；fresh=${current?.fresh ?? "unknown"}；反馈龄=${Date.now() - capsReceivedAtRef.current} ms；stamp=${current?.stamp_ns ?? "unknown"}；boot=${current?.boot_id ?? "unknown"}/${stream?.boot ?? "none"}；epoch=${current?.control_epoch ?? "unknown"}/${stream?.epoch ?? "none"}；lease=${current?.lease_id ?? "unknown"}/${stream?.payload.lease_id ?? "none"}；owner=${current?.owner_source_id ?? "unknown"}；source=${current?.source_id ?? "unknown"}；fault=${current?.fault_code ?? "unknown"}；reject=${current?.reject_code ?? "unknown"}；反馈说明=${current?.reason || "无"}`});
+  }
+  async function disable(reason: string) {
+    logStop(reason);
     reconnectStopRef.current = false;
     ++operationRef.current; stopTimer(); setArmed(false); setSupportConfirmed(false); setShowConfiguration(false);
     setStopRequested(true); setOperation("stopping"); callbackRef.current(true);
@@ -132,7 +137,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       if (!active) return;
       if (seenV2Ref.current && capsRef.current?.fresh && Date.now() - capsReceivedAtRef.current > 1500) {
         acceptCapabilities({ ...capsRef.current, fresh: false, reason: "驱动反馈未及时更新" });
-        if (timerRef.current !== null) void disableRef.current();
+        if (timerRef.current !== null) void disableRef.current("驱动反馈未及时更新");
       }
       if (inFlight) return;
       inFlight = true;
@@ -148,7 +153,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
         if (!seenV2Ref.current && /未知操作|unknown.*op|unsupported.*op|未提供 POS_VEL 能力/i.test(message)) setLegacyConfirmed(true);
         if (seenV2Ref.current && capsRef.current) {
           acceptCapabilities({ ...capsRef.current, fresh: false, reason: message });
-          if (timerRef.current !== null) void disableRef.current();
+          if (timerRef.current !== null) void disableRef.current(`驱动能力查询失败：${message}`);
         }
       } finally { inFlight = false; }
     };
@@ -169,7 +174,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     if (message.op === "error" && !message.request_id && timerRef.current !== null) {
       const error = message.message ?? "命令发送失败";
       reportOperationFailure("Motor",error,{key:`stream:${operationRef.current}`,title:"Motor · 指令发送失败"});
-      void disableRef.current().then(() => { if (mountedRef.current) setResult(`${error}；已请求停止，等待反馈确认。`); });
+      void disableRef.current(`原生发送失败：${error}`).then(() => { if (mountedRef.current) setResult(`${error}；已请求停止，等待反馈确认。`); });
     }
     if ((message.op === "joint_command_ack" || message.op === "motor_command_v2_ack") && message.sequence !== undefined) setSequence(message.sequence);
     if (message.op === "topic_message" && message.topic === statusTopic) {
@@ -188,7 +193,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     ++operationRef.current; const hadCommand = timerRef.current !== null || pendingRef.current !== null;
     stopTimer(); setArmed(false); setSupportConfirmed(false); setOperation(null); callbackRef.current(false);
     if (hadCommand) {
-      void disableRef.current();
+      void disableRef.current(!active ? "页面不再活动" : "其他控制任务占用");
     }
   }, [active, controlLocked, bridge]);
   useEffect(() => {
@@ -202,7 +207,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       const hadCommand = timerRef.current !== null || pendingRef.current !== null;
       if (timerRef.current !== null) window.clearInterval(timerRef.current);
       timerRef.current = null; streamRef.current = null; callbackRef.current(false);
-      if (hadCommand) void bridge.request(createCommandPayload(3)).catch(() => undefined);
+      if (hadCommand) { logStop("Motor 页面卸载"); void bridge.request(createCommandPayload(3)).catch(() => undefined); }
     };
   }, [bridge]);
 
@@ -243,7 +248,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       if (mountedRef.current && operation === operationRef.current) {
         reportOperationFailure("Motor",`应用失败 / 结果未确认：${String(reason)}；请求 DISABLE，不会自动重试。`,{key:modeAttempt.current?.key,title:"Motor · 驱动模式应用失败",summary:capsRef.current?.error_code ? `固件模式校验未通过：${motorModeError(capsRef.current.error_code)}。正在请求 DISABLE。` : "模式结果未确认，正在请求 DISABLE。"});
         if (capsRef.current) acceptCapabilities({ ...capsRef.current, fresh: false, reason: "配置结果未确认，请等待新鲜读回" });
-        await disable();
+        await disable(`模式应用结果未确认：${String(reason)}`);
         if (mountedRef.current) setResult(`模式应用失败 / 结果未确认：${String(reason)}。已请求停止，不会自动重试或执行目标。`);
       }
     } finally {
@@ -267,7 +272,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       if (drive === "POS_VEL") {
         const current = capsRef.current!;
         const lease = await bridge.request({ op: "motor_control_lease", lease_action: "acquire", boot_id: current.boot_id, control_epoch: current.control_epoch, active_joint_mask: mask, control_mode: "POS_VEL", confirmation: "ARMED" });
-        if (!mountedRef.current || operation !== operationRef.current || !canRunRef.current) { void bridge.request(createCommandPayload(3)).catch(() => undefined); return; }
+        if (!mountedRef.current || operation !== operationRef.current || !canRunRef.current) { logStop("启动响应迟到，页面或操作已变更"); void bridge.request(createCommandPayload(3)).catch(() => undefined); return; }
         const next = lease.motor_control;
         if (!next || next.boot_id !== current.boot_id || next.control_epoch !== current.control_epoch || !next.disabled_verified || next.lease_id <= 0 || !next.source_id || next.owner_source_id !== next.source_id || controlGate(next, true, drive, mask)) throw new Error("V2 控制租约未获确认");
         acceptCapabilities(next);
@@ -275,34 +280,42 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
         payload = createPosVelPayload(posMode, parsedPos!.values!, next);
       } else payload = createCommandPayload(mitMode, parsedMit!.values!);
       const response = await bridge.request(payload);
-      if (!mountedRef.current || operation !== operationRef.current || !canRunRef.current) { void bridge.request(createCommandPayload(3)).catch(() => undefined); return; }
+      if (!mountedRef.current || operation !== operationRef.current || !canRunRef.current) { logStop("启动响应迟到，页面或操作已变更"); void bridge.request(createCommandPayload(3)).catch(() => undefined); return; }
       streamRef.current = { payload, boot: initialControl?.boot_id, epoch: initialControl?.control_epoch };
       setSequence(response.sequence); setOperation(null); setStreaming(true); setTargetDirty(false); setResult("已发布；持续控制中。到位后仍保持，可编辑并确认更新目标。");
       timerRef.current = window.setInterval(() => {
         if (!canRunRef.current || operation !== operationRef.current) { stopTimer(); return; }
         const stream = streamRef.current;
-        if (!stream || streamInvalid(stream)) { void disableRef.current(); return; }
-        try { bridge.send(stream.payload); } catch { void disableRef.current(); }
+        const reason = stream ? streamInvalid(stream) : "当前控制帧丢失";
+        if (!stream || reason) { void disableRef.current(reason || "当前控制帧丢失"); return; }
+        try { bridge.send(stream.payload); } catch (error) { void disableRef.current(`页面发送异常：${String(error)}`); }
       }, 50);
     } catch (reason) {
       if (!mountedRef.current || operation !== operationRef.current) return;
       setOperation(null); setArmed(false); callbackRef.current(false);
-      await disable();
+      await disable(`控制启动失败：${String(reason)}`);
       if (mountedRef.current) {setResult(`控制未开始：${String(reason)}；已请求停止。`);reportOperationFailure("Motor",`控制未开始：${String(reason)}；已请求停止。`,{key:`start:${operation}`,title:"Motor · 控制启动失败"});}
     }
   }
 
-  function streamInvalid(stream: NonNullable<typeof streamRef.current>): boolean {
+  function streamInvalid(stream: NonNullable<typeof streamRef.current>): string | null {
+    if (!seenV2Ref.current) return null;
     const current = capsRef.current, payload = stream.payload;
-    return seenV2Ref.current && (!!controlGate(current, true, drive, mask) || Date.now() - capsReceivedAtRef.current > 1500
-      || current?.boot_id !== stream.boot || current?.control_epoch !== stream.epoch
-      || (drive === "POS_VEL" && (current?.lease_id !== payload.lease_id || current?.owner_source_id !== current?.source_id)));
+    const gate = controlGate(current, true, drive, mask);
+    if (gate) return gate;
+    if (Date.now() - capsReceivedAtRef.current > 1500) return "驱动反馈源已超过 1500 ms 未推进";
+    if (current?.boot_id !== stream.boot) return "固件启动身份变更";
+    if (current?.control_epoch !== stream.epoch) return "驱动配置代次变更";
+    if (drive === "POS_VEL" && current?.lease_id !== payload.lease_id) return "控制租约变更或已失效";
+    if (drive === "POS_VEL" && current?.owner_source_id !== current?.source_id) return "控制租约不属于当前连接";
+    return null;
   }
 
   async function updateTarget() {
     const stream = streamRef.current;
     if (!canRunRef.current || pendingRef.current || stopRequested || !stream || !streaming || mode !== 1 || !targetDirty || !armed) return;
-    if (streamInvalid(stream)) { void disableRef.current(); return; }
+    const stopReason = streamInvalid(stream);
+    if (stopReason) { void disableRef.current(`更新目标前校验失败：${stopReason}`); return; }
     const current = capsRef.current;
     const mit = drive === "MIT" ? parseCommandValues({ velocity, kp, kd, effort }, motors) : null;
     const pos = drive === "POS_VEL" && current ? parsePosVelValues(motors, velocityLimits, current, mode) : null;
@@ -321,7 +334,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       setResult("目标已更新；沿用当前控制会话持续保持，无需 DISABLE。");
     } catch (reason) {
       if (!mountedRef.current || operation !== operationRef.current) return;
-      await disable();
+      await disable(`目标更新结果未确认：${String(reason)}`);
       if (mountedRef.current) {
         setResult(`目标更新结果未确认：${String(reason)}；已请求停止。`);
         reportOperationFailure("Motor", `目标更新结果未确认：${String(reason)}；已请求停止。`, {title:"Motor · 目标更新失败"});
@@ -373,7 +386,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       <p className="mode-description">{drive === "MIT" ? selectedMode.description : mode === 0 ? "由固件锁存新鲜当前位置并保持；表单目标不下发" : "逐轴目标位置 + 正速度上限；执行后持续保持"}</p>
       {drive === "MIT" && <div className="command-grid shared-command-grid">{([["Velocity · rad/s", velocity, setVelocity], ["Kp", kp, setKp], ["Kd", kd, setKd], ["Effort · Nm", effort, setEffort]] as const).map(([label, value, setter]) => <label key={label}>{label}<input type="text" inputMode="decimal" disabled={label === "Velocity · rad/s" ? targetLocked : busy} value={value} onChange={event => decimal(event.target.value, setter)} /></label>)}</div>}
       <label className="arm-check"><input type="checkbox" checked={armed} disabled={targetLocked || !!gate} aria-label="安全确认" onChange={event => setArmed(event.target.checked)} />已核对所选关节、参数及现场安全</label>
-      <div className="control-actions"><ActionButton className="send-command" disabled={targetLocked || !armed || !!gate || (streaming && !targetDirty)} onClick={() => void (streaming ? updateTarget() : start())}>{mainLabel}</ActionButton><ActionButton className="stop-command" onClick={() => void disable()}>停止并 DISABLE</ActionButton></div>
+      <div className="control-actions"><ActionButton className="send-command" disabled={targetLocked || !armed || !!gate || (streaming && !targetDirty)} onClick={() => void (streaming ? updateTarget() : start())}>{mainLabel}</ActionButton><ActionButton className="stop-command" onClick={() => void disable("用户点击停止按钮")}>停止并 DISABLE</ActionButton></div>
       {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {selectedCount} 轴{targetDirty ? " · 草稿待提交" : ""}</div>}
       {inputError && <p className="error" role="alert">{inputError}</p>}
       <OperationLogNotice source="Motor" notice={result} label={stopRequested ? "等待输出关闭确认" : streaming ? "持续控制中" : "控制操作已有更新"} />
