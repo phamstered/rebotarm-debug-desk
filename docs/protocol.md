@@ -623,7 +623,7 @@ Position/动作组、Pick、Gravity、Trajectory、Joint4 的原生任务同时�
 原生队列优先发送 Position/Pick/重力辨识取消及 DISABLE。停止请求使此前对应队列中的执行指令失效，DISABLE 使全部已排队执行域失效；写入前重新核验代次和任务许可，失效项明确返回“未下发到 Bridge”。此机制不撤回已发送指令，也不替代机械臂停止确认。直接轨迹和 SSH 控制操作的任务生命周期见下文。
 
 
-Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。Rust 观察实际写入的指令流；250 ms 没有新指令会在下一次原生检查时请求 DISABLE（检查周期 250 ms，不代表 250 ms 内保证硬件关闭）。普通状态查询不维持指令流，Rust 不重放或补发运动命令。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
+Motor 非 DISABLE 请求只允许实际 `page-motor` WebView，首帧下发前登记任务，收到发布 ACK 后才允许同一所属窗口继续发送。安装版 Rust 在首帧真实 ACK 后，以 20 ms（名义 50 Hz）周期续发当前已提交目标；页面每 50 ms 确认同一目标，原生返回 `motor_stream_renewed`，只表示续期受理，不伪造发布 ACK 或 sequence。更新目标须重新准入，并使排队中的旧目标及迟到回执失效。每次实际写入仍检查当前任务、反馈及 boot/epoch/lease/来源/掩码；最多 8 帧在途，不积累无限补帧。页面 250 ms 未确认或实际写入间隔超过原门限，在下一次约 20 ms 原生检查时停止续发并请求 DISABLE（不保证硬件关闭的绝对时限）。普通状态查询、原生续发和 ACK 均不刷新页面截止时间。目标只存在当前连接内存，不跨页面退出、STOP、重连或应用重启恢复；不得自动恢复失效租约。窗口退出、连接丢失、发布结果未知时保留任务；可发送时串行请求 DISABLE，重试间隔至少 1 秒。Bridge 继续为每帧分配 sequence、清零 DISABLE 控制字段并保留原安全门。
 
 Motor 的 DISABLE ACK 仅证明已发布。释放任务还需同一连接身份和代次的 HardwareStatus：mode=3、last_command_sequence 按 uint32 串行序列覆盖该次 DISABLE ACK（允许回绕）、新增的源时间戳，以及 1 秒内的原生接收时刻。连接建立时 Rust 为配置的 statusTopic 保留一个原生订阅，所有 WebView 退出也不会取消，避免停止确认依赖页面刷新。重复/倒退时间戳不能刷新有效期；断线后需重新确认，源时钟重置需重连。主机、SSH 用户/端口、Bridge 远端端口、ROS domain、命令/反馈 Topic 共同识别连接；换机器人不能用新机器人反馈解锁旧任务，也不向另一机器人自动 DISABLE。原本地隧道端口改变不影响身份。这里确认的是固件输出关闭，不是机械静止。
 
@@ -822,3 +822,7 @@ Startup restores occupancy before workspace initialization and does not connect.
 `terminal-open` 事件携带 `{target,source?,task?}`，target 为 main 或页面名，供页内日志入口定位 dock；`terminal-storage-error` 通知本地归档错误，同时错误保留在下一次 read 响应中。清屏和跟随均为本地视图行为，无修改服务端历史的 IPC。
 
 SSH 日志批次按普通文件设备号/inode/字节长度/前缀指纹校验游标，保留未完成 UTF-8 行至下一次读取。每来源最多 128 KiB / 2000 行，超量插入显式截断提示；替换、截短重新读当前允许文件，不发送任意远端命令。归档只保留诊断，不参与控制任务票据恢复。
+
+### Motor 能力查询回执排序
+
+同一 boot 与 control_epoch 的有效 `motor_capabilities` 查询回执可能晚于新状态推送到达。桌面与原生忽略这种更旧的查询快照，保留最新源时间戳及其原始有效期；不会用迟到查询续期。推送时间戳回退、旧启动/配置代次、显式失效或过期反馈仍按失效处理。发送停止诊断分别记录页面确认超时、原生发送间隔超时，以及反馈/许可失效的实际身份与反馈龄，统一写入 Terminal。

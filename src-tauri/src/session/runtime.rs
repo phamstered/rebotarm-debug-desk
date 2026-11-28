@@ -65,6 +65,14 @@ struct Core {
     monitor: super::monitor::History,
 }
 
+fn annotate_motor_error(tasks: &Tasks, ticket: Option<u64>, result: Result<WireFrame,String>) -> Result<WireFrame,String> {
+    result.map_err(|error| {
+        if let Some(task)=tasks.snapshot().filter(|t|Some(t.id)==ticket && t.kind==super::tasks::Kind::Motor && t.phase==super::tasks::Phase::Stopping) {
+            format!("{error}；{}",task.message)
+        } else {error}
+    })
+}
+
 fn validate_profile(profile: &Value) -> Result<(), String> {
     if serde_json::to_vec(profile).map_err(|e| e.to_string())?.len() > 16 * 1024 {
         return Err("Profile 超出大小限制".into());
@@ -108,6 +116,7 @@ pub struct Runtime {
     pub collection_operations: Arc<super::collection_operation::Operations>,
     pub observations: Arc<super::observations::Observations>,
     resources: Arc<super::resources::Resources>,
+    motor_stream: Arc<super::motor_stream::Stream>,
     pub motion_logs: Arc<super::motion_observations::MotionLogs>,
     core: Arc<Mutex<Core>>,
     connect_gate: AsyncMutex<()>,
@@ -133,6 +142,7 @@ impl Default for Runtime {
             collection_operations: Arc::new(super::collection_operation::Operations::default()),
             observations,
             resources: Arc::new(super::resources::Resources::default()),
+            motor_stream: Arc::new(super::motor_stream::Stream::default()),
             motion_logs: Arc::new(super::motion_observations::MotionLogs::default()),
             core: Arc::new(Mutex::new(Core {
                 epoch: 0,
@@ -415,6 +425,7 @@ impl Runtime {
             if expected_epoch.is_some_and(|epoch| core.epoch != epoch) {
                 return;
             }
+            self.motor_stream.clear();
             self.tasks
                 .lost(None, "连接已断开；重连后需核验 Bridge 任务已停止");
             core.epoch += 1;
@@ -600,6 +611,7 @@ impl Runtime {
     }
 
     fn watch_tasks(&self, epoch: u64) {
+        let stream = self.motor_stream.clone();
         let core = Arc::downgrade(&self.core);
         let tasks = self.tasks.clone();
         let changed = self.task_changed.clone();
@@ -634,6 +646,53 @@ impl Runtime {
                 let Some(transport) = transport else {
                     break;
                 };
+                let stream_action = {
+                    let guard = core.lock().unwrap();
+                    if guard.epoch != epoch { break; }
+                    let action = stream.poll(tasks.snapshot().as_ref(), Instant::now());
+                    if let super::motor_stream::Poll::Expired(owner, age) = &action {
+                        tasks.lost(Some(owner), &format!("Motor 页面续期超时：{age} ms ≥ 250 ms，已停止原生续发并请求 DISABLE"));
+                    }
+                    action
+                };
+                match stream_action {
+                    super::motor_stream::Poll::Idle => {},
+                    super::motor_stream::Poll::Expired(..) => {},
+                    super::motor_stream::Poll::Send(frame) => {
+                        let tasks=tasks.clone();let stream=stream.clone();let transport=transport.clone();
+                        let core=Arc::downgrade(&core);
+                        tokio::spawn(async move {
+                            let admission = {
+                                let Some(core) = core.upgrade() else { return; };
+                                let guard = core.lock().unwrap();
+                                if guard.epoch != epoch || !stream.current(&frame, Instant::now()) { stream.complete(&frame); return; }
+                                tasks.admit(frame.owner.clone(), &frame.payload, Instant::now())
+                            };
+                            let result=match admission {
+                                Ok(admission) => {
+                                    let guard_stream=stream.clone();let guard_frame=frame.clone();
+                                    let permit: super::command_queue::SendPermit=Arc::new(move || {
+                                        guard_stream.current(&guard_frame,Instant::now())
+                                            && admission.permit.as_ref().is_none_or(|p|p())
+                                    });
+                                    transport.request_guarded(frame.payload.clone(), Duration::from_secs(1), Some(permit)).await
+                                },
+                                Err(error)=>Err(error),
+                            };
+                            // A retarget/STOP may supersede this queued frame or ACK.
+                            let Some(core)=core.upgrade() else{return};let mut core=core.lock().unwrap();
+                            if core.epoch != epoch || !stream.complete(&frame) {return;}
+                            let result=annotate_motor_error(&tasks,Some(frame.ticket),result);
+                            tasks.reply(Some(frame.ticket),epoch,&frame.payload,result.as_ref().map(|f|&f.metadata).map_err(String::as_str));
+                            let failure=match &result {Err(e)=>Some(e.as_str()),Ok(f) if f.op()=="error"=>Some(f.metadata["message"].as_str().unwrap_or("Bridge 拒绝续发")),_=>None};
+                            if let Some(error)=failure {
+                                stream.clear();
+                                let event=WireFrame::parse(serde_json::to_vec(&json!({"op":"error","message":format!("Motor 原生续发失败：{error}")})).unwrap().into(),false).unwrap();
+                                route(&mut core,event,origin.elapsed().as_millis() as u64);
+                            }
+                        });
+                    },
+                }
                 if let Some(action) = tasks.poll(epoch, Instant::now()) {
                     let core = Arc::downgrade(&core);
                     let tasks = tasks.clone();
@@ -716,7 +775,7 @@ impl Runtime {
                         tasks.finish_action(action.ticket, action.action);
                     });
                 }
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(super::motor_stream::PERIOD).await;
             }
         });
     }
@@ -1163,12 +1222,24 @@ impl Runtime {
             }
             return Ok(result);
         }
-        let (admission, profile) = {
+        let (admission, profile, stream_generation, page_command_at) = {
             let core = self.core.lock().unwrap();
             core.validate(native_label, attachment)?;
             self.tasks.touch(&attachment.owner(), Instant::now());
-            (self.tasks.admit(attachment.owner(), &message, Instant::now())?, core.profile.clone())
+            let admission = self.tasks.admit(attachment.owner(), &message, Instant::now())?;
+            if super::motor_command::disable(&message) { self.motor_stream.clear(); }
+            if super::motor_stream::command(&message) {
+              if let Some(ticket)=admission.ticket {
+                match self.motor_stream.renew(&attachment.owner(),ticket,&message,Instant::now()) {
+                    Ok(true)=>return WireFrame::parse(serde_json::to_vec(&json!({"op":"motor_stream_renewed"})).unwrap().into(),false),
+                    Err(error)=>{self.tasks.lost(Some(&attachment.owner()),&error);return Err(error);},
+                    Ok(false)=>{},
+                }
+              }
+            }
+            (admission, core.profile.clone(), self.motor_stream.generation(), Instant::now())
         };
+        let is_stream = super::motor_stream::command(&message);
         if super::motor_command::mutation(&message) {
             if let Some(id) = admission.ticket.filter(|id| self.tasks.motor_needs_prepare(*id)) {
                 let recovery = self.motor_recovery.clone(); let tasks = self.tasks.clone(); let profile = profile.clone();
@@ -1184,9 +1255,19 @@ impl Runtime {
             self.tasks.reply(admission.ticket, attachment.epoch, &message, Err(&error));
             return Err(error);
         }
+        let existing_stream = {
+            let core = self.core.lock().unwrap();
+            core.validate(native_label, attachment)?;
+            let existing = is_stream && admission.ticket.is_some_and(|id|self.motor_stream.has(&attachment.owner(),id));
+            if existing {
+                self.motor_stream.replace(attachment.owner(),admission.ticket.unwrap(),message.clone(),page_command_at);
+            }
+            existing
+        };
         let result = transport
             .request_guarded(message.clone(), timeout, admission.permit)
             .await;
+        let result = annotate_motor_error(&self.tasks, admission.ticket, result);
         {
             let core = self.core.lock().unwrap();
             if core.epoch == attachment.epoch {
@@ -1201,6 +1282,11 @@ impl Runtime {
                 );
                 if let Ok(reply) = &result {
                     self.tasks.observe(attachment.epoch, &reply.metadata);
+                    // First frame is installed only after its real ACK and current task admission.
+                    if is_stream && !existing_stream && self.motor_stream.generation()==stream_generation
+                        && self.tasks.snapshot().is_some_and(|t|Some(t.id)==admission.ticket && t.phase==super::tasks::Phase::Running) {
+                        self.motor_stream.replace(attachment.owner(),admission.ticket.unwrap(),message.clone(),page_command_at);
+                    }
                 }
             }
         }
@@ -1626,6 +1712,11 @@ mod tests {
                             "trajectory_heartbeat" => json!({"op":"trajectory_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "trajectory_cancel" => json!({"op":"trajectory_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "trajectory_task_status" => json!({"op":"trajectory_task_status","command_id":message["command_id"],"known":false,"terminal":false,"busy":false,"task_phase":"unknown","request_id":message["request_id"]}),
+                            "motor_control_lease" => {
+                                let mut caps=super::super::motor_v2_task::tests::caps(); caps["stamp_ns"]=json!("101"); caps["lease_id"]=json!(9);
+                                json!({"op":"motor_control_lease_ack","motor_control":caps,"request_id":message["request_id"]})
+                            },
+                            "motor_command_v2" => json!({"op":"motor_command_v2_ack","mode":message["mode"],"boot_id":message["boot_id"],"control_epoch":message["control_epoch"],"lease_id":message["lease_id"],"sequence":124,"request_id":message["request_id"]}),
                             "joint_command" => json!({"op":"joint_command_ack", "mode":message["mode"], "sequence":123, "request_id":message["request_id"]}),
                             "gravity_id_heartbeat" => json!({"op":"gravity_id_heartbeat_ack","renewed":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
                             "gravity_id_cancel" => json!({"op":"gravity_id_cancel_ack","accepted":true,"command_id":message["command_id"],"request_id":message["request_id"]}),
@@ -2202,6 +2293,59 @@ mod tests {
         assert!(seen.lock().unwrap().iter().all(|v| !super::super::motor_command::mutation(v)),
             "recovery must never replay configuration, acquire a lease or stream a target");
         hub.close(); server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_motor_renews_over_websocket_retargets_and_expires_without_page_confirmation() {
+        native_motor_stream_fixture(false).await;
+        native_motor_stream_fixture(true).await;
+    }
+    async fn native_motor_stream_fixture(v2: bool) {
+        let (port, events, seen, server) = fake_bridge().await;
+        let hub = Runtime::default();
+        let path = std::env::temp_dir().join(super::super::controller_journal::new_id().unwrap()).join("motor.json");
+        hub.motor_recovery.restore(&hub.tasks, Ok(path.clone()));
+        hub.connect_profile(port, offline_profile("fixture.invalid")).await.unwrap(); seed_idle_activity(&hub).await;
+        let (motor, _) = hub.attach("page-motor").unwrap();
+        events.send(json!({"op":"topic_message","topic":"/status","data":{"mode":3,"last_command_sequence":1,"header":{"stamp":{"sec":1,"nanosec":0}}}})).unwrap();
+        let timeout=Duration::from_secs(2);
+        tokio::time::timeout(timeout,async {while !hub.core.lock().unwrap().latest_topics.contains_key("/status") {tokio::task::yield_now().await;}}).await.unwrap();
+        let mut caps=super::super::motor_v2_task::tests::caps();
+        if v2 {
+            hub.tasks.observe(motor.epoch,&json!({"op":"motor_control_status","motor_control":caps}));
+            hub.request("page-motor",&motor,"control",super::super::motor_v2_task::tests::acquire(),timeout).await.unwrap();
+        }
+        let op=if v2 {"motor_command_v2"} else {"joint_command"};
+        let mut target=json!({"op":op,"mode":1,"position":[0.1],"boot_id":"99","control_epoch":7,"lease_id":9,"active_joint_mask":1,"control_mode":"POS_VEL","confirmation":"ARMED"});
+        assert_eq!(hub.request("page-motor",&motor,"control",target.clone(),timeout).await.unwrap().op(),format!("{op}_ack"));
+        for i in 0..5 {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            if v2 {
+                caps["stamp_ns"]=json!((102+i).to_string()); caps["lease_id"]=json!(9); caps["mode"]=json!(1); caps["enabled_joint_mask"]=json!(1); caps["disabled_verified"]=json!(false);
+                hub.tasks.observe(motor.epoch,&json!({"op":"motor_control_status","motor_control":caps}));
+                let mut older=caps.clone(); older["stamp_ns"]=json!("101");
+                hub.tasks.observe(motor.epoch,&json!({"op":"motor_capabilities","motor_control":older}));
+            }
+            assert_eq!(hub.request("page-motor",&motor,"control",target.clone(),timeout).await.unwrap().op(),"motor_stream_renewed");
+        }
+        let before=seen.lock().unwrap().iter().filter(|m|m["op"]==op && m["mode"]==1).count();
+        assert!(before>=20,"native must produce substantially more than the 6 page requests: {before}");
+        assert!(!seen.lock().unwrap().iter().any(|m|m["mode"]==3));
+        target["position"]=json!([0.2]);
+        hub.request("page-motor",&motor,"control",target.clone(),timeout).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let messages=seen.lock().unwrap(); let first=messages.iter().position(|m|m["position"]==json!([0.2])).unwrap();
+            assert!(messages[first..].iter().filter(|m|m["mode"]==1).all(|m|m["position"]==json!([0.2])));
+        }
+        // No more page confirmations. ACKs/native sends cannot renew its 250 ms deadline.
+        tokio::time::timeout(timeout,async {while !seen.lock().unwrap().iter().any(|m|m["mode"]==3) {tokio::task::yield_now().await;}}).await.unwrap();
+        assert!(hub.tasks.snapshot().unwrap().message.contains("页面续期超时"));
+        let stopped=seen.lock().unwrap().iter().filter(|m|m["mode"]==1).count();
+        assert!(hub.request("page-motor",&motor,"control",target,timeout).await.is_err());
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(stopped,seen.lock().unwrap().iter().filter(|m|m["mode"]==1).count());
+        hub.close(); server.abort(); std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]

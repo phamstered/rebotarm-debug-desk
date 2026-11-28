@@ -22,6 +22,7 @@ pub mod documents;
 pub mod local_tasks;
 
 pub mod motor_task;
+pub mod motor_stream;
 pub mod motor_command;
 pub mod motor_v2_task;
 

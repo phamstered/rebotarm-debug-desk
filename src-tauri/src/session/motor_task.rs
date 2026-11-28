@@ -45,6 +45,11 @@ impl Context {
         if epoch == self.epoch && value["motor_control"].is_object() {
             self.control_seen |= value["motor_control"]["supported"] == true;
             if let Some(control) = super::motor_v2_task::Evidence::parse(&value["motor_control"], now) {
+                // A query reply can be delivered after a newer unsolicited status.
+                // Ignore only valid, same-generation query reordering; never reset its age.
+                if value["op"] == "motor_capabilities" && self.control.as_ref().is_some_and(|old|
+                    old.boot == control.boot && old.value["control_epoch"] == control.value["control_epoch"]
+                    && control.stamp < old.stamp) { return; }
                 let retired = self.retired_control_boots.contains(&control.boot);
                 let rollback = self.control.as_ref().is_some_and(|old| old.boot == control.boot
                     && (control.stamp < old.stamp || control.value["control_epoch"].as_u64() < old.value["control_epoch"].as_u64()));
@@ -172,6 +177,20 @@ impl Motor {
             || (Self::mit_evidence(context, now) && self.bound_control.as_ref().is_some_and(|(boot,epoch)|
                 context.and_then(|c|c.control.as_ref()).is_some_and(|e| &e.boot == boot && e.value["control_epoch"] == *epoch))),
             |op| op.ready_to_write(request, context.and_then(|c| c.control.as_ref()), now))
+    }
+    pub fn write_block_reason(&self, request: &Value, context: Option<&Context>, now: Instant) -> Option<String> {
+        let gap=now.saturating_duration_since(self.last_command).as_millis();
+        if gap>=self.timeout().as_millis() {
+            return Some(format!("Motor 原生发送间隔超时：{gap} ms ≥ {} ms",self.timeout().as_millis()));
+        }
+        if self.ready_to_write(request,context,now) {return None;}
+        let evidence=context.and_then(|c|c.control.as_ref());
+        Some(match evidence {
+            None=>"Motor 驱动反馈缺失".into(),
+            Some(e)=>format!("Motor 驱动反馈/许可失效：fresh={}，反馈龄={} ms，发送间隔={gap} ms，boot={}，epoch={}，lease={}，owner={}，mask={}，fault={}",
+                e.value["fresh"],e.value["age_ms"].as_u64().unwrap_or(1000) as u128+now.saturating_duration_since(e.at).as_millis(),
+                e.boot,e.value["control_epoch"],e.value["lease_id"],e.value["owner_source_id"],e.value["selected_joint_mask"],e.value["fault_code"]),
+        })
     }
     pub fn continuation(&self, request: &Value) -> bool {
         self.v2.as_ref().map_or(request["op"] == "joint_command", |v|v.continuation(request))
@@ -303,6 +322,34 @@ mod tests {
         context.observe(1, &status(2, 3, 2), now);
         assert!(context.control_seen); assert!(!motor.stopped(Some(&context), now));
         assert!(!motor.ready_to_write(&json!({"op":"joint_command","mode":1}), Some(&context), now));
+    }
+    #[test]
+    fn delayed_query_preserves_newer_evidence_without_extending_freshness() {
+        let now=Instant::now(); let mut c=Context::new(1,&profile("first")).unwrap();
+        let mut caps=super::super::motor_v2_task::tests::caps(); caps["stamp_ns"]=json!("200");
+        c.observe(1,&json!({"op":"motor_control_status","motor_control":caps}),now);
+        caps["stamp_ns"]=json!("100");
+        c.observe(1,&json!({"op":"motor_capabilities","motor_control":caps}),now+Duration::from_millis(900));
+        let e=c.control.as_ref().unwrap(); assert_eq!(e.stamp,200); assert!(e.fresh(now+Duration::from_millis(999)));
+        assert!(!e.fresh(now+Duration::from_millis(1000)));
+        // Unsolicited rollback, explicit stale evidence and epoch rollback remain failures.
+        for (op,key,value) in [("motor_control_status","fresh",json!(true)),("motor_capabilities","fresh",json!(false)),
+            ("motor_capabilities","control_epoch",json!(6))] {
+            let mut bad=caps.clone(); bad[key]=value;
+            let mut copy=c.clone(); copy.observe(1,&json!({"op":op,"motor_control":bad}),now);
+            assert!(!copy.control.as_ref().unwrap().fresh(now));
+        }
+    }
+    #[test]
+    fn write_failure_distinguishes_send_gap_from_invalid_evidence() {
+        let now=Instant::now(); let mut c=Context::new(1,&profile("first")).unwrap();
+        c.observe(1,&status(1,3,1),now);
+        let m=Motor::start(Some(&c),1,now).unwrap(); let request=json!({"op":"joint_command","mode":1});
+        assert!(m.write_block_reason(&request,Some(&c),now).is_none());
+        assert!(m.write_block_reason(&request,Some(&c),now+Duration::from_millis(250)).unwrap().contains("发送间隔超时：250"));
+        let mut caps=super::super::motor_v2_task::tests::caps(); caps["fresh"]=json!(false);
+        c.observe(1,&json!({"motor_control":caps}),now);
+        assert!(m.write_block_reason(&request,Some(&c),now).unwrap().contains("反馈缺失"));
     }
     #[test]
     fn v2_watermarks_survive_invalidation_and_reject_old_boot_and_epoch() {

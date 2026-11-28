@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultMotors } from "./motorLogic";
-import { actualDriveMode, acceptMotorEvidence, controlGate, createPosVelPayload, hasStopProof, parsePosVelValues } from "./motorControlLogic";
+import { actualDriveMode, acceptMotorEvidence, delayedMotorQuery, controlGate, createPosVelPayload, hasStopProof, parsePosVelValues } from "./motorControlLogic";
 import type { MotorControlCapabilities } from "./types";
 const caps: MotorControlCapabilities = { supported: true, fresh: true, reason: "", age_ms: 0, protocol_version: 2, boot_id: "9007199254740993", control_epoch: 2, source_id: "5", owner_source_id: "5", lease_id: 9, selected_joint_mask: 1, enabled_joint_mask: 0, verified_joint_mask: 127, pos_vel_supported_mask: 63, control_modes: Array(7).fill("POS_VEL"), velocity_limit_max: Array(7).fill(2), position_min: Array(7).fill(-3), position_max: Array(7).fill(3), switching: false, disabled_verified: true, operation_id: 1, operation_state: 2, last_command_sequence: 40, mode: 3, fault_code: 0, error_code: 0, rejected_sequence: 0, reject_code: 0, stamp_ns: "1000000000" };
 function inputs() { const rows = createDefaultMotors(); rows[0].enabled = true; rows[0].position = "0.2"; return { rows, velocities: ["0.4", ...Array(6).fill("")] }; }
@@ -47,4 +47,14 @@ describe("runtime mode evidence", () => {
     expect(hasStopProof({ ...next, control_epoch: 3 }, caps, 42)).toBe(true); // Canceling configuration advances its epoch.
     expect(hasStopProof({ ...next, last_command_sequence: 1 }, caps, 0xffffffff)).toBe(true);
   });
+});
+
+it("only ignores valid same-generation older capability queries", () => {
+  const watermark = acceptMotorEvidence(null, caps).watermark;
+  const older = { ...caps, stamp_ns: "900000000" };
+  expect(delayedMotorQuery(watermark, older)).toBe(true);
+  for (const patch of [{ fresh: false }, { supported: false }, { boot_id: "2" }, { control_epoch: 1 }, { age_ms: 1000 }, { stamp_ns: "0" }, { stamp_ns: "bad" }]) {
+    expect(delayedMotorQuery(watermark, { ...older, ...patch })).toBe(false);
+  }
+  expect(acceptMotorEvidence(watermark, older).error).toBeTruthy(); // pushed rollback remains invalid
 });

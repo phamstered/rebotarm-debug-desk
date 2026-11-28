@@ -305,7 +305,7 @@ describe("MotorControl V2", () => {
     bridge.command.mockResolvedValueOnce({ op: "motor_control_lease_ack", motor_control: leased }).mockResolvedValueOnce({ op: "motor_command_v2_ack", sequence: 42 }); arm(); start("执行目标并保持"); await flush();
     expect(bridge.command).toHaveBeenNthCalledWith(1, expect.objectContaining({ op: "motor_control_lease", lease_action: "acquire" }));
     expect(bridge.command).toHaveBeenNthCalledWith(2, { op: "motor_command_v2", boot_id: current.boot_id, control_epoch: 2, lease_id: 9, control_mode: "POS_VEL", mode: 1, active_joint_mask: 1, position: [0.3, 0, 0, 0, 0, 0, 0], pos_vel: { velocity_limit: [0.4, 0, 0, 0, 0, 0, 0] }, confirmation: "ARMED" });
-    await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2); expect(screen.getByRole("button", { name: "更新目标并保持" })).toBeDisabled(); expect(screen.getByText("20 Hz · 最近提交的目标快照")).toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(100)); expect(bridge.send).toHaveBeenCalledTimes(2); expect(screen.getByRole("button", { name: "更新目标并保持" })).toBeDisabled(); expect(screen.getByText("页面确认 20 Hz · 安装版原生续发 50 Hz · 最近提交目标")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: { ...leased, last_command_sequence: 42, stamp_ns: "2000000000", enabled_joint_mask: 0, mode: 3, lease_id: 0, owner_source_id: "0" } }));
     expect(await terminalOutput("Motor")).toMatch(/已确认输出关闭/); fireEvent.change(screen.getByLabelText("执行状态"), { target: { value: "0" } }); expect(screen.getByRole("button", { name: "保持当前位置" })).toBeDisabled();
@@ -450,6 +450,19 @@ describe("Motor continuous retargeting", () => {
   }
   function target(value: string) { fireEvent.change(screen.getByLabelText("joint1 Position · rad"), { target: { value } }); }
   function update() { start("更新目标并保持"); }
+
+  it("keeps streaming through a delayed query but stops when the newer evidence expires", async () => {
+    vi.useFakeTimers(); const { bridge, running } = await runningPos();
+    const older = { ...running, stamp_ns: "1150000000" };
+    bridge.setCapabilities(older);
+    await act(async () => bridge.emit({ op: "motor_capabilities", motor_control: older }));
+    await act(async () => vi.advanceTimersByTime(600));
+    expect(bridge.send).toHaveBeenCalledWith(expect.objectContaining({ op: "motor_command_v2", mode: 1 }));
+    expect(bridge.command.mock.calls.some(([m]) => m.mode === 3)).toBe(false);
+    // Polling older evidence cannot keep the source fresh forever.
+    await act(async () => vi.advanceTimersByTime(2000));
+    expect(bridge.command.mock.calls.some(([m]) => m.mode === 3)).toBe(true);
+  });
 
   it("edits a draft while holding, then repeatedly updates the same lease without DISABLE", async () => {
     vi.useFakeTimers(); const { bridge, props } = await runningPos();

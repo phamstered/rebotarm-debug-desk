@@ -7,7 +7,7 @@ import type { BridgeEnvelope, HardwareStatus, MotorControlCapabilities } from ".
 import { createCommandPayload, createDefaultMotors, DEFAULT_JOINT_COUNT, DEFAULT_KD, DEFAULT_KP, DEFAULT_MODE, faultInfo, jointLabel, modes, normalizeDecimal, parseCommandValues, resizeMotors } from "./motorLogic";
 import { motorRangeFor, parseMotorUrdfRanges } from "./motorRangeLogic";
 import type { CommandMode, MotorRowInput } from "./motorLogic";
-import { actualDriveMode, acceptMotorEvidence, controlGate, type MotorEvidenceWatermark, createPosVelPayload, hasStopProof, parsePosVelValues, selectedMotorMask } from "./motorControlLogic";
+import { actualDriveMode, acceptMotorEvidence, delayedMotorQuery, controlGate, type MotorEvidenceWatermark, createPosVelPayload, hasStopProof, parsePosVelValues, selectedMotorMask } from "./motorControlLogic";
 
 import { formatMotorNumber, motorAxisNames, motorFirmwareRanges, motorModeEvidence, motorModeError, type MotorModeLogEntry } from "./motorModeLogLogic";
 
@@ -72,7 +72,8 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     if (modeEvidenceRef.current) logMode("停止反馈：已核验输出关闭；此前模式事务结果保留，不代表模式切换成功。");
     setResult("已确认输出关闭；机械臂是否停稳请核对现场。重新开始需再次确认。");
   }
-  function acceptCapabilities(value: MotorControlCapabilities) {
+  function acceptCapabilities(value: MotorControlCapabilities, query = false) {
+    if (query && delayedMotorQuery(evidenceWatermarkRef.current, value)) return;
     if (value.supported) seenV2Ref.current = true;
     // Once V2 was observed, loss of its evidence must never restore legacy admission.
     let next = !value.supported && seenV2Ref.current && capsRef.current?.supported ? { ...capsRef.current, fresh: false, reason: value.reason || "V2 能力丢失" } : value;
@@ -138,7 +139,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       try {
         const response = await bridge.request({ op: "motor_capabilities" });
         if (disposed) return;
-        if (response.motor_control) acceptCapabilities(response.motor_control);
+        if (response.motor_control) acceptCapabilities(response.motor_control, true);
         else throw new Error("当前 Bridge 未提供 POS_VEL 能力");
       } catch (reason) {
         if (disposed) return;
@@ -156,7 +157,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
   }, [bridge, active]);
 
   useEffect(() => bridge.onMessage(message => {
-    if (message.motor_control) acceptCapabilities(message.motor_control);
+    if (message.motor_control) acceptCapabilities(message.motor_control, message.op === "motor_capabilities");
     if (message.op === "disconnected") {
       modeEvidenceRef.current = "";
       ++operationRef.current; stopTimer(); setArmed(false); setSupportConfirmed(false); setLegacyConfirmed(false); setOperation(null); callbackRef.current(false);
@@ -316,7 +317,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
     try {
       const response = await bridge.request(payload);
       if (!mountedRef.current || operation !== operationRef.current || !canRunRef.current) return;
-      setSequence(response.sequence); setOperation(null); setTargetDirty(false);
+      if (response.sequence !== undefined) setSequence(response.sequence); setOperation(null); setTargetDirty(false);
       setResult("目标已更新；沿用当前控制会话持续保持，无需 DISABLE。");
     } catch (reason) {
       if (!mountedRef.current || operation !== operationRef.current) return;
@@ -376,7 +377,7 @@ export function MotorControl({ bridge, jointState, urdfXml = "", status, statusT
       {streaming && <div className="streaming-indicator"><span />持续控制中 · {drive} / {selectedMode.label} · {selectedCount} 轴{targetDirty ? " · 草稿待提交" : ""}</div>}
       {inputError && <p className="error" role="alert">{inputError}</p>}
       <OperationLogNotice source="Motor" notice={result} label={stopRequested ? "等待输出关闭确认" : streaming ? "持续控制中" : "控制操作已有更新"} />
-      <details className="motor-control-details"><summary>控制详情</summary><dl><dt>指令流</dt><dd>20 Hz · 最近提交的目标快照</dd><dt>sequence</dt><dd>{sequence ?? "—"}</dd><dt>lease</dt><dd>{drive === "POS_VEL" ? capabilities?.lease_id ?? "—" : "V1 原生准入"}</dd><dt>反馈龄上界</dt><dd>{capabilities ? `${capabilities.age_ms} ms${capabilities.fresh ? "" : "（过期）"}` : "旧协议"}</dd><dt>Topic</dt><dd>{drive === "POS_VEL" ? `${commandTopic}_v2` : commandTopic}</dd></dl></details>
+      <details className="motor-control-details"><summary>控制详情</summary><dl><dt>指令流</dt><dd>页面确认 20 Hz · 安装版原生续发 50 Hz · 最近提交目标</dd><dt>sequence</dt><dd>{sequence ?? "—"}</dd><dt>lease</dt><dd>{drive === "POS_VEL" ? capabilities?.lease_id ?? "—" : "V1 原生准入"}</dd><dt>反馈龄上界</dt><dd>{capabilities ? `${capabilities.age_ms} ms${capabilities.fresh ? "" : "（过期）"}` : "旧协议"}</dd><dt>Topic</dt><dd>{drive === "POS_VEL" ? `${commandTopic}_v2` : commandTopic}</dd></dl></details>
       <small className="safety-note">停止或离开页面会请求关闭输出，结果以新鲜固件反馈为准。滑块范围来自当前 URDF；POS_VEL 下发还须满足固件已验证范围。未选择的轴不发送运动目标。断流可能触发故障锁存，不会自动恢复控制。</small>
     </aside>
   </div>;
