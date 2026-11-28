@@ -311,7 +311,7 @@ Tauri `RunEvent::Exit` 在保存布局后关闭 Runtime，并同步向 `SessionS
 
 Motor 页的驱动候选和执行状态分离；V1 MIT 保持原消息布局，V2 POS_VEL 使用独立 ROS 消息、能力状态与配置服务。Bridge 的 MotorControl 适配器用独立回调组推进非阻塞事务，ROS 收包/看门狗不等待 WebSocket 写入；状态按连接合并到有界发送队列。每连接 source_id 与固件 boot/epoch/lease 绑定，配置不能由周期运动帧触发。能力探测的“已观察到 V2”是会话内粘性的，状态消失不会重新启用旧协议宽松路径。
 
-模式申请先停机，再等待真实反馈，写入/读回配置后才发出终态结果；恢复 MIT 还需全组验证和 RELEASE。`disabled_verified` 由固件依据本次 CAN stop 之后的七轴反馈生成，而不是依据曾经缓存的零使能掩码。显式 DISABLE 撤销在途配置与流权限；晚到服务回调、旧 epoch 或 lease 不能重新使能。Bridge 在 V2 流中断时请求停止，Rust 也监视真正发出的指令并保留未知任务，均不补发旧目标。
+模式申请先停机，再等待真实反馈，写入/读回配置后才发出终态结果；恢复 MIT 还需全组验证和 RELEASE。`disabled_verified` 由固件依据本次 CAN stop 之后的七轴反馈生成，而不是依据曾经缓存的零使能掩码。显式 DISABLE 撤销在途配置与流权限；晚到服务回调、旧 epoch 或 lease 不能重新使能。Bridge 在 V2 流中断时请求停止，Rust 也监视真正发出的指令并保留未知任务，撤销后均不补发旧目标。
 
 原生 Motor 恢复记录扩展为可选 operation 类别（configuration/release/stream），兼容已有 V1 记录。恢复只建立关闭输出的占用，V2 记录不能仅凭旧 HardwareStatus 解锁。Bridge 无页面订阅也推送 MotorControlStatus，因此所有 WebView 关闭后仍由原生会话接收停止证据。硬件资格验证由 executor 单独控制，默认 POS_VEL supported mask 为零；隔离模拟验收不改变真实电机资格。
 
@@ -349,4 +349,4 @@ Manager startup/load ensures a companion robot_state_publisher before reporting 
 
 ## POS_VEL 持续目标保持
 
-WebView 每 50 ms 续发参数快照；Bridge 对有效 POS_VEL 指令进行校验并保存至当前连接的内存流。ROS 侧 20 ms 定时器续发同一目标，以隔离页面与 SSH 调度抖动。每一帧都重新检查硬件新鲜度、订阅者、boot/epoch/lease/来源/掩码与参数，并使用新的 sequence。该流与 DISABLE、断开及模式撤销共用互斥锁；撤销会清除快照，停止之后不能排入旧目标。客户端 250 ms 超时与固件 100 ms 看门狗分别保留；本机发布不刷新客户端计时。快照不持久化、不跨重连恢复，不自动续租。
+WebView 每 50 ms 确认已提交的参数快照；安装版 Rust 在首帧 ACK 后每 20 ms 续发当前目标到 Bridge。原生独立保留 250 ms 页面确认截止时间，续发与 ACK 不延长该期限；更新目标使旧排队帧及旧回执失效，停止/离开页面/重连清空快照，不自动恢复。原生每帧仍经过任务与固件证据准入，最多 8 帧在途，队列拥塞时不无限积压。Bridge 对有效 POS_VEL 指令进行校验并保存至当前连接的内存流。ROS 侧 20 ms 定时器续发同一目标，以隔离页面与 SSH 调度抖动。每一帧都重新检查硬件新鲜度、订阅者、boot/epoch/lease/来源/掩码与参数，并使用新的 sequence。该流与 DISABLE、断开及模式撤销共用互斥锁；撤销会清除快照，停止之后不能排入旧目标。客户端 250 ms 超时与固件 100 ms 看门狗分别保留；本机发布不刷新客户端计时。快照不持久化、不跨重连恢复，不自动续租。

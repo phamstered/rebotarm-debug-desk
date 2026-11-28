@@ -5,6 +5,13 @@ export const POS_VEL_JOINT_COUNT = 7;
 export type PosVelValues = { position: number[]; velocityLimit: number[]; mask: number };
 export type MotorEvidenceWatermark = { boot: string; epoch: number; stamp: bigint; retiredBoots: string[] };
 
+/** A delayed query must not replace newer pushed evidence or refresh its expiry. */
+export function delayedMotorQuery(previous: MotorEvidenceWatermark | null, value: MotorControlCapabilities): boolean {
+  if (!previous || !value.supported || !value.fresh || previous.boot !== value.boot_id || previous.epoch !== value.control_epoch
+    || !Number.isFinite(value.age_ms) || value.age_ms < 0 || value.age_ms >= 1000) return false;
+  try { const stamp = BigInt(value.stamp_ns); return stamp > 0n && stamp < previous.stamp; } catch { return false; }
+}
+
 /** Preserve source high watermarks across stale/unsupported responses. */
 export function acceptMotorEvidence(previous: MotorEvidenceWatermark | null, value: MotorControlCapabilities): { watermark: MotorEvidenceWatermark | null; advanced: boolean; error?: string } {
   const unchanged = { watermark: previous, advanced: false };

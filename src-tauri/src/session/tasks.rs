@@ -856,9 +856,11 @@ impl Tasks {
                     }
                     if task.motor_terminal || task.leased_terminal || (task.motor_durable && !task.motor_prepared)
                         || (task.leased_durable && !task.leased_prepared) { return false; }
-                    if is_motor && task.motor.as_ref().is_some_and(|motor| !motor.ready_to_write(&command, motor_context.as_ref(), Instant::now())) {
-                        stop(task, "Motor 指令或驱动证据已过期，已撤销发送并请求 DISABLE");
-                        return false;
+                    if is_motor {
+                        if let Some(reason)=task.motor.as_ref().and_then(|motor|motor.write_block_reason(&command,motor_context.as_ref(),Instant::now())) {
+                            stop(task,&format!("{reason}；已撤销发送并请求 DISABLE"));
+                            return false;
+                        }
                     }
                     if ticket.is_some() {
                         task.sent = true;
@@ -1254,7 +1256,10 @@ impl Tasks {
                     || now.saturating_duration_since(task.motor.as_ref().unwrap().last_command)
                         >= task.motor.as_ref().unwrap().timeout())
             {
-                stop(task, "Motor 指令流已中断，已请求 DISABLE");
+                let motor = task.motor.as_ref().unwrap();
+                let gap = now.saturating_duration_since(motor.last_command).as_millis();
+                let limit = motor.timeout().as_millis();
+                stop(task, &format!("Motor 指令流已中断：发送间隔 {gap} ms / 门限 {limit} ms，已请求 DISABLE"));
             }
             if !stopped(task) {
                 return None;
