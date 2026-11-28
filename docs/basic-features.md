@@ -173,12 +173,12 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 - 模式切换过程统一写入底部 Terminal 的 `Motor` 来源，包含申请、固件事务变化、应用结果和停止确认。后续停止反馈、刷新能力或重新打开确认框不会覆盖失败原因；关闭页面或断开连接仍保留应用内历史。页面保留当前固件事务、失败状态与可操作的停止按钮。日志只记录实际收到的状态，不补造底层步骤。POS_VEL 仍展示所选轴的固件已验证范围与当前反馈；error 10 表示范围不符，应用不会自动移动或放宽限位。
 - 配置先发送 DISABLE，等待本次停止后的新鲜、真实关闭反馈，再逐轴写寄存器并读回。模式申请、服务 ACK、消息发布均不代表切换成功；部分失败或结果未知时保持禁止开始，需核验停止后重新操作。
 - 旧 Bridge / 固件继续使用 V1 MIT。POS_VEL 需要新 Bridge、ROS V2 消息/服务及支持固件；本连接一旦观察到 V2，能力丢失或过期就禁止新控制，不自动退回 MIT。当前固件默认不开放未经台架验证的 POS_VEL 轴，joint7 不默认开放。
-- 关节目标区与控制区在宽屏分为两栏；窄窗口控制区在前。MIT 和 POS_VEL 分别保留参数草稿，改变模式、所选轴或参数后需要重新确认；运行中冻结本次参数快照，停止后重新确认才能开始。
+- 关节目标区与控制区在宽屏分为两栏；窄窗口控制区在前。MIT 和 POS_VEL 分别保留参数草稿，改变模式、所选轴或参数后需要重新确认；TRACK 持续控制期间可编辑已选轴的位置和速度草稿；编辑不改变当前发送目标，重新勾选安全确认后点击“更新目标并保持”提交。驱动模式、执行状态、所选轴及 MIT Kp/Kd/Effort 在运行中保持锁定。HOLD / RETURN 不开放运行中目标更新。
 - Position 提供滑块及数值输入，min/max 按当前连接的 URDF 关节名读取并只读显示，MIT / POS_VEL 共用同一模型范围，只约束滑块编辑。旋转关节直接使用 `<limit lower/upper>`（rad）；原始 joint7 夹爪使用同一 URDF 的 MicroRosSystem 标定比例、偏移及 position 行程，将 URDF 与标定行程的交集换算为电机 rad，负比例会交换上下界。不会把夹爪米制行程直接当作电机角度。
 - 尚未收到 URDF、缺少有效限位、连续/mimic 关节或夹爪标定不完整时，min/max 显示为空并禁用滑块，说明原因；数值输入保持既有规则。重新连接会清除旧模型范围，不使用内置预览模型兜底。模型更新只刷新滑块范围，不改写目标/所选轴或自动下发；“使用当前位置”仍由用户显式写入反馈。支持自然输入负数、小数及逗号小数。
 - MIT 保持 HOLD / TRACK / RETURN，默认 TRACK、`Kp=8`、`Kd=2`；Velocity / Kp / Kd / Effort 全局共享，Effort 限制 `[-1,1] Nm`，数值必须有限。上位机不另加 MIT Position / Velocity / Kp / Kd 限幅，固件仍最终校验。
 - POS_VEL 首版只支持 TRACK / HOLD，参数为逐轴 Position 和正速度上限（rad/s），范围来自固件能力状态；不显示 MIT Kp / Kd / Effort。HOLD 由固件锁存新鲜当前位置，未选轴通过显式掩码保持关闭，不把零目标当作“未选”。
-- 主按钮为 MIT“开始控制”、POS_VEL“执行目标并保持”，HOLD 为“保持当前位置”。点击一次后界面后台仍以 20 Hz 续发本次获准快照；频率、sequence、lease、反馈龄及 Topic 放在“控制详情”。发送 ACK 不表示到位，到位也不自动结束保持。
+- 主按钮为 MIT“开始控制”、POS_VEL“执行目标并保持”，HOLD 为“保持当前位置”。点击一次后界面后台仍以 20 Hz 续发本次获准快照；频率、sequence、lease、反馈龄及 Topic 放在“控制详情”。发送 ACK 不表示到位，到位也不自动结束保持。TRACK 更新目标沿用同一控制流与 POS_VEL 租约，不发送 DISABLE、不重新申请许可；每次更新原子替换后续续发的目标快照，等待回执期间仍续发已提交的新目标。无效草稿不下发，继续保持上一目标；更新请求失败或结果未知时沿用停止确认流程，不自动恢复。
 - “停止并 DISABLE”常驻，不需要安全勾选。停止、离开页面、能力失效、首帧或许可结果未知时停止续发并请求关闭输出；重新显示页面不恢复发送。DISABLE 清零控制字段，发送三帧且每帧分配新 sequence。
 - 停止反馈区区分“已请求 DISABLE”与“已确认输出关闭”。V2 完成还要求 `disabled_verified`：全部七轴的新鲜关闭反馈均来自本次真正 CAN 停止之后。真实停稳和负载支撑仍需核对现场，不能把输出关闭当作保持姿态。
 - Bridge 保留订阅者、新鲜 status / JointState（<1 s）、固件 active 轴及确认门禁；V2 另校验 boot、配置代次、连接来源、租约与范围。切换、租约、持续流纳入原生任务锁及重启恢复，未知结果不释放占用；Rust 不自动补发旧目标。
@@ -276,7 +276,7 @@ Robot View 左臂腕部点云默认使用 `/cameras/left_arm/wrist/` 下的彩�
 | WebSocket | hello、发送状态、请求关联、错误、断开 | `src/bridge.test.ts` |
 | URDF | transient-local 晚加入 QoS、symlink-install package URI 与目录穿越防护、相对纹理、Base64、JointState 映射、内联/命名材质颜色、异步网格挂载后着色、错误/轨迹提示非重叠布局 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp`、`src/urdfLogic.test.ts`、`src/ViewerHeadsUp.test.tsx`、`src/resourceCacheLogic.test.ts`、`src/urdfAssetLogic.test.ts`、`src/UrdfViewer.test.tsx`、`bridge/easy_debug_bridge/test/test_viewer_transport.py` |
 | 电机输入 | 默认 TRACK/Kp/Kd、多电机使能掩码、目标草稿、小数输入、有效数值和 Effort 限制 | `src/motorLogic.test.ts` |
-| 电机交互 | 独立导航页、7 个默认关节、安全确认、URDF 滑块范围及夹爪单位换算、模型/连接更新、每关节选择、使用当前位置、20 Hz 流、切页 DISABLE | `src/App.test.tsx`、`src/MotorControl.test.tsx`、`src/motorRangeLogic.test.ts` |
+| 电机交互 | 独立导航页、7 个默认关节、安全确认、URDF 滑块范围及夹爪单位换算、模型/连接更新、每关节选择、使用当前位置、20 Hz 流、TRACK 草稿与连续更新、更新/STOP 竞争、切页 DISABLE | `src/App.test.tsx`、`src/MotorControl.test.tsx`、`src/motorRangeLogic.test.ts` |
 | Fault | 固件 0–11 映射及未知 fault | `src/motorLogic.test.ts`、`src/MotorControl.test.tsx` |
 | Bridge 命令 | mode、ARMED、有限值、Effort、关节掩码解析/校验及 sequence 分配 | `bridge/easy_debug_bridge/test/test_bridge_core.cpp` |
 | Joint4 历史兼容 | 旧布局迁移、入口移除、原生任务恢复与停止核验 | `src/App.test.tsx`、`src-tauri/src/session/layout.rs`、`src-tauri/src/session/leased_recovery.rs` |
