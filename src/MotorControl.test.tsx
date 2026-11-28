@@ -89,7 +89,7 @@ describe("MotorControl legacy MIT", () => {
   it("shows read-only model bounds by joint name while preserving the seven command slots", async () => {
     const urdfXml = motorUrdf(urdfJoint("joint3", -2, 2), urdfJoint("joint1", -0.1, 0.2));
     mount(bridgeDouble(), { urdfXml }); await flush();
-    expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(7);
+    expect(within(screen.getByRole("table", { name: "关节控制列表" })).getAllByRole("row").slice(1)).toHaveLength(7);
     expect(screen.getByLabelText("joint1 行程 min")).toHaveValue("-0.1");
     expect(screen.getByLabelText("joint1 行程 max")).toHaveValue("0.2");
     expect(screen.getByLabelText("joint1 行程 min")).toHaveAttribute("readonly");
@@ -191,7 +191,8 @@ describe("MotorControl live model ranges", () => {
     expect(Number(slider.min)).toBeCloseTo((0.05 - 0.004282757541) / -0.008612826752, 12);
     expect(Number(slider.max)).toBeCloseTo((0 - 0.004282757541) / -0.008612826752, 12);
     expect(screen.getByLabelText(`${name} Position · rad`)).toHaveValue("0");
-    expect(screen.getByText("实测 0.5000")).toBeVisible();
+    expect(screen.getByLabelText("gripper_finger_left_joint 实测位置")).toBeVisible();
+    expect(screen.getByLabelText("gripper_finger_left_joint 实测位置")).toHaveTextContent("0.5000");
     expect(bridge.command).not.toHaveBeenCalled(); expect(bridge.send).not.toHaveBeenCalled();
   });
 
@@ -538,13 +539,13 @@ describe("Motor continuous retargeting", () => {
 
   it("selects and clears all draft axes while keeping the one-axis stream alive", async () => {
     vi.useFakeTimers(); const { bridge } = await runningPos();
-    fireEvent.click(screen.getByRole("button", { name: "全选轴" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选轴" }));
     for (let i = 1; i <= 7; i++) expect(screen.getByLabelText(`joint${i} 选择控制`)).toBeChecked();
-    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "全选轴" })).toBeChecked();
     expect(screen.getByText("已选 7/7")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选轴" }));
     expect(screen.getByText("已选 0/7")).toBeVisible();
-    expect(screen.getByRole("button", { name: "取消全选" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "全选轴" })).not.toBeChecked();
     await act(async () => vi.advanceTimersByTimeAsync(100));
     expect(bridge.command).toHaveBeenCalledTimes(2);
     expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ active_joint_mask: 1 }));
@@ -557,7 +558,7 @@ describe("Motor continuous retargeting", () => {
     fireEvent.change(screen.getByLabelText("joint2 速度上限 · rad/s"), { target: { value: "0.3" } });
     fireEvent.click(screen.getByRole("button", { name: "停止并 DISABLE" })); await flush();
     expect(screen.getByLabelText("joint2 选择控制")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "全选轴" })).toBeDisabled();
     const stopped = { ...running, stamp_ns: "1400000000", disabled_verified: true, mode: 3, enabled_joint_mask: 0, lease_id: 0, owner_source_id: "0", last_command_sequence: 42 };
     await act(async () => bridge.emit({ op: "motor_control_status", motor_control: stopped }));
     expect(screen.getByLabelText("joint2 选择控制")).toBeChecked();
@@ -571,7 +572,7 @@ describe("Motor continuous retargeting", () => {
   it("does not bypass unsupported-axis validation when selecting all POS_VEL axes", async () => {
     const { bridge } = mount(bridgeDouble(capabilities({ control_modes: Array(7).fill("POS_VEL"), pos_vel_supported_mask: 63 })));
     await flush(); fireEvent.click(screen.getByRole("button", { name: "POS_VEL" }));
-    fireEvent.click(screen.getByRole("button", { name: "全选轴" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选轴" }));
     expect(screen.getByText("已选 7/7")).toBeVisible();
     expect(screen.getByLabelText("安全确认")).toBeDisabled();
     expect(screen.getByRole("button", { name: "执行目标并保持" })).toBeDisabled();
@@ -581,7 +582,7 @@ describe("Motor continuous retargeting", () => {
   it.each([{ active: false }, { controlLocked: true }])("locks single and batch selection when unavailable: %j", async extra => {
     mount(bridgeDouble(), extra); await flush();
     expect(screen.getByLabelText("joint1 选择控制")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "全选轴" })).toBeDisabled();
   });
 
   it("atomically replaces the interval snapshot while an update ACK is delayed", async () => {
@@ -593,7 +594,7 @@ describe("Motor continuous retargeting", () => {
     expect(screen.getByRole("button", { name: "正在更新…" })).toBeDisabled();
     expect(screen.getByLabelText("joint1 Position · rad")).toBeDisabled();
     expect(screen.getByLabelText("joint2 选择控制")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "全选轴" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "全选轴" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "停止并 DISABLE" })).toBeEnabled();
     await act(async () => vi.advanceTimersByTimeAsync(150));
     expect(bridge.send).toHaveBeenCalledTimes(3);
@@ -640,5 +641,50 @@ describe("Motor continuous retargeting", () => {
     arm(); update(); await flush(); await act(async () => vi.advanceTimersByTimeAsync(100));
     expect(bridge.command).toHaveBeenCalledTimes(2); expect(bridge.send).toHaveBeenCalledTimes(2);
     expect(bridge.send).toHaveBeenLastCalledWith(expect.objectContaining({ op: "joint_command", mode: 1, position: [0.7, 0, 0, 0, 0, 0, 0], velocity: 0.1, kp: 8, kd: 2, active_joint_mask: 1 }));
+  });
+});
+
+
+describe("Motor unified joint table", () => {
+  it("shows seven aligned rows and a mixed-state select-all checkbox without submitting commands", async () => {
+    const { bridge } = mount(); await flush();
+    const table = screen.getByRole("table", { name: "关节控制列表" });
+    expect(within(table).getAllByRole("row")).toHaveLength(8);
+    expect(within(table).getAllByRole("rowheader").map(row => row.textContent)).toEqual(Array.from({length: 7}, (_, i) => `joint${i + 1}`));
+    const all = screen.getByRole("checkbox", { name: "全选轴" });
+    select(); expect(all).toBePartiallyChecked();
+    fireEvent.click(all); expect(all).toBeChecked(); expect(all).not.toBePartiallyChecked();
+    select(2); expect(all).toBePartiallyChecked();
+    fireEvent.click(all); fireEvent.click(all); expect(all).not.toBeChecked(); expect(all).not.toBePartiallyChecked();
+    expect(screen.getByRole("button", { name: "使用当前位置" })).toBeDisabled();
+    expect(bridge.command).not.toHaveBeenCalled();
+  });
+
+  it("copies current positions only into selected rows and never replaces a draft on feedback updates", async () => {
+    const { bridge, props, rerender } = mount(); await flush();
+    select(2); fireEvent.change(screen.getByLabelText("joint2 Position · rad"), {target: {value: "0.8"}}); select(2);
+    select(); arm(); fireEvent.click(screen.getByRole("button", { name: "使用当前位置" }));
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.15");
+    expect(screen.getByLabelText("joint2 Position · rad")).toHaveValue("0.8");
+    expect(screen.getByLabelText("安全确认")).not.toBeChecked();
+    rerender(<MotorControl {...props} jointState={{name: ["joint1", "joint2", "joint3"], position: [0.4, 0.5, 0.6]}} />);
+    expect(screen.getByLabelText("joint1 实测位置")).toHaveTextContent("0.4000");
+    expect(screen.getByLabelText("joint1 Position · rad")).toHaveValue("0.15");
+    expect(screen.getByLabelText("joint2 Position · rad")).toHaveValue("0.8");
+    expect(bridge.command).not.toHaveBeenCalled();
+  });
+
+  it("switches only the mode-specific columns and fills speed only on selected axes", async () => {
+    const { bridge } = mount(bridgeDouble(capabilities({pos_vel_supported_mask: 127}))); await flush();
+    expect(screen.queryByRole("columnheader", {name: /速度上限/})).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText("Kp")).toHaveLength(1);
+    select(); fireEvent.click(screen.getByRole("button", {name: "POS_VEL"}));
+    expect(screen.getByRole("columnheader", {name: /速度上限/})).toBeVisible();
+    expect(screen.queryByLabelText("Kp")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("统一速度上限 · rad/s"), {target: {value: "0.3"}});
+    fireEvent.click(screen.getByRole("button", {name: "填写所选轴"}));
+    expect(screen.getByLabelText("joint1 速度上限 · rad/s")).toHaveValue("0.3");
+    expect(screen.getByLabelText("joint2 速度上限 · rad/s")).toHaveValue("");
+    expect(bridge.command).not.toHaveBeenCalled();
   });
 });
